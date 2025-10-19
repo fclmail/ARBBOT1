@@ -36,13 +36,15 @@ jobs:
 
       - name: Run arbitrage script
         env:
-          RPC_URL: ${{ secrets.RPC_URL }}
-          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-          CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
-          BUY_ROUTER: ${{ github.event.inputs.buy_router || secrets.BUY_ROUTER }}
-          SELL_ROUTER: ${{ github.event.inputs.sell_router || secrets.SELL_ROUTER }}
-          TOKEN: ${{ github.event.inputs.token || secrets.TOKEN }}
-          AMOUNT_IN_HUMAN: ${{ github.event.inputs.amount_in_human || secrets.AMOUNT_IN_HUMAN }}
+         env:
+  RPC_URL: ${{ secrets.RPC_URL }}
+  PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+  CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
+  BUY_ROUTER: ${{ github.event.inputs.buy_router || secrets.BUY_ROUTER }}
+  SELL_ROUTER: ${{ github.event.inputs.sell_router || secrets.SELL_ROUTER }}
+  TOKEN: ${{ github.event.inputs.token || secrets.TOKEN }}
+  AMOUNT_IN_HUMAN: ${{ github.event.inputs.amount_in_human || secrets.AMOUNT_IN_HUMAN }}
+  AMOUNT_IN: ${{ github.event.inputs.amount_in_human || secrets.AMOUNT_IN_HUMAN }}
         run: node scripts/arbitrage.js
 
   withdraw-profit:
