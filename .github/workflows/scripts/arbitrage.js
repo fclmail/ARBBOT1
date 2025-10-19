@@ -33,7 +33,7 @@ const contract = new Contract(CONTRACT_ADDRESS, ABI, wallet);
 
 // Helper: convert human-readable USDC.e to smallest units (6 decimals)
 const decimals = 6;
-const AMOUNT_IN = ethers.parseUnits(AMOUNT_IN_HUMAN || '0.01', decimals); // default 0.01 USDC.e
+const AMOUNT_IN = ethers.parseUnits(AMOUNT_IN_HUMAN || '0.0001', decimals); // default 0.01 USDC.e
 
 // Split comma-separated router lists
 const buyRouters = BUY_ROUTER.split(',');
