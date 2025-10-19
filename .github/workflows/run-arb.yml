@@ -1,10 +1,72 @@
-name: Placeholder
+name: Run Arbitrage
 
 on:
   workflow_dispatch:
+    inputs:
+      buy_router:
+        description: 'Buy router address'
+        required: false
+      sell_router:
+        description: 'Sell router address'
+        required: false
+      token:
+        description: 'Token address'
+        required: false
+      amount_in:
+        description: 'Amount in smallest units (e.g. USDC 6 decimals)'
+        required: false
+
+  # Optional: scheduled run (every 30 minutes)
+  schedule:
+    - cron: '*/30 * * * *'
 
 jobs:
-  build:
+  run-arb:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Workflow setup step complete"
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run arbitrage script
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
+          BUY_ROUTER: ${{ github.event.inputs.buy_router || secrets.BUY_ROUTER }}
+          SELL_ROUTER: ${{ github.event.inputs.sell_router || secrets.SELL_ROUTER }}
+          TOKEN: ${{ github.event.inputs.token || secrets.TOKEN }}
+          AMOUNT_IN: ${{ github.event.inputs.amount_in || secrets.AMOUNT_IN }}
+        run: node scripts/arbitrage.js
+
+  withdraw-profit:
+    runs-on: ubuntu-latest
+    needs: run-arb
+    if: ${{ always() }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Withdraw profit
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
+          TOKEN: ${{ secrets.TOKEN }}
+        run: node scripts/withdraw.js
+
