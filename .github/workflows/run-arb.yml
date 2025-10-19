@@ -12,13 +12,12 @@ on:
       token:
         description: 'Token address'
         required: false
-      amount_in:
-        description: 'Amount in smallest units (e.g. USDC 6 decimals)'
+      amount_in_human:
+        description: 'Amount in human-readable format (e.g. 0.01 USDC.e)'
         required: false
 
-  # Optional: scheduled run (every 30 minutes)
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/30 * * * *'  # every 30 minutes
 
 jobs:
   run-arb:
@@ -32,10 +31,8 @@ jobs:
         with:
           node-version: '20'
 
-    - name: Install dependencies
-  run: npm install
-
-
+      - name: Install dependencies
+        run: npm install
 
       - name: Run arbitrage script
         env:
@@ -45,7 +42,7 @@ jobs:
           BUY_ROUTER: ${{ github.event.inputs.buy_router || secrets.BUY_ROUTER }}
           SELL_ROUTER: ${{ github.event.inputs.sell_router || secrets.SELL_ROUTER }}
           TOKEN: ${{ github.event.inputs.token || secrets.TOKEN }}
-          AMOUNT_IN: ${{ github.event.inputs.amount_in || secrets.AMOUNT_IN }}
+          AMOUNT_IN_HUMAN: ${{ github.event.inputs.amount_in_human || secrets.AMOUNT_IN_HUMAN }}
         run: node scripts/arbitrage.js
 
   withdraw-profit:
@@ -62,7 +59,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install  # changed from npm ci to npm install
 
       - name: Withdraw profit
         env:
@@ -71,4 +68,3 @@ jobs:
           CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
           TOKEN: ${{ secrets.TOKEN }}
         run: node scripts/withdraw.js
-
