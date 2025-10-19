@@ -1,0 +1,12 @@
+{
+  "name": "aave-flash-arb-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "arb": "node scripts/arbitrage.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "ethers": "^6.9.0"
+  }
+}
