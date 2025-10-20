@@ -1,47 +1,69 @@
-// scripts/arbitrage.js
-import 'dotenv/config';
-import fs from 'fs';
-import path from 'path';
-import { Wallet, Contract, ethers } from 'ethers';
+import { ethers } from "ethers";
+import fs from "fs";
+import path from "path";
 
-const ABI = JSON.parse(
-  fs.readFileSync(path.join(process.cwd(), 'abi', 'AaveFlashArb.json'), 'utf8')
-).abi;
+// --- Load environment variables ---
+const {
+  RPC_URL,
+  PRIVATE_KEY,
+  CONTRACT_ADDRESS,
+  BUY_ROUTER,
+  SELL_ROUTER,
+  TOKEN,
+  AMOUNT_IN_HUMAN
+} = process.env;
 
-const { RPC_URL, PRIVATE_KEY, CONTRACT_ADDRESS, BUY_ROUTER, SELL_ROUTER, TOKEN, AMOUNT_IN } =
-  process.env;
-
-if (!RPC_URL || !PRIVATE_KEY || !CONTRACT_ADDRESS) {
-  console.error('❌ Missing environment variables. Check your .env or GitHub Secrets.');
+// --- Validate environment ---
+if (!RPC_URL || !PRIVATE_KEY || !CONTRACT_ADDRESS || !BUY_ROUTER || !SELL_ROUTER || !TOKEN) {
+  console.error("Missing required environment variables!");
   process.exit(1);
 }
 
+// --- Provider & Wallet ---
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new Wallet(PRIVATE_KEY, provider);
-const contract = new Contract(CONTRACT_ADDRESS, ABI, wallet);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
+// --- Load ABI ---
+const abiPath = path.join(process.cwd(), "abi", "AaveFlashArb.json");
+const abiJSON = fs.readFileSync(abiPath, "utf-8");
+const abi = JSON.parse(abiJSON);
+
+// --- Contract instance ---
+const contract = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
+
+// --- Convert human-readable amount to smallest unit ---
+let AMOUNT_IN;
+try {
+  if (!AMOUNT_IN_HUMAN) throw new Error("AMOUNT_IN_HUMAN is not set in secrets!");
+  AMOUNT_IN = ethers.parseUnits(AMOUNT_IN_HUMAN, 6); // USDC.e has 6 decimals
+  console.log("Parsed AMOUNT_IN:", AMOUNT_IN.toString());
+} catch (err) {
+  console.error("Error parsing AMOUNT_IN_HUMAN:", err.message);
+  process.exit(1);
+}
+
+// --- Execute arbitrage ---
 async function main() {
   try {
-    console.log('🚀 Starting arbitrage...');
+    console.log("🚀 Starting arbitrage...");
     console.log({
       BUY_ROUTER,
       SELL_ROUTER,
       TOKEN,
-      AMOUNT_IN,
+      AMOUNT_IN: AMOUNT_IN.toString()
     });
 
-    const tx = await contract.executeArbitrage(BUY_ROUTER, SELL_ROUTER, TOKEN, AMOUNT_IN, {
-      gasLimit: 1_500_000,
-    });
+    const tx = await contract.executeArbitrage(BUY_ROUTER, SELL_ROUTER, TOKEN, AMOUNT_IN);
+    console.log("Transaction sent! Hash:", tx.hash);
 
-    console.log('✅ Transaction sent:', tx.hash);
     const receipt = await tx.wait();
-    console.log('🎯 Transaction mined:', receipt.transactionHash);
-    console.log('Status:', receipt.status);
+    console.log("Transaction confirmed! Receipt:", receipt.transactionHash);
   } catch (err) {
-    console.error('⚠️ Error executing arbitrage:', err);
+    console.error("⚠️ Error executing arbitrage:", err);
     process.exit(1);
   }
 }
 
+// --- Run ---
 main();
+
