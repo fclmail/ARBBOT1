@@ -33,7 +33,7 @@ if (Array.isArray(data)) return data;
 if (Array.isArray(data.abi)) return data.abi;
 if (Array.isArray(data.contractAbi)) return data.contractAbi;
 
-throw new Error(Unsupported ABI format in ${jsonPath}. Keys: ${Object.keys(data)});
+throw new Error(`Unsupported ABI format in ${jsonPath}. Keys: ${Object.keys(data)}`);
 }
 
 // --- Contract instance ---
