@@ -25,11 +25,31 @@ if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !BUY_ROUTER || !SELL_ROUTER || !TOKEN) 
   process.exit(1);
 }
 
+// --- Trim all inputs ---
+const contractAddress = CONTRACT_ADDRESS.trim();
+const buyRouter = BUY_ROUTER.trim();
+const sellRouter = SELL_ROUTER.trim();
+const token = TOKEN.trim();
+const rpcUrl = RPC_URL.trim();
+
+// --- Validate Ethereum addresses ---
+function validateAddress(addr, name) {
+  if (!ethers.isAddress(addr)) {
+    console.error(`Invalid Ethereum address for ${name}:`, addr);
+    process.exit(1);
+  }
+}
+
+validateAddress(contractAddress, "CONTRACT_ADDRESS");
+validateAddress(buyRouter, "BUY_ROUTER");
+validateAddress(sellRouter, "SELL_ROUTER");
+validateAddress(token, "TOKEN");
+
 // --- Provider & Wallet ---
-const provider = new ethers.JsonRpcProvider(RPC_URL.trim());
+const provider = new ethers.JsonRpcProvider(rpcUrl);
 const wallet = new ethers.Wallet(PRIVATE_KEY.trim(), provider);
 
-// --- Load ABI ---
+// --- Load ABI robustly ---
 async function loadAbi(jsonPath) {
   const content = await fs.readFile(jsonPath, "utf8");
   const data = JSON.parse(content);
@@ -53,25 +73,21 @@ async function main() {
       process.exit(1);
     }
 
-    const arbContract = new ethers.Contract(CONTRACT_ADDRESS.trim(), abi, wallet);
+    const arbContract = new ethers.Contract(contractAddress, abi, wallet);
 
     // Convert human-readable amount to smallest unit (6 decimals)
+    if (!AMOUNT_IN_HUMAN) throw new Error("AMOUNT_IN_HUMAN not defined!");
     const amountIn = ethers.parseUnits(AMOUNT_IN_HUMAN.trim(), 6);
     console.log("Parsed AMOUNT_IN:", amountIn.toString());
 
     // --- Execute arbitrage ---
     console.log("🚀 Starting arbitrage...");
-    console.log({
-      BUY_ROUTER: BUY_ROUTER.trim(),
-      SELL_ROUTER: SELL_ROUTER.trim(),
-      TOKEN: TOKEN.trim(),
-      AMOUNT_IN: amountIn.toString()
-    });
+    console.log({ buyRouter, sellRouter, token, amountIn: amountIn.toString() });
 
     const tx = await arbContract.executeArbitrage(
-      BUY_ROUTER.trim(),
-      SELL_ROUTER.trim(),
-      TOKEN.trim(),
+      buyRouter,
+      sellRouter,
+      token,
       amountIn
     );
 
@@ -91,4 +107,3 @@ main().catch(err => {
   console.error("Unhandled error in arbitrage script:", err);
   process.exit(1);
 });
-
