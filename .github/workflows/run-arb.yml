@@ -1,28 +1,31 @@
-name: Run Arbitrage
+name: Run Arbitrage Bot
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '*/30 * * * *'  # every 30 minutes
 
 jobs:
-  run-arb:
+  run:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
       - name: Install dependencies
         run: npm install
 
-      - name: Run arbitrage script
+      - name: Run Arbitrage Script
         env:
-          RPC_URL: ${{ secrets.RPC_URL }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          RPC_URL: ${{ secrets.RPC_URL }}
           CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
+          TOKEN: ${{ secrets.TOKEN }}
+          AMOUNT_IN: ${{ secrets.AMOUNT_IN }}
+          BUY_ROUTER: ${{ secrets.BUY_ROUTER }}
+          SELL_ROUTER: ${{ secrets.SELL_ROUTER }}
         run: node scripts/arbitrage.js
