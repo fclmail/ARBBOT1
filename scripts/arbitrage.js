@@ -1,5 +1,15 @@
 #!/usr/bin/env node
-import { JsonRpcProvider, Wallet, Contract, utils } from "ethers";
+import * as ethers from "ethers";
+
+// Provider & wallet
+const provider = new ethers.JsonRpcProvider(RPC_URL.trim());
+const wallet = new ethers.Wallet(PRIVATE_KEY.trim(), provider);
+
+// Convert human-readable amount
+let amountIn = ethers.parseUnits(AMOUNT_IN_HUMAN.trim(), 6);
+
+// Contract
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS.trim(), abi, wallet);
 import { promises as fs } from "fs";
 import path from "path";
 
