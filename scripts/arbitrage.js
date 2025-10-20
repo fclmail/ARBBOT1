@@ -1,15 +1,5 @@
 #!/usr/bin/env node
 import * as ethers from "ethers";
-
-// Provider & wallet
-const provider = new ethers.JsonRpcProvider(RPC_URL.trim());
-const wallet = new ethers.Wallet(PRIVATE_KEY.trim(), provider);
-
-// Convert human-readable amount
-let amountIn = ethers.parseUnits(AMOUNT_IN_HUMAN.trim(), 6);
-
-// Contract
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS.trim(), abi, wallet);
 import { promises as fs } from "fs";
 import path from "path";
 
@@ -24,7 +14,7 @@ const {
   AMOUNT_IN_HUMAN
 } = process.env;
 
-// --- Validate environment variables ---
+// --- Validate environment ---
 if (!RPC_URL) {
   console.error("RPC_URL not defined!");
   process.exit(1);
@@ -36,10 +26,10 @@ if (!PRIVATE_KEY || !CONTRACT_ADDRESS || !BUY_ROUTER || !SELL_ROUTER || !TOKEN) 
 }
 
 // --- Provider & Wallet ---
-const provider = new JsonRpcProvider(RPC_URL.trim());
-const wallet = new Wallet(PRIVATE_KEY.trim(), provider);
+const provider = new ethers.JsonRpcProvider(RPC_URL.trim());
+const wallet = new ethers.Wallet(PRIVATE_KEY.trim(), provider);
 
-// --- Load ABI robustly ---
+// --- Load ABI ---
 async function loadAbi(jsonPath) {
   const content = await fs.readFile(jsonPath, "utf8");
   const data = JSON.parse(content);
@@ -51,33 +41,25 @@ async function loadAbi(jsonPath) {
   throw new Error(`Unsupported ABI format in ${jsonPath}. Keys: ${Object.keys(data)}`);
 }
 
-// --- Main function ---
+// --- Main arbitrage function ---
 async function main() {
-  // Load ABI
-  const abiPath = path.join(process.cwd(), "abi", "AaveFlashArb.json");
-  const abi = await loadAbi(abiPath);
-
-  if (!Array.isArray(abi)) {
-    console.error("ABI must be an array. Loaded type:", typeof abi);
-    process.exit(1);
-  }
-
-  const contractAddress = CONTRACT_ADDRESS.trim();
-  const arbContract = new Contract(contractAddress, abi, wallet);
-
-  // Convert human-readable amount to smallest unit (6 decimals for USDC)
-  let amountIn;
   try {
-    if (!AMOUNT_IN_HUMAN) throw new Error("AMOUNT_IN_HUMAN is not set!");
-    amountIn = utils.parseUnits(AMOUNT_IN_HUMAN.trim(), 6);
+    // Load ABI
+    const abiPath = path.join(process.cwd(), "abi", "AaveFlashArb.json");
+    const abi = await loadAbi(abiPath);
+
+    if (!Array.isArray(abi)) {
+      console.error("ABI must be an array. Loaded type:", typeof abi);
+      process.exit(1);
+    }
+
+    const arbContract = new ethers.Contract(CONTRACT_ADDRESS.trim(), abi, wallet);
+
+    // Convert human-readable amount to smallest unit (6 decimals)
+    const amountIn = ethers.parseUnits(AMOUNT_IN_HUMAN.trim(), 6);
     console.log("Parsed AMOUNT_IN:", amountIn.toString());
-  } catch (err) {
-    console.error("Error parsing AMOUNT_IN_HUMAN:", err.message);
-    process.exit(1);
-  }
 
-  // Execute arbitrage
-  try {
+    // --- Execute arbitrage ---
     console.log("🚀 Starting arbitrage...");
     console.log({
       BUY_ROUTER: BUY_ROUTER.trim(),
@@ -104,6 +86,7 @@ async function main() {
   }
 }
 
+// --- Run main ---
 main().catch(err => {
   console.error("Unhandled error in arbitrage script:", err);
   process.exit(1);
