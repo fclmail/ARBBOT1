@@ -1,14 +1,12 @@
 {
-  "name": "arb-bot",
+  "name": "arbbot1",
   "version": "1.0.0",
-  "description": "Aave Flash Loan Arbitrage Bot",
-  "main": "scripts/arbitrage.js",
+  "type": "module",
   "scripts": {
-    "start": "node scripts/arbitrage.js",
-    "withdraw": "node scripts/withdraw.js"
+    "start": "node scripts/arbitrage.js"
   },
   "dependencies": {
-    "ethers": "^6.8.0",
-    "dotenv": "^16.3.1"
+    "ethers": "^6.15.0"
   }
 }
+
