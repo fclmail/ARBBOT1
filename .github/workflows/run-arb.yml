@@ -1,70 +1,35 @@
-name: Run Arbitrage
+name: ARB Bot
 
 on:
   workflow_dispatch:
-    inputs:
-      buy_router:
-        description: 'Buy router address'
-        required: false
-      sell_router:
-        description: 'Sell router address'
-        required: false
-      token:
-        description: 'Token address'
-        required: false
-      amount_in_human:
-        description: 'Amount in human-readable format (e.g. 0.01 USDC.e)'
-        required: false
-
-  schedule:
-    - cron: '*/30 * * * *'  # every 30 minutes
+  push:
+    branches: [ main ]
 
 jobs:
   run-arb:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      # 1️⃣ Checkout repo
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # 2️⃣ Setup Node.js
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
-      - name: Install dependencies
+      # 3️⃣ Install dependencies
+      - name: Install deps
         run: npm install
 
-      - name: Run arbitrage script
+      # 4️⃣ Run arbitrage script
+      - name: Run arbitrage
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
-          BUY_ROUTER: ${{ github.event.inputs.buy_router || secrets.BUY_ROUTER }}
-          SELL_ROUTER: ${{ github.event.inputs.sell_router || secrets.SELL_ROUTER }}
-          TOKEN: ${{ github.event.inputs.token || secrets.TOKEN }}
-          AMOUNT_IN_HUMAN: ${{ github.event.inputs.amount_in_human || secrets.AMOUNT_IN_HUMAN }}
+          BUY_ROUTER: ${{ secrets.BUY_ROUTER }}
+          SELL_ROUTER: ${{ secrets.SELL_ROUTER }}
+          TOKEN: ${{ secrets.TOKEN }}
+          AMOUNT_IN_HUMAN: ${{ secrets.AMOUNT_IN_HUMAN }}
         run: node scripts/arbitrage.js
 
-  withdraw-profit:
-    runs-on: ubuntu-latest
-    needs: run-arb
-    if: ${{ always() }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Withdraw profit
-        env:
-          RPC_URL: ${{ secrets.RPC_URL }}
-          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-          CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
-          TOKEN: ${{ secrets.TOKEN }}
-        run: node scripts/withdraw.js
