@@ -87,7 +87,8 @@ async function arbitrageLoop() {
   console.log(`💰 Amount in: ${AMOUNT_IN} USDC.e`);
   console.log(`💵 Minimum profit threshold: ${MIN_PROFIT_USDC} USDC.e`);
 
-  const amountInRaw = ethers.utils.parseUnits(AMOUNT_IN.toString(), tokens.USDC.decimals);
+  const usdcDecimals = tokens.USDC.decimals || (await getTokenDecimals(tokens.USDC.address));
+  const amountInRaw = ethers.utils.parseUnits(AMOUNT_IN.toString(), usdcDecimals);
 
   while (!stopFlag) {
     for (const [symbol, meta] of Object.entries(tokens)) {
