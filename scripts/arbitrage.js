@@ -71,7 +71,7 @@ async function getAmountOut(routerAddress, amountIn, path) {
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts[amounts.length - 1];
   } catch (e) {
-    return ethers.BigInt(0);
+    return BigInt(0);
   }
 }
 
