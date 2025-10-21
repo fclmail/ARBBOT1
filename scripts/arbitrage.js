@@ -1,19 +1,11 @@
-import 'dotenv/config';
 import { ethers } from "ethers";
-import fs from "fs";
-import path from "path";
+import "dotenv/config";
 
-const {
-  RPC_URL,
-  PRIVATE_KEY,
-  CONTRACT_ADDRESS,
-  AMOUNT_IN,
-  MIN_PROFIT_USDC,
-  BUY_ROUTER,
-  SELL_ROUTER
-} = process.env;
+// 🟣 Polygon Provider
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 
-const tokens = {
+// 🪙 Token Addresses (Polygon Mainnet)
+const TOKENS = {
   CRV: { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
   DAI: { address: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", decimals: 18 },
   KLIMA: { address: "0x4e78011ce80ee02d2c3e649fb657e45898257815", decimals: 9 },
@@ -22,107 +14,99 @@ const tokens = {
   USDT: { address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", decimals: 6 },
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
   WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 },
+  USDCe: { address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 },
 };
 
-const USDCe = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
-function validateEnv() {
-  const required = { RPC_URL, PRIVATE_KEY, CONTRACT_ADDRESS, AMOUNT_IN, MIN_PROFIT_USDC, BUY_ROUTER, SELL_ROUTER };
-  for (const [key, val] of Object.entries(required)) {
-    if (!val || val.trim() === "") {
-      console.error(`❌ Missing environment variable: ${key}`);
-      process.exit(1);
-    }
-  }
-}
-
-function loadAbi() {
-  const abiPath = path.join(process.cwd(), "abi", "AaveFlashArb.json");
-  if (!fs.existsSync(abiPath)) {
-    console.error(`❌ ABI file not found: ${abiPath}`);
-    process.exit(1);
-  }
-  return JSON.parse(fs.readFileSync(abiPath, "utf-8"));
-}
-
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts)"
+// 🧩 ABIs
+const routerV2Abi = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"
 ];
 
-async function safeGetAmountsOut(router, amountIn, path) {
+const quoterAbi = [
+  "function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)"
+];
+
+// 🧠 Routers & Quoter Contracts
+const routers = {
+  QuickSwap: new ethers.Contract("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff", routerV2Abi, provider),
+  SushiSwap: new ethers.Contract("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506", routerV2Abi, provider),
+};
+
+const uniswapV3Quoter = new ethers.Contract(
+  "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6",
+  quoterAbi,
+  provider
+);
+
+// ⚙️ Config
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC || "0.00001");
+const AMOUNT_IN = ethers.parseUnits(process.env.AMOUNT_IN || "0.0008", 6); // USDC.e decimals = 6
+
+// 🧮 Helpers
+const format = (amount, decimals) => Number(ethers.formatUnits(amount, decimals));
+
+async function getV2Price(router, tokenIn, tokenOut, amountIn) {
   try {
-    const amounts = await router.getAmountsOut(amountIn, path);
-    return amounts;
+    const amounts = await router.getAmountsOut(amountIn, [tokenIn, tokenOut]);
+    return amounts[1];
   } catch {
-    return null; // skip failed pair
+    return ethers.Zero;
   }
 }
 
-async function main() {
+async function getV3Price(quoter, tokenIn, tokenOut, amountIn, fee = 3000) {
+  try {
+    const amountOut = await quoter.callStatic.quoteExactInputSingle(tokenIn, tokenOut, fee, amountIn, 0);
+    return amountOut;
+  } catch {
+    return ethers.Zero;
+  }
+}
+
+// 🧭 Main Arbitrage Logic
+async function checkArbitrage() {
   console.log("🚀 Starting Polygon Arbitrage Bot...");
-  validateEnv();
-  const abi = loadAbi();
+  console.log(`✅ Connected as ${wallet.address}`);
+  console.log(`💰 Amount in: ${ethers.formatUnits(AMOUNT_IN, 6)} USDC.e`);
+  console.log(`💵 Minimum profit threshold: ${MIN_PROFIT_USDC} USDC.e\n`);
 
-  const provider = new ethers.JsonRpcProvider(RPC_URL);
-  const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-  console.log(`✅ Connected as ${await wallet.getAddress()}`);
+  for (const [symbol, token] of Object.entries(TOKENS)) {
+    if (symbol === "USDCe") continue; // Skip base token
 
-  const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
-  const buyRouter = new ethers.Contract(BUY_ROUTER, routerAbi, provider);
-  const sellRouter = new ethers.Contract(SELL_ROUTER, routerAbi, provider);
+    console.log(`🔎 Checking token: ${symbol}`);
 
-  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6);
-  const minProfit = ethers.parseUnits(MIN_PROFIT_USDC, 6);
+    const buyPriceQuick = await getV2Price(routers.QuickSwap, TOKENS.USDCe.address, token.address, AMOUNT_IN);
+    const buyPriceSushi = await getV2Price(routers.SushiSwap, TOKENS.USDCe.address, token.address, AMOUNT_IN);
 
-  console.log(`💰 Amount in: ${AMOUNT_IN} USDC.e`);
-  console.log(`💵 Minimum profit threshold: ${MIN_PROFIT_USDC} USDC.e`);
+    const sellPriceQuick = await getV2Price(routers.QuickSwap, token.address, TOKENS.USDCe.address, buyPriceQuick);
+    const sellPriceSushi = await getV2Price(routers.SushiSwap, token.address, TOKENS.USDCe.address, buyPriceSushi);
 
-  for (const [symbol, token] of Object.entries(tokens)) {
-    console.log(`\n🔎 Checking token: ${symbol}`);
+    const v3Price = await getV3Price(uniswapV3Quoter, TOKENS.USDCe.address, token.address, AMOUNT_IN);
 
-    const pathBuy = [USDCe, token.address];
-    const pathSell = [token.address, USDCe];
+    // Pick best buy/sell options
+    const bestBuy = [buyPriceQuick, buyPriceSushi, v3Price].reduce((a, b) => (a > b ? b : a));
+    const bestSell = [sellPriceQuick, sellPriceSushi, v3Price].reduce((a, b) => (a > b ? a : b));
 
-    const buyAmounts = await safeGetAmountsOut(buyRouter, amountInParsed, pathBuy);
-    if (!buyAmounts) {
-      console.log(`⚠️ No liquidity for ${symbol} on buy router`);
+    if (bestBuy === ethers.Zero || bestSell === ethers.Zero) {
+      console.log(`⚠️ No liquidity for ${symbol} on available routers\n`);
       continue;
     }
 
-    const tokenOut = buyAmounts[1];
-    const sellAmounts = await safeGetAmountsOut(sellRouter, tokenOut, pathSell);
-    if (!sellAmounts) {
-      console.log(`⚠️ No liquidity for ${symbol} on sell router`);
-      continue;
-    }
+    // Normalize output to USDC.e
+    const profit = format(bestSell - bestBuy, 6);
+    console.log(`💰 Estimated profit: $${profit.toFixed(6)}\n`);
 
-    const usdcOut = sellAmounts[1];
-    const profit = usdcOut - amountInParsed;
-
-    const profitDisplay = Number(ethers.formatUnits(profit, 6));
-    console.log(`💰 Estimated profit: ${profitDisplay.toFixed(8)} USDC.e`);
-
-    if (profit <= 0n) {
-      console.log("⚠️ No profit opportunity.");
-      continue;
-    }
-
-    if (profit < minProfit) {
-      console.log("⚠️ Profit below threshold, skipping trade");
-      continue;
-    }
-
-    console.log("💥 Profit acceptable, executing arbitrage...");
-
-    try {
-      const tx = await contract.executeArbitrage(BUY_ROUTER, SELL_ROUTER, token.address, amountInParsed);
-      console.log(`📤 Transaction submitted! Hash: ${tx.hash}`);
-      const receipt = await tx.wait();
-      console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
-    } catch (err) {
-      console.error("⚠️ Transaction failed:", err.message);
+    if (profit >= MIN_PROFIT_USDC) {
+      console.log(`🚀 PROFITABLE OPPORTUNITY FOUND for ${symbol}!`);
+      console.log(`💸 Potential Profit: $${profit.toFixed(6)} USDC.e`);
+      // Here you would execute the transaction:
+      // await executeArbitrage(bestRouter, ...)
     }
   }
 }
 
-main();
+// Run Bot
+checkArbitrage()
+  .then(() => console.log("✅ Scan complete"))
+  .catch((err) => console.error("⚠️ Error:", err.message));
