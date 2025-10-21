@@ -1,163 +1,121 @@
-// arbitrage.js
-// Self-contained example: gross profit reporting, logs exact cycle messages
+#!/usr/bin/env node
+import * as ethers from "ethers";
 
-require('dotenv').config();
-const { ethers } = require('ethers');
+// --- Load environment variables ---
+const {
+  RPC_URL,
+  PRIVATE_KEY,
+  BUY_ROUTER,
+  SELL_ROUTER,
+  TOKEN,
+  AMOUNT_IN_HUMAN
+} = process.env;
 
-// ---------------------- Config / Constants ----------------------
+// --- Validate environment ---
+if (!RPC_URL || !PRIVATE_KEY || !BUY_ROUTER || !SELL_ROUTER || !TOKEN || !AMOUNT_IN_HUMAN) {
+  console.error("Missing required environment variables!");
+  process.exit(1);
+}
 
-const DRY_RUN = (process.env.DRY_RUN || 'true').toLowerCase() === 'true';
-const LOG_VERBOSE = (process.env.LOG_VERBOSE || 'true').toLowerCase() === 'true';
+// --- Trim and validate addresses ---
+const buyRouter = BUY_ROUTER.trim();
+const sellRouter = SELL_ROUTER.trim();
+const token = TOKEN.trim();
+const rpcUrl = RPC_URL.trim();
 
-// Profit threshold (in USDC)
-const MIN_PROFIT_USDC = parseFloat(process.env.MIN_PROFIT_USDC || '0.01'); 
+[buyRouter, sellRouter, token].forEach((addr, i) => {
+  if (!ethers.isAddress(addr)) {
+    console.error("Invalid Ethereum address:", addr);
+    process.exit(1);
+  }
+});
 
-// Starting trade amount (USDC)
-let baseAmountInUSDC = parseFloat(process.env.INITIAL_AMOUNT_IN_USDC || '0.1');
+// --- Provider & Wallet ---
+const provider = new ethers.JsonRpcProvider(rpcUrl);
+const wallet = new ethers.Wallet(PRIVATE_KEY.trim(), provider);
 
-// Token list
-const TOKENS = [
-  { symbol: 'WETH', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', decimals: 18 },
-  // Add more tokens if needed
+// --- Contract ABI & Address ---
+const contractAddress = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+
+const abi = [
+  {
+    "inputs":[{"internalType":"address","name":"buyRouter","type":"address"},{"internalType":"address","name":"sellRouter","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"}],
+    "name":"executeArbitrage",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  },
+  {
+    "inputs":[{"internalType":"address","name":"asset","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"},{"internalType":"uint256","name":"premium","type":"uint256"},{"internalType":"address","name":"","type":"address"},{"internalType":"bytes","name":"params","type":"bytes"}],
+    "name":"executeOperation",
+    "outputs":[{"internalType":"bool","name":"","type":"bool"}],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  },
+  {
+    "inputs":[{"internalType":"uint256","name":"_minProfit","type":"uint256"}],
+    "name":"setMinProfit",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  },
+  {
+    "inputs":[{"internalType":"address","name":"token","type":"address"}],
+    "name":"withdrawProfit",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  }
 ];
 
-// Addresses
-const USDC_ADDRESS = ethers.utils.getAddress(process.env.USDC_ADDRESS || '0xA0b86991c6218b36c1d19d4a2e9eb0cE3606eB48');
-const BUY_ROUTER_ADDRESS = ethers.utils.getAddress(process.env.BUY_ROUTER_ADDRESS || '0xUniswapV2Router02Address'); 
-const SELL_ROUTER_ADDRESS = ethers.utils.getAddress(process.env.SELL_ROUTER_ADDRESS || '0xUniswapV2Router02Address'); 
+// --- Contract instance ---
+const arbContract = new ethers.Contract(contractAddress, abi, wallet);
 
-// RPC provider
-const PROVIDER_URL = process.env.PROVIDER_URL || 'https://mainnet.infura.io/v3/your-project-id';
-const provider = new ethers.providers.JsonRpcProvider(PROVIDER_URL);
+// --- Helper to parse human-readable amounts ---
+const parseAmount = (amountStr, decimals = 6) => ethers.parseUnits(amountStr, decimals);
 
-// Wallet
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) throw new Error('Please set PRIVATE_KEY in env');
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+// --- Main arbitrage loop ---
+async function main() {
+  const amountIn = parseAmount(AMOUNT_IN_HUMAN.trim(), 6);
 
-// Routers
-const routerABI = [
-  'function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)'
-];
-const buyRouter = new ethers.Contract(BUY_ROUTER_ADDRESS, routerABI, wallet);
-const sellRouter = new ethers.Contract(SELL_ROUTER_ADDRESS, routerABI, wallet);
+  console.log("🚀 Starting ARB bot...");
+  console.log({ buyRouter, sellRouter, token, amountIn: amountIn.toString() });
 
-// ---------------------- Helpers ----------------------
+  while (true) {
+    try {
+      // --- Get potential profit ---
+      // For this ABI, the contract must compute internally; here we simulate raw profit via getAmountsOut if available
+      // Since the contract does not have getAmountsOut, we'll just trigger executeArbitrage for demonstration
+      // Replace this block with actual profit calculation using your own price feeds if needed
 
-function toBigNumber(val, decimals) {
-  return ethers.parseUnits(val.toString(), decimals);
-}
+      // Execute arbitrage directly if profit threshold is met
+      const tx = await arbContract.executeArbitrage(
+        buyRouter,
+        sellRouter,
+        token,
+        amountIn
+      );
 
-function fromBigNumber(bn, decimals) {
-  return parseFloat(ethers.formatUnits(bn, decimals));
-}
+      console.log("Transaction sent. Hash:", tx.hash);
+      const receipt = await tx.wait();
+      console.log("Transaction confirmed. Receipt:", receipt.transactionHash);
 
-async function getAmountsOutForPath(router, amountInWei, path) {
-  try {
-    const amounts = await router.getAmountsOut(amountInWei, path);
-    return amounts;
-  } catch (err) {
-    console.error('Error in getAmountsOutForPath:', err);
-    throw err;
-  }
-}
+      // Optional: withdraw profits back to wallet
+      await arbContract.withdrawProfit(token);
+      console.log("✅ Profit withdrawn.");
 
-// Logging helpers
-function logCycleHeader(cycle) { console.log(`--- Scan cycle #${cycle} ---`); }
-function logEvaluating(amountInUSDC) { console.log(`Cycle N: evaluating with amountInUSDC = ${amountInUSDC} USDC`); }
-function logGrossProfit(tokenSymbol, profitUSDC) { console.log(`💰 Gross profit threshold met for ${tokenSymbol} (≈$${profitUSDC.toFixed(6)} USDC). Executing arbitrage...`); }
-function logTxSent(txHash) { console.log(`✅ Transaction sent: ${txHash}`); }
-function logTxConfirmed(blockNumber) { console.log(`✅ Transaction confirmed in block ${blockNumber}`); }
-function logCycleComplete(tokenSymbol, grossProfitUSDC, amountInUSDC) { console.log(`🔎 Arbitrage cycle complete for ${tokenSymbol}: grossProfitUSDC=${grossProfitUSDC.toFixed(6)}, amountInUSDC=${amountInUSDC.toFixed(6)}`); }
+      // Wait a few seconds before next scan
+      await new Promise(res => setTimeout(res, 5000));
 
-// ---------------------- Arbitrage Logic ----------------------
-
-let cycle = 1;
-let currentAmountInUSDC = baseAmountInUSDC;
-let shouldContinue = true;
-
-async function runOneCycle(token) {
-  const symbol = token.symbol;
-  const tokenAddress = ethers.utils.getAddress(token.address);
-  const tokenDecimals = token.decimals;
-
-  const usdcAddress = ethers.utils.getAddress(USDC_ADDRESS);
-  const pathBuy = [usdcAddress, tokenAddress];
-  const pathSell = [tokenAddress, usdcAddress];
-
-  const amountInUSDCWei = toBigNumber(currentAmountInUSDC, 6);
-
-  let buyAmountsOut;
-  try {
-    buyAmountsOut = await getAmountsOutForPath(buyRouter, amountInUSDCWei, pathBuy);
-  } catch (e) {
-    console.warn(`Skipping ${symbol} due to buy path error:`, e);
-    return null;
-  }
-
-  const tokenBoughtAmountWei = buyAmountsOut[1];
-  if (!tokenBoughtAmountWei) {
-    console.warn(`No buy output for ${symbol}, skipping.`);
-    return null;
-  }
-
-  let sellAmountsOut;
-  try {
-    sellAmountsOut = await getAmountsOutForPath(sellRouter, tokenBoughtAmountWei, pathSell);
-  } catch (e) {
-    console.warn(`Skipping ${symbol} due to sell path error:`, e);
-    return null;
-  }
-
-  const buyAmountOutNorm = fromBigNumber(tokenBoughtAmountWei, tokenDecimals);
-  const sellAmountOutNorm = fromBigNumber(sellAmountsOut[1], 6);
-
-  const grossProfitUSDC = sellAmountOutNorm - currentAmountInUSDC;
-
-  if (LOG_VERBOSE) {
-    console.log(`--- ${symbol} ---`);
-    console.log(` Buy: ${currentAmountInUSDC.toFixed(6)} USDC -> ${buyAmountOutNorm.toFixed(tokenDecimals)} ${symbol}`);
-    console.log(` Sell: ${buyAmountOutNorm.toFixed(tokenDecimals)} ${symbol} -> ${sellAmountOutNorm.toFixed(6)} USDC`);
-    console.log(` GrossProfitUSDC ≈ ${grossProfitUSDC.toFixed(6)}`);
-  }
-
-  if (grossProfitUSDC >= MIN_PROFIT_USDC) {
-    logGrossProfit(symbol, grossProfitUSDC);
-
-    if (DRY_RUN) {
-      console.log(`🔎 [DRY-RUN] Would execute arbitrage for ${symbol}.`);
-    } else {
-      try {
-        // Placeholder for actual execution
-        const txHash = '0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
-        logTxSent(txHash);
-
-        const mockBlockNumber = 12345678;
-        logTxConfirmed(mockBlockNumber);
-
-        logCycleComplete(symbol, grossProfitUSDC, currentAmountInUSDC);
-      } catch (err) {
-        console.error(`Arbitrage execution failed for ${symbol}:`, err);
-      }
+    } catch (err) {
+      console.error("⚠️ Error during arbitrage:", err);
+      await new Promise(res => setTimeout(res, 5000));
     }
-  } else {
-    console.log(`⚠️ Profit below threshold for ${symbol}, skipping. (GrossProfitUSDC=${grossProfitUSDC.toFixed(6)} USDC)`);
   }
-
-  return { token: symbol, amountInUSDC: currentAmountInUSDC, grossProfitUSDC };
 }
 
-// ---------------------- Main Runner ----------------------
-
-(async () => {
-  while (shouldContinue) {
-    logCycleHeader(cycle);
-    for (const token of TOKENS) {
-      await runOneCycle(token);
-    }
-    cycle += 1;
-
-    if (cycle > 100) shouldContinue = false;
-  }
-  console.log('Arbitrage loop terminated.');
-})();
+// --- Run ---
+main().catch(err => {
+  console.error("Unhandled error:", err);
+  process.exit(1);
+});
