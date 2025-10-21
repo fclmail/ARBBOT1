@@ -2,96 +2,82 @@
 import { ethers } from "ethers";
 import fs from "fs";
 import path from "path";
+import dotenv from "dotenv";
+dotenv.config();
 
 // --- Load Environment Variables ---
-const {
-  RPC_URL,
-  PRIVATE_KEY,
-  CONTRACT_ADDRESS,
-  TOKEN,
-  AMOUNT_IN,
-  BUY_ROUTER,
-  SELL_ROUTER
-} = process.env;
+const { RPC_URL, PRIVATE_KEY, CONTRACT_ADDRESS, MIN_PROFIT, AMOUNT_IN } = process.env;
 
-// --- Validate Required Values ---
-function validateEnv() {
-  const required = { RPC_URL, PRIVATE_KEY, CONTRACT_ADDRESS, TOKEN, AMOUNT_IN, BUY_ROUTER, SELL_ROUTER };
-  for (const [key, value] of Object.entries(required)) {
-    if (!value || value.trim() === "") {
-      console.error(`❌ Missing environment variable: ${key}`);
-      process.exit(1);
-    }
-  }
-}
+// --- Token list ---
+const TOKENS = {
+  CRV: { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
+  DAI: { address: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", decimals: 18 },
+  KLIMA: { address: "0x4e78011ce80ee02d2c3e649fb657e45898257815", decimals: 9 },
+  LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
+  QUICK: { address: "0x831753dd7087cac61ab5644b308642cc1c33dc13", decimals: 18 },
+  USDT: { address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", decimals: 6 },
+  WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
+  WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 },
+};
+
+// --- Router list ---
+const ROUTERS = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+};
 
 // --- Load ABI ---
 function loadAbi() {
   const abiPath = path.join(process.cwd(), "abi", "AaveFlashArb.json");
-  if (!fs.existsSync(abiPath)) {
-    console.error(`❌ ABI file not found at: ${abiPath}`);
-    process.exit(1);
-  }
-  try {
-    const abiJSON = fs.readFileSync(abiPath, "utf-8");
-    return JSON.parse(abiJSON);
-  } catch (err) {
-    console.error("❌ Error parsing ABI JSON:", err.message);
-    process.exit(1);
-  }
+  if (!fs.existsSync(abiPath)) throw new Error("ABI file missing");
+  return JSON.parse(fs.readFileSync(abiPath, "utf-8"));
 }
 
-// --- Main Function ---
+// --- Main ---
 async function main() {
-  console.log("🚀 Starting Polygon Arbitrage Bot...");
-
-  validateEnv();
-  const abi = loadAbi();
-
-  // --- Setup Provider and Wallet ---
   const provider = new ethers.JsonRpcProvider(RPC_URL);
   const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-  console.log(`✅ Connected to Polygon RPC as ${await wallet.getAddress()}`);
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, loadAbi().abi, wallet);
 
-  // --- Setup Contract ---
-  const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
+  console.log("✅ Connected as", await wallet.getAddress());
 
-  // --- Clean & validate router addresses ---
-  const buyRouter = BUY_ROUTER.trim().replace(/\s+/g, "");
-  const sellRouter = SELL_ROUTER.trim().replace(/\s+/g, "");
-  const token = TOKEN.trim();
+  const minProfitParsed = ethers.parseUnits(MIN_PROFIT, 6); // USDC has 6 decimals
+  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6);
 
-  if (!ethers.isAddress(buyRouter) || !ethers.isAddress(sellRouter) || !ethers.isAddress(token)) {
-    console.error("❌ Invalid address detected:", { buyRouter, sellRouter, token });
-    process.exit(1);
-  }
+  for (const [symbol, token] of Object.entries(TOKENS)) {
+    try {
+      // --- Simulate arbitrage
+      await contract.callStatic.executeArbitrage(
+        ROUTERS.QuickSwap,
+        ROUTERS.SushiSwap,
+        token.address,
+        amountInParsed
+      );
 
-  // --- Parse amount ---
-  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e has 6 decimals
+      console.log(`💰 Arbitrage possible for ${symbol}. Sending transaction...`);
 
-  console.log("🔍 Input Parameters:");
-  console.log({ token, buyRouter, sellRouter, AMOUNT_IN, ParsedAmount: amountInParsed.toString() });
+      const tx = await contract.executeArbitrage(
+        ROUTERS.QuickSwap,
+        ROUTERS.SushiSwap,
+        token.address,
+        amountInParsed
+      );
 
-  // --- Execute Arbitrage via Flash Loan ---
-  try {
-    console.log("💥 Sending flash loan arbitrage transaction...");
+      const receipt = await tx.wait();
+      console.log(`✅ Executed ${symbol}, tx: ${tx.hash}`);
 
-    const tx = await contract.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      token,
-      amountInParsed,
-      { gasLimit: 500_000 } // adjust as needed
-    );
-
-    console.log(`📤 Transaction submitted! Hash: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
-  } catch (err) {
-    console.error("⚠️ Error executing flash loan arbitrage:", err);
-    process.exit(1);
+    } catch (err) {
+      console.log(`❌ No profitable arbitrage for ${symbol}`);
+    }
   }
 }
 
-// --- Run ---
+// --- Run periodically ---
+const SCAN_INTERVAL_MIN = 5; // minutes
+setInterval(() => {
+  console.log("🔎 Scanning token list for arbitrage...");
+  main();
+}, SCAN_INTERVAL_MIN * 60 * 1000);
+
+// Initial run
 main();
