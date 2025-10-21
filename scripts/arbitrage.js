@@ -26,11 +26,8 @@ const tokens = {
   WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 },
 };
 
-// --- Router List ---
-const routers = {
-  buy: BUY_ROUTER,
-  sell: SELL_ROUTER,
-};
+// --- Constants ---
+const USDCe = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC.e
 
 // --- Validate environment ---
 function validateEnv() {
@@ -59,16 +56,14 @@ function loadAbi() {
   }
 }
 
-// --- UniswapV2 Router ABI fragment ---
+// --- Router ABI (Minimal) ---
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts)",
-  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
+  "function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts)"
 ];
 
 // --- Main Function ---
 async function main() {
   console.log("🚀 Starting Polygon Arbitrage Bot...");
-
   validateEnv();
   const abi = loadAbi();
 
@@ -77,55 +72,48 @@ async function main() {
   console.log(`✅ Connected as ${await wallet.getAddress()}`);
 
   const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
+  const buyRouter = new ethers.Contract(BUY_ROUTER, routerAbi, provider);
+  const sellRouter = new ethers.Contract(SELL_ROUTER, routerAbi, provider);
 
-  // Convert amounts to BigNumber
-  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e has 6 decimals
+  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e
   const minProfit = ethers.parseUnits(MIN_PROFIT_USDC, 6);
 
   console.log(`💰 Amount in: ${AMOUNT_IN} USDC.e`);
   console.log(`💵 Minimum profit threshold: ${MIN_PROFIT_USDC} USDC.e`);
 
-  // --- Routers ---
-  const buyRouter = new ethers.Contract(routers.buy, routerAbi, provider);
-  const sellRouter = new ethers.Contract(routers.sell, routerAbi, provider);
-
   for (const [symbol, token] of Object.entries(tokens)) {
     try {
       console.log(`\n🔎 Checking token: ${symbol}`);
 
-      // Build swap paths
-      const pathBuy = [ethers.constants.AddressZero.replace("0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000"), token.address]; // USDC.e → token
-      const pathSell = [token.address, ethers.constants.AddressZero.replace("0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000")]; // token → USDC.e
+      const pathBuy = [USDCe, token.address];
+      const pathSell = [token.address, USDCe];
 
-      // Use USDC.e address for amountIn
-      pathBuy[0] = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // USDC.e
-
-      // Get expected output amounts
       const amountsOutBuy = await buyRouter.getAmountsOut(amountInParsed, pathBuy);
-      const amountToken = amountsOutBuy[amountsOutBuy.length - 1];
+      const tokenOut = amountsOutBuy[1];
 
-      const amountsOutSell = await sellRouter.getAmountsOut(amountToken, pathSell);
-      const amountOutUSDC = amountsOutSell[amountsOutSell.length - 1];
+      const amountsOutSell = await sellRouter.getAmountsOut(tokenOut, pathSell);
+      const usdcOut = amountsOutSell[1];
 
-      // Normalize decimals to USDC.e
-      const profit = amountOutUSDC - amountInParsed;
+      const profit = usdcOut - amountInParsed;
+      const profitDisplay = Number(ethers.formatUnits(profit, 6));
 
-      // Convert to BigNumber
-      const profitBN = ethers.BigInt(profit);
+      console.log(`💰 Estimated profit: ${profitDisplay.toFixed(8)} USDC.e`);
 
-      console.log(`💰 Estimated profit: ${ethers.formatUnits(profitBN, 6)} USDC.e`);
+      if (profit <= 0n) {
+        console.log("⚠️ No profit opportunity.");
+        continue;
+      }
 
-      if (profitBN < minProfit) {
+      if (profit < minProfit) {
         console.log("⚠️ Profit below threshold, skipping trade");
         continue;
       }
 
       console.log("💥 Profit acceptable, executing arbitrage...");
 
-      // Execute flash loan arbitrage
       const tx = await contract.executeArbitrage(
-        routers.buy,
-        routers.sell,
+        BUY_ROUTER,
+        SELL_ROUTER,
         token.address,
         amountInParsed
       );
@@ -133,6 +121,7 @@ async function main() {
       console.log(`📤 Transaction submitted! Hash: ${tx.hash}`);
       const receipt = await tx.wait();
       console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
+
     } catch (err) {
       console.error("⚠️ Error executing arbitrage:", err.message || err);
     }
