@@ -1,4 +1,3 @@
-// scripts/arbitrage.js
 import 'dotenv/config';
 import { ethers } from "ethers";
 import fs from "fs";
@@ -9,23 +8,23 @@ const {
   RPC_URL,
   PRIVATE_KEY,
   CONTRACT_ADDRESS,
-  TOKEN,
   AMOUNT_IN,
-  MIN_PROFIT_PERCENT,
+  MIN_PROFIT_USDC,
   BUY_ROUTER,
   SELL_ROUTER
 } = process.env;
 
-// --- Validate Required Values ---
-function validateEnv() {
-  const required = { RPC_URL, PRIVATE_KEY, CONTRACT_ADDRESS, TOKEN, AMOUNT_IN, MIN_PROFIT_PERCENT, BUY_ROUTER, SELL_ROUTER };
-  for (const [key, value] of Object.entries(required)) {
-    if (!value || value.trim() === "") {
-      console.error(`❌ Missing environment variable: ${key}`);
-      process.exit(1);
-    }
-  }
-}
+// --- Token List ---
+const tokens = {
+  CRV: { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
+  DAI: { address: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", decimals: 18 },
+  KLIMA: { address: "0x4e78011ce80ee02d2c3e649fb657e45898257815", decimals: 9 },
+  LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
+  QUICK: { address: "0x831753dd7087cac61ab5644b308642cc1c33dc13", decimals: 18 },
+  USDT: { address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", decimals: 6 },
+  WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
+  WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 }
+};
 
 // --- Load ABI ---
 function loadAbi() {
@@ -45,52 +44,53 @@ function loadAbi() {
 
 // --- Main Function ---
 async function main() {
-  console.log("🚀 Starting Polygon Arbitrage Bot...");
-  validateEnv();
-  const abi = loadAbi();
-
-  try {
-    const provider = new ethers.JsonRpcProvider(RPC_URL);
-    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    console.log(`✅ Connected to Polygon RPC as ${await wallet.getAddress()}`);
-
-    const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
-
-    const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC decimals
-    const minProfitPercent = parseFloat(MIN_PROFIT_PERCENT);
-
-    // Clean router addresses
-    const buyRouter = BUY_ROUTER.trim();
-    const sellRouter = SELL_ROUTER.trim();
-
-    console.log("🔍 Input Parameters:");
-    console.log({ token: TOKEN, buyRouter, sellRouter, AMOUNT_IN, amountInParsed: amountInParsed.toString(), minProfitPercent });
-
-    // --- ESTIMATE PROFIT --- //
-    // Fetch current balances after simulated swap (read-only)
-    // Here we call a custom contract view function "simulateArbitrage" (needs to be implemented on-chain)
-    // Alternatively, you can estimate using off-chain price oracles
-    let estimatedProfit = 0; // Placeholder for simulation
-    // Example: for demo, assume 0.02% profit of AMOUNT_IN
-    estimatedProfit = Number(AMOUNT_IN) * minProfitPercent;
-
-    console.log(`💰 Estimated profit: $${estimatedProfit.toFixed(4)}`);
-    if (estimatedProfit < Number(AMOUNT_IN) * minProfitPercent) {
-      console.log(`⚠️ Estimated profit below MIN_PROFIT_PERCENT. Skipping execution.`);
-      return;
-    }
-
-    // --- Execute Arbitrage --- //
-    console.log("💥 Sending flash loan arbitrage transaction...");
-    const tx = await contract.executeArbitrage(buyRouter, sellRouter, TOKEN.trim(), amountInParsed);
-    console.log(`📤 Transaction submitted! Hash: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
-  } catch (err) {
-    console.error("⚠️ Error executing flash loan arbitrage:", err);
+  if (!RPC_URL || !PRIVATE_KEY || !CONTRACT_ADDRESS || !AMOUNT_IN || !MIN_PROFIT_USDC || !BUY_ROUTER || !SELL_ROUTER) {
+    console.error("❌ Missing environment variable(s)");
     process.exit(1);
+  }
+
+  const provider = new ethers.JsonRpcProvider(RPC_URL);
+  const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+  console.log(`✅ Connected as ${await wallet.getAddress()}`);
+
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, loadAbi().abi, wallet);
+
+  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e has 6 decimals
+  const minProfitParsed = ethers.parseUnits(MIN_PROFIT_USDC, 6);
+
+  console.log(`💰 Amount in: ${AMOUNT_IN} USDC.e`);
+  console.log(`💵 Minimum profit threshold: ${MIN_PROFIT_USDC} USDC.e`);
+
+  for (const [symbol, tokenData] of Object.entries(tokens)) {
+    console.log(`\n🔎 Checking token: ${symbol}`);
+
+    try {
+      // For demonstration: simulate profit calculation
+      // In production, you’d call an off-chain price oracle or Uniswap quoter
+      const estimatedProfit = minProfitParsed; // simulate $0.00001 profit
+      console.log(`💰 Estimated profit: $${ethers.formatUnits(estimatedProfit, 6)}`);
+
+      if (estimatedProfit.lt(minProfitParsed)) {
+        console.log("⚠️ Profit below threshold, skipping trade");
+        continue;
+      }
+
+      console.log("💥 Executing arbitrage transaction...");
+      const tx = await contract.executeArbitrage(
+        BUY_ROUTER.trim(),
+        SELL_ROUTER.trim(),
+        tokenData.address,
+        amountInParsed
+      );
+
+      console.log(`📤 Transaction submitted! Hash: ${tx.hash}`);
+      const receipt = await tx.wait();
+      console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
+
+    } catch (err) {
+      console.error("⚠️ Error executing arbitrage:", err.message);
+    }
   }
 }
 
-// --- Run ---
 main();
