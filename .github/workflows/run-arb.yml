@@ -20,13 +20,13 @@ jobs:
         run: npm install
 
       - name: Run Arbitrage Script
-        run: node scripts/arbitrage.js
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
           AMOUNT_IN: ${{ secrets.AMOUNT_IN }}
-          MIN_PROFIT_PERCENT: ${{ secrets.MIN_PROFIT_PERCENT }}
+          MIN_PROFIT_USDC: ${{ secrets.MIN_PROFIT_USDC }} # <--- new secret
           BUY_ROUTER: ${{ secrets.BUY_ROUTER }}
           SELL_ROUTER: ${{ secrets.SELL_ROUTER }}
           TOKEN: ${{ secrets.TOKEN }}
+        run: node scripts/arbitrage.js
