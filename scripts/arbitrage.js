@@ -20,7 +20,7 @@ const ROUTERS = {
 
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const AMOUNT_IN = process.env.AMOUNT_IN;
-const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC; // USDC.e value
+const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC; // profit threshold in USDC.e
 const TOKEN_USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // ----------------- PROVIDER & WALLET -----------------
@@ -39,59 +39,74 @@ const ROUTER_ABI = [
   "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"
 ];
 
-// ----------------- MAIN -----------------
-async function main() {
+const buyRouter = new ethers.Contract(ROUTERS.buyRouter, ROUTER_ABI, provider);
+const sellRouter = new ethers.Contract(ROUTERS.sellRouter, ROUTER_ABI, provider);
+
+const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e decimals
+
+// ----------------- STOP MECHANISM -----------------
+let stopBot = false;
+process.on('SIGINT', () => {
+  console.log('\n🛑 Stop signal received. Exiting loop...');
+  stopBot = true;
+});
+
+// ----------------- MAIN LOOP -----------------
+async function arbitrageLoop() {
   console.log("🚀 Starting Polygon Arbitrage Bot...");
   console.log("✅ Connected as", wallet.address);
   console.log("💰 Amount in:", AMOUNT_IN, "USDC.e");
   console.log("💵 Minimum profit threshold:", MIN_PROFIT_USDC, "USDC.e\n");
 
-  const buyRouter = new ethers.Contract(ROUTERS.buyRouter, ROUTER_ABI, provider);
-  const sellRouter = new ethers.Contract(ROUTERS.sellRouter, ROUTER_ABI, provider);
+  while (!stopBot) {
+    for (const [symbol, token] of Object.entries(TOKENS)) {
+      try {
+        const pathBuy = [TOKEN_USDC, token.address];
+        const pathSell = [token.address, TOKEN_USDC];
 
-  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e decimals
+        // --- RAW ON-CHAIN AMOUNT FETCH ---
+        const amountsOutBuy = await buyRouter.getAmountsOut(amountInParsed, pathBuy);
+        const tokenAmountRaw = amountsOutBuy[1]; // BigInt
 
-  for (const [symbol, token] of Object.entries(TOKENS)) {
-    try {
-      const pathBuy = [TOKEN_USDC, token.address];
-      const pathSell = [token.address, TOKEN_USDC];
+        const amountsOutSell = await sellRouter.getAmountsOut(tokenAmountRaw, pathSell);
+        const usdcOutRaw = amountsOutSell[1]; // BigInt
 
-      // ----- RAW PRICE FETCH -----
-      const amountsOutBuy = await buyRouter.getAmountsOut(amountInParsed, pathBuy);
-      const tokenAmount = amountsOutBuy[1];
+        // --- DECIMAL NORMALIZATION ---
+        const tokenAmount = Number(ethers.formatUnits(tokenAmountRaw, token.decimals));
+        const usdcOut = Number(ethers.formatUnits(usdcOutRaw, 6));
 
-      const amountsOutSell = await sellRouter.getAmountsOut(tokenAmount, pathSell);
-      const usdcOut = amountsOutSell[1];
+        const profit = usdcOut - Number(AMOUNT_IN);
 
-      // ----- PROFIT CALCULATION -----
-      const profitBigInt = usdcOut - amountInParsed;
-      const profit = Number(ethers.formatUnits(profitBigInt, 6));
+        console.log(`🔎 Checking token: ${symbol}`);
+        console.log(`💰 Estimated profit: $${profit.toFixed(6)} USDC.e`);
 
-      console.log(`🔎 Checking token: ${symbol}`);
-      console.log(`💰 Estimated profit: $${profit.toFixed(6)} USDC.e`);
+        if (profit >= Number(MIN_PROFIT_USDC)) {
+          console.log("💥 Arbitrage profitable! Executing trade...");
 
-      if (profitBigInt >= ethers.parseUnits(MIN_PROFIT_USDC, 6)) {
-        console.log("💥 Arbitrage profitable! Executing trade...");
+          const tx = await arbContract.executeArbitrage(
+            ROUTERS.buyRouter,
+            ROUTERS.sellRouter,
+            token.address,
+            amountInParsed
+          );
 
-        const tx = await arbContract.executeArbitrage(
-          ROUTERS.buyRouter,
-          ROUTERS.sellRouter,
-          token.address,
-          amountInParsed
-        );
-
-        console.log("📤 Transaction submitted! Hash:", tx.hash);
-        await tx.wait();
-        console.log("✅ Trade executed!\n");
-      } else {
-        console.log("⚠️ Profit below threshold, skipping.\n");
+          console.log("📤 Transaction submitted! Hash:", tx.hash);
+          await tx.wait();
+          console.log("✅ Trade executed!\n");
+        } else {
+          console.log("⚠️ Profit below threshold, skipping.\n");
+        }
+      } catch (err) {
+        console.log(`⚠️ Error executing arbitrage for ${symbol}:`, err.reason || err.message, "\n");
       }
-    } catch (err) {
-      console.log(`⚠️ Error executing arbitrage for ${symbol}:`, err.reason || err.message, "\n");
     }
+
+    // Optional: delay between loops to avoid RPC overload
+    await new Promise(resolve => setTimeout(resolve, 5000));
   }
+
+  console.log("🏁 Arbitrage bot stopped.");
 }
 
-main()
-  .then(() => console.log("🏁 Arbitrage check complete."))
-  .catch(err => console.error(err));
+// ----------------- RUN -----------------
+arbitrageLoop().catch(err => console.error(err));
