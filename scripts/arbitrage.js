@@ -55,7 +55,7 @@ async function main() {
     console.log(`✅ Connected to Polygon RPC as ${await wallet.getAddress()}`);
 
     // --- Setup Contract ---
-    const contract = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
 
     // --- Parse Amount ---
     const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // 6 decimals for USDC.e
