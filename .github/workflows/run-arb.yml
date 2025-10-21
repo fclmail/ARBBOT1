@@ -1,32 +1,35 @@
-name: Run Arbitrage Bot
+name: ARB Bot
 
+# Trigger the workflow manually or on push to main
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
-  run:
+  run-arb:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # 1️⃣ Checkout repository
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # 2️⃣ Setup Node.js
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      # 3️⃣ Install dependencies
       - name: Install dependencies
         run: npm install
 
-      - name: Run Arbitrage Script
+      # 4️⃣ Run arbitrage script
+      - name: Run arbitrage
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-          CONTRACT_ADDRESS: ${{ secrets.CONTRACT_ADDRESS }}
-          AMOUNT_IN: ${{ secrets.AMOUNT_IN }}
-          MIN_PROFIT_USDC: ${{ secrets.MIN_PROFIT_USDC }} # <--- new secret
           BUY_ROUTER: ${{ secrets.BUY_ROUTER }}
           SELL_ROUTER: ${{ secrets.SELL_ROUTER }}
           TOKEN: ${{ secrets.TOKEN }}
+          AMOUNT_IN_HUMAN: ${{ secrets.AMOUNT_IN_HUMAN }}
         run: node scripts/arbitrage.js
