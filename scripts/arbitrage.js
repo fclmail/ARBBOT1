@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as ethers from "ethers";
 
-// --- Load environment variables ---
+// --- Environment variables ---
 const {
   RPC_URL,
   PRIVATE_KEY,
@@ -11,11 +11,14 @@ const {
   AMOUNT_IN_HUMAN
 } = process.env;
 
-// --- Validate environment ---
 if (!RPC_URL || !PRIVATE_KEY || !BUY_ROUTER || !SELL_ROUTER || !TOKEN || !AMOUNT_IN_HUMAN) {
   console.error("Missing required environment variables!");
   process.exit(1);
 }
+
+// --- Constants ---
+const MIN_PROFIT_USDC = 0.0000001; // minimum profit threshold
+const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 
 // --- Trim and validate addresses ---
 const buyRouter = BUY_ROUTER.trim();
@@ -23,7 +26,7 @@ const sellRouter = SELL_ROUTER.trim();
 const token = TOKEN.trim();
 const rpcUrl = RPC_URL.trim();
 
-[buyRouter, sellRouter, token].forEach((addr, i) => {
+[buyRouter, sellRouter, token].forEach((addr) => {
   if (!ethers.isAddress(addr)) {
     console.error("Invalid Ethereum address:", addr);
     process.exit(1);
@@ -34,27 +37,11 @@ const rpcUrl = RPC_URL.trim();
 const provider = new ethers.JsonRpcProvider(rpcUrl);
 const wallet = new ethers.Wallet(PRIVATE_KEY.trim(), provider);
 
-// --- Contract ABI & Address ---
-const contractAddress = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-
+// --- Contract ABI ---
 const abi = [
   {
     "inputs":[{"internalType":"address","name":"buyRouter","type":"address"},{"internalType":"address","name":"sellRouter","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"}],
     "name":"executeArbitrage",
-    "outputs":[],
-    "stateMutability":"nonpayable",
-    "type":"function"
-  },
-  {
-    "inputs":[{"internalType":"address","name":"asset","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"},{"internalType":"uint256","name":"premium","type":"uint256"},{"internalType":"address","name":"","type":"address"},{"internalType":"bytes","name":"params","type":"bytes"}],
-    "name":"executeOperation",
-    "outputs":[{"internalType":"bool","name":"","type":"bool"}],
-    "stateMutability":"nonpayable",
-    "type":"function"
-  },
-  {
-    "inputs":[{"internalType":"uint256","name":"_minProfit","type":"uint256"}],
-    "name":"setMinProfit",
     "outputs":[],
     "stateMutability":"nonpayable",
     "type":"function"
@@ -69,26 +56,20 @@ const abi = [
 ];
 
 // --- Contract instance ---
-const arbContract = new ethers.Contract(contractAddress, abi, wallet);
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
 
-// --- Helper to parse human-readable amounts ---
+// --- Helpers ---
 const parseAmount = (amountStr, decimals = 6) => ethers.parseUnits(amountStr, decimals);
+const minProfitUnits = parseAmount(MIN_PROFIT_USDC.toString(), 6); // threshold in token smallest unit
+const amountIn = parseAmount(AMOUNT_IN_HUMAN.trim(), 6);
 
-// --- Main arbitrage loop ---
+console.log("🚀 Starting ARB bot with MIN_PROFIT_USDC =", MIN_PROFIT_USDC);
+
+// --- Main loop ---
 async function main() {
-  const amountIn = parseAmount(AMOUNT_IN_HUMAN.trim(), 6);
-
-  console.log("🚀 Starting ARB bot...");
-  console.log({ buyRouter, sellRouter, token, amountIn: amountIn.toString() });
-
   while (true) {
     try {
-      // --- Get potential profit ---
-      // For this ABI, the contract must compute internally; here we simulate raw profit via getAmountsOut if available
-      // Since the contract does not have getAmountsOut, we'll just trigger executeArbitrage for demonstration
-      // Replace this block with actual profit calculation using your own price feeds if needed
-
-      // Execute arbitrage directly if profit threshold is met
+      // --- Here we call executeArbitrage; assume contract calculates profit internally ---
       const tx = await arbContract.executeArbitrage(
         buyRouter,
         sellRouter,
@@ -100,11 +81,11 @@ async function main() {
       const receipt = await tx.wait();
       console.log("Transaction confirmed. Receipt:", receipt.transactionHash);
 
-      // Optional: withdraw profits back to wallet
+      // --- Withdraw profits to wallet ---
       await arbContract.withdrawProfit(token);
-      console.log("✅ Profit withdrawn.");
+      console.log("✅ Profit withdrawn");
 
-      // Wait a few seconds before next scan
+      // --- Wait 5 seconds before next scan ---
       await new Promise(res => setTimeout(res, 5000));
 
     } catch (err) {
@@ -119,3 +100,4 @@ main().catch(err => {
   console.error("Unhandled error:", err);
   process.exit(1);
 });
+
