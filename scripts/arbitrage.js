@@ -70,8 +70,18 @@ async function main() {
     });
 
     // --- Execute Arbitrage ---
+    // --- Clean & sanitize router addresses ---
+    const buyRouter = BUY_ROUTER.trim().replace(/\s+/g, "");
+    const sellRouter = SELL_ROUTER.trim().replace(/\s+/g, "");
+
+    // Optional: log for debugging
+    console.log("🧾 Cleaned Routers:");
+    console.log({ buyRouter, sellRouter });
+
+    // --- Execute Arbitrage ---
     console.log("💥 Executing arbitrage transaction...");
-    const tx = await contract.executeArbitrage(BUY_ROUTER, SELL_ROUTER, TOKEN, amountInParsed);
+    const tx = await contract.executeArbitrage(buyRouter, sellRouter, TOKEN.trim(), amountInParsed);
+
 
     console.log(`📤 Transaction sent! Hash: ${tx.hash}`);
     const receipt = await tx.wait();
