@@ -23,8 +23,25 @@ const tokens = {
   QUICK: { address: "0x831753dd7087cac61ab5644b308642cc1c33dc13", decimals: 18 },
   USDT: { address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", decimals: 6 },
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
-  WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 }
+  WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 },
 };
+
+// --- Router List ---
+const routers = {
+  buy: BUY_ROUTER,
+  sell: SELL_ROUTER,
+};
+
+// --- Validate environment ---
+function validateEnv() {
+  const required = { RPC_URL, PRIVATE_KEY, CONTRACT_ADDRESS, AMOUNT_IN, MIN_PROFIT_USDC, BUY_ROUTER, SELL_ROUTER };
+  for (const [key, value] of Object.entries(required)) {
+    if (!value || value.trim() === "") {
+      console.error(`❌ Missing environment variable: ${key}`);
+      process.exit(1);
+    }
+  }
+}
 
 // --- Load ABI ---
 function loadAbi() {
@@ -42,53 +59,82 @@ function loadAbi() {
   }
 }
 
+// --- UniswapV2 Router ABI fragment ---
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts)",
+  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
+];
+
 // --- Main Function ---
 async function main() {
-  if (!RPC_URL || !PRIVATE_KEY || !CONTRACT_ADDRESS || !AMOUNT_IN || !MIN_PROFIT_USDC || !BUY_ROUTER || !SELL_ROUTER) {
-    console.error("❌ Missing environment variable(s)");
-    process.exit(1);
-  }
+  console.log("🚀 Starting Polygon Arbitrage Bot...");
+
+  validateEnv();
+  const abi = loadAbi();
 
   const provider = new ethers.JsonRpcProvider(RPC_URL);
   const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
   console.log(`✅ Connected as ${await wallet.getAddress()}`);
 
-  const contract = new ethers.Contract(CONTRACT_ADDRESS, loadAbi().abi, wallet);
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
 
+  // Convert amounts to BigNumber
   const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e has 6 decimals
-  const minProfitParsed = ethers.parseUnits(MIN_PROFIT_USDC, 6);
+  const minProfit = ethers.parseUnits(MIN_PROFIT_USDC, 6);
 
   console.log(`💰 Amount in: ${AMOUNT_IN} USDC.e`);
   console.log(`💵 Minimum profit threshold: ${MIN_PROFIT_USDC} USDC.e`);
 
-  for (const [symbol, tokenData] of Object.entries(tokens)) {
-    console.log(`\n🔎 Checking token: ${symbol}`);
+  // --- Routers ---
+  const buyRouter = new ethers.Contract(routers.buy, routerAbi, provider);
+  const sellRouter = new ethers.Contract(routers.sell, routerAbi, provider);
 
+  for (const [symbol, token] of Object.entries(tokens)) {
     try {
-      // For demonstration: simulate profit calculation
-      // In production, you’d call an off-chain price oracle or Uniswap quoter
-      const estimatedProfit = minProfitParsed; // simulate $0.00001 profit
-      console.log(`💰 Estimated profit: $${ethers.formatUnits(estimatedProfit, 6)}`);
+      console.log(`\n🔎 Checking token: ${symbol}`);
 
-      if (estimatedProfit.lt(minProfitParsed)) {
+      // Build swap paths
+      const pathBuy = [ethers.constants.AddressZero.replace("0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000"), token.address]; // USDC.e → token
+      const pathSell = [token.address, ethers.constants.AddressZero.replace("0x0000000000000000000000000000000000000000", "0x0000000000000000000000000000000000000000")]; // token → USDC.e
+
+      // Use USDC.e address for amountIn
+      pathBuy[0] = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // USDC.e
+
+      // Get expected output amounts
+      const amountsOutBuy = await buyRouter.getAmountsOut(amountInParsed, pathBuy);
+      const amountToken = amountsOutBuy[amountsOutBuy.length - 1];
+
+      const amountsOutSell = await sellRouter.getAmountsOut(amountToken, pathSell);
+      const amountOutUSDC = amountsOutSell[amountsOutSell.length - 1];
+
+      // Normalize decimals to USDC.e
+      const profit = amountOutUSDC - amountInParsed;
+
+      // Convert to BigNumber
+      const profitBN = ethers.BigInt(profit);
+
+      console.log(`💰 Estimated profit: ${ethers.formatUnits(profitBN, 6)} USDC.e`);
+
+      if (profitBN < minProfit) {
         console.log("⚠️ Profit below threshold, skipping trade");
         continue;
       }
 
-      console.log("💥 Executing arbitrage transaction...");
+      console.log("💥 Profit acceptable, executing arbitrage...");
+
+      // Execute flash loan arbitrage
       const tx = await contract.executeArbitrage(
-        BUY_ROUTER.trim(),
-        SELL_ROUTER.trim(),
-        tokenData.address,
+        routers.buy,
+        routers.sell,
+        token.address,
         amountInParsed
       );
 
       console.log(`📤 Transaction submitted! Hash: ${tx.hash}`);
       const receipt = await tx.wait();
       console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
-
     } catch (err) {
-      console.error("⚠️ Error executing arbitrage:", err.message);
+      console.error("⚠️ Error executing arbitrage:", err.message || err);
     }
   }
 }
