@@ -58,30 +58,30 @@ async function main() {
     const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
 
     // --- Parse Amount ---
-    const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // 6 decimals for USDC.e
+    const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // assuming USDC.e (6 decimals)
 
+    // --- Clean and Validate Router Addresses ---
+    const buyRouter = BUY_ROUTER.trim().replace(/\s+/g, "");
+    const sellRouter = SELL_ROUTER.trim().replace(/\s+/g, "");
+
+    if (!ethers.isAddress(buyRouter) || !ethers.isAddress(sellRouter)) {
+      console.error("❌ Invalid router address detected:", { buyRouter, sellRouter });
+      process.exit(1);
+    }
+
+    // --- Log Inputs ---
     console.log("🔍 Input Parameters:");
     console.log({
-      TOKEN,
-      BUY_ROUTER,
-      SELL_ROUTER,
-      AMOUNT_IN: AMOUNT_IN,
+      TOKEN: TOKEN.trim(),
+      BUY_ROUTER: buyRouter,
+      SELL_ROUTER: sellRouter,
+      AMOUNT_IN,
       ParsedAmount: amountInParsed.toString(),
     });
 
     // --- Execute Arbitrage ---
-    // --- Clean & sanitize router addresses ---
-    const buyRouter = BUY_ROUTER.trim().replace(/\s+/g, "");
-    const sellRouter = SELL_ROUTER.trim().replace(/\s+/g, "");
-
-    // Optional: log for debugging
-    console.log("🧾 Cleaned Routers:");
-    console.log({ buyRouter, sellRouter });
-
-    // --- Execute Arbitrage ---
     console.log("💥 Executing arbitrage transaction...");
     const tx = await contract.executeArbitrage(buyRouter, sellRouter, TOKEN.trim(), amountInParsed);
-
 
     console.log(`📤 Transaction sent! Hash: ${tx.hash}`);
     const receipt = await tx.wait();
