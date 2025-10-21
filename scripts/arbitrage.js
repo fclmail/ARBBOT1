@@ -48,46 +48,47 @@ async function main() {
   validateEnv();
   const abi = loadAbi();
 
+  // --- Setup Provider and Wallet ---
+  const provider = new ethers.JsonRpcProvider(RPC_URL);
+  const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+  console.log(`✅ Connected to Polygon RPC as ${await wallet.getAddress()}`);
+
+  // --- Setup Contract ---
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
+
+  // --- Clean & validate router addresses ---
+  const buyRouter = BUY_ROUTER.trim().replace(/\s+/g, "");
+  const sellRouter = SELL_ROUTER.trim().replace(/\s+/g, "");
+  const token = TOKEN.trim();
+
+  if (!ethers.isAddress(buyRouter) || !ethers.isAddress(sellRouter) || !ethers.isAddress(token)) {
+    console.error("❌ Invalid address detected:", { buyRouter, sellRouter, token });
+    process.exit(1);
+  }
+
+  // --- Parse amount ---
+  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e has 6 decimals
+
+  console.log("🔍 Input Parameters:");
+  console.log({ token, buyRouter, sellRouter, AMOUNT_IN, ParsedAmount: amountInParsed.toString() });
+
+  // --- Execute Arbitrage via Flash Loan ---
   try {
-    // --- Setup Provider and Wallet ---
-    const provider = new ethers.JsonRpcProvider(RPC_URL);
-    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    console.log(`✅ Connected to Polygon RPC as ${await wallet.getAddress()}`);
+    console.log("💥 Sending flash loan arbitrage transaction...");
 
-    // --- Setup Contract ---
-    const contract = new ethers.Contract(CONTRACT_ADDRESS, abi.abi, wallet);
+    const tx = await contract.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      token,
+      amountInParsed,
+      { gasLimit: 500_000 } // adjust as needed
+    );
 
-    // --- Parse Amount ---
-    const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // assuming USDC.e (6 decimals)
-
-    // --- Clean and Validate Router Addresses ---
-    const buyRouter = BUY_ROUTER.trim().replace(/\s+/g, "");
-    const sellRouter = SELL_ROUTER.trim().replace(/\s+/g, "");
-
-    if (!ethers.isAddress(buyRouter) || !ethers.isAddress(sellRouter)) {
-      console.error("❌ Invalid router address detected:", { buyRouter, sellRouter });
-      process.exit(1);
-    }
-
-    // --- Log Inputs ---
-    console.log("🔍 Input Parameters:");
-    console.log({
-      TOKEN: TOKEN.trim(),
-      BUY_ROUTER: buyRouter,
-      SELL_ROUTER: sellRouter,
-      AMOUNT_IN,
-      ParsedAmount: amountInParsed.toString(),
-    });
-
-    // --- Execute Arbitrage ---
-    console.log("💥 Executing arbitrage transaction...");
-    const tx = await contract.executeArbitrage(buyRouter, sellRouter, TOKEN.trim(), amountInParsed);
-
-    console.log(`📤 Transaction sent! Hash: ${tx.hash}`);
+    console.log(`📤 Transaction submitted! Hash: ${tx.hash}`);
     const receipt = await tx.wait();
     console.log(`✅ Transaction confirmed in block ${receipt.blockNumber}`);
   } catch (err) {
-    console.error("⚠️ Error executing arbitrage:", err);
+    console.error("⚠️ Error executing flash loan arbitrage:", err);
     process.exit(1);
   }
 }
