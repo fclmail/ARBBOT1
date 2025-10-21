@@ -1,135 +1,109 @@
-// scripts/arbitrage.js
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
 
-// -------------------------
-// CONFIG
-// -------------------------
 const RPC_URL = process.env.RPC_URL;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-const AMOUNT_IN = process.env.AMOUNT_IN || "0.0008"; // default small trade
-const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC || "0.00001";
+const AMOUNT_IN_USDC = process.env.AMOUNT_IN; // e.g., "100"
+const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC; // e.g., "0.00001"
+const BUY_ROUTER = process.env.BUY_ROUTER;
+const SELL_ROUTER = process.env.SELL_ROUTER;
+const TOKEN_LIST = JSON.parse(process.env.TOKEN_LIST); 
+// Example: { "WETH": { "address": "0x...", "decimals": 18 }, "WBTC": {...} }
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const contract = new ethers.Contract(
   CONTRACT_ADDRESS,
-  [
-    "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountIn) external",
-    "function withdrawProfit(address token) external",
-  ],
+  ["function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountIn) external",
+   "function withdrawProfit(address token) external"],
   wallet
 );
 
-// Example token and router setup (replace with your own)
-const tokens = {
-  USDC: { address: process.env.USDC_ADDRESS, decimals: 6 },
-  WBTC: { address: process.env.WBTC_ADDRESS },
-  WETH: { address: process.env.WETH_ADDRESS },
-  KLIMA: { address: process.env.KLIMA_ADDRESS },
-};
+// ------------------------
+// UTILITIES
+// ------------------------
 
-const routers = {
-  SUSHI: process.env.SUSHI_ROUTER,
-  QUICK: process.env.QUICK_ROUTER,
-};
-
-// -------------------------
-// HELPERS
-// -------------------------
 async function getTokenDecimals(tokenAddress) {
+  if (!tokenAddress) return 18; // fallback
   const token = new ethers.Contract(tokenAddress, ["function decimals() view returns (uint8)"], provider);
   return await token.decimals();
 }
 
-async function getAmountOutRaw(router, tokenIn, amountIn) {
-  const path = [tokens.USDC.address, tokenIn, tokens.USDC.address];
+async function getAmountOut(routerAddress, tokenIn, amountInRaw) {
+  if (!tokenIn || !routerAddress) return ethers.BigInt(0);
   try {
-    const routerContract = new ethers.Contract(
-      router,
-      ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory amounts)"],
+    const router = new ethers.Contract(routerAddress,
+      ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"],
       provider
     );
-    const amounts = await routerContract.getAmountsOut(amountIn, path);
-    return amounts[amounts.length - 1];
+    const amounts = await router.getAmountsOut(amountInRaw, [TOKEN_LIST.USDC.address, tokenIn]);
+    return amounts[1];
   } catch (e) {
-    console.error(`⚠️ getAmountOutRaw failed for ${tokenIn} on router ${router}: ${e.message}`);
+    console.warn(`⚠️ getAmountOut failed for token ${tokenIn}: ${e.message}`);
     return ethers.BigInt(0);
   }
 }
 
-function normalizeAmount(amount, decimals) {
-  return Number(ethers.formatUnits(amount, decimals));
-}
-
-async function fetchTokenDecimals(tokenObj) {
-  if (!tokenObj.decimals) tokenObj.decimals = await getTokenDecimals(tokenObj.address);
-}
-
-// -------------------------
+// ------------------------
 // ARBITRAGE LOOP
-// -------------------------
-let STOP = false;
+// ------------------------
+
+let stopBot = false;
 
 process.on("SIGINT", () => {
-  console.log("\n🛑 Stop signal received. Exiting...");
-  STOP = true;
+  console.log("🛑 Stop signal received. Exiting loop...");
+  stopBot = true;
 });
 
 async function arbitrageLoop() {
-  // Ensure all decimals are loaded
-  for (const t of Object.values(tokens)) await fetchTokenDecimals(t);
-
   console.log("🚀 Starting Polygon Arbitrage Bot...");
+  console.log(`💰 Amount in: ${AMOUNT_IN_USDC} USDC.e`);
+  console.log(`💵 Minimum profit threshold: ${MIN_PROFIT_USDC} USDC.e`);
 
-  while (!STOP) {
-    for (const [symbol, token] of Object.entries(tokens)) {
-      if (symbol === "USDC") continue;
+  while (!stopBot) {
+    for (const [symbol, token] of Object.entries(TOKEN_LIST)) {
+      if (!token.address || symbol === "USDC") continue;
 
-      for (const [buyName, buyRouter] of Object.entries(routers)) {
-        for (const [sellName, sellRouter] of Object.entries(routers)) {
-          if (buyName === sellName) continue;
+      try {
+        const decimals = token.decimals || await getTokenDecimals(token.address);
+        const amountInRaw = ethers.parseUnits(AMOUNT_IN_USDC, 6); // USDC 6 decimals
 
-          try {
-            const amountInRaw = ethers.parseUnits(AMOUNT_IN.toString(), tokens.USDC.decimals);
+        // Raw getAmountOut for buy and sell
+        const buyAmountOut = await getAmountOut(BUY_ROUTER, token.address, amountInRaw);
+        const sellAmountOut = await getAmountOut(SELL_ROUTER, token.address, buyAmountOut);
 
-            // Fetch raw amounts
-            const buyOut = await getAmountOutRaw(buyRouter, token.address, amountInRaw);
-            const sellOut = await getAmountOutRaw(sellRouter, token.address, buyOut);
+        // Decimal normalization
+        const buyNormalized = Number(buyAmountOut) / (10 ** decimals);
+        const sellNormalized = Number(sellAmountOut) / (10 ** 6); // USDC output
 
-            // Normalize to USDC
-            const buyOutNorm = normalizeAmount(buyOut, token.decimals);
-            const sellOutNorm = normalizeAmount(sellOut, tokens.USDC.decimals);
+        const profit = sellNormalized - Number(AMOUNT_IN_USDC);
+        console.log(`🔎 ${symbol} | Estimated profit: $${profit.toFixed(8)} USDC.e`);
 
-            const profit = sellOutNorm - AMOUNT_IN;
-            const profitUSDC = profit;
-
-            console.log(`🔎 ${symbol} ${buyName}→${sellName} | Est. Profit: $${profitUSDC.toFixed(6)} USDC`);
-
-            if (profitUSDC >= MIN_PROFIT_USDC) {
-              console.log(`⚡ Profitable opportunity found! Executing arbitrage for ${symbol}...`);
-              const tx = await contract.executeArbitrage(buyRouter, sellRouter, token.address, amountInRaw, { gasLimit: 1000000 });
-              console.log(`📤 Transaction sent: ${tx.hash}`);
-              const receipt = await tx.wait();
-              console.log(`✅ Arbitrage executed. Tx confirmed in block ${receipt.blockNumber}. Profit est: $${profitUSDC.toFixed(6)} USDC`);
-            }
-          } catch (err) {
-            console.error(`⚠️ Error executing arbitrage for ${symbol} ${buyName}→${sellName}: ${err.message}`);
-          }
+        if (profit >= Number(MIN_PROFIT_USDC)) {
+          console.log(`⚡ Profit above threshold. Executing arbitrage for ${symbol}...`);
+          const tx = await contract.executeArbitrage(BUY_ROUTER, SELL_ROUTER, token.address, amountInRaw, { gasLimit: 1_000_000 });
+          console.log(`✅ Tx sent: ${tx.hash}`);
+          const receipt = await tx.wait();
+          console.log(`🎯 Arbitrage executed: ${symbol} | Block: ${receipt.blockNumber}`);
+        } else {
+          console.log(`⚠️ Profit below threshold, skipping ${symbol}`);
         }
+
+      } catch (e) {
+        console.error(`⚠️ Error executing arbitrage for ${symbol}: ${e.message}`);
       }
     }
 
-    // Optional: small delay to avoid rate limits
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 2000)); // 2s pause before next scan
   }
 
-  console.log("🛑 Arbitrage loop stopped.");
+  console.log("🛑 Bot stopped. Exiting.");
 }
 
-// -------------------------
+// ------------------------
 // START
-// -------------------------
-arbitrageLoop().catch((err) => console.error(err));
+// ------------------------
+
+arbitrageLoop().catch(console.error);
