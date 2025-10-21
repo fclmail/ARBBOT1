@@ -20,7 +20,7 @@ const ROUTERS = {
 
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const AMOUNT_IN = process.env.AMOUNT_IN;
-const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC; // in USDC.e smallest units
+const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC; // USDC.e value
 const TOKEN_USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // ----------------- PROVIDER & WALLET -----------------
@@ -32,7 +32,6 @@ const ARB_ABI = [
   "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external",
   "function withdrawProfit(address token) external"
 ];
-
 const arbContract = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 
 // ----------------- ROUTER ABI -----------------
@@ -50,12 +49,12 @@ async function main() {
   const buyRouter = new ethers.Contract(ROUTERS.buyRouter, ROUTER_ABI, provider);
   const sellRouter = new ethers.Contract(ROUTERS.sellRouter, ROUTER_ABI, provider);
 
+  const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e decimals
+
   for (const [symbol, token] of Object.entries(TOKENS)) {
     try {
       const pathBuy = [TOKEN_USDC, token.address];
       const pathSell = [token.address, TOKEN_USDC];
-
-      const amountInParsed = ethers.parseUnits(AMOUNT_IN, 6); // USDC.e has 6 decimals
 
       // ----- RAW PRICE FETCH -----
       const amountsOutBuy = await buyRouter.getAmountsOut(amountInParsed, pathBuy);
@@ -64,14 +63,14 @@ async function main() {
       const amountsOutSell = await sellRouter.getAmountsOut(tokenAmount, pathSell);
       const usdcOut = amountsOutSell[1];
 
-      // ----- DECIMAL NORMALIZATION -----
-      const usdcOutFormatted = ethers.formatUnits(usdcOut, 6);
-      const profit = usdcOut - parseFloat(AMOUNT_IN);
+      // ----- PROFIT CALCULATION -----
+      const profitBigInt = usdcOut - amountInParsed;
+      const profit = Number(ethers.formatUnits(profitBigInt, 6));
 
       console.log(`🔎 Checking token: ${symbol}`);
       console.log(`💰 Estimated profit: $${profit.toFixed(6)} USDC.e`);
 
-      if (profit >= parseFloat(MIN_PROFIT_USDC)) {
+      if (profitBigInt >= ethers.parseUnits(MIN_PROFIT_USDC, 6)) {
         console.log("💥 Arbitrage profitable! Executing trade...");
 
         const tx = await arbContract.executeArbitrage(
@@ -87,9 +86,8 @@ async function main() {
       } else {
         console.log("⚠️ Profit below threshold, skipping.\n");
       }
-
     } catch (err) {
-      console.log(`⚠️ Error executing arbitrage for ${symbol}:`, err.message, "\n");
+      console.log(`⚠️ Error executing arbitrage for ${symbol}:`, err.reason || err.message, "\n");
     }
   }
 }
