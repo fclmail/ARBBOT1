@@ -18,15 +18,7 @@
  *  - SCAN_INTERVAL_MS (default: 5000)
  */
 
-import {
-  JsonRpcProvider,
-  Wallet,
-  Contract,
-  parseUnits,
-  formatUnits,
-  isAddress,
-  BigNumber
-} from "ethers";
+import { JsonRpcProvider, Wallet, Contract, parseUnits, formatUnits, isAddress } from "ethers";
 
 const {
   RPC_URL,
@@ -94,7 +86,8 @@ const arbContract = new Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 
 // --- Helpers ---
 const toUnits = (humanStr) => parseUnits(humanStr, DECIMALS);
-const fromUnits = (big) => formatUnits(big, DECIMALS);
+const fromUnits = (bigintVal) => formatUnits(bigintVal, DECIMALS);
+
 const amountIn = toUnits(AMOUNT_HUMAN);
 const minProfitUnits = toUnits(MIN_PROFIT);
 
@@ -109,12 +102,12 @@ async function checkArbDirection(buyR, sellR, label) {
     const pathSell = [tokenAddr, usdcAddr];
 
     const buyAmounts = await buyR.getAmountsOut(amountIn, pathBuy);
-    const tokenOut = BigNumber.from(buyAmounts[1]);
+    const tokenOut = BigInt(buyAmounts[1].toString());
 
     const sellAmounts = await sellR.getAmountsOut(tokenOut, pathSell);
-    const usdcOut = BigNumber.from(sellAmounts[1]);
+    const usdcOut = BigInt(sellAmounts[1].toString());
 
-    const profit = usdcOut.sub(amountIn);
+    const profit = usdcOut - BigInt(amountIn.toString());
 
     console.log(`${now()} [${label}] 💰 Buy -> token: ${fromUnits(tokenOut)} token`);
     console.log(`${now()} [${label}] 💵 Sell -> USDC: ${fromUnits(usdcOut)} USDC`);
@@ -123,7 +116,7 @@ async function checkArbDirection(buyR, sellR, label) {
     return { profit, buyR, sellR };
   } catch (err) {
     console.warn(`${now()} [${label}] ⚠️ Router call failed: ${err.reason || err.message}`);
-    return { profit: BigNumber.from(-1) }; // negative to skip execution
+    return { profit: -1n }; // negative to skip execution
   }
 }
 
@@ -144,7 +137,7 @@ async function executeArb(buyR, sellR, label) {
       sellR.address,
       tokenAddr,
       amountIn,
-      { gasLimit: gasEst.mul(120).div(100) } // +20% buffer
+      { gasLimit: gasEst.mul(120n).div(100n) } // +20% buffer
     );
 
     console.log(`${now()} [${label}] 🧾 TX sent: ${tx.hash}`);
@@ -163,7 +156,6 @@ async function runLoop() {
     iteration++;
     console.log(`\n${now()} [#${iteration}] 🔍 Scanning block ${await provider.getBlockNumber()}...`);
 
-    // Check both directions
     const directions = [
       { buyR: buyRouter, sellR: sellRouter, label: "A→B" },
       { buyR: sellRouter, sellR: buyRouter, label: "B→A" }
@@ -171,7 +163,7 @@ async function runLoop() {
 
     for (const dir of directions) {
       const { profit, buyR, sellR } = await checkArbDirection(dir.buyR, dir.sellR, dir.label);
-      if (profit.gte(minProfitUnits)) {
+      if (profit >= BigInt(minProfitUnits.toString())) {
         console.log(`${now()} [${dir.label}] ✅ Profitable! Executing arbitrage...`);
         await executeArb(buyR, sellR, dir.label);
       } else {
