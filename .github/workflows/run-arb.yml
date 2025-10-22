@@ -8,69 +8,48 @@ on:
 jobs:
   run-arb:
     runs-on: ubuntu-latest
+
     steps:
-      # 1) Checkout repository
+      # 1️⃣ Checkout repository
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Setup Node.js
+      # 2️⃣ Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # 3) Debug - show files (helps diagnose wrong working dir / missing package.json)
-      - name: Debug repo files
-        run: |
-          echo "Repository files:"
-          ls -la
-          echo "Top-level contents:"
-          ls -la .
-          echo "scripts folder:"
-          ls -la scripts || true
-          echo "package.json (if present):"
-          if [ -f package.json ]; then echo "package.json exists"; cat package.json; else echo "package.json NOT present"; fi
-
-      # 4) Install dependencies
-      - name: Install dependencies
-        run: npm install
-
-      # 5) Validate required environment variables (does NOT expose PRIVATE_KEY)
-      - name: Validate env & addresses
+      # 3️⃣ Debug environment
+      - name: Debug environment variables
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           BUY_ROUTER: ${{ secrets.BUY_ROUTER }}
           SELL_ROUTER: ${{ secrets.SELL_ROUTER }}
           TOKEN: ${{ secrets.TOKEN }}
           AMOUNT_IN_HUMAN: ${{ secrets.AMOUNT_IN_HUMAN }}
+          USDC_ADDRESS: ${{ secrets.USDC_ADDRESS }}
         run: |
-          node -e "
-          const required = ['RPC_URL','BUY_ROUTER','SELL_ROUTER','TOKEN','AMOUNT_IN_HUMAN'];
-          const missing = required.filter(k => !process.env[k] || process.env[k].trim()==='');
-          if (missing.length) {
-            console.error('Missing required secrets/vars:', missing.join(', '));
-            process.exit(1);
-          }
-          // simple address validator for 0x-prefixed 40-hex chars
-          const isAddr = s => /^0x[a-fA-F0-9]{40}$/.test(s.trim());
-          const addrChecks = [
-            ['BUY_ROUTER', process.env.BUY_ROUTER],
-            ['SELL_ROUTER', process.env.SELL_ROUTER],
-            ['TOKEN', process.env.TOKEN]
-          ];
-          const bad = addrChecks.filter(([k,v]) => !isAddr(v || ''));
-          if (bad.length) {
-            console.error('Invalid Ethereum address for:', bad.map(b => b[0]).join(', '));
-            console.error('Provided values (masked):');
-            for (const [k,v] of addrChecks) {
-              console.log(k + ':', (v || '').replace(/.(?=.{4})/g, '*').slice(0,42));
-            }
-            process.exit(1);
-          }
-          console.log('Environment validation passed ✅');
-          "
+          echo "🔍 Checking environment..."
+          for VAR in RPC_URL PRIVATE_KEY BUY_ROUTER SELL_ROUTER TOKEN AMOUNT_IN_HUMAN USDC_ADDRESS; do
+            if [ -z "${!VAR}" ]; then
+              echo "❌ Missing: $VAR"
+              EXIT=1
+            else
+              echo "✅ Found: $VAR"
+            fi
+          done
+          if [ "$EXIT" = "1" ]; then
+            echo "Missing one or more required environment variables."
+            exit 1
+          fi
 
-      # 6) Run the arbitrage script (PRIVATE_KEY only passed in this step)
+      # 4️⃣ Install dependencies
+      - name: Install dependencies
+        run: npm install
+
+      # 5️⃣ Run arbitrage bot
       - name: Run arbitrage
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
@@ -79,4 +58,5 @@ jobs:
           SELL_ROUTER: ${{ secrets.SELL_ROUTER }}
           TOKEN: ${{ secrets.TOKEN }}
           AMOUNT_IN_HUMAN: ${{ secrets.AMOUNT_IN_HUMAN }}
+          USDC_ADDRESS: ${{ secrets.USDC_ADDRESS }}
         run: node scripts/arbitrage.js
