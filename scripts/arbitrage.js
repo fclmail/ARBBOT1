@@ -1,24 +1,10 @@
 #!/usr/bin/env node
 /**
- * scripts/arbitrage.js
- * Bidirectional live arbitrage scanner + executor using UniswapV2-style routers.
- *
- * Required ENV:
- *  - RPC_URL
- *  - PRIVATE_KEY
- *  - BUY_ROUTER
- *  - SELL_ROUTER
- *  - TOKEN
- *  - USDC_ADDRESS
- *  - AMOUNT_IN_HUMAN
- *
- * Optional ENV:
- *  - CONTRACT_ADDRESS
- *  - MIN_PROFIT_USDC
- *  - SCAN_INTERVAL_MS
+ * Bidirectional arbitrage scanner + executor
+ * Ethers v6 compatible, fixed BigNumber/parseUnits issues
  */
 
-import { JsonRpcProvider, Wallet, Contract, parseUnits, formatUnits, isAddress, BigInt } from "ethers";
+import { JsonRpcProvider, Wallet, Contract, parseUnits, formatUnits, isAddress, toBigInt } from "ethers";
 
 const {
   RPC_URL,
@@ -147,6 +133,3 @@ runLoop().catch((err) => {
   console.error("❌ Fatal error:", err);
   process.exit(1);
 });
-
-
-
