@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * scripts/arbitrage.js
- * Live arbitrage scanner + executor using on-chain getAmountsOut (UniswapV2-style routers).
+ * Bidirectional live arbitrage scanner + executor using UniswapV2-style routers.
  *
  * Required ENV:
  *  - RPC_URL
@@ -13,12 +13,12 @@
  *  - AMOUNT_IN_HUMAN
  *
  * Optional ENV:
- *  - CONTRACT_ADDRESS (default: deployed AaveFlashArb)
- *  - MIN_PROFIT_USDC (default: 0.0000001)
- *  - SCAN_INTERVAL_MS (default: 5000)
+ *  - CONTRACT_ADDRESS
+ *  - MIN_PROFIT_USDC
+ *  - SCAN_INTERVAL_MS
  */
 
-import { JsonRpcProvider, Wallet, Contract, parseUnits, formatUnits, isAddress } from "ethers";
+import { JsonRpcProvider, Wallet, Contract, parseUnits, formatUnits, isAddress, BigInt } from "ethers";
 
 const {
   RPC_URL,
@@ -49,15 +49,13 @@ const sellRouterAddr = SELL_ROUTER.trim();
 const tokenAddr = TOKEN.trim();
 const usdcAddr = USDC_ADDRESS.trim();
 const AMOUNT_HUMAN = AMOUNT_IN_HUMAN.trim();
-const DECIMALS = 6; // USDC decimals
+const DECIMALS = 6;
 let MIN_PROFIT = MIN_PROFIT_USDC ? Number(MIN_PROFIT_USDC) : 0.0000001;
-const SCAN_MS = SCAN_INTERVAL_MS ? Number(SCAN_INTERVAL_MS) : 5000;
-
-// Clamp very small minProfit
 if (MIN_PROFIT < 1 / 10 ** DECIMALS) {
   console.warn(`⚠️ MIN_PROFIT_USDC (${MIN_PROFIT}) too small for ${DECIMALS}-decimal token. Clamping to ${1 / 10 ** DECIMALS}`);
   MIN_PROFIT = 1 / 10 ** DECIMALS;
 }
+const SCAN_MS = SCAN_INTERVAL_MS ? Number(SCAN_INTERVAL_MS) : 5000;
 
 // --- Validate addresses ---
 for (const [name, a] of [["BUY_ROUTER", buyRouterAddr], ["SELL_ROUTER", sellRouterAddr], ["TOKEN", tokenAddr], ["USDC_ADDRESS", usdcAddr], ["CONTRACT_ADDRESS", CONTRACT_ADDRESS]]) {
@@ -72,12 +70,8 @@ const provider = new JsonRpcProvider(rpcUrl);
 const wallet = new Wallet(PRIVATE_KEY.trim(), provider);
 
 // --- ABIs ---
-const UNIV2_ROUTER_ABI = [
-  "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory)"
-];
-const ARB_ABI = [
-  "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"
-];
+const UNIV2_ROUTER_ABI = ["function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory)"];
+const ARB_ABI = ["function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"];
 
 // --- Instances ---
 const buyRouter = new Contract(buyRouterAddr, UNIV2_ROUTER_ABI, provider);
@@ -85,67 +79,47 @@ const sellRouter = new Contract(sellRouterAddr, UNIV2_ROUTER_ABI, provider);
 const arbContract = new Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 
 // --- Helpers ---
-const toUnits = (humanStr) => parseUnits(humanStr, DECIMALS);
-const fromUnits = (bigintVal) => formatUnits(bigintVal, DECIMALS);
-
+const toUnits = (humanStr) => parseUnits(humanStr.toString(), DECIMALS);
+const fromUnits = (big) => formatUnits(big, DECIMALS);
 const amountIn = toUnits(AMOUNT_HUMAN);
-const minProfitUnits = toUnits(MIN_PROFIT);
-
-// --- Utility ---
+const minProfitUnits = toUnits(MIN_PROFIT.toString());
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 const now = () => new Date().toISOString();
 
-// --- Arbitrage check for one direction ---
-async function checkArbDirection(buyR, sellR, label) {
+// --- Bidirectional scan ---
+async function checkArbDirection(buyR, sellR, direction) {
   try {
     const pathBuy = [usdcAddr, tokenAddr];
     const pathSell = [tokenAddr, usdcAddr];
 
     const buyAmounts = await buyR.getAmountsOut(amountIn, pathBuy);
-    const tokenOut = BigInt(buyAmounts[1].toString());
+    const buyOut = BigInt(buyAmounts[1].toString());
 
-    const sellAmounts = await sellR.getAmountsOut(tokenOut, pathSell);
-    const usdcOut = BigInt(sellAmounts[1].toString());
+    const sellAmounts = await sellR.getAmountsOut(buyOut, pathSell);
+    const sellOut = BigInt(sellAmounts[1].toString());
 
-    const profit = usdcOut - BigInt(amountIn.toString());
+    const profit = sellOut - BigInt(amountIn.toString());
 
-    console.log(`${now()} [${label}] 💰 Buy -> token: ${fromUnits(tokenOut)} token`);
-    console.log(`${now()} [${label}] 💵 Sell -> USDC: ${fromUnits(usdcOut)} USDC`);
-    console.log(`${now()} [${label}] 🧮 Raw profit: ${fromUnits(profit)} USDC`);
+    console.log(`${now()} [${direction}] 💰 Buy -> token: ${fromUnits(buyOut)} token`);
+    console.log(`${now()} [${direction}] 💵 Sell -> USDC: ${fromUnits(sellOut)} USDC`);
+    console.log(`${now()} [${direction}] 🧮 Profit: ${fromUnits(profit)} USDC`);
 
-    return { profit, buyR, sellR };
+    if (profit > BigInt(minProfitUnits.toString())) {
+      console.log(`${now()} [${direction}] ✅ Executing arbitrage...`);
+      try {
+        const gasEst = await arbContract.estimateGas.executeArbitrage(buyR.address, sellR.address, tokenAddr, amountIn);
+        const tx = await arbContract.executeArbitrage(buyR.address, sellR.address, tokenAddr, amountIn, { gasLimit: gasEst.mul(120).div(100) });
+        console.log(`${now()} [${direction}] 🧾 TX sent: ${tx.hash}`);
+        const receipt = await tx.wait();
+        console.log(`${now()} [${direction}] 🎉 TX confirmed: ${receipt.transactionHash}`);
+      } catch (err) {
+        console.error(`${now()} [${direction}] ❌ Execution failed: ${err.message}`);
+      }
+    } else {
+      console.log(`${now()} [${direction}] 🚫 No profitable opportunity.`);
+    }
   } catch (err) {
-    console.warn(`${now()} [${label}] ⚠️ Router call failed: ${err.reason || err.message}`);
-    return { profit: -1n }; // negative to skip execution
-  }
-}
-
-// --- Execute arbitrage if profitable ---
-async function executeArb(buyR, sellR, label) {
-  try {
-    const gasEst = await arbContract.estimateGas.executeArbitrage(
-      buyR.address,
-      sellR.address,
-      tokenAddr,
-      amountIn
-    );
-
-    console.log(`${now()} [${label}] ⛽ Gas estimate: ${gasEst.toString()}`);
-
-    const tx = await arbContract.executeArbitrage(
-      buyR.address,
-      sellR.address,
-      tokenAddr,
-      amountIn,
-      { gasLimit: gasEst.mul(120n).div(100n) } // +20% buffer
-    );
-
-    console.log(`${now()} [${label}] 🧾 TX sent: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(`${now()} [${label}] 🎉 TX confirmed: ${receipt.transactionHash}`);
-    console.log(`${now()} [${label}] 💎 Arbitrage executed! Profit retained in contract.`);
-  } catch (err) {
-    console.error(`${now()} [${label}] ❌ Execution failed: ${err.reason || err.message}`);
+    console.warn(`${now()} [${direction}] ⚠️ Router call failed: ${err.message}`);
   }
 }
 
@@ -154,42 +128,23 @@ let iteration = 0;
 async function runLoop() {
   while (true) {
     iteration++;
-    console.log(`\n${now()} [#${iteration}] 🔍 Scanning block ${await provider.getBlockNumber()}...`);
+    const block = await provider.getBlockNumber();
+    console.log(`\n${now()} [#${iteration}] 🔍 Block ${block} — scanning both directions...`);
 
-    const directions = [
-      { buyR: buyRouter, sellR: sellRouter, label: "A→B" },
-      { buyR: sellRouter, sellR: buyRouter, label: "B→A" }
-    ];
+    // 1️⃣ Direction: BUY_ROUTER as buy, SELL_ROUTER as sell
+    await checkArbDirection(buyRouter, sellRouter, "A→B");
 
-    for (const dir of directions) {
-      const { profit, buyR, sellR } = await checkArbDirection(dir.buyR, dir.sellR, dir.label);
-      if (profit >= BigInt(minProfitUnits.toString())) {
-        console.log(`${now()} [${dir.label}] ✅ Profitable! Executing arbitrage...`);
-        await executeArb(buyR, sellR, dir.label);
-      } else {
-        console.log(`${now()} [${dir.label}] 🚫 No profitable opportunity (profit <= min).`);
-      }
-    }
+    // 2️⃣ Direction: SELL_ROUTER as buy, BUY_ROUTER as sell (reverse)
+    await checkArbDirection(sellRouter, buyRouter, "B→A");
 
     await sleep(SCAN_MS);
   }
 }
 
 // --- Start ---
-console.log(`${now()} ▸ 🚀 Starting live arbitrage scanner`);
-console.log(`${now()} ▸ Config:`);
-console.log(`   • Contract:        ${CONTRACT_ADDRESS}`);
-console.log(`   • Buy Router:      ${buyRouterAddr}`);
-console.log(`   • Sell Router:     ${sellRouterAddr}`);
-console.log(`   • Token:           ${tokenAddr}`);
-console.log(`   • USDC:            ${usdcAddr}`);
-console.log(`   • Amount In:       ${AMOUNT_HUMAN} USDC`);
-console.log(`   • Min Profit:      ${MIN_PROFIT} USDC`);
-console.log(`   • Interval:        ${SCAN_MS} ms`);
-console.log(`   • Wallet:          ${wallet.address}`);
-
+console.log(`${now()} ▸ 🚀 Starting bidirectional live arbitrage scanner`);
 runLoop().catch((err) => {
-  console.error(`❌ Fatal error:`, err);
+  console.error("❌ Fatal error:", err);
   process.exit(1);
 });
 
