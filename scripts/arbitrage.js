@@ -84,8 +84,7 @@ const sellRouter = new Contract(sellRouterAddr, UNIV2_ROUTER_ABI, provider);
 const arbContract = new Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 
 //🟢 9  Helpers: decimal handling (will be filled after decimals are known)
-let USDC_DECIMALS = 6;  // fallback
-let TOKEN_DECIMALS = 18; // fallback
+
 
 // Per-event helpers will depend on actual decimals
 let amountInUSDC = null; // BigInt in USDC base units
@@ -138,8 +137,6 @@ async function initDecimals() {
     const usdcD = await usdcDecContract.decimals();  
     const tokenD = await tokenDecContract.decimals();  
 
-    USDC_DECIMALS = Number(usdcD);  
-    TOKEN_DECIMALS = Number(tokenD);  
 
     // Initialize MIN_PROFIT_UNITS using USDC decimals  
     MIN_PROFIT_UNITS = parseUnits(MIN_PROFIT_USDC ? MIN_PROFIT_USDC.toString() : "0.0000001", USDC_DECIMALS);  
