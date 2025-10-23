@@ -1,23 +1,12 @@
 #!/usr/bin/env node
 /**
- * Bidirectional arbitrage scanner + executor
- * Ethers v6 compatible, with explicit decimal normalization and improved logging.
+ * Bidirectional Arbitrage Scanner + Executor
+ * Ethers v6 compatible, with safe decimal normalization and live profit detection.
  *
- * Usage: configure env vars and run with Node (ESM).
- *
- * Required env:
- *  - RPC_URL
- *  - PRIVATE_KEY
- *  - BUY_ROUTER
- *  - SELL_ROUTER
- *  - TOKEN
- *  - USDC_ADDRESS
- *  - AMOUNT_IN_HUMAN
- *
- * Optional:
- *  - CONTRACT_ADDRESS (defaults provided)
- *  - MIN_PROFIT_USDC (defaults to "0.0000001" if omitted)
- *  - SCAN_INTERVAL_MS (defaults to 5000)
+ * Fixes:
+ *  - Avoids "invalid FixedNumber string value" (no scientific notation)
+ *  - Avoids "too many decimals for format" (clamps MIN_PROFIT_USDC to token decimals)
+ *  - Improved logging and error safety
  */
 
 import {
@@ -31,7 +20,7 @@ import {
 
 (async () => {
   try {
-    // ----- 1. Load & validate environment variables -----
+    // 1️⃣ Load env vars
     const {
       RPC_URL,
       PRIVATE_KEY,
@@ -52,67 +41,60 @@ import {
       process.exit(1);
     }
 
-    // Trim and set local variables
+    // 2️⃣ Normalize env values
     const rpcUrl = RPC_URL.trim();
     const buyRouterAddr = BUY_ROUTER.trim();
     const sellRouterAddr = SELL_ROUTER.trim();
     const tokenAddr = TOKEN.trim();
     const usdcAddr = USDC_ADDRESS.trim();
-    const AMOUNT_HUMAN_STR = AMOUNT_IN_HUMAN.trim();
+    const amountHumanStr = AMOUNT_IN_HUMAN.trim();
     const CONTRACT_ADDRESS = (ENV_CONTRACT_ADDRESS || "0x19B64f74553eE0ee26BA01BF34321735E4701C43").trim();
     const SCAN_MS = SCAN_INTERVAL_MS ? Number(SCAN_INTERVAL_MS) : 5000;
-
-    // Keep MIN_PROFIT as a raw string to avoid JS converting to exponential form
     const MIN_PROFIT_USDC_STR = (typeof MIN_PROFIT_USDC === "string" && MIN_PROFIT_USDC.trim() !== "")
       ? MIN_PROFIT_USDC.trim()
-      : "0.0000001";
+      : "0.000001"; // ✅ at most 6 decimals for USDC
 
-    // ----- 2. Validate addresses -----
-    for (const [name, a] of [
+    // 3️⃣ Validate addresses
+    for (const [name, addr] of [
       ["BUY_ROUTER", buyRouterAddr],
       ["SELL_ROUTER", sellRouterAddr],
       ["TOKEN", tokenAddr],
       ["USDC_ADDRESS", usdcAddr],
       ["CONTRACT_ADDRESS", CONTRACT_ADDRESS]
     ]) {
-      if (!isAddress(a)) {
-        console.error(`❌ Invalid Ethereum address for ${name}:`, a);
+      if (!isAddress(addr)) {
+        console.error(`❌ Invalid Ethereum address for ${name}:`, addr);
         process.exit(1);
       }
     }
 
-    // ----- 3. Provider / Wallet -----
+    // 4️⃣ Provider + wallet
     const provider = new JsonRpcProvider(rpcUrl);
     const wallet = new Wallet(PRIVATE_KEY.trim(), provider);
 
-    // ----- 4. ABIs -----
-    const UNIV2_ROUTER_ABI = ["function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory)"];
-    const ARB_ABI = ["function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"];
+    // 5️⃣ ABIs
+    const UNIV2_ROUTER_ABI = [
+      "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory)"
+    ];
+    const ARB_ABI = [
+      "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"
+    ];
 
-    // ----- 5. Contracts -----
+    // 6️⃣ Contract instances
     const buyRouter = new Contract(buyRouterAddr, UNIV2_ROUTER_ABI, provider);
     const sellRouter = new Contract(sellRouterAddr, UNIV2_ROUTER_ABI, provider);
-    const arbContract = new Contract(CONTRACT_ADDRESS, ARB_ABI, wallet); // connected to signer
+    const arbContract = new Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 
-    // ----- 6. Decimal placeholders & helpers -----
-    let USDC_DECIMALS = 6;   // sensible default fallback
-    let TOKEN_DECIMALS = 18; // sensible default fallback
+    // 7️⃣ State vars
+    let USDC_DECIMALS = 6;
+    let TOKEN_DECIMALS = 18;
+    let amountInUSDC = null;
+    let MIN_PROFIT_UNITS = null;
 
-    let amountInUSDC = null;   // bigint (base units)
-    let MIN_PROFIT_UNITS = null; // bigint (USDC base units)
-
-    // conversion helpers (will be defined after decimals are fetched)
-    let toUnitsAny = null;
-    let fromUnitsAny = null;
-
-    // Safe decimal to string helper: ensures numeric strings are plain decimals (not exponential)
-    // Accepts string or number; returns a plain decimal string.
-    function decimalString(input, decimalsGuess = 18) {
+    // Helper functions
+    const decimalString = (input, decimalsGuess = 18) => {
       if (typeof input === "string") {
-        // assume user provided a decimal representation string
         if (input.includes("e") || input.includes("E")) {
-          // If user provided exponential, convert by Number and toFixed (fallback).
-          // This is rare because we prefer to keep MIN_PROFIT as string in env.
           const n = Number(input);
           if (Number.isNaN(n)) throw new Error(`invalid numeric input: ${input}`);
           return n.toFixed(decimalsGuess).replace(/(?:\.0+|(\.\d+?)0+)$/, "$1");
@@ -124,125 +106,99 @@ import {
         return input.toFixed(decimalsGuess).replace(/(?:\.0+|(\.\d+?)0+)$/, "$1");
       }
       throw new Error("unsupported input type for decimalString");
-    }
+    };
 
-    // ----- 7. Initialize decimals from on-chain -----
+    const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+    // 8️⃣ Init decimals
     async function initDecimals() {
       try {
-        const usdcDecContract = new Contract(usdcAddr, ["function decimals() view returns (uint8)"], provider);
-        const tokenDecContract = new Contract(tokenAddr, ["function decimals() view returns (uint8)"], provider);
+        const decABI = ["function decimals() view returns (uint8)"];
+        const usdcDecC = new Contract(usdcAddr, decABI, provider);
+        const tokenDecC = new Contract(tokenAddr, decABI, provider);
 
         const [usdcD, tokenD] = await Promise.all([
-          usdcDecContract.decimals(),
-          tokenDecContract.decimals()
+          usdcDecC.decimals(),
+          tokenDecC.decimals()
         ]);
 
         USDC_DECIMALS = Number(usdcD);
         TOKEN_DECIMALS = Number(tokenD);
 
-        // Define conversion helpers using ethers.parseUnits / formatUnits
-        toUnitsAny = (humanStr, decimals) => {
-          // Ensure we pass a plain decimal string (no exponential)
-          const clean = decimalString(humanStr, Math.max(decimals, 18));
-          return parseUnits(clean, decimals);
-        };
+        // Clamp MIN_PROFIT to max decimals (fix for underflow)
+        const safeMinProfitStr = (() => {
+          const parts = MIN_PROFIT_USDC_STR.split(".");
+          if (parts.length === 2 && parts[1].length > USDC_DECIMALS) {
+            const trimmed = `${parts[0]}.${parts[1].slice(0, USDC_DECIMALS)}`;
+            console.warn(`⚠️ MIN_PROFIT_USDC precision trimmed to ${USDC_DECIMALS} decimals (${trimmed})`);
+            return trimmed;
+          }
+          return MIN_PROFIT_USDC_STR;
+        })();
 
-        fromUnitsAny = (big, decimals) => {
-          return formatUnits(big, decimals);
-        };
-
-        // amountInUSDC is the amount we input (human AMOUNT_HUMAN_STR interpreted as USDC)
-        // Use AMOUNT_HUMAN_STR directly (string) to avoid exponential formatting.
-        amountInUSDC = toUnitsAny(AMOUNT_HUMAN_STR, USDC_DECIMALS);
-
-        // Convert MIN_PROFIT to units using string representation to avoid scientific notation
-        MIN_PROFIT_UNITS = toUnitsAny(MIN_PROFIT_USDC_STR, USDC_DECIMALS);
+        const cleanAmt = decimalString(amountHumanStr, USDC_DECIMALS);
+        amountInUSDC = parseUnits(cleanAmt, USDC_DECIMALS);
+        MIN_PROFIT_UNITS = parseUnits(safeMinProfitStr, USDC_DECIMALS);
 
         console.log(`🔧 Decimals initialized: USDC=${USDC_DECIMALS}, TOKEN=${TOKEN_DECIMALS}`);
-        console.log(`🔧 Amount in (human): ${AMOUNT_HUMAN_STR} -> base units: ${amountInUSDC.toString()}`);
-        console.log(`🔧 Min profit (human): ${MIN_PROFIT_USDC_STR} -> base units: ${MIN_PROFIT_UNITS.toString()}`);
+        console.log(`🔧 amountInUSDC=${amountInUSDC.toString()}`);
+        console.log(`🔧 MIN_PROFIT_USDC=${safeMinProfitStr} (base units: ${MIN_PROFIT_UNITS.toString()})`);
       } catch (err) {
         console.error("❌ Failed to initialize decimals:", err);
         throw err;
       }
     }
 
-    // ----- 8. Utility: sleep -----
-    const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-
-    // ----- 9. Single-direction check & execution -----
-    /**
-     * checkArbDirection(buyRouterContract, sellRouterContract, label)
-     * buyRouterContract: router used to buy token with USDC (USDC -> TOKEN)
-     * sellRouterContract: router used to sell token back to USDC (TOKEN -> USDC)
-     */
-    async function checkArbDirection(buyR, sellR, directionLabel) {
+    // 9️⃣ Arbitrage check
+    async function checkArbDirection(buyR, sellR, label) {
       try {
-        if (!toUnitsAny) {
-          console.warn(`${new Date().toISOString()} [${directionLabel}] ⚠️ Conversions not ready. Skipping.`);
-          return;
-        }
-
-        // Paths: USDC -> TOKEN -> USDC
         const pathBuy = [usdcAddr, tokenAddr];
         const pathSell = [tokenAddr, usdcAddr];
-
-        // amountInBase is in USDC base units (bigint)
         const amountInBase = amountInUSDC;
 
-        // Query buy router: how many TOKEN do we get for amountInUSDC
-        const buyAmounts = await buyR.getAmountsOut(amountInBase, pathBuy);
-        // buyAmounts is an array-like: [amountInBase, buyOutToken]
-        const buyOutToken = buyAmounts[1];
+        const buyOut = await buyR.getAmountsOut(amountInBase, pathBuy);
+        const buyTokenOut = buyOut[1];
 
-        // Query sell router: how many USDC do we get selling buyOutToken
-        const sellAmounts = await sellR.getAmountsOut(buyOutToken, pathSell);
-        const sellOutUSDC = sellAmounts[1];
+        const sellOut = await sellR.getAmountsOut(buyTokenOut, pathSell);
+        const sellUSDCOut = sellOut[1];
 
-        // Compute profit in USDC base units (bigint)
-        const profitUSDC = BigInt(sellOutUSDC.toString()) - BigInt(amountInBase.toString());
+        const profit = BigInt(sellUSDCOut.toString()) - BigInt(amountInBase.toString());
 
-        // Convert for logging to human-readable
-        const buyOutHumanToken = fromUnitsAny(buyOutToken, TOKEN_DECIMALS);
-        const sellOutHumanUSDC = fromUnitsAny(sellOutUSDC, USDC_DECIMALS);
-        const profitHumanUSDC = profitUSDC >= 0n ? fromUnitsAny(profitUSDC.toString(), USDC_DECIMALS) : "-" + fromUnitsAny(((-profitUSDC)).toString(), USDC_DECIMALS);
+        const buyTokenHuman = formatUnits(buyTokenOut, TOKEN_DECIMALS);
+        const sellUSDCHuman = formatUnits(sellUSDCOut, USDC_DECIMALS);
+        const profitHuman = formatUnits(profit, USDC_DECIMALS);
 
-        console.log(`${new Date().toISOString()} [${directionLabel}] 🔎 In: ${fromUnitsAny(amountInBase, USDC_DECIMALS)} USDC`);
-        console.log(`${new Date().toISOString()} [${directionLabel}] 💱 Buy router gives: ${buyOutHumanToken} TOKEN`);
-        console.log(`${new Date().toISOString()} [${directionLabel}] 💲 Sell router returns: ${sellOutHumanUSDC} USDC`);
-        console.log(`${new Date().toISOString()} [${directionLabel}] 🧮 Profit: ${profitHumanUSDC} USDC (base units: ${profitUSDC.toString()})`);
+        console.log(`${new Date().toISOString()} [${label}] 💱 Buy → ${buyTokenHuman} TOKEN`);
+        console.log(`${new Date().toISOString()} [${label}] 💲 Sell → ${sellUSDCHuman} USDC`);
+        console.log(`${new Date().toISOString()} [${label}] 🧮 Profit = ${profitHuman} USDC`);
 
-        // Decide whether to execute
-        if (profitUSDC > BigInt(MIN_PROFIT_UNITS.toString())) {
-          console.log(`${new Date().toISOString()} [${directionLabel}] ✅ Profit above threshold — executing arbitrage.`);
-
+        if (profit > MIN_PROFIT_UNITS) {
+          console.log(`${new Date().toISOString()} [${label}] ✅ Executing arbitrage (profit > min threshold)...`);
           try {
-            // estimateGas (contract is connected to wallet)
-            const gasEst = await arbContract.estimateGas.executeArbitrage(buyR.address, sellR.address, tokenAddr, amountInBase);
-            const gasLimit = gasEst * 120n / 100n; // 20% buffer
-
-            const tx = await arbContract.executeArbitrage(buyR.address, sellR.address, tokenAddr, amountInBase, {
-              gasLimit
-            });
-
-            console.log(`${new Date().toISOString()} [${directionLabel}] 🧾 TX sent: ${tx.hash}`);
-            const receipt = await tx.wait();
-            console.log(`${new Date().toISOString()} [${directionLabel}] 🎉 TX confirmed: ${receipt.transactionHash}`);
+            const gasEst = await arbContract.estimateGas.executeArbitrage(
+              buyR.address, sellR.address, tokenAddr, amountInBase
+            );
+            const gasLimit = gasEst * 120n / 100n;
+            const tx = await arbContract.executeArbitrage(
+              buyR.address, sellR.address, tokenAddr, amountInBase, { gasLimit }
+            );
+            console.log(`${new Date().toISOString()} [${label}] 🧾 TX sent: ${tx.hash}`);
+            const rcpt = await tx.wait();
+            console.log(`${new Date().toISOString()} [${label}] 🎉 TX confirmed: ${rcpt.transactionHash}`);
           } catch (execErr) {
-            console.error(`${new Date().toISOString()} [${directionLabel}] ❌ Execution failed:`, execErr?.message ?? execErr);
+            console.error(`${new Date().toISOString()} [${label}] ❌ Execution failed: ${execErr.message}`);
           }
         } else {
-          console.log(`${new Date().toISOString()} [${directionLabel}] 🚫 Opportunity not profitable (threshold not met).`);
+          console.log(`${new Date().toISOString()} [${label}] 🚫 Not profitable (below threshold).`);
         }
       } catch (err) {
-        console.warn(`${new Date().toISOString()} [${directionLabel}] ⚠️ Router or call failed:`, err?.message ?? err);
+        console.warn(`${new Date().toISOString()} [${label}] ⚠️ Router query failed: ${err.message}`);
       }
     }
 
-    // ----- 10. Main loop -----
+    // 🔟 Main loop
     async function runLoop() {
       await initDecimals();
-
       console.log(`${new Date().toISOString()} ▸ 🚀 Starting bidirectional live arbitrage scanner`);
       let iteration = 0;
 
@@ -250,29 +206,20 @@ import {
         try {
           const block = await provider.getBlockNumber();
           iteration++;
-          console.log(`\n${new Date().toISOString()} [#${iteration}] 🔍 Block ${block} — scanning both directions...`);
-
-          // Direction A→B: buy on buyRouter (USDC->TOKEN), sell on sellRouter (TOKEN->USDC)
+          console.log(`\n${new Date().toISOString()} [#${iteration}] 🔍 Block ${block}: scanning both directions...`);
           await checkArbDirection(buyRouter, sellRouter, "A→B");
-
-          // Direction B→A: buy on sellRouter, sell on buyRouter
           await checkArbDirection(sellRouter, buyRouter, "B→A");
-        } catch (loopErr) {
-          console.error(`${new Date().toISOString()} ❌ Error in main loop iteration:`, loopErr?.message ?? loopErr);
+        } catch (err) {
+          console.error(`${new Date().toISOString()} ❌ Loop error: ${err.message}`);
         }
-
         await sleep(SCAN_MS);
       }
     }
 
-    // Start
-    runLoop().catch((err) => {
-      console.error("❌ Fatal error in main loop:", err);
-      process.exit(1);
-    });
+    await runLoop();
 
-  } catch (startupErr) {
-    console.error("❌ Startup error:", startupErr);
+  } catch (fatal) {
+    console.error("❌ Fatal startup error:", fatal);
     process.exit(1);
   }
 })();
