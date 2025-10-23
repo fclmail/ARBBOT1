@@ -4,10 +4,10 @@
  * Ethers v6 compatible, robust decimal handling, safe execution.
  *
  * Features:
- *  - Robust decimal normalization (USDC/TOKEN)
- *  - Profits in USDC base units (BigInt)
+ *  - All amounts displayed in USDC dollar value ($)
+ *  - Shows how much token you get for $1 or for trade amount
+ *  - Profits computed in USDC base units and displayed as $X.XX
  *  - MIN_PROFIT_USDC clamped to USDC decimals
- *  - Safe logging for negative profits
  *  - Execute arbitrage only if profit >= MIN_PROFIT threshold
  *  - Handles router call failures gracefully
  */
@@ -92,7 +92,6 @@ import {
 
     const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
-    // 8️⃣ Helper: clamp decimal string
     const clampDecimalString = (inputStr, decimals) => {
       const parts = inputStr.split(".");
       if (parts.length === 2 && parts[1].length > decimals) {
@@ -101,7 +100,7 @@ import {
       return inputStr;
     };
 
-    // 9️⃣ Initialize decimals
+    // 8️⃣ Initialize decimals and base units
     async function initDecimals() {
       try {
         const decABI = ["function decimals() view returns (uint8)"];
@@ -115,26 +114,24 @@ import {
 
         const safeMinProfitStr = clampDecimalString(MIN_PROFIT_USDC_STR, USDC_DECIMALS);
 
-        // Amount in USDC base units
         amountInUSDC = parseUnits(clampDecimalString(amountHumanStr, USDC_DECIMALS), USDC_DECIMALS);
         MIN_PROFIT_UNITS = parseUnits(safeMinProfitStr, USDC_DECIMALS);
 
         console.log(`🔧 Decimals initialized: USDC=${USDC_DECIMALS}, TOKEN=${TOKEN_DECIMALS}`);
-        console.log(`🔧 amountInUSDC=${amountInUSDC.toString()}`);
-        console.log(`🔧 MIN_PROFIT_USDC=${safeMinProfitStr} (base units: ${MIN_PROFIT_UNITS.toString()})`);
+        console.log(`🔧 Trade Amount: $${formatUnits(amountInUSDC, USDC_DECIMALS)}`);
+        console.log(`🔧 MIN_PROFIT_USDC: $${safeMinProfitStr} (base units: ${MIN_PROFIT_UNITS.toString()})`);
       } catch (err) {
         console.error("❌ Failed to initialize decimals:", err);
         throw err;
       }
     }
 
-    // 10️⃣ Arbitrage check with error safeguards
+    // 9️⃣ Arbitrage check with live $ amounts
     async function checkArbDirection(buyR, sellR, label) {
       try {
         const pathBuy = [usdcAddr, tokenAddr];
         const pathSell = [tokenAddr, usdcAddr];
 
-        // Safe getAmountsOut wrapper
         const safeGetAmountsOut = async (router, amountIn, path) => {
           try {
             const amounts = await router.getAmountsOut(amountIn, path);
@@ -144,6 +141,11 @@ import {
             return null;
           }
         };
+
+        // Amount received for $1
+        const oneUSDC = parseUnits("1", USDC_DECIMALS);
+        const buyOut1 = await safeGetAmountsOut(buyR, oneUSDC, pathBuy);
+        const tokenPer1USD = buyOut1 ? formatUnits(BigInt(buyOut1[1].toString()), TOKEN_DECIMALS) : "0";
 
         const buyOut = await safeGetAmountsOut(buyR, amountInUSDC, pathBuy);
         if (!buyOut) {
@@ -162,13 +164,15 @@ import {
         // Profit in USDC base units
         const profitBase = sellUSDCOut - amountInUSDC;
 
-        const buyTokenHuman = formatUnits(buyTokenOut, TOKEN_DECIMALS);
-        const sellUSDCHuman = formatUnits(sellUSDCOut, USDC_DECIMALS);
-        const profitHuman = formatUnits(profitBase, USDC_DECIMALS);
+        // Convert all to human-readable USDC $ amounts
+        const buyUSD = formatUnits(amountInUSDC, USDC_DECIMALS);
+        const sellUSD = formatUnits(sellUSDCOut, USDC_DECIMALS);
+        const profitUSD = formatUnits(profitBase, USDC_DECIMALS);
 
-        console.log(`${new Date().toISOString()} [${label}] 💱 Buy → ${buyTokenHuman} TOKEN`);
-        console.log(`${new Date().toISOString()} [${label}] 💲 Sell → ${sellUSDCHuman} USDC`);
-        console.log(`${new Date().toISOString()} [${label}] 🧮 Profit = ${profitHuman} USDC`);
+        console.log(`${new Date().toISOString()} [${label}] 💱 Buy → $${buyUSD} worth of TOKEN (~${buyTokenOut} raw units)`);
+        console.log(`${new Date().toISOString()} [${label}]    ($1 buys ~${tokenPer1USD} TOKEN)`);
+        console.log(`${new Date().toISOString()} [${label}] 💲 Sell → $${sellUSD} USDC`);
+        console.log(`${new Date().toISOString()} [${label}] 🧮 Profit = $${profitUSD} USDC`);
 
         if (profitBase >= MIN_PROFIT_UNITS) {
           console.log(`${new Date().toISOString()} [${label}] ✅ Executing arbitrage...`);
@@ -190,7 +194,7 @@ import {
       }
     }
 
-    // 11️⃣ Main scanning loop
+    // 10️⃣ Main scanning loop
     async function runLoop() {
       await initDecimals();
       console.log(`${new Date().toISOString()} ▸ 🚀 Starting bidirectional live arbitrage scanner`);
@@ -210,7 +214,6 @@ import {
       }
     }
 
-    // 12️⃣ Start
     await runLoop();
 
   } catch (fatal) {
