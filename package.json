@@ -1,8 +1,14 @@
 {
-  "name": "my-arb-bot",
+  "name": "arbbot1",
   "version": "1.0.0",
+  "description": "Polygon arbitrage scanner and flash loan executor",
+  "main": "scripts/arbitrage.js",
   "type": "module",
+  "scripts": {
+    "start": "node scripts/arbitrage.js"
+  },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "ethers": "^6.15.0"
   }
 }
