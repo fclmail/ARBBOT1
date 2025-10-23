@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
  * Bidirectional Arbitrage Scanner + Executor
- * Ethers v6 compatible, robust decimal handling, live USDC profit calculation.
+ * Ethers v6 compatible, robust decimal handling, safe execution, callStatic simulation.
  *
  * Features:
- *  - Reads actual decimals from chain
- *  - All calculations normalized to USDC base units
- *  - Logs buy/sell/profit in $ (USDC)
- *  - Uses simulateArb read-only function to predict profits
- *  - Executes arbitrage only when profit >= MIN_PROFIT_USDC
+ *  - Decimal normalization (USDC/TOKEN)
+ *  - Profits in USDC base units (BigInt)
+ *  - MIN_PROFIT_USDC clamped to USDC decimals
+ *  - Safe logging: USD amounts with $ sign
+ *  - Shows token per $1
+ *  - callStatic simulation to detect profitable trades
+ *  - Executes only when profit >= threshold
  */
 
 import {
@@ -22,7 +24,7 @@ import {
 
 (async () => {
   try {
-    // 1️⃣ Load env vars
+    // 1️⃣ Load environment variables
     const {
       RPC_URL,
       PRIVATE_KEY,
@@ -43,7 +45,7 @@ import {
       process.exit(1);
     }
 
-    // 2️⃣ Normalize
+    // 2️⃣ Normalize env values
     const rpcUrl = RPC_URL.trim();
     const buyRouterAddr = BUY_ROUTER.trim();
     const sellRouterAddr = SELL_ROUTER.trim();
@@ -52,9 +54,11 @@ import {
     const amountHumanStr = AMOUNT_IN_HUMAN.trim();
     const CONTRACT_ADDRESS = (ENV_CONTRACT_ADDRESS || "0x19B64f74553eE0ee26BA01BF34321735E4701C43").trim();
     const SCAN_MS = SCAN_INTERVAL_MS ? Number(SCAN_INTERVAL_MS) : 5000;
-    const MIN_PROFIT_USDC_STR = (MIN_PROFIT_USDC && MIN_PROFIT_USDC.trim() !== "") ? MIN_PROFIT_USDC.trim() : "0.000001";
+    const MIN_PROFIT_USDC_STR = (typeof MIN_PROFIT_USDC === "string" && MIN_PROFIT_USDC.trim() !== "")
+      ? MIN_PROFIT_USDC.trim()
+      : "0.000001";
 
-    // 3️⃣ Validate addresses
+    // 3️⃣ Validate Ethereum addresses
     for (const [name, addr] of [
       ["BUY_ROUTER", buyRouterAddr],
       ["SELL_ROUTER", sellRouterAddr],
@@ -74,10 +78,7 @@ import {
 
     // 5️⃣ ABIs
     const UNIV2_ROUTER_ABI = ["function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory)"];
-    const ARB_ABI = [
-      "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external",
-      "function simulateArb(address buyRouter, address sellRouter, address token, uint256 amountIn) external view returns (uint256)"
-    ];
+    const ARB_ABI = ["function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"];
 
     // 6️⃣ Contracts
     const buyRouter = new Contract(buyRouterAddr, UNIV2_ROUTER_ABI, provider);
@@ -92,7 +93,7 @@ import {
 
     const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
-    // 8️⃣ Clamp decimal string helper
+    // 8️⃣ Helper: clamp decimal string
     const clampDecimalString = (inputStr, decimals) => {
       const parts = inputStr.split(".");
       if (parts.length === 2 && parts[1].length > decimals) {
@@ -101,7 +102,7 @@ import {
       return inputStr;
     };
 
-    // 9️⃣ Initialize decimals & base units
+    // 9️⃣ Initialize decimals
     async function initDecimals() {
       try {
         const decABI = ["function decimals() view returns (uint8)"];
@@ -113,8 +114,6 @@ import {
         TOKEN_DECIMALS = Number(tokenD);
 
         const safeMinProfitStr = clampDecimalString(MIN_PROFIT_USDC_STR, USDC_DECIMALS);
-
-        // Normalize human amount to USDC base units
         amountInUSDC = parseUnits(clampDecimalString(amountHumanStr, USDC_DECIMALS), USDC_DECIMALS);
         MIN_PROFIT_UNITS = parseUnits(safeMinProfitStr, USDC_DECIMALS);
 
@@ -127,10 +126,12 @@ import {
       }
     }
 
-    // 🔟 Arbitrage check with simulateArb
+    // 🔟 Arbitrage check
     async function checkArbDirection(buyR, sellR, label) {
       try {
-        // Safe getAmountsOut wrapper
+        const pathBuy = [usdcAddr, tokenAddr];
+        const pathSell = [tokenAddr, usdcAddr];
+
         const safeGetAmountsOut = async (router, amountIn, path) => {
           try {
             const amounts = await router.getAmountsOut(amountIn, path);
@@ -141,38 +142,43 @@ import {
           }
         };
 
-        const pathBuy = [usdcAddr, tokenAddr];
-        const pathSell = [tokenAddr, usdcAddr];
-
-        // Buy
         const buyOut = await safeGetAmountsOut(buyR, amountInUSDC, pathBuy);
-        if (!buyOut) { console.warn(`${label} ⚠️ Buy router failed`); return; }
+        if (!buyOut) {
+          console.warn(`${label} ⚠️ Buy router call failed or returned 0`);
+          return;
+        }
         const buyTokenOut = BigInt(buyOut[1].toString());
-        const pricePerTokenUSDC = Number(formatUnits(amountInUSDC, USDC_DECIMALS)) / Number(formatUnits(buyTokenOut, TOKEN_DECIMALS));
 
-        // Sell
         const sellOut = await safeGetAmountsOut(sellR, buyTokenOut, pathSell);
-        if (!sellOut) { console.warn(`${label} ⚠️ Sell router failed`); return; }
+        if (!sellOut) {
+          console.warn(`${label} ⚠️ Sell router call failed or returned 0`);
+          return;
+        }
         const sellUSDCOut = BigInt(sellOut[1].toString());
 
-        // Profit base units
+        // Profit in USDC base units
         const profitBase = sellUSDCOut - amountInUSDC;
         const profitPercent = Number(formatUnits(profitBase, USDC_DECIMALS)) / Number(formatUnits(amountInUSDC, USDC_DECIMALS)) * 100;
 
-        console.log(`${new Date().toISOString()} [${label}] 💱 Buy → $${formatUnits(amountInUSDC, USDC_DECIMALS)} → ${formatUnits(buyTokenOut, TOKEN_DECIMALS)} TOKEN (~$${pricePerTokenUSDC.toFixed(6)} per token)`);
-        console.log(`${new Date().toISOString()} [${label}] 💲 Sell → $${formatUnits(sellUSDCOut, USDC_DECIMALS)} USDC`);
-        console.log(`${new Date().toISOString()} [${label}] 🧮 Profit → $${formatUnits(profitBase, USDC_DECIMALS)} (${profitPercent.toFixed(2)}%)`);
+        // USD equivalents
+        const buyTokenHuman = formatUnits(buyTokenOut, TOKEN_DECIMALS);
+        const sellUSDCHuman = formatUnits(sellUSDCOut, USDC_DECIMALS);
+        const profitHuman = formatUnits(profitBase, USDC_DECIMALS);
+        const per1USDToken = Number(formatUnits(buyTokenOut, TOKEN_DECIMALS)) / Number(formatUnits(amountInUSDC, USDC_DECIMALS));
 
-        // Simulate on-chain
+        console.log(`${new Date().toISOString()} [${label}] 💱 Buy → $${formatUnits(amountInUSDC, USDC_DECIMALS)} → ${buyTokenHuman} TOKEN (~$${per1USDToken.toFixed(6)} per $1)`);
+        console.log(`${new Date().toISOString()} [${label}] 💲 Sell → $${sellUSDCHuman} USDC`);
+        console.log(`${new Date().toISOString()} [${label}] 🧮 Profit → $${profitHuman} USDC (${profitPercent.toFixed(2)}%)`);
+
+        // callStatic simulation
         try {
-          const simulated = await arbContract.simulateArb(buyR.address, sellR.address, tokenAddr, amountInUSDC);
-          const simulatedProfit = BigInt(simulated.toString()) - amountInUSDC;
-          console.log(`${new Date().toISOString()} [${label}] 🔍 Simulated on-chain profit → $${formatUnits(simulatedProfit, USDC_DECIMALS)}`);
+          const staticRes = await arbContract.callStatic.executeArbitrage(buyR.address, sellR.address, tokenAddr, amountInUSDC);
+          console.log(`${new Date().toISOString()} [${label}] ⚡ callStatic simulation result: $${formatUnits(staticRes, USDC_DECIMALS)} USDC`);
         } catch (simErr) {
           console.warn(`${new Date().toISOString()} [${label}] ⚠️ Simulation failed: ${simErr.message}`);
         }
 
-        // Execute only if profitable
+        // Execute only if profit meets threshold
         if (profitBase >= MIN_PROFIT_UNITS) {
           console.log(`${new Date().toISOString()} [${label}] ✅ Executing arbitrage...`);
           try {
@@ -190,11 +196,11 @@ import {
         }
 
       } catch (err) {
-        console.error(`${new Date().toISOString()} [${label}] ⚠️ Arb check error: ${err.message}`);
+        console.error(`${new Date().toISOString()} [${label}] ⚠️ Arbitrage check error: ${err.message}`);
       }
     }
 
-    // 11️⃣ Main loop
+    // 11️⃣ Main scanning loop
     async function runLoop() {
       await initDecimals();
       console.log(`${new Date().toISOString()} ▸ 🚀 Starting bidirectional live arbitrage scanner`);
@@ -221,5 +227,6 @@ import {
     process.exit(1);
   }
 })();
+
 
 
