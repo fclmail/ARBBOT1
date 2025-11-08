@@ -1,7 +1,17 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-import chalk from "chalk";
 dotenv.config();
+
+// ─────────────────────────────────────────────
+// SIMPLE COLOR UTILS (replaces chalk)
+// ─────────────────────────────────────────────
+const color = {
+  cyan: (t) => `\x1b[36m${t}\x1b[0m`,
+  green: (t) => `\x1b[32m${t}\x1b[0m`,
+  yellow: (t) => `\x1b[33m${t}\x1b[0m`,
+  gray: (t) => `\x1b[90m${t}\x1b[0m`,
+  magenta: (t) => `\x1b[35m${t}\x1b[0m`,
+};
 
 // ─────────────────────────────────────────────
 // CONFIGURATION
@@ -24,7 +34,7 @@ const ROUTERS = {
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   QuickSwap: "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
-  JetSwap: "0x6b3d817814eabc984d51896b1015c0b89e9737ca"
+  JetSwap: "0x6b3d817814eabc984d51896b1015c0b89e9737ca",
 };
 
 // Tokens
@@ -57,7 +67,7 @@ const TOKENS = {
   USDT:{address:"0xc2132d05d31c914a87c6611c10748aeb04b58e8f",decimals:6},
   WBTC:{address:"0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",decimals:8},
   WETH:{address:"0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",decimals:18},
-  XSGD:{address:"0x70e8de73ce022f373d5a9f00b0ec0cf5835b0fc0",decimals:6}
+  XSGD:{address:"0x70e8de73ce022f373d5a9f00b0ec0cf5835b0fc0",decimals:6},
 };
 
 // Base currency & parameters
@@ -92,11 +102,11 @@ async function scanToken(symbol, token, routers, arbContract) {
   const results = [];
   const buyPaths = [
     [USDC, token.address],
-    [USDC, TOKENS.WETH.address, token.address]
+    [USDC, TOKENS.WETH.address, token.address],
   ];
   const sellPaths = [
     [token.address, USDC],
-    [token.address, TOKENS.WETH.address, USDC]
+    [token.address, TOKENS.WETH.address, USDC],
   ];
 
   for (const [buyName, buyAddr] of Object.entries(routers)) {
@@ -131,18 +141,18 @@ async function scanToken(symbol, token, routers, arbContract) {
           const profitUSD = fmt(profit, 6);
           results.push({ symbol, buyName, sellName, profitUSD });
           console.log(
-            `${chalk.cyan(`[${symbol}]`)} 💱 ${buyName}→${sellName} | Buy: $${fmt(TRADE_AMOUNT_USDC)} → Sell: $${fmt(sellOut)} | Profit: ${chalk.green(`+$${profitUSD}`)}`
+            `${color.cyan(`[${symbol}]`)} 💱 ${buyName}→${sellName} | Buy: $${fmt(TRADE_AMOUNT_USDC)} → Sell: $${fmt(sellOut)} | Profit: ${color.green(`+$${profitUSD}`)}`
           );
 
           // Execute if above threshold
           if (profit > MIN_PROFIT_USDC) {
-            console.log(chalk.yellow(`⚡ Executing arbitrage for ${symbol} (${buyName}→${sellName})...`));
+            console.log(color.yellow(`⚡ Executing arbitrage for ${symbol} (${buyName}→${sellName})...`));
             const tx = await arbContract.executeArbitrage(buyAddr, sellAddr, token.address, TRADE_AMOUNT_USDC, { gasLimit: 1_500_000 });
             console.log(`⛓️ TX: ${tx.hash}`);
           }
         }
       } catch (err) {
-        console.log(chalk.gray(`[${symbol}] ⚠️ ${buyName}→${sellName}: ${err.message}`));
+        console.log(color.gray(`[${symbol}] ⚠️ ${buyName}→${sellName}: ${err.message}`));
       }
     }
   }
@@ -166,7 +176,7 @@ async function main() {
       if (symbol === "USDC") continue;
       await scanToken(symbol, token, ROUTERS, arbContract);
     }
-    console.log(chalk.magenta(`Cycle complete — restarting scan...\n`));
+    console.log(color.magenta(`Cycle complete — restarting scan...\n`));
     await new Promise((r) => setTimeout(r, 5000));
   }
 }
