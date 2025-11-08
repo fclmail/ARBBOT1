@@ -1,43 +1,52 @@
+#!/usr/bin/env node
+/**
+ * Robust arbitrage scanner (getAmountsOut-based)
+ * - multi-base, multi-hop path generation
+ * - factory pair checking when available
+ * - RPC throttling & retry/backoff
+ * - profit calculation in USDC base units
+ * - executes arbContract when profit >= MIN_PROFIT_USDC
+ *
+ * No external color dependency.
+ */
+
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
 
-// ─────────────────────────────────────────────
-// SIMPLE COLOR UTILS (replaces chalk)
-// ─────────────────────────────────────────────
-const color = {
-  cyan: (t) => `\x1b[36m${t}\x1b[0m`,
-  green: (t) => `\x1b[32m${t}\x1b[0m`,
-  yellow: (t) => `\x1b[33m${t}\x1b[0m`,
-  gray: (t) => `\x1b[90m${t}\x1b[0m`,
-  magenta: (t) => `\x1b[35m${t}\x1b[0m`,
-};
-
-// ─────────────────────────────────────────────
-// CONFIGURATION
-// ─────────────────────────────────────────────
-
-// RPC & Wallet
+// -------------------- CONFIG --------------------
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) throw new Error("❌ Missing PRIVATE_KEY in environment");
+if (!PRIVATE_KEY) {
+  console.error("❌ Missing PRIVATE_KEY in environment");
+  process.exit(1);
+}
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Arbitrage Contract (hard-coded)
-const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43".toLowerCase();
+// Hardcoded arbitrage contract (owner must be this wallet)
+const ARB_CONTRACT = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 
-// Routers (DEXs)
+// Routers (keep them as known addresses). Use lowercase or checksummed addresses.
 const ROUTERS = {
-  Dfyn: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  Dfyn: "0xa8b607aa09b6a2641cf6f90f643e76d3f6e6ff73",
+  ApeSwap: "0xc0788a3ad43d79aa53b09c2eacc313a787d1d607",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   QuickSwap: "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
-  JetSwap: "0x6b3d817814eabc984d51896b1015c0b89e9737ca",
+  JetSwap: "0x6b3d817814eabc984d51896b1015c0b89e9737ca" // may be optional
 };
 
-// Tokens
+// Factories (if known) to pre-check pair existence (some routers expose factory separately)
+const FACTORIES = {
+  Dfyn: "0x9ad32efcb1c6c92f9f9701d7a1f4c964f59e7fbd",    // example - adjust if needed
+  ApeSwap: "0xcf083be4164828f00cae704ec15a36d711491284",
+  SushiSwap: "0xc35dadb65012ec5796536bd9864ed8773abc74c4",
+  QuickSwap: "0x5757371414417b8c6caad45baef941abc7d3ab32",
+  JetSwap: undefined
+};
+
+// Token list (full list provided). Keep token decimals for formatting.
 const TOKENS = {
   AAVE:{address:"0xd6df932a45c0f255f85145f286ea0b292b21c90b",decimals:18},
   APE:{address:"0x4d224452801aced8b2f0aebe155379bb5d594381",decimals:18},
@@ -70,121 +79,228 @@ const TOKENS = {
   XSGD:{address:"0x70e8de73ce022f373d5a9f00b0ec0cf5835b0fc0",decimals:6},
 };
 
-// Base currency & parameters
-const USDC = TOKENS.USDC.address;
-const TRADE_AMOUNT_USDC = 100n * 1_000_000n;
-const MIN_PROFIT_USDC = 10_000n; // 0.01 USDC
+// Bases to try (most common base tokens on Polygon)
+const BASES = [
+  TOKENS.USDC.address,
+  TOKENS.USDT.address,
+  TOKENS.WETH.address,
+  "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270" // WMATIC
+];
 
-// ─────────────────────────────────────────────
+// Trade params
+const TRADE_USD_STR = "100"; // $100 per arbitrage attempt (human string)
+const TRADE_AMOUNT_USDC = ethers.parseUnits(TRADE_USD_STR, TOKENS.USDC.decimals); // BigInt
+const MIN_PROFIT_USDC = ethers.parseUnits("0.01", TOKENS.USDC.decimals); // $0.01
+
 // ABIs
-// ─────────────────────────────────────────────
-const UNISWAP_V2_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"
-];
-const ARB_CONTRACT_ABI = [
-  "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"
-];
+const ROUTER_ABI = ["function getAmountsOut(uint256 amountIn, address[] memory path) view returns (uint256[] memory)"];
+const FACTORY_ABI = ["function getPair(address tokenA, address tokenB) external view returns (address)"];
+const ARB_ABI = ["function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"];
 
-// ─────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────
-function fmt(num, dec = 6) {
-  return (Number(num) / 10 ** dec).toFixed(4);
+// Small color helpers (no deps)
+const C = {
+  cyan: (t)=>`\x1b[36m${t}\x1b[0m`,
+  green:(t)=>`\x1b[32m${t}\x1b[0m`,
+  yellow:(t)=>`\x1b[33m${t}\x1b[0m`,
+  gray:(t)=>`\x1b[90m${t}\x1b[0m`,
+  magenta:(t)=>`\x1b[35m${t}\x1b[0m`
+};
+
+// utility formatting
+const now = ()=> new Date().toISOString();
+const fmtUSDC = (big) => Number(ethers.formatUnits(big, TOKENS.USDC.decimals)).toFixed(6);
+
+// provider readiness / retry wrapper (handles intermittent RPC failures)
+async function waitForProvider(maxRetries = 5){
+  let attempt = 0;
+  while (attempt < maxRetries){
+    try {
+      await provider.getBlockNumber();
+      return;
+    } catch (err){
+      attempt++;
+      console.warn(`${C.yellow("WARN")} provider check failed (attempt ${attempt}) - ${err.message}. retrying in ${attempt}00ms`);
+      await new Promise(r=>setTimeout(r, attempt * 100));
+    }
+  }
+  throw new Error("Provider not responding after retries");
 }
-function now() {
-  return new Date().toISOString();
+
+// Build router & factory contracts
+const routerContracts = {};
+const factoryContracts = {};
+for (const [k,v] of Object.entries(ROUTERS)){
+  routerContracts[k] = new ethers.Contract(v, ROUTER_ABI, provider);
+  if (FACTORIES[k]) factoryContracts[k] = new ethers.Contract(FACTORIES[k], FACTORY_ABI, provider);
 }
 
-// ─────────────────────────────────────────────
-// CORE LOGIC
-// ─────────────────────────────────────────────
-async function scanToken(symbol, token, routers, arbContract) {
-  const results = [];
-  const buyPaths = [
-    [USDC, token.address],
-    [USDC, TOKENS.WETH.address, token.address],
-  ];
-  const sellPaths = [
-    [token.address, USDC],
-    [token.address, TOKENS.WETH.address, USDC],
-  ];
+// arbitrage contract instance (wallet signer)
+const arbContract = new ethers.Contract(ARB_CONTRACT, ARB_ABI, wallet);
 
-  for (const [buyName, buyAddr] of Object.entries(routers)) {
-    const buyRouter = new ethers.Contract(buyAddr, UNISWAP_V2_ABI, provider);
-    for (const [sellName, sellAddr] of Object.entries(routers)) {
+// throttle controls
+const MIN_DELAY_MS = 200; // delay between router calls to avoid rate-limit
+const MAX_PATHS_PER_TOKEN = 12; // keep path explosion in check
+
+// generate candidate buy/sell paths: single-hop and 2-hop using BASES
+function generatePaths(tokenAddress){
+  const paths = [];
+  // single-hop from each base
+  for (const b of BASES){
+    paths.push([b, tokenAddress]);
+  }
+  // two-hop: base1 -> base2 -> token
+  for (const b1 of BASES){
+    for (const b2 of BASES){
+      if (b1 === b2) continue;
+      paths.push([b1, b2, tokenAddress]);
+    }
+  }
+  // also try direct USDC -> token (already included), and limited size
+  return paths.slice(0, MAX_PATHS_PER_TOKEN);
+}
+
+// check pair existence when factory contract provided (for base->token)
+async function pairExists(factoryContract, a, b){
+  if (!factoryContract) return true;
+  try {
+    const pair = await factoryContract.getPair(a, b);
+    return pair && pair !== ethers.ZeroAddress;
+  } catch {
+    return true; // if factory call fails, allow fallback to getAmountsOut (will be caught)
+  }
+}
+
+// main scanning of a single token across router pairs
+async function scanToken(tokenSymbol, tokenObj){
+  // generate buyPaths & sellPaths
+  const buyPaths = generatePaths(tokenObj.address);
+  const sellPaths = generatePaths(tokenObj.address).map(p => p.slice().reverse()); // reversed to sell
+
+  for (const [buyName, buyAddr] of Object.entries(ROUTERS)){
+    for (const [sellName, sellAddr] of Object.entries(ROUTERS)){
       if (buyName === sellName) continue;
-      const sellRouter = new ethers.Contract(sellAddr, UNISWAP_V2_ABI, provider);
 
-      try {
-        let buyOut;
-        for (const path of buyPaths) {
-          try {
-            const out = await buyRouter.getAmountsOut(TRADE_AMOUNT_USDC, path);
-            buyOut = out[out.length - 1];
-            break;
-          } catch {}
-        }
-        if (!buyOut) throw new Error("No buy route");
+      // small throttle before heavy RPC calls
+      await new Promise(r => setTimeout(r, MIN_DELAY_MS));
 
-        let sellOut;
-        for (const path of sellPaths) {
-          try {
-            const out = await sellRouter.getAmountsOut(buyOut, path);
-            sellOut = out[out.length - 1];
-            break;
-          } catch {}
-        }
-        if (!sellOut) throw new Error("No sell route");
+      // pre-check pair existence for first hop when factory known (optional, avoids many calls)
+      const buyFactory = factoryContracts[buyName];
+      const sellFactory = factoryContracts[sellName];
 
-        const profit = sellOut - TRADE_AMOUNT_USDC;
-        if (profit > 0n) {
-          const profitUSD = fmt(profit, 6);
-          results.push({ symbol, buyName, sellName, profitUSD });
-          console.log(
-            `${color.cyan(`[${symbol}]`)} 💱 ${buyName}→${sellName} | Buy: $${fmt(TRADE_AMOUNT_USDC)} → Sell: $${fmt(sellOut)} | Profit: ${color.green(`+$${profitUSD}`)}`
-          );
-
-          // Execute if above threshold
-          if (profit > MIN_PROFIT_USDC) {
-            console.log(color.yellow(`⚡ Executing arbitrage for ${symbol} (${buyName}→${sellName})...`));
-            const tx = await arbContract.executeArbitrage(buyAddr, sellAddr, token.address, TRADE_AMOUNT_USDC, { gasLimit: 1_500_000 });
-            console.log(`⛓️ TX: ${tx.hash}`);
+      let buyTokenAmount = null; // BigNumber
+      // try each buy path until one returns
+      for (const path of buyPaths){
+        try {
+          // if factory available, check the first pair exists
+          if (buyFactory){
+            const ok = await pairExists(buyFactory, path[0], path[1]);
+            if (!ok) { continue; }
           }
+          const router = routerContracts[buyName];
+          const out = await router.getAmountsOut(TRADE_AMOUNT_USDC, path);
+          buyTokenAmount = out[out.length - 1];
+          break;
+        } catch (err){
+          // ignore and try next path
+          // console.debug(`[${tokenSymbol}] ${buyName} path failed: ${err.message}`);
         }
-      } catch (err) {
-        console.log(color.gray(`[${symbol}] ⚠️ ${buyName}→${sellName}: ${err.message}`));
+      }
+      if (!buyTokenAmount) {
+        // no buy route found
+        console.log(`${C.gray(`[${tokenSymbol}]`)} ${buyName}→${sellName}: ${C.yellow("No buy route")}`);
+        continue;
+      }
+
+      // try sell paths: convert token amount -> USDC
+      let sellUSDCOut = null;
+      for (const path of sellPaths){
+        try {
+          if (sellFactory){
+            const ok = await pairExists(sellFactory, path[0], path[1]);
+            if (!ok) { continue; }
+          }
+          const router = routerContracts[sellName];
+          const out = await router.getAmountsOut(buyTokenAmount, path);
+          sellUSDCOut = out[out.length - 1];
+          break;
+        } catch (err){
+          // try next path
+        }
+      }
+      if (!sellUSDCOut){
+        console.log(`${C.gray(`[${tokenSymbol}]`)} ${buyName}→${sellName}: ${C.yellow("No sell route")}`);
+        continue;
+      }
+
+      // compute profit in USDC base units (BigInt/BigNumber safe)
+      const profitBN = BigInt(sellUSDCOut.toString()) - BigInt(TRADE_AMOUNT_USDC.toString());
+      const profitHuman = Number(ethers.formatUnits(profitBN >= 0n ? profitBN : -profitBN, TOKENS.USDC.decimals)).toFixed(6);
+      const buyUSD = fmtNumber(TRADE_AMOUNT_USDC, TOKENS.USDC.decimals);
+      const sellUSD = fmtNumber(sellUSDCOut, TOKENS.USDC.decimals);
+
+      const sign = profitBN >= 0n ? "" : "-";
+      const profitSignText = (profitBN >= 0n) ? C.green(`+$${profitHuman}`) : C.gray(`-$${profitHuman}`);
+
+      // Log nicely
+      console.log(`${C.cyan(`[${tokenSymbol}]`)} ${buyName}→${sellName} | Buy: $${buyUSD} | Sell: $${sellUSD} | Profit: ${profitSignText}`);
+
+      // Execute if profit meets threshold
+      if (profitBN >= BigInt(MIN_PROFIT_USDC.toString())){
+        console.log(C.yellow(`${now()} ⚡ Executing arbitrage for ${tokenSymbol} (${buyName}→${sellName}) — profit $${profitHuman}`));
+        try {
+          // Execute — note this will spend gas
+          const tx = await arbContract.executeArbitrage(buyAddr, sellAddr, tokenObj.address, TRADE_AMOUNT_USDC, { gasLimit: 1_500_000 });
+          console.log(C.magenta(`⛓️ TX submitted: ${tx.hash}`));
+          await tx.wait();
+          console.log(C.green(`✅ TX confirmed. Profit should be in contract ${ARB_CONTRACT}`));
+        } catch (execErr){
+          console.warn(C.gray(`${now()} ⚠ Execution failed: ${execErr?.message ?? execErr}`));
+        }
+      }
+
+    } // sell routers
+  } // buy routers
+}
+
+// small helper to format BigNumber or BigInt to decimal string
+function fmtNumber(value, decimals = 6){
+  try {
+    return Number(ethers.formatUnits(value, decimals)).toFixed(6);
+  } catch {
+    // fallback when value is BigInt
+    return (Number(value) / Math.pow(10, decimals)).toFixed(6);
+  }
+}
+
+// -------------------- MAIN LOOP --------------------
+(async function main(){
+  console.log(`🔗 Contract: ${ARB_CONTRACT}`);
+  console.log(`💰 Trade Amount: $${TRADE_USD_STR}`);
+  console.log(`📈 Min Profit: $${Number(ethers.formatUnits(MIN_PROFIT_USDC, TOKENS.USDC.decimals)).toFixed(6)}`);
+  console.log(`🔧 Using Routers: ${Object.keys(ROUTERS).join(", ")}`);
+  console.log(`🔧 Bases tried: ${BASES.join(", ")}`);
+  console.log();
+
+  await waitForProvider(10);
+
+  // continuous scan
+  while (true){
+    console.log(`\n${now()} ▸ Scanning tokens...`);
+    for (const [symbol, token] of Object.entries(TOKENS)){
+      if (symbol === "USDC") continue;
+      try {
+        await scanToken(symbol, token);
+      } catch (err){
+        console.error(`${C.gray(`[${symbol}]`)} ERROR scanning token: ${err?.message ?? err}`);
+        // small pause on unexpected errors to avoid flood
+        await new Promise(r=>setTimeout(r, 500));
       }
     }
+    console.log(C.magenta(`Cycle complete — sleeping 3s before next run`));
+    await new Promise(r => setTimeout(r, 3000));
   }
-  return results;
-}
 
-// ─────────────────────────────────────────────
-// MAIN LOOP
-// ─────────────────────────────────────────────
-async function main() {
-  const arbContract = new ethers.Contract(CONTRACT_ADDRESS, ARB_CONTRACT_ABI, wallet);
-
-  console.log(`🔗 Contract: ${CONTRACT_ADDRESS}`);
-  console.log(`💰 Trade Amount: $${fmt(TRADE_AMOUNT_USDC, 6)}`);
-  console.log(`📈 Min Profit: $${fmt(MIN_PROFIT_USDC, 6)}`);
-  console.log(`🔧 Using Routers: ${Object.keys(ROUTERS).join(", ")}`);
-
-  while (true) {
-    console.log(`\n🕒 ${now()} ▸ Scanning tokens...`);
-    for (const [symbol, token] of Object.entries(TOKENS)) {
-      if (symbol === "USDC") continue;
-      await scanToken(symbol, token, ROUTERS, arbContract);
-    }
-    console.log(color.magenta(`Cycle complete — restarting scan...\n`));
-    await new Promise((r) => setTimeout(r, 5000));
-  }
-}
-
-// ─────────────────────────────────────────────
-// ENTRY
-// ─────────────────────────────────────────────
-main().catch((err) => {
+})().catch(err=>{
   console.error("Fatal:", err);
   process.exit(1);
 });
