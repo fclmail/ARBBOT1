@@ -1,8 +1,3 @@
-EXPLAIN WHY WHEN ARBITRAGE FOUND NOT EXECUTED AND PROVIDE SNIPPET TO
-ACTIVATE AND FIX EXECUTE ARBITRAGE.
-
-HERE IS CODE:
-
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
