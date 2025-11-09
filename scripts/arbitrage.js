@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ─────────────── CONFIG ───────────────
-const RPC_URL = process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com";
+const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY");
 
@@ -55,15 +55,23 @@ async function getAmountOut(routerAddr, token, amountIn) {
 
   const path = [tokens.USDC.address, token.address];
   let out;
+
   try {
-    const amounts = await router.getAmountsOut(ethers.utils.parseUnits(amountIn.toString(), tokens.USDC.decimals), path);
-    out = Number(ethers.utils.formatUnits(amounts[amounts.length - 1], token.decimals));
+    const amounts = await router.getAmountsOut(
+      ethers.parseUnits(amountIn.toString(), tokens.USDC.decimals),
+      path
+    );
+    out = Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   } catch {
     // fallback via WETH
     const path2 = [tokens.USDC.address, tokens.WETH.address, token.address];
-    const amounts = await router.getAmountsOut(ethers.utils.parseUnits(amountIn.toString(), tokens.USDC.decimals), path2);
-    out = Number(ethers.utils.formatUnits(amounts[amounts.length - 1], token.decimals));
+    const amounts = await router.getAmountsOut(
+      ethers.parseUnits(amountIn.toString(), tokens.USDC.decimals),
+      path2
+    );
+    out = Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   }
+
   return out;
 }
 
@@ -94,7 +102,9 @@ async function scan() {
 
           if (profitPct >= MIN_PROFIT_PCT) {
             opportunities.push({ token: symbol, buyName, sellName, buyPrice, sellPrice, profitUSDC, profitPct });
-            console.log(`🚨 ${symbol} | Buy:${buyName} Sell:${sellName} Profit: $${fmt(profitUSDC)} (${fmt(profitPct,2)}%)`);
+            console.log(
+              `🚨 ${symbol} | Buy:${buyName} Sell:${sellName} Profit: $${fmt(profitUSDC)} (${fmt(profitPct, 2)}%)`
+            );
             // Optional: execute trade automatically
             // await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
@@ -116,7 +126,7 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
       buyRouter,
       sellRouter,
       tokenAddr,
-      ethers.utils.parseUnits(amount.toString(), tokens.USDC.decimals),
+      ethers.parseUnits(amount.toString(), tokens.USDC.decimals),
       { gasLimit: 1_500_000 }
     );
     console.log(`✅ Trade executed: ${tx.hash}`);
@@ -130,7 +140,7 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
 async function main() {
   while (true) {
     await scan();
-    await new Promise(r => setTimeout(r, 3000)); // scan every 3s, similar to rapid HTML scan
+    await new Promise((r) => setTimeout(r, 3000)); // scan every 3 s
   }
 }
 
