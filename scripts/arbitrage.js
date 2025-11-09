@@ -47,8 +47,8 @@ const tokens = {
 };
 
 // ─────────────── TRADE SETTINGS ───────────────
-const TRADE_AMOUNT_USDC = .10; // trade amount in USDC
-const MIN_PROFIT_PCT = 0.2; // minimum profit %
+const TRADE_AMOUNT_USDC = 10; // trade amount in USDC
+const MIN_PROFIT_PCT = 5; // minimum profit %
 const SLIPPAGE_PCT = 0; // adjust like HTML
 
 // ─────────────── HELPERS ───────────────
