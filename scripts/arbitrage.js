@@ -7,7 +7,7 @@ dotenv.config();
 // ─────────────────────────────────────────────
 
 // RPC & Wallet
-const RPC_URL = process.env.RPC_URL || "https://winter-maximum-shard.matic.quiknode.pro/336e53ee889720bcc1faed189dd19d54686dcb26/";
+const RPC_URL = process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY; // your wallet key (never commit!)
 if (!PRIVATE_KEY) throw new Error("❌ Missing PRIVATE_KEY in environment");
 
