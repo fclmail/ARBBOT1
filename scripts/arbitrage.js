@@ -29,13 +29,13 @@ const arbContract = new ethers.Contract(
 );
 
 //────────────────────────────────────────────
-//🟢6  Router addresses (EIP-55 checksummed)
+//🟢6  Router addresses (EIP‑55 checksummed)
 //────────────────────────────────────────────
 const routers = {
   QuickSwap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
   SushiSwap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-  Dfyn:      ethers.getAddress("0xD654953D746F0b114D1F85332dC43446ac79413d"), // ✅ corrected checksum
-  ApeSwap:   ethers.getAddress("0xC0788A3aD43d79Aa53B09C2EaCc313A787d1d607")
+  Dfyn:      ethers.getAddress("0xA102072A4C07F06EC3B4900FDC4C7B80B6C57429"),  // ✔ correct address obtained from DFYN docs :contentReference[oaicite:0]{index=0}
+  ApeSwap:   ethers.getAddress("0xC0788A3aD43d79AA53B09C2EaCc313A787d1d607")
 };
 
 //────────────────────────────────────────────
@@ -111,7 +111,7 @@ async function scan() {
           const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
 
-          //🟢12  Profit calculation identical to front-end version
+          //🟢12  Profit calculation identical to front‑end version
           const buyPrice = TRADE_AMOUNT_USDC / buyOut;
           const sellPrice = TRADE_AMOUNT_USDC / sellOut;
           let profitUSDC = sellPrice - buyPrice;
@@ -144,7 +144,7 @@ async function scan() {
 }
 
 //────────────────────────────────────────────
-//🟢16  Executes arbitrage on-chain through your deployed contract
+//🟢16  Executes arbitrage on‑chain through your deployed contract
 //────────────────────────────────────────────
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
   try {
@@ -184,3 +184,4 @@ async function main() {
 //────────────────────────────────────────────
 //🟢18  Start the bot and catch any unexpected errors
 main().catch((err) => console.error("❌ Fatal error:", err.message));
+
