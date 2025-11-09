@@ -1,5 +1,5 @@
 //────────────────────────────────────────────
-//  arbitrage.js — Full Automated Arbitrage Bot (Checksummed)
+//  arbitrage.js — Full Automated Arbitrage Bot
 //────────────────────────────────────────────
 
 //🟢1  Import required libraries and environment configuration
@@ -34,7 +34,7 @@ const arbContract = new ethers.Contract(
 const routers = {
   QuickSwap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
   SushiSwap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-  Dfyn:      ethers.getAddress("0xA102072A4C07F06EC3B4900FDC4C7B80B6C57429"),
+  Dfyn:      ethers.getAddress("0xa8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73"),
   ApeSwap:   ethers.getAddress("0xc0788a3ad43d79aa53b09c2eacc313a787d1d607")
 };
 
@@ -45,7 +45,7 @@ const tokens = {
   USDC: { address: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"), decimals: 6 },
   USDT: { address: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F"), decimals: 6 },
   WETH: { address: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"), decimals: 18 },
-  AAVE: { address: ethers.getAddress("0xD6DF932A45C0f255f85145F286eA0b292B21C90B"), decimals: 18 }
+  AAVE: { address: ethers.getAddress("0xd6DF932A45C0f255f85145F286EA0b292B21C90B"), decimals: 18 }
 };
 
 //────────────────────────────────────────────
@@ -66,31 +66,33 @@ function fmt(n, dec = 6) {
 //🟢10  Helper: Get output token amount from a DEX router
 //────────────────────────────────────────────
 async function getAmountOut(routerAddr, token, amountIn) {
-  const router = new ethers.Contract(
-    routerAddr,
-    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-    provider
-  );
-
-  const path = [tokens.USDC.address, token.address];
-  let out;
-
   try {
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), tokens.USDC.decimals),
-      path
+    const router = new ethers.Contract(
+      routerAddr,
+      ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
+      provider
     );
-    out = Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
-  } catch {
-    const path2 = [tokens.USDC.address, tokens.WETH.address, token.address];
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), tokens.USDC.decimals),
-      path2
-    );
-    out = Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
-  }
 
-  return out;
+    const path = [tokens.USDC.address, token.address];
+    try {
+      const amounts = await router.getAmountsOut(
+        ethers.parseUnits(amountIn.toString(), tokens.USDC.decimals),
+        path
+      );
+      return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
+    } catch {
+      // Fallback via WETH
+      const path2 = [tokens.USDC.address, tokens.WETH.address, token.address];
+      const amounts = await router.getAmountsOut(
+        ethers.parseUnits(amountIn.toString(), tokens.USDC.decimals),
+        path2
+      );
+      return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
+    }
+  } catch (err) {
+    console.warn(`⚠️ getAmountOut failed for router ${routerAddr}: ${err.message}`);
+    return 0; // Continue scanning next pair
+  }
 }
 
 //────────────────────────────────────────────
@@ -109,11 +111,14 @@ async function scan() {
           const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
 
+          if (!buyOut || !sellOut) continue; // Skip failed pairs
+
           const buyPrice = TRADE_AMOUNT_USDC / buyOut;
           const sellPrice = TRADE_AMOUNT_USDC / sellOut;
           let profitUSDC = sellPrice - buyPrice;
           let profitPct = (profitUSDC / buyPrice) * 100;
 
+          // Apply slippage adjustment
           const slAdj = 1 - SLIPPAGE_PCT / 100;
           profitUSDC *= slAdj;
           profitPct *= slAdj;
@@ -124,12 +129,11 @@ async function scan() {
               `🚨 ${symbol} | Buy:${buyName} → Sell:${sellName} | Profit: $${fmt(profitUSDC)} (${fmt(profitPct, 2)}%)`
             );
 
-            //🟢15  Execute the arbitrage trade automatically
+            // Execute the arbitrage trade automatically
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
         } catch (e) {
-          //🟢 Error in one pair does not stop scanning
-          console.warn(`⚠️  Error ${symbol} ${buyName}->${sellName}: ${e.reason || e.message}`);
+          console.warn(`⚠️ Scan error ${symbol} ${buyName}->${sellName}: ${e.message}`);
         }
       }
     }
@@ -140,7 +144,7 @@ async function scan() {
 }
 
 //────────────────────────────────────────────
-//🟢16  Executes arbitrage on-chain through your deployed contract
+//🟢12  Executes arbitrage on-chain through your deployed contract
 //────────────────────────────────────────────
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
   try {
@@ -161,7 +165,7 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
 }
 
 //────────────────────────────────────────────
-//🟢17  Main execution loop — repeats scanning indefinitely
+//🟢13  Main execution loop — repeats scanning indefinitely
 //────────────────────────────────────────────
 async function main() {
   console.log("🚀 Arbitrage bot started...");
@@ -175,7 +179,6 @@ async function main() {
 }
 
 //────────────────────────────────────────────
-//🟢18  Start the bot and catch any unexpected errors
+//🟢14  Start the bot and catch any unexpected errors
 main().catch((err) => console.error("❌ Fatal error:", err.message));
-
 
