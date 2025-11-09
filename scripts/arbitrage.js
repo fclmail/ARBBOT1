@@ -1,3 +1,8 @@
+EXPLAIN WHY WHEN ARBITRAGE FOUND NOT EXECUTED AND PROVIDE SNIPPET TO
+ACTIVATE AND FIX EXECUTE ARBITRAGE.
+
+HERE IS CODE:
+
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
@@ -100,14 +105,25 @@ async function scan() {
           profitUSDC *= slAdj;
           profitPct *= slAdj;
 
-          if (profitPct >= MIN_PROFIT_PCT) {
-            opportunities.push({ token: symbol, buyName, sellName, buyPrice, sellPrice, profitUSDC, profitPct });
-            console.log(
-              `🚨 ${symbol} | Buy:${buyName} Sell:${sellName} Profit: $${fmt(profitUSDC)} (${fmt(profitPct, 2)}%)`
-            );
-            // Optional: execute trade automatically
-            // await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
-          }
+         if (profitPct >= MIN_PROFIT_PCT) {
+  opportunities.push({ token: symbol, buyName, sellName, buyPrice, sellPrice, profitUSDC, profitPct });
+  console.log(
+    `🚨 ${symbol} | Buy:${buyName} Sell:${sellName} Profit: $${fmt(profitUSDC)} (${fmt(profitPct, 2)}%)`
+  );
+
+  try {
+    // ✅ Execute trade automatically with checksummed addresses
+    await executeTrade(
+      ethers.getAddress(buyRouter),
+      ethers.getAddress(sellRouter),
+      ethers.getAddress(token.address),
+      TRADE_AMOUNT_USDC
+    );
+  } catch (err) {
+    console.warn(`⚠️ Failed to execute trade: ${err.message}`);
+  }
+}
+
         } catch (e) {
           console.warn(`⚠️ Error ${symbol} ${buyName}->${sellName}: ${e.message}`);
         }
