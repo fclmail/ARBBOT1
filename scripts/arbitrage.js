@@ -35,7 +35,7 @@ const routers = {
   QuickSwap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
   SushiSwap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
   Dfyn:      ethers.getAddress("0xa8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73"),
-  ApeSwap:   ethers.getAddress("0xc0788a3ad43d79aa53b09c2eacc313a787d1d607")
+  ApeSwap:   ethers.getAddress("0xC0788A3aD43d79AA53B09c2EaCc313A787d1d607")
 };
 
 //────────────────────────────────────────────
@@ -182,3 +182,4 @@ async function main() {
 //🟢14  Start the bot and catch any unexpected errors
 main().catch((err) => console.error("❌ Fatal error:", err.message));
 
+  
