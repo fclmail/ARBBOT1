@@ -34,8 +34,8 @@ const arbContract = new ethers.Contract(
 const routers = {
   QuickSwap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
   SushiSwap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-  Dfyn:      ethers.getAddress("0xa8b607aa09b6a2641cf6f90f643e76d3f6e6ff73"),
-  ApeSwap:   ethers.getAddress("0xc0788a3ad43d79aa53b09c2eacc313a787d1d607")
+  Dfyn:      ethers.getAddress("0xD654953D746F0b114D1F85332dC43446ac79413d"), // ✅ corrected checksum
+  ApeSwap:   ethers.getAddress("0xC0788A3aD43d79Aa53B09C2EaCc313A787d1d607")
 };
 
 //────────────────────────────────────────────
@@ -45,7 +45,7 @@ const tokens = {
   USDC: { address: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"), decimals: 6 },
   USDT: { address: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F"), decimals: 6 },
   WETH: { address: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"), decimals: 18 },
-  AAVE: { address: ethers.getAddress("0xD6DF932A45C0f255f85145F286eA0b292B21C90B"), decimals: 18 }
+  AAVE: { address: ethers.getAddress("0xD6Df932A45C0f255f85145F286eA0b292B21C90B"), decimals: 18 }
 };
 
 //────────────────────────────────────────────
