@@ -1,27 +1,28 @@
-// ─────────────── IMPORTS ───────────────
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-import arbArtifact from "../artifacts/contracts/AaveFlashArb.sol/AaveFlashArb.json" assert { type: "json" };
 dotenv.config();
 
 // ─────────────── CONFIG ───────────────
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in .env");
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY");
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// ✅ Your deployed contract address (update if redeployed)
 const CONTRACT_ADDRESS = "0x19b64f74553ee0ee26ba01bf34321735e4701c43";
-
-// ─────────────── CONTRACT ───────────────
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbArtifact.abi, wallet);
+const arbContract = new ethers.Contract(
+  CONTRACT_ADDRESS,
+  [
+    "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external"
+  ],
+  wallet
+);
 
 // ─────────────── ROUTERS ───────────────
 const routers = {
   QuickSwap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
-  SushiSwap: ethers.getAddress("0x1b02dA8Cb0d097eb8D57a175b88c7D8b47997506"),
+  SushiSwap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
   Dfyn: ethers.getAddress("0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73"),
   ApeSwap: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607")
 };
@@ -42,22 +43,31 @@ const tokens = {
   WETH:  { address: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"), decimals: 18 }
 };
 
-// ─────────────── TRADE SETTINGS ───────────────
-const TRADE_AMOUNT_USDC = 10;   // USDC amount to test each arb
-const MIN_PROFIT_PCT = 5;       // only execute >5% profit
-const SLIPPAGE_PCT = 0;         // simulate 0% slippage
+// ─────────────── SETTINGS ───────────────
+const TRADE_AMOUNT_USDC = 10; // Trade amount in USDC
+const MIN_PROFIT_PCT = 5; // Minimum profit %
+const SLIPPAGE_PCT = 0;   // Slippage
 
-// ─────────────── HELPERS ───────────────
-function fmt(n, dec = 4) {
+// ─────────────── HELPER: USDC BALANCE ───────────────
+const USDC_ADDRESS = tokens.USDC.address;
+const usdcContract = new ethers.Contract(
+  USDC_ADDRESS,
+  ["function balanceOf(address) view returns (uint256)"],
+  provider
+);
+
+function fmt(n, dec = 6) {
   return Number(n).toFixed(dec);
 }
 
+// ─────────────── GET AMOUNT OUT ───────────────
 async function getAmountOut(routerAddr, token, amountIn) {
   const router = new ethers.Contract(
     routerAddr,
     ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
     provider
   );
+
   try {
     const path = [tokens.USDC.address, token.address];
     const amounts = await router.getAmountsOut(
@@ -75,62 +85,87 @@ async function getAmountOut(routerAddr, token, amountIn) {
   }
 }
 
-// ─────────────── EXECUTION LOGIC ───────────────
-async function executeTrade(buyRouter, sellRouter, tokenAddr, amountUSDC) {
+// ─────────────── EXECUTE TRADE ───────────────
+async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
   try {
-    console.log(`🚀 Executing arbitrage...`);
+    // 1️⃣ Contract balance before trade
+    const balanceBefore = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+
+    // 2️⃣ Simulate trade (callStatic)
+    await arbContract.callStatic.executeArbitrage(
+      buyRouter, sellRouter, tokenAddr,
+      ethers.parseUnits(amount.toString(), tokens.USDC.decimals)
+    );
+
+    // 3️⃣ Execute actual trade
     const tx = await arbContract.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      tokenAddr,
-      ethers.parseUnits(amountUSDC.toString(), tokens.USDC.decimals),
+      buyRouter, sellRouter, tokenAddr,
+      ethers.parseUnits(amount.toString(), tokens.USDC.decimals),
       { gasLimit: 1_500_000 }
     );
-    console.log(`⏳ TX submitted: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(`✅ Trade confirmed in block ${receipt.blockNumber}`);
+    console.log(`⏳ Trade sent: ${tx.hash}`);
+    await tx.wait();
 
-    const bal = await new ethers.Contract(tokens.USDC.address, ["function balanceOf(address) view returns (uint256)"], provider)
-      .balanceOf(CONTRACT_ADDRESS);
-    console.log(`💰 Contract USDC balance: ${ethers.formatUnits(bal, 6)} USDC`);
+    // 4️⃣ Balance after trade
+    const balanceAfter = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    const profit = balanceAfter.sub(balanceBefore);
+
+    // 5️⃣ Log success and profit
+    console.log(`✅ Trade succeeded! Profit deposited: ${ethers.formatUnits(profit, 6)} USDC`);
   } catch (e) {
-    console.error(`⚠️ Trade failed: ${e.message}`);
+    console.error(`⚠️ Trade failed or reverted: ${e.message}`);
   }
 }
 
-// ─────────────── MAIN SCAN LOOP ───────────────
+// ─────────────── SCAN LOOP ───────────────
 async function scan() {
   console.log("🔍 Starting arbitrage scan...");
+  const opportunities = [];
+
   for (const [symbol, token] of Object.entries(tokens)) {
     for (const [buyName, buyRouter] of Object.entries(routers)) {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
         if (buyName === sellName) continue;
+
         try {
           const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
-          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
-          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
+
+          let buyPrice = TRADE_AMOUNT_USDC / buyOut;
+          let sellPrice = TRADE_AMOUNT_USDC / sellOut;
           let profitPct = ((sellPrice - buyPrice) / buyPrice) * 100 * (1 - SLIPPAGE_PCT / 100);
 
+          // Normalize decimals
+          profitPct = Number(profitPct.toFixed(2));
+
           if (profitPct >= MIN_PROFIT_PCT) {
-            console.log(
-              `🚨 ${symbol} | Buy:${buyName} → Sell:${sellName} | Profit: ${fmt(profitPct, 2)}%`
+            opportunities.push({ token: symbol, buyName, sellName, profitPct });
+            console.log(`🚨 ${symbol} | Buy:${buyName} → Sell:${sellName} | Profit: ${fmt(sellPrice - buyPrice)} USDC (${profitPct}%)`);
+
+            await executeTrade(
+              ethers.getAddress(buyRouter),
+              ethers.getAddress(sellRouter),
+              ethers.getAddress(token.address),
+              TRADE_AMOUNT_USDC
             );
-            await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
+
         } catch (err) {
           console.warn(`⚠️ Error ${symbol} ${buyName}->${sellName}: ${err.message}`);
         }
       }
     }
   }
+
+  console.log(`Scan complete. Found ${opportunities.length} opportunities.`);
+  return opportunities;
 }
 
-// ─────────────── LOOP ───────────────
+// ─────────────── MAIN LOOP ───────────────
 async function main() {
   while (true) {
     await scan();
-    await new Promise((r) => setTimeout(r, 5000)); // every 5s
+    await new Promise(r => setTimeout(r, 3000)); // scan every 3s
   }
 }
 
