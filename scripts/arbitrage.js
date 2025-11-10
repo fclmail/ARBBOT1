@@ -5,10 +5,13 @@ dotenv.config();
 // ─────────────── CONFIG ───────────────
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in environment variables");
 
-// Hardcode contract address here
+// ✅ Hardcoded contract address
 const CONTRACT_ADDRESS = "0x19b64f74553ee0ee26ba01bf34321735e4701c43";
+
+if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
+  throw new Error("Missing PRIVATE_KEY or CONTRACT_ADDRESS");
+}
 
 console.log("PRIVATE_KEY:", PRIVATE_KEY ? "[OK]" : "[MISSING]");
 console.log("CONTRACT_ADDRESS:", CONTRACT_ADDRESS ? "[OK]" : "[MISSING]");
@@ -29,7 +32,7 @@ const arbContract = new ethers.Contract(
 const routers = {
   QuickSwap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
   SushiSwap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-  Dfyn: ethers.getAddress("0xA8b607Aa09B6A2641CF6F90f643E76D3F6E6Ff73"),
+  Dfyn: ethers.getAddress("0xA8b607aA09B6a2641cF6F90f643E76d3F6E6Ff73"), // ✅ Fixed checksum
   ApeSwap: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607")
 };
 
@@ -86,7 +89,7 @@ async function getAmountOut(routerAddr, token, amountIn) {
 // ─────────────── EXECUTE TRADE ───────────────
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
   try {
-    // simulate trade first
+    // Call static first to simulate trade
     await arbContract.callStatic.executeArbitrage(
       buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), tokens.USDC.decimals)
     );
@@ -95,14 +98,15 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
       buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), tokens.USDC.decimals),
       { gasLimit: 1_500_000 }
     );
+
     console.log(`⏳ Trade sent: ${tx.hash}`);
     await tx.wait();
 
+    // Read real USDC balance after trade
     const usdcAddress = await arbContract.USDC();
     const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
     const balance = await usdcContract.balanceOf(arbContract.address);
     console.log(`✅ Trade succeeded! Contract USDC balance: ${ethers.formatUnits(balance, 6)} USDC`);
-
   } catch (err) {
     console.error(`⚠️ Trade failed or reverted: ${err.message}`);
   }
@@ -133,9 +137,11 @@ async function scan() {
 
           if (profitPct >= MIN_PROFIT_PCT) {
             opportunities.push({ token: symbol, buyName, sellName, buyPrice, sellPrice, profitUSDC, profitPct });
+
             console.log(`🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: $${fmt(profitUSDC)} (${fmt(profitPct,2)}%)`);
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
+
         } catch (e) {
           console.warn(`⚠️ Error ${symbol} ${buyName}->${sellName}: ${e.message}`);
         }
@@ -156,3 +162,4 @@ async function main() {
 }
 
 main().catch(console.error);
+
