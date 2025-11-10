@@ -1,19 +1,23 @@
 import { ethers } from "ethers";
+import dotenv from "dotenv";
+dotenv.config();
 
 // ─────────────── CONFIG ───────────────
-const RPC_URL = "https://polygon-rpc.com";
-const PRIVATE_KEY = "YOUR_PRIVATE_KEY_HERE";
-const CONTRACT_ADDRESS = "0x19b64f74553ee0ee26ba01bf34321735e4701c43"; // hardcoded
+const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in environment variables");
 
-if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
-  throw new Error("Missing PRIVATE_KEY or CONTRACT_ADDRESS");
-}
+// Hardcode contract address here
+const CONTRACT_ADDRESS = "0x19b64f74553ee0ee26ba01bf34321735e4701c43";
+
+console.log("PRIVATE_KEY:", PRIVATE_KEY ? "[OK]" : "[MISSING]");
+console.log("CONTRACT_ADDRESS:", CONTRACT_ADDRESS ? "[OK]" : "[MISSING]");
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 const arbContract = new ethers.Contract(
-  CONTRACT_ADDRESS,
+  ethers.getAddress(CONTRACT_ADDRESS),
   [
     "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external",
     "function USDC() view returns(address)"
@@ -25,7 +29,7 @@ const arbContract = new ethers.Contract(
 const routers = {
   QuickSwap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
   SushiSwap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-  Dfyn: ethers.getAddress("0xA8B607Aa09B6A2641Cf6F90f643E76D3F6E6Ff73"),
+  Dfyn: ethers.getAddress("0xA8b607Aa09B6A2641CF6F90f643E76D3F6E6Ff73"),
   ApeSwap: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607")
 };
 
@@ -82,7 +86,7 @@ async function getAmountOut(routerAddr, token, amountIn) {
 // ─────────────── EXECUTE TRADE ───────────────
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
   try {
-    // Simulate first
+    // simulate trade first
     await arbContract.callStatic.executeArbitrage(
       buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), tokens.USDC.decimals)
     );
@@ -98,6 +102,7 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
     const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
     const balance = await usdcContract.balanceOf(arbContract.address);
     console.log(`✅ Trade succeeded! Contract USDC balance: ${ethers.formatUnits(balance, 6)} USDC`);
+
   } catch (err) {
     console.error(`⚠️ Trade failed or reverted: ${err.message}`);
   }
@@ -128,11 +133,9 @@ async function scan() {
 
           if (profitPct >= MIN_PROFIT_PCT) {
             opportunities.push({ token: symbol, buyName, sellName, buyPrice, sellPrice, profitUSDC, profitPct });
-
             console.log(`🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: $${fmt(profitUSDC)} (${fmt(profitPct,2)}%)`);
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
-
         } catch (e) {
           console.warn(`⚠️ Error ${symbol} ${buyName}->${sellName}: ${e.message}`);
         }
