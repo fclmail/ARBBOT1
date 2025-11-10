@@ -1,17 +1,19 @@
-import { ethers } from "ethers";
+import { ethers } from "ethers"; 
 import dotenv from "dotenv";
 dotenv.config();
 
 // ─────────────── CONFIG ───────────────
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+
+// ✅ Hardcoded contract address
+const CONTRACT_ADDRESS = "0x19b64f74553ee0ee26ba01bf34321735e4701c43";
 
 console.log("PRIVATE_KEY:", PRIVATE_KEY ? "[OK]" : "[MISSING]");
 console.log("CONTRACT_ADDRESS:", CONTRACT_ADDRESS ? "[OK]" : "[MISSING]");
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
-  throw new Error("Missing PRIVATE_KEY or CONTRACT_ADDRESS in environment variables");
+  throw new Error("Missing PRIVATE_KEY or CONTRACT_ADDRESS");
 }
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -160,4 +162,3 @@ async function main() {
 }
 
 main().catch(console.error);
-
