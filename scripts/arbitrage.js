@@ -1,5 +1,5 @@
 // scripts/arb.js
-// ────────────────────────────────────────────
+// ─────────────────────────────────────────────
 // Aave flash arbitrage bot — robust version (works with your deployed contract)
 // ─────────────────────────────────────────────
 import { ethers } from "ethers";
@@ -266,4 +266,5 @@ async function scan() {
     await new Promise(res => setTimeout(res, SCAN_INTERVAL_MS));
   }
 })();
+
 
