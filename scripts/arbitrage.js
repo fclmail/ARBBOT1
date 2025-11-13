@@ -12,7 +12,7 @@ if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in env");
 
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // hardcoded contract
 const SCAN_INTERVAL_MS = 40_000; // 40 seconds
-const TRADE_AMOUNT_USDC = 10; // human USDC amount
+const TRADE_AMOUNT_USDC = .01; // human USDC amount
 const MIN_PROFIT_PCT = 3; // percent
 const SLIPPAGE_PCT = 0; // percent assumed for calculation (adjust if desired)
 const MIN_WALLET_MATIC = 0.001; // minimal MATIC to allow tx (safety)
