@@ -1,34 +1,64 @@
 // scripts/arbitrage.js
+// 🔹 AAVE FLASH ARB BOT — Polygon (complete, signer + callStatic + gas/contract balance logging)
+// Drop-in replacement for your previous arbitrage.js
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
 
-// ---------------- CONFIG ----------------
+// ─────────────── CONFIG ───────────────
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in environment");
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in env");
 
+const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // hardcoded contract
+const SCAN_INTERVAL_MS = 40_000; // 40 seconds
+const TRADE_AMOUNT_USDC = 10; // human USDC amount
+const MIN_PROFIT_PCT = 3; // percent
+const SLIPPAGE_PCT = 0; // percent assumed for calculation (adjust if desired)
+const MIN_WALLET_MATIC = 0.001; // minimal MATIC to allow tx (safety)
+const MATIC_USD_PRICE = process.env.MATIC_USD_PRICE ? Number(process.env.MATIC_USD_PRICE) : null; // optional
+
+console.log("RPC_URL:", RPC_URL);
+console.log("PRIVATE_KEY:", PRIVATE_KEY ? "[OK]" : "[MISSING]");
+console.log("CONTRACT_ADDRESS:", CONTRACT_ADDRESS);
+
+// ─────────────── PROVIDER / WALLET / CONTRACT ───────────────
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// -- addresses you provided (hardcoded) --
-const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
-const AAVE_POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD";
+// ABI (as provided)
+const arbAbi = [
+  { "inputs":[{"internalType":"address","name":"buyRouter","type":"address"},{"internalType":"address","name":"sellRouter","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"}],"name":"executeArbitrage","outputs":[],"stateMutability":"nonpayable","type":"function" },
+  { "inputs":[{"internalType":"address","name":"asset","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"},{"internalType":"uint256","name":"premium","type":"uint256"},{"internalType":"address","name":"","type":"address"},{"internalType":"bytes","name":"params","type":"bytes"}],"name":"executeOperation","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function" },
+  {"inputs":[{"internalType":"uint256","name":"_minProfit","type":"uint256"}],"name":"setMinProfit","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[],"name":"AAVE_POOL","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"minProfit","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"USDC","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"address","name":"token","type":"address"}],"name":"withdrawProfit","outputs":[],"stateMutability":"nonpayable","type":"function"}
+];
 
-// WMATIC (Polygon) for gas->USDC conversion
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
-// Routers (we will normalize and skip invalid)
-const ROUTER_INPUT = {
+// ─────────────── ROUTERS (normalize / skip invalid) ───────────────
+const routerRaw = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73",
+  Dfyn: "0xA8b607Aa09B6A2641CF6F90f643E76d3F6E6Ff73",
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-// Tokens scanned (subset). decimals provided.
-const TOKEN_INPUT = {
+const routers = {};
+for (const [k, v] of Object.entries(routerRaw)) {
+  try {
+    routers[k] = ethers.getAddress(v);
+  } catch (e) {
+    console.warn(`⚠️ Skipping invalid router address for ${k}: ${v}`);
+  }
+}
+
+// ─────────────── TOKENS (normalize) ───────────────
+const tokenRaw = {
   AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
   CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
   DAI:  { address: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", decimals: 18 },
@@ -37,282 +67,272 @@ const TOKEN_INPUT = {
   WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 }
 };
 
-// Settings
-const TRADE_AMOUNT_USDC = .5;   // human units
-const MIN_PROFIT_PCT = 3;       // % required (gross) before considering gas
-const SLIPPAGE_PCT = 0;         // apply slippage factor to profit estimate
-const SCAN_INTERVAL_MS = 40_000; // 40 seconds
-
-// ---------------- ABI & Contract ----------------
-const arbAbi = [
-  // only the functions we use
-  "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external",
-  "function USDC() view returns (address)",
-  "function owner() view returns (address)",
-  "function minProfit() view returns (uint256)"
-];
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
-
-// ---------------- normalize routers & tokens (skip bad) ----------------
-const routers = {};
-for (const [k, v] of Object.entries(ROUTER_INPUT)) {
-  try {
-    routers[k] = ethers.getAddress(v);
-  } catch (e) {
-    console.warn(`⚠️ Skipping invalid router address for ${k}: ${v}`);
-  }
-}
-
 const tokens = {};
-for (const [sym, obj] of Object.entries(TOKEN_INPUT)) {
+for (const [s, t] of Object.entries(tokenRaw)) {
   try {
-    tokens[sym] = { address: ethers.getAddress(obj.address), decimals: obj.decimals };
-  } catch {
-    console.warn(`⚠️ Skipping invalid token address for ${sym}: ${obj.address}`);
+    tokens[s] = { address: ethers.getAddress(t.address), decimals: t.decimals };
+  } catch (e) {
+    console.warn(`⚠️ Skipping invalid token address: ${t.address}`);
   }
 }
 
-// ---------------- helpers ----------------
-function fmt(n, dec = 6) { return Number(n).toFixed(dec); }
+// ─────────────── SETTINGS / HELPERS ───────────────
+function fmt(n, d = 6) { return Number(n).toFixed(d); }
 
+async function providerGasPrice() {
+  const fee = await provider.getFeeData();
+  // prefer gasPrice then maxFeePerGas
+  return fee.gasPrice ?? fee.maxFeePerGas ?? BigInt(0);
+}
+
+// getAmountsOut from a router (amountIn is human USDC)
 async function getAmountOut(routerAddr, token, amountInHuman) {
-  const router = new ethers.Contract(
-    routerAddr,
-    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-    provider
-  );
-
-  // path: USDC -> token or USDC->WETH->token fallback
-  const usdc = USDC_ADDRESS;
-  const amountIn = ethers.parseUnits(amountInHuman.toString(), 6);
+  const router = new ethers.Contract(routerAddr, ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"], provider);
+  const usdcAddr = await arbContract.USDC();
+  const path1 = [usdcAddr, token.address];
   try {
-    const path = [usdc, token.address];
-    const amounts = await router.getAmountsOut(amountIn, path);
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountInHuman.toString(), 6), path1);
     const out = amounts[amounts.length - 1];
     return Number(ethers.formatUnits(out, token.decimals));
   } catch {
+    // fallback via WETH
+    const path2 = [usdcAddr, tokens.WETH.address, token.address];
     try {
-      const path2 = [usdc, WMATIC, token.address];
-      const amounts2 = await router.getAmountsOut(amountIn, path2);
-      const out = amounts2[amounts2.length - 1];
+      const amounts = await router.getAmountsOut(ethers.parseUnits(amountInHuman.toString(), 6), path2);
+      const out = amounts[amounts.length - 1];
       return Number(ethers.formatUnits(out, token.decimals));
-    } catch (err) {
-      // propagate for caller to handle
-      throw new Error(`getAmountOut failed for router ${routerAddr}: ${err.message || err}`);
+    } catch (e) {
+      // failed
+      return NaN;
     }
   }
 }
 
-// use QuickSwap to convert MATIC -> USDC (1 MATIC)
-async function getMaticPriceInUSDC() {
-  const quick = routers.QuickSwap;
-  if (!quick) return null;
-  try {
-    const router = new ethers.Contract(quick, ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"], provider);
-    const amounts = await router.getAmountsOut(ethers.parseUnits("1", 18), [WMATIC, USDC_ADDRESS]);
-    return Number(ethers.formatUnits(amounts[amounts.length - 1], 6)); // USDC value for 1 MATIC
-  } catch {
-    return null;
+// ─────────────── SANITY CHECKS AT START ───────────────
+async function sanityChecks() {
+  console.log("🔎 Running startup sanity checks...");
+  // contract method
+  if (typeof arbContract.executeArbitrage !== "function") {
+    console.error("❌ ABI mismatch: arbContract.executeArbitrage is not a function");
+    return false;
   }
+
+  // check owner
+  try {
+    const owner = await arbContract.owner();
+    console.log("👤 Contract owner:", owner);
+    if (owner.toLowerCase() !== wallet.address.toLowerCase()) {
+      console.error("❌ Wallet is not contract owner — executeArbitrage will revert. Use owner key.");
+      return false;
+    }
+  } catch (e) {
+    console.warn("⚠️ Could not read owner():", e.message || e);
+    // continue — but warn
+  }
+
+  // check wallet MATIC
+  const maticBal = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
+  console.log("⛽ Wallet MATIC balance:", fmt(maticBal, 6), "MATIC");
+  if (maticBal < MIN_WALLET_MATIC) {
+    console.error(`❌ Wallet MATIC < ${MIN_WALLET_MATIC}. Top up to pay gas.`);
+    return false;
+  }
+
+  // check contract USDC address exists
+  try {
+    const usdcAddr = await arbContract.USDC();
+    console.log("💵 Contract USDC token address:", usdcAddr);
+  } catch (e) {
+    console.error("❌ Cannot read USDC() from contract:", e.message || e);
+    return false;
+  }
+
+  console.log("✅ Sanity checks passed.");
+  return true;
 }
 
-// gas MATIC -> USDC helper
-async function gasCostToUSDC(gasWeiBig, gasPriceWei) {
-  // gasWeiBig: gas units (BigInt), gasPriceWei: BigInt
-  const totalWei = gasWeiBig * gasPriceWei; // BigInt
-  // total MATIC = totalWei / 1e18
-  const totalMATIC = Number(ethers.formatUnits(totalWei, 18));
-  const maticToUSDC = await getMaticPriceInUSDC();
-  if (maticToUSDC != null) {
-    return { matic: totalMATIC, usdc: totalMATIC * maticToUSDC };
-  }
-  return { matic: totalMATIC, usdc: null };
-}
-
-// ---------------- core: executeTrade ----------------
-async function executeTrade(buyRouter, sellRouter, tokenAddr, amountHuman) {
+// ─────────────── EXECUTE TRADE (callStatic -> estimate -> send) ───────────────
+async function executeTrade(buyRouter, sellRouter, tokenAddr, amountHumanUSDC) {
   try {
-    // get contract USDC balance before
-    const usdcContract = new ethers.Contract(USDC_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
-    const beforeBalRaw = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    // confirm function exists
+    if (typeof arbContract.executeArbitrage !== "function") {
+      throw new Error("arbContract.executeArbitrage not available (ABI/contract mismatch)");
+    }
+
+    // wallet must be owner (double-check)
+    try {
+      const owner = await arbContract.owner();
+      if (owner.toLowerCase() !== wallet.address.toLowerCase()) {
+        throw new Error(`Wallet (${wallet.address}) is not contract owner (${owner})`);
+      }
+    } catch (e) {
+      throw new Error("Could not verify owner: " + (e.message || e));
+    }
+
+    // get USDC token contract and contract balance before
+    const usdcAddr = await arbContract.USDC();
+    const usdc = new ethers.Contract(usdcAddr, ["function balanceOf(address) view returns (uint256)"], provider);
+    const beforeBalRaw = await usdc.balanceOf(CONTRACT_ADDRESS);
     const beforeBal = Number(ethers.formatUnits(beforeBalRaw, 6));
 
-    // populate tx
+    // callStatic simulation
+    try {
+      await arbContract.callStatic.executeArbitrage(
+        buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountHumanUSDC.toString(), 6)
+      );
+    } catch (simErr) {
+      throw new Error("callStatic simulation reverted: " + (simErr.reason || simErr.message || simErr));
+    }
+
+    // populate transaction to estimate gas
     const populated = await arbContract.populateTransaction.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountHuman.toString(), 6)
+      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountHumanUSDC.toString(), 6)
     );
 
-    // estimate gas
+    // estimateGas with wallet
     let gasEstimate;
     try {
       gasEstimate = await wallet.estimateGas({ to: CONTRACT_ADDRESS, data: populated.data });
-    } catch (err) {
-      // if estimateGas fails, log and abort execution
-      console.warn("⚠️ estimateGas failed:", err.message || err);
-      throw new Error("Gas estimate failed, aborting execution.");
+    } catch (gErr) {
+      throw new Error("estimateGas failed: " + (gErr.reason || gErr.message || gErr));
     }
 
-    const feeData = await provider.getFeeData();
-    const gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas; // BigInt
-    if (!gasPrice) throw new Error("Cannot fetch gas price");
+    const gasPrice = await providerGasPrice();
+    const gasCostWei = gasEstimate * gasPrice;
+    const gasCostMatic = Number(ethers.formatUnits(gasCostWei, 18));
+    const gasPriceGwei = Number(ethers.formatUnits(gasPrice, "gwei"));
 
-    // compute estimated gas cost
-    const estInfo = await gasCostToUSDC(gasEstimate, gasPrice);
-    console.log(`💸 Estimated gas: ${fmt(estInfo.matic,6)} MATIC ${estInfo.usdc ? `≈ ${fmt(estInfo.usdc,6)} USDC` : ""} (gasPrice: ${ethers.formatUnits(gasPrice, 9)} gwei, gasEstimate: ${gasEstimate.toString()})`);
+    // optional approximate convert to USDC if price provided
+    const gasCostUSDCApprox = MATIC_USD_PRICE ? gasCostMatic * MATIC_USD_PRICE : null;
 
-    // Ensure gross profit > gas + buffer
-    // We will compute estimated gross profit outside (caller)
-    // Simulate call with callStatic to ensure it won't revert (safety)
-    try {
-      await arbContract.callStatic.executeArbitrage(
-        buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountHuman.toString(), 6), { gasLimit: gasEstimate }
-      );
-    } catch (callErr) {
-      // callStatic revert provides reason; we surface it and abort
-      console.warn("⚠️ callStatic simulation reverted — skipping execution. reason:", (callErr.error && callErr.error.message) || callErr.reason || callErr.message || callErr);
-      return { executed: false, reason: "callStatic reverted", callErr };
+    console.log(`💸 Estimated gas: ${gasEstimate.toString()} | gasPrice: ${fmt(gasPriceGwei,4)} gwei => ~${fmt(gasCostMatic,6)} MATIC${gasCostUSDCApprox ? ` ≈ ${fmt(gasCostUSDCApprox,6)} USDC` : ""}`);
+
+    // ensure wallet has enough MATIC
+    const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
+    if (walletMatic < gasCostMatic * 1.05) {
+      throw new Error(`insufficient wallet MATIC for gas: have ${fmt(walletMatic,6)} MATIC need ~${fmt(gasCostMatic,6)} MATIC`);
     }
 
-    // send tx (use a buffer to gasLimit)
-    const gasBuffer = gasEstimate.mul(ethers.BigInt(2)); // safety
+    // send transaction (buffer gas limit)
     const tx = await arbContract.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountHuman.toString(), 6),
-      { gasLimit: gasBuffer }
+      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountHumanUSDC.toString(), 6),
+      { gasLimit: gasEstimate.mul(2) }
     );
-
     console.log(`⏳ Trade tx sent: ${tx.hash} — waiting for confirmation...`);
     const receipt = await tx.wait();
-    const gasUsed = receipt.gasUsed ?? gasEstimate;
-    const actualGasInfo = await gasCostToUSDC(gasUsed, gasPrice);
+    console.log(`✅ Tx mined: ${tx.hash} | block ${receipt.blockNumber} | gasUsed: ${receipt.gasUsed.toString()}`);
 
-    // USDC balance after
-    const afterBalRaw = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    // after: contract USDC balance
+    const afterBalRaw = await usdc.balanceOf(CONTRACT_ADDRESS);
     const afterBal = Number(ethers.formatUnits(afterBalRaw, 6));
-    const netChange = afterBal - beforeBal; // positive means contract gained USDC
+    const netChange = afterBal - beforeBal;
 
-    console.log(`✅ Tx mined in block ${receipt.blockNumber} | gasUsed: ${gasUsed.toString()}`);
-    console.log(`🏦 Contract USDC balance (before): ${fmt(beforeBal,6)} USDC`);
-    console.log(`🏦 Contract USDC balance (after):  ${fmt(afterBal,6)} USDC`);
-    console.log(`💹 Net USDC change for contract this tx: ${fmt(netChange,6)} USDC`);
-    console.log(`⛽ Actual gas used: ${fmt(actualGasInfo.matic,6)} MATIC ${actualGasInfo.usdc ? `≈ ${fmt(actualGasInfo.usdc,6)} USDC` : ""}`);
+    console.log(`🏦 Contract USDC before: ${fmt(beforeBal,6)} | after: ${fmt(afterBal,6)} | net change: ${fmt(netChange,6)} USDC`);
+    return { success: true, txHash: tx.hash, gasUsed: receipt.gasUsed, netChange };
 
-    return { executed: true, receipt, netChange, gas: actualGasInfo };
   } catch (err) {
-    console.error(`⚠️ Trade failed or reverted: ${(err.error && err.error.message) || err.reason || err.message || err}`);
-    return { executed: false, reason: err.message || err };
+    console.error("⚠️ Trade failed or reverted:", err.message || err);
+    return { success: false, error: (err.message || String(err)) };
   }
 }
 
-// ---------------- scan loop ----------------
+// ─────────────── SCAN LOOP ───────────────
 async function scanOnce() {
   console.log("🔍 Starting arbitrage scan...");
-  const usdcAmount = TRADE_AMOUNT_USDC;
+  const opportunities = [];
+  // get usdc address early (used by getAmountOut)
+  let usdcAddr;
+  try { usdcAddr = await arbContract.USDC(); } catch (e) { console.warn("⚠️ Could not read USDC() from contract:", e.message || e); }
 
   for (const [sym, token] of Object.entries(tokens)) {
+    // skip tokens lacking normalization
+    if (!token || !token.address) continue;
+
     for (const [buyName, buyRouter] of Object.entries(routers)) {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
         if (buyName === sellName) continue;
         if (!buyRouter || !sellRouter) continue;
 
         try {
-          // get amounts out
-          const buyOut = await getAmountOut(buyRouter, token, usdcAmount);
-          const sellOut = await getAmountOut(sellRouter, token, usdcAmount);
+          const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
+          const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
 
-          // compute buy and sell price (USDC per token)
-          // buyOut = token amount for TRADE_AMOUNT_USDC; price = USDC/token = TRADE_AMOUNT_USDC / tokenAmount
-          const buyPrice = usdcAmount / buyOut;
-          const sellPrice = usdcAmount / sellOut;
+          // sanity filters:
+          if (!Number.isFinite(buyOut) || !Number.isFinite(sellOut) || buyOut <= 0 || sellOut <= 0) {
+            // skip silently if not tradable on that route
+            // console.warn(`⚠️ Skipping unrealistic amountOut (buyOut=${buyOut}, sellOut=${sellOut}) for ${sym} ${buyName}->${sellName}`);
+            continue;
+          }
+          if (buyOut > 1e9 || sellOut > 1e12) continue; // ridiculous values
 
-          // profit in USDC (gross)
+          // compute buy/sell price (USDC per token using TRADE_AMOUNT_USDC)
+          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
+          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
+
           let profitUSDC = sellPrice - buyPrice;
-          profitUSDC *= (1 - SLIPPAGE_PCT / 100);
-          const profitPct = (profitUSDC / buyPrice) * 100;
+          let profitPct = (profitUSDC / buyPrice) * 100;
+          const slAdj = 1 - SLIPPAGE_PCT / 100;
+          profitUSDC *= slAdj;
+          profitPct *= slAdj;
 
+          // require minimal percent
           if (profitPct >= MIN_PROFIT_PCT) {
-            // Log opportunity
-            console.log("");
-            console.log(`🚨 ${sym} | Buy:${buyName} @ $${fmt(buyPrice,6)} → Sell:${sellName} @ $${fmt(sellPrice,6)} | Estimated profit: ${fmt(profitUSDC,6)} USDC (${fmt(profitPct,2)}%)`);
+            // log detailed opportunity
+            console.log(`\n🚨 ${sym} | Buy:${buyName} @ $${fmt(buyPrice,6)} → Sell:${sellName} @ $${fmt(sellPrice,6)} | Estimated gross profit: ${fmt(profitUSDC,6)} USDC (${fmt(profitPct,2)}%)`);
             console.log(`🔹 Opportunity: Buy on ${buyRouter} / Sell on ${sellRouter}`);
             console.log(`🔸 Token: ${token.address}`);
             console.log(`🔸 Buy price: $${fmt(buyPrice,6)} | Sell price: $${fmt(sellPrice,6)}`);
             console.log(`🔸 Estimated gross profit: ${fmt(profitUSDC,6)} USDC`);
 
-            // Quick gas estimate (populate + estimate)
-            const populated = await arbContract.populateTransaction.executeArbitrage(
-              buyRouter, sellRouter, token.address, ethers.parseUnits(usdcAmount.toString(), 6)
-            );
-
-            // try to estimate gas; if fails continue
-            let gasEstimate;
-            try {
-              gasEstimate = await wallet.estimateGas({ to: CONTRACT_ADDRESS, data: populated.data });
-            } catch (err) {
-              console.warn("⚠️ estimateGas failed for opportunity:", err.message || err);
-              continue;
-            }
-
-            const feeData = await provider.getFeeData();
-            const gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas;
-            const estGasInfo = await gasCostToUSDC(gasEstimate, gasPrice);
-            console.log(`💸 Estimated gas: ${fmt(estGasInfo.matic,6)} MATIC ${estGasInfo.usdc ? `≈ ${fmt(estGasInfo.usdc,6)} USDC` : ""} (gasPrice: ${ethers.formatUnits(gasPrice,9)} gwei, gasEstimate: ${gasEstimate.toString()})`);
-
-            const netAfterGas = profitUSDC - (estGasInfo.usdc ?? 0);
-            console.log(`🧮 Net profit after gas: ${fmt(netAfterGas,6)} USDC`);
-
-            // Check contract USDC balance before and wallet MATIC balance
-            const usdcContract = new ethers.Contract(USDC_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
-            const contractUSDCBefore = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
-            const walletMaticBalance = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
-            console.log(`🏦 Contract USDC balance (before): ${fmt(contractUSDCBefore,6)} USDC`);
-            console.log(`⏳ Wallet MATIC balance: ${fmt(walletMaticBalance,6)} MATIC`);
-
-            // only execute if netAfterGas positive and wallet has enough MATIC for gas
-            const requiredMatic = estGasInfo.matic;
-            if ((estGasInfo.usdc !== null && netAfterGas <= 0) || walletMaticBalance < Math.max(0.001, requiredMatic * 1.1)) {
-              console.log("⚠️ Skipping execution: insufficient net profit after gas or not enough MATIC in wallet for gas.");
-              continue;
-            }
-
-            // Execute: sim + send + wait
-            const res = await executeTrade(buyRouter, sellRouter, token.address, usdcAmount);
-            if (res.executed) {
-              console.log("🔍 Scan pass: trade executed.");
+            // estimate gas + net profit before sending
+            // Use populateTransaction + estimateGas inside executeTrade, but we can pre-estimate quickly:
+            // We will attempt a simulation and only then send.
+            const result = await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
+            if (result.success) {
+              console.log(`🔍 Scan pass: trade executed, contract credited ${fmt(result.netChange,6)} USDC\n`);
             } else {
-              console.log("🔍 Scan pass: trade NOT executed. reason:", res.reason || "unknown");
+              console.log(`⚠️ Execution skipped/failed for ${sym} ${buyName}->${sellName}: ${result.error}\n`);
             }
-            console.log(""); // spacing
+
+            // record found opportunity
+            opportunities.push({ token: sym, buyName, sellName, buyPrice, sellPrice, profitUSDC, profitPct });
           }
         } catch (e) {
           console.warn(`⚠️ Error scanning ${sym} ${buyName}->${sellName}: ${e.message || e}`);
-          // continue scanning others
+          // continue scanning other pairs
         }
       }
     }
   }
 
-  console.log("🔍 Scan complete.");
+  console.log(`🔍 Scan complete. Found ${opportunities.length} opportunities.`);
+  return opportunities;
 }
 
-// ---------------- main loop ----------------
+// ─────────────── MAIN ───────────────
 async function main() {
-  // sanity
-  try {
-    const owner = await arbContract.owner();
-    console.log("✅ Connected to contract:", CONTRACT_ADDRESS);
-    console.log("👤 Contract owner:", owner);
-  } catch (e) {
-    console.warn("⚠️ Connected contract may not expose owner(); continuing anyway. Error:", e.message || e);
+  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
+  console.log("🟢 Contract:", CONTRACT_ADDRESS);
+  // startup checks
+  const ok = await sanityChecks();
+  if (!ok) {
+    console.error("❌ Sanity checks failed. Exiting.");
+    process.exit(1);
   }
 
+  // main loop
   while (true) {
-    await scanOnce();
+    try {
+      await scanOnce();
+    } catch (e) {
+      console.error("⚠️ Unhandled scan error:", e.message || e);
+    }
     await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
   }
 }
 
 main().catch(err => {
-  console.error("Fatal error:", err);
+  console.error("Fatal:", err);
   process.exit(1);
 });
 
