@@ -61,7 +61,7 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS ───────────────
-const TRADE_AMOUNT_USDC = 10; // Amount to borrow/trade
+const TRADE_AMOUNT_USDC = 1; // Amount to borrow/trade
 const MIN_PROFIT_PCT = 3;
 const SLIPPAGE_PCT = 0;
 
