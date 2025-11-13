@@ -105,21 +105,19 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
 
     console.log(`💸 Estimated gas cost: ${fmt(gasCostUSDC)} USDC`);
 
-    // Check if trade net profit > MIN_NET_PROFIT_USDC
     if (TRADE_AMOUNT_USDC < gasCostUSDC + MIN_NET_PROFIT_USDC) {
       console.log(`⚠️ Skipping trade, estimated gas > profit`);
       return;
     }
 
-    // CallStatic to simulate execution
+    // Simulation
     await arbContract.callStatic.executeArbitrage(
       buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), 6)
     );
 
-    // Send transaction
     const tx = await arbContract.executeArbitrage(
       buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), 6),
-      { gasLimit: gasEstimate.mul(2) } // slight buffer
+      { gasLimit: gasEstimate.mul(2) }
     );
     console.log(`⏳ Trade sent: ${tx.hash}`);
     await tx.wait();
@@ -153,7 +151,8 @@ async function scan() {
 
           if (profitPct >= MIN_PROFIT_PCT) {
             opportunities.push({ token: symbol, buyName, sellName, profitUSDC, profitPct });
-            console.log(`🚨 ${symbol} | Buy:${buyName} → Sell:${sellName} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
+            // 🟢 NEW: Log includes buy/sell prices
+            console.log(`🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
 
@@ -173,9 +172,8 @@ async function main() {
   console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
   while (true) {
     await scan();
-    await new Promise(r => setTimeout(r, 5000)); // 5s delay between scans
+    await new Promise(r => setTimeout(r, 5000));
   }
 }
 
 main().catch(console.error);
-
