@@ -38,7 +38,7 @@ const TOKEN_INPUT = {
 };
 
 // Settings
-const TRADE_AMOUNT_USDC = 10;   // human units
+const TRADE_AMOUNT_USDC = .5;   // human units
 const MIN_PROFIT_PCT = 3;       // % required (gross) before considering gas
 const SLIPPAGE_PCT = 0;         // apply slippage factor to profit estimate
 const SCAN_INTERVAL_MS = 40_000; // 40 seconds
