@@ -11,7 +11,7 @@ const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // Hardcoded contract
 const SCAN_INTERVAL_MS = 40_000; // 40 seconds as requested
-const TRADE_AMOUNT_USDC = 0.008; // default trade amount (human USDC)
+const TRADE_AMOUNT_USDC = 10; // human USDC (change here to set trade amount)
 const MIN_PROFIT_PCT = 3;     // threshold %
 const SLIPPAGE_PCT = 0;       // slippage assumption %
 const MIN_NET_PROFIT_USDC = 1; // only execute if net profit > $1 (you can change)
@@ -61,7 +61,7 @@ const tokens = {
   DAI:  { address: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", decimals: 18 },
   LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
-  WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 },
+  WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 }
 };
 
 // WMATIC (wrapped MATIC) address on Polygon (used to price gas in USDC)
@@ -113,11 +113,8 @@ async function getAmountOut(routerAddr, token, amountInHumanUSDC) {
  * - returns { gasEstimate (BigInt), gasPrice (BigInt), gasCostMatic (number in MATIC) }
  */
 async function estimateGasCostMatic(populatedTx) {
-  // ensure 'to' set; populatedTx should come from populateTransaction
   if (!populatedTx.to) throw new Error("populateTransaction missing to");
-
   const gasEstimate = await wallet.estimateGas(populatedTx);
-  // provider.getGasPrice() exists on Polygon (returns wei)
   const gasPrice = await provider.getGasPrice();
   const gasCostWei = gasEstimate * gasPrice;
   const gasCostMatic = Number(ethers.formatUnits(gasCostWei, 18)); // MATIC amount
@@ -160,7 +157,6 @@ async function getWalletMaticBalance() {
 
 // ─────────────── EXECUTE TRADE (with callStatic + gas check + detailed logging) ───────────────
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amountHumanUSDC) {
-  // amountHumanUSDC is e.g. 10
   try {
     const usdcBefore = await getContractUSDCBalance();
     const walletMaticBefore = await getWalletMaticBalance();
@@ -172,16 +168,16 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amountHumanUSDC) {
       buyRouter, sellRouter, tokenAddr, amountUnits
     );
 
-    // attach 'to' (contract address) for estimateGas (populateTransaction includes to by default)
+    // attach 'to' (populateTransaction should already include to)
     populated.to = CONTRACT_ADDRESS;
 
     // estimate gas and gas cost in MATIC
     const { gasEstimate, gasPrice, gasCostMatic } = await estimateGasCostMatic(populated);
 
-    // convert gas cost to USDC (approx) using QuickSwap path WMATIC->USDC
+    // convert gas cost to USDC (approx)
     const gasCostUSDCapprox = await convertMaticToUSDC(gasCostMatic);
 
-    // callStatic simulation: prevents sending hopeless txs (this simulates the whole flash loan path)
+    // callStatic simulation: prevents sending hopeless txs
     try {
       await arbContract.callStatic.executeArbitrage(buyRouter, sellRouter, tokenAddr, amountUnits);
     } catch (simErr) {
@@ -189,9 +185,7 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amountHumanUSDC) {
       return { executed: false, reason: "callStatic reverted", simErr };
     }
 
-    // optional net profit check: we compute gross profit in scan already, but we also ensure estimated net > MIN_NET_PROFIT_USDC
-    // For safety, we require estimated gas in USDC < (estimated gross profit - MIN_NET_PROFIT_USDC)
-    // We'll return gasCostUSDCapprox null if conversion failed; in that case we still try but mark as riskier.
+    // success simulation: return populated tx for sending later
     return { executed: true, gasEstimate, gasPrice, gasCostMatic, gasCostUSDCapprox, usdcBefore, walletMaticBefore, populated };
   } catch (err) {
     console.error(`⚠️ Trade simulation or gas estimate failed: ${err.reason || err.message || err}`);
@@ -202,7 +196,6 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amountHumanUSDC) {
 // send tx (separated so we simulate first then send)
 async function sendTradeTx(populatedTx, amountHumanUSDC) {
   try {
-    // send actual tx with a buffer on gasLimit
     const gasEstimate = await wallet.estimateGas(populatedTx);
     const gasLimit = gasEstimate * 2n;
     const tx = await wallet.sendTransaction({ to: CONTRACT_ADDRESS, data: populatedTx.data, gasLimit });
@@ -230,13 +223,12 @@ async function scanOnce(tradeAmountHuman = TRADE_AMOUNT_USDC) {
           const buyOut = await getAmountOut(buyRouter, token, tradeAmountHuman);
           const sellOut = await getAmountOut(sellRouter, token, tradeAmountHuman);
 
-          // if buyOut or sellOut are zero or NaN, skip
           if (!buyOut || !sellOut || isNaN(buyOut) || isNaN(sellOut) || buyOut <= 0 || sellOut <= 0) {
             continue;
           }
 
-          const buyPrice = tradeAmountHuman / buyOut;  // USDC per token on buy
-          const sellPrice = tradeAmountHuman / sellOut; // USDC per token on sell
+          const buyPrice = tradeAmountHuman / buyOut;
+          const sellPrice = tradeAmountHuman / sellOut;
 
           let profitUSDC = sellPrice - buyPrice; // gross
           let profitPct = (profitUSDC / buyPrice) * 100;
@@ -244,9 +236,7 @@ async function scanOnce(tradeAmountHuman = TRADE_AMOUNT_USDC) {
           profitUSDC *= slAdj;
           profitPct *= slAdj;
 
-          // Only consider human-visible profit (not tiny dust)
           if (profitPct >= MIN_PROFIT_PCT && profitUSDC > 0) {
-            // Detailed log before attempting
             console.log(`\n🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Estimated gross profit: ${fmt(profitUSDC,6)} USDC (${fmt(profitPct,2)}%)`);
             console.log(`🔹 Opportunity: Buy on ${buyRouter} / Sell on ${sellRouter}`);
             console.log(`🔸 Token: ${token.address}`);
@@ -272,7 +262,6 @@ async function scanOnce(tradeAmountHuman = TRADE_AMOUNT_USDC) {
             if (gasCostUSDCapprox !== null && !isNaN(gasCostUSDCapprox)) {
               netProfitAfterGasUSDC = profitUSDC - gasCostUSDCapprox;
             } else {
-              // we don't know MATIC->USDC, so we keep gross profit but log that gas in USDC unknown
               console.warn("⚠️ Could not estimate gas cost in USDC (QuickSwap price path unavailable). Net profit shown will not subtract gas.");
             }
 
@@ -298,12 +287,16 @@ async function scanOnce(tradeAmountHuman = TRADE_AMOUNT_USDC) {
               const contractAfter = await getContractUSDCBalance();
               const netChange = contractAfter - contractBefore;
               console.log(`🏦 Contract USDC balance (after): ${fmt(contractAfter,6)} USDC`);
-              console.log(`💹 Net USDC change for contract this tx: ${fmt(netChange,6)} USDC`);
+
+              // === NEW explicit net profit sent to contract log ===
+              const netProfitToContract = netChange;
+              console.log(`💰 Net Profit Sent to Contract: ${fmt(netProfitToContract,6)} USDC`);
+              // ======================================================
+
             } catch (sendErr) {
               console.error(`⚠️ Transaction failed to send / reverted: ${sendErr.reason || sendErr.message || sendErr}`);
             }
 
-            // Add opportunity to list
             opportunities.push({
               token: symbol, buyName, sellName, buyPrice, sellPrice, grossProfit: profitUSDC, netProfitApprox: netProfitAfterGasUSDC
             });
@@ -347,8 +340,3 @@ main().catch(err => {
   console.error("Fatal error:", err.message || err);
   process.exit(1);
 });
-
-
-
-
-
