@@ -1,112 +1,124 @@
-import { ethers, parseUnits } from "ethers"; // ethers v6
-import dotenv from "dotenv";
-dotenv.config();
+import { ethers } from "ethers";
+import "dotenv/config";
 
-import AAVE_FLASH_ARB_ABI from "../abis/AaveFlashArb.json"; // save your ABI as JSON
-
-// ---------------- CONFIG ----------------
-const RPC_URL = process.env.RPC_URL;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
+// ================= CONFIG =================
+const RPC_URL = process.env.RPC_URL; // Polygon RPC
+const PRIVATE_KEY = process.env.PRIVATE_KEY; // Wallet private key
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
-// Routers
-const routers = {
+const ROUTERS = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Dfyn: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73" // optional: will skip if invalid
+  Dfyn: "0xA8b607Aa09B6A2641CF6F90f643E76d3F6E6Ff73" // optional, might be invalid
 };
 
-// Tokens to scan
-const tokens = [
-  "0x172370d5Cd63279eFa6d502DAB29171933a610AF", // CRV
-  "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39", // LINK
-  "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6"  // WBTC
+const MIN_PROFIT_USDC = ethers.parseUnits("1", 6); // minimum 1 USDC profit
+
+// ================= ABI INLINED =================
+const AAVE_FLASH_ARB_ABI = [
+  {
+    "inputs": [
+      { "internalType": "address", "name": "buyRouter", "type": "address" },
+      { "internalType": "address", "name": "sellRouter", "type": "address" },
+      { "internalType": "address", "name": "token", "type": "address" },
+      { "internalType": "uint256", "name": "amountIn", "type": "uint256" }
+    ],
+    "name": "executeArbitrage",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "asset", "type": "address" },
+      { "internalType": "uint256", "name": "amount", "type": "uint256" },
+      { "internalType": "uint256", "name": "premium", "type": "uint256" },
+      { "internalType": "address", "name": "", "type": "address" },
+      { "internalType": "bytes", "name": "params", "type": "bytes" }
+    ],
+    "name": "executeOperation",
+    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "uint256", "name": "_minProfit", "type": "uint256" }],
+    "name": "setMinProfit",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "_aavePool", "type": "address" },
+      { "internalType": "address", "name": "_usdc", "type": "address" },
+      { "internalType": "uint256", "name": "_minProfit", "type": "uint256" }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "token", "type": "address" }],
+    "name": "withdrawProfit",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  { "inputs": [], "name": "AAVE_POOL", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "minProfit", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
 ];
 
-// Minimum profit in USDC
-const MIN_PROFIT_USDC = parseUnits("1", 6); // 1 USDC
-
-// ---------------- PROVIDER & WALLET ----------------
+// ================= PROVIDER & WALLET =================
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-// ---------------- CONTRACT INSTANCE ----------------
 const arbContract = new ethers.Contract(CONTRACT_ADDRESS, AAVE_FLASH_ARB_ABI, wallet);
 
-// ---------------- HELPERS ----------------
-async function isValidRouter(router) {
+// ================= ARBITRAGE FUNCTION =================
+async function runArbitrage(buyRouter, sellRouter, token, amountIn) {
   try {
-    const code = await provider.getCode(router);
-    return code !== "0x";
+    const tx = await arbContract.executeArbitrage(buyRouter, sellRouter, token, amountIn, {
+      gasLimit: 5_000_000
+    });
+    console.log(`Arbitrage tx sent: ${tx.hash}`);
+    await tx.wait();
+    console.log("Arbitrage executed successfully!");
   } catch (err) {
-    return false;
+    console.error("Trade failed or reverted:", err.reason || err);
   }
 }
 
-function getRouterPairs() {
-  const validRouters = Object.entries(routers).filter(([name, addr]) => addr && addr !== "");
-  return validRouters;
-}
-
-// ---------------- ARBITRAGE SCAN ----------------
+// ================= MOCK SCAN & EXECUTE =================
 async function scanAndExecute() {
   console.log("🚀 Starting arbitrage scan...");
 
-  for (const token of tokens) {
-    const routerPairs = getRouterPairs();
+  // Example tokens & amounts
+  const tokenList = [
+    "0x172370d5Cd63279eFa6d502DAB29171933a610AF", // CRV
+    "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39"  // LINK
+  ];
+  const amountIn = ethers.parseUnits("100", 6); // 100 USDC
 
-    for (let i = 0; i < routerPairs.length; i++) {
-      for (let j = 0; j < routerPairs.length; j++) {
-        if (i === j) continue;
+  for (const token of tokenList) {
+    // QuickSwap → ApeSwap
+    if (ROUTERS.QuickSwap && ROUTERS.ApeSwap) {
+      console.log(`Scanning opportunity: QuickSwap -> ApeSwap for ${token}`);
+      await runArbitrage(ROUTERS.QuickSwap, ROUTERS.ApeSwap, token, amountIn);
+    }
 
-        const [buyName, buyRouter] = routerPairs[i];
-        const [sellName, sellRouter] = routerPairs[j];
-
-        // Skip invalid routers (like Dfyn if needed)
-        if (!(await isValidRouter(buyRouter)) || !(await isValidRouter(sellRouter))) {
-          console.warn(`⚠️ Skipping invalid router pair: ${buyName} -> ${sellName}`);
-          continue;
-        }
-
-        // Dummy price simulation, replace with your price fetch logic
-        const buyPrice = Math.random() * 100;
-        const sellPrice = buyPrice * (1 + Math.random() * 0.2);
-
-        const estimatedProfit = sellPrice - buyPrice; // simplified for demo
-
-        if (parseUnits(estimatedProfit.toString(), 6).gte(MIN_PROFIT_USDC)) {
-          console.log(`🚨 Opportunity: Buy:${buyName} -> Sell:${sellName} | Token: ${token}`);
-          console.log(`Estimated profit: ${estimatedProfit.toFixed(6)} USDC`);
-
-          // Attempt execution
-          try {
-            const tx = await arbContract.executeArbitrage(
-              buyRouter,
-              sellRouter,
-              token,
-              parseUnits("1000", 6) // example amount, change as needed
-            );
-            console.log(`✅ Trade submitted: ${tx.hash}`);
-            await tx.wait();
-            console.log("✅ Trade confirmed!");
-          } catch (err) {
-            console.error(`⚠️ Trade failed: ${err.message}`);
-          }
-        }
-      }
+    // SushiSwap → ApeSwap
+    if (ROUTERS.SushiSwap && ROUTERS.ApeSwap) {
+      console.log(`Scanning opportunity: SushiSwap -> ApeSwap for ${token}`);
+      await runArbitrage(ROUTERS.SushiSwap, ROUTERS.ApeSwap, token, amountIn);
     }
   }
 }
 
-// ---------------- MAIN ----------------
+// ================= MAIN =================
 (async () => {
-  console.log("🟢 Connected to contract:", CONTRACT_ADDRESS);
-  console.log("👤 Wallet address:", wallet.address);
-
+  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
   await scanAndExecute();
 })();
-
 
