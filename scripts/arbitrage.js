@@ -11,7 +11,7 @@ const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 const SCAN_INTERVAL_MS = 40_000; // 40s
-const TRADE_AMOUNT_USDC = 0.01; // default trade amount
+const TRADE_AMOUNT_USDC = 0.007; // default trade amount
 const MIN_PROFIT_PCT = 3;       // minimum profit %
 const MIN_NET_PROFIT_USDC = 1;  // minimum net profit
 
