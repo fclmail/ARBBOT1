@@ -1,40 +1,53 @@
+// scripts/arbitrage.js
 // ----------------------------------------------------
-// AAVE FLASH ARB BOT - POLYGON
-// Fully fixed version
+// AAVE FLASH ARB BOT - POLYGON (ES Module)
 // ----------------------------------------------------
 import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
+import "dotenv/config";
 
-// ----------------------------------------------------
-// Hardcoded contract address + minimal ABI
-// ----------------------------------------------------
-const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+// ---------------- CONFIG ----------------
+const RPC_URL = process.env.RPC_URL;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const ARB_CONTRACT = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // Hardcoded
+const TRADE_AMOUNT = "0.02"; // USDC amount in human-readable units
+const SCAN_DELAY_MS = 5000; // 5s between scans
 
+// ---------------- ABI ----------------
 const arbAbi = [
-  "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn) external",
-  "function owner() external view returns(address)",
-  "function USDC() external view returns(address)"
+  {
+    "inputs":[
+      {"internalType":"address","name":"buyRouter","type":"address"},
+      {"internalType":"address","name":"sellRouter","type":"address"},
+      {"internalType":"address","name":"token","type":"address"},
+      {"internalType":"uint256","name":"amountIn","type":"uint256"}
+    ],
+    "name":"executeArbitrage",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  },
+  { "inputs": [], "name": "owner", "outputs": [{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" },
+  { "inputs": [], "name": "USDC", "outputs": [{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" }
 ];
 
-// ----------------------------------------------------
-// Provider + Wallet
-// ----------------------------------------------------
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+// ---------------- PROVIDER + WALLET ----------------
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// ----------------------------------------------------
-// Contract instance
-// ----------------------------------------------------
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+// ---------------- CONTRACT INSTANCE ----------------
+const arbContract = new ethers.Contract(ARB_CONTRACT, arbAbi, wallet);
 
-// ----------------------------------------------------
-// Routers and tokens (example addresses, fix checksum!)
-// ----------------------------------------------------
+// ---------------- UTILITY ----------------
+const norm = (addr) => {
+  try { return ethers.getAddress(addr); }
+  catch { return null; }
+};
+
+// ---------------- EXAMPLE ROUTERS & TOKENS ----------------
 const routers = {
-  QuickSwap: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  SushiSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  ApeSwap: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
 const tokens = {
@@ -43,84 +56,84 @@ const tokens = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
-// ----------------------------------------------------
-// Normalize addresses
-// ----------------------------------------------------
-function norm(addr) {
-  try { return ethers.getAddress(addr); }
-  catch { return null; }
-}
-
-// ----------------------------------------------------
-// Execute arbitrage
-// ----------------------------------------------------
+// ---------------- EXECUTE TRADE ----------------
 async function executeTrade(buyRouter, sellRouter, token, amountUnits) {
+  const buy = norm(buyRouter);
+  const sell = norm(sellRouter);
+  const tok = norm(token);
+  if (!buy || !sell || !tok) return { executed: false, reason: "Invalid address" };
+
+  // Convert to smallest unit (assume 6 decimals for USDC)
+  const amount = ethers.parseUnits(amountUnits, 6);
+
+  // 1️⃣ CallStatic simulation
   try {
-    const buy = norm(buyRouter);
-    const sell = norm(sellRouter);
-    const tok = norm(token);
-
-    if (!buy || !sell || !tok) {
-      console.log("❌ Invalid address checksum");
-      return { executed: false };
-    }
-
-    // Simulate trade using callStatic with small amount
-    try {
-      await arbContract.callStatic.executeArbitrage(buy, sell, tok, amountUnits);
-    } catch (err) {
-      console.log("✖ callStatic would fail:", err.reason || err.message);
-      return { executed: false };
-    }
-
-    // Send transaction
-    console.log("🟢 Sending trade...");
-    const tx = await arbContract.executeArbitrage(buy, sell, tok, amountUnits, { gasLimit: 2500000 });
-    const receipt = await tx.wait();
-    console.log("✅ Arbitrage executed:", receipt.transactionHash);
-
-    // Print contract USDC balance
-    const usdcAddress = await arbContract.USDC();
-    const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
-    const contractBalanceRaw = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-    const contractBalance = Number(ethers.formatUnits(contractBalanceRaw, 6));
-    console.log("Contract USDC balance:", contractBalance.toFixed(6));
-
-    // Print wallet MATIC balance
-    const walletBalanceRaw = await provider.getBalance(wallet.address);
-    const walletBalance = Number(ethers.formatUnits(walletBalanceRaw, 18));
-    console.log("Wallet MATIC balance:", walletBalance.toFixed(6));
-
-    return { executed: true, hash: receipt.transactionHash };
+    await arbContract.callStatic.executeArbitrage(buy, sell, tok, amount);
   } catch (err) {
-    console.log("❌ Error executing trade:", err.message);
-    return { executed: false, reason: err.message };
+    return { executed: false, reason: "callStatic fail: " + (err.reason || err.message) };
+  }
+
+  // 2️⃣ Send transaction
+  try {
+    const tx = await arbContract.executeArbitrage(buy, sell, tok, amount, { gasLimit: 2_500_000 });
+    const receipt = await tx.wait();
+    return { executed: true, hash: receipt.hash };
+  } catch (err) {
+    return { executed: false, reason: err.reason || err.message };
   }
 }
 
-// ----------------------------------------------------
-// Main loop
-// ----------------------------------------------------
-async function main() {
-  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
-  while (true) {
-    for (const tokenName of Object.keys(tokens)) {
-      for (const buyName of Object.keys(routers)) {
-        for (const sellName of Object.keys(routers)) {
-          if (buyName === sellName) continue;
-          const tokenAddr = tokens[tokenName];
-          const buyAddr = routers[buyName];
-          const sellAddr = routers[sellName];
+// ---------------- FETCH CONTRACT + WALLET BALANCE ----------------
+async function getBalances() {
+  const usdcAddress = await arbContract.USDC();
+  const contractUSDC = await (new ethers.Contract(usdcAddress, [{"inputs":[],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}], provider)).balanceOf(ARB_CONTRACT);
+  const walletMATIC = await provider.getBalance(wallet.address);
+  return {
+    contractUSDC: ethers.formatUnits(contractUSDC, 6),
+    walletMATIC: ethers.formatEther(walletMATIC)
+  };
+}
 
-          const tradeAmount = ethers.parseUnits("0.02", 6); // Small test amount
+// ---------------- SCAN ----------------
+async function scan() {
+  console.log("🔍 Scanning for arbitrage opportunities...");
+  for (const tokenKey of Object.keys(tokens)) {
+    const token = tokens[tokenKey];
+    for (const buyKey of Object.keys(routers)) {
+      for (const sellKey of Object.keys(routers)) {
+        if (buyKey === sellKey) continue;
+        const buyRouter = routers[buyKey];
+        const sellRouter = routers[sellKey];
 
-          console.log(`🔹 Checking trade: ${tokenName} | Buy:${buyName} -> Sell:${sellName}`);
-          await executeTrade(buyAddr, sellAddr, tokenAddr, tradeAmount);
+        console.log(`🔹 Checking trade: ${tokenKey} | Buy:${buyKey} -> Sell:${sellKey}`);
+        const result = await executeTrade(buyRouter, sellRouter, token, TRADE_AMOUNT);
+
+        if (result.executed) {
+          console.log(`✅ Trade executed: ${tokenKey} | Buy:${buyKey} -> Sell:${sellKey} | TxHash: ${result.hash}`);
+        } else {
+          console.log(`✖ callStatic would fail: ${result.reason}`);
         }
       }
     }
-    await new Promise(r => setTimeout(r, 5000)); // 5s delay
+  }
+
+  const balances = await getBalances();
+  console.log(`🔹 Contract USDC balance: ${balances.contractUSDC}`);
+  console.log(`🔹 Wallet MATIC balance: ${balances.walletMATIC}`);
+}
+
+// ---------------- MAIN LOOP ----------------
+async function main() {
+  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
+  while (true) {
+    try {
+      await scan();
+      await new Promise(r => setTimeout(r, SCAN_DELAY_MS));
+    } catch (err) {
+      console.error("Error in main loop:", err);
+    }
   }
 }
 
 main().catch(console.error);
+
