@@ -8,8 +8,8 @@ dotenv.config();
 // ─────────────── CONFIG 🟢1 ───────────────
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // deployed contract
-const MIN_NET_PROFIT_USDC = 1; // minimum profit after gas
+const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+const MIN_NET_PROFIT_USDC = 1;
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
   throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS");
@@ -48,14 +48,14 @@ const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn: "0xA8b607Aa09B6A2641CF6F90F643E76D3F6E6Ff73",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  Dfyn:      "0xA8b607Aa09b6a2641cF6f90F643E76d3F6E6Ff73", // ← FIXED checksum
+  ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
 // ─────────────── TOKENS 🟢5 ───────────────
 const tokens = {
   AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
-  CRV: { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
+  CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
   LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
@@ -77,6 +77,7 @@ async function getAmountOut(routerAddr, token, amountIn) {
 
   const usdcAddress = await arbContract.USDC();
   const path = [usdcAddress, token.address];
+
   try {
     const amounts = await router.getAmountsOut(
       ethers.parseUnits(amountIn.toString(), 6),
@@ -93,58 +94,28 @@ async function getAmountOut(routerAddr, token, amountIn) {
   }
 }
 
-// ─────────────── CUMULATIVE PROFIT TRACKING 🟢8 ───────────────
+// ─────────────── CUMULATIVE PROFIT 🟢8 ───────────────
 let cumulativeProfit = 0;
 
-// ─────────────────────────────────────────────
-// 🆕 NEW — SAFE callStatic PRE-TRADE SIMULATION
-// ─────────────────────────────────────────────
-async function simulateTrade(buyRouter, sellRouter, tokenAddr, amount) {
-  const amountUnits = ethers.parseUnits(amount.toString(), 6);
-
-  try {
-    // test execution — will revert if losing money
-    await arbContract.callStatic.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, amountUnits
-    );
-
-    // gas estimate
-    const populated = await arbContract.populateTransaction.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, amountUnits
-    );
-
-    const gas = await wallet.estimateGas(populated);
-    const gasPrice = await provider.getGasPrice();
-    const gasCostMatic = Number(ethers.formatUnits(gas * gasPrice, 18));
-
-    // convert gas → USDC
-    const router = new ethers.Contract(
-      routers.QuickSwap,
-      ["function getAmountsOut(uint,address[]) view returns(uint[])"],
-      provider
-    );
-
-    const usdc = await arbContract.USDC();
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(gasCostMatic.toString(), 18),
-      ["0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", usdc] // WMATIC → USDC
-    );
-
-    const gasUSDC = Number(ethers.formatUnits(amounts[1], 6));
-
-    return { success: true, gasUSDC };
-
-  } catch (err) {
-    return {
-      success: false,
-      reason: err.reason || err.message || "Unknown revert"
-    };
-  }
-}
-
-// ─────────────── EXECUTE TRADE WITH NET & CUMULATIVE PROFIT LOGGING 🟢9 ───────────────
+// ─────────────── EXECUTE TRADE 🟢9 (callStatic ADDED HERE) ───────────────
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
   try {
+
+    // ─────────────── NEW: callStatic CHECK ───────────────
+    try {
+      await arbContract.callStatic.executeArbitrage(
+        buyRouter,
+        sellRouter,
+        tokenAddr,
+        ethers.parseUnits(amount.toString(), 6)
+      );
+      console.log("✔ callStatic: Trade WILL succeed.");
+    } catch (err) {
+      console.log("✖ callStatic: Trade WOULD FAIL →", err.reason || err.message);
+      return; // ← STOP, DO NOT SEND TX
+    }
+
+    // ─────────────── REAL TRANSACTION ───────────────
     const tx = await arbContract.executeArbitrage(
       buyRouter,
       sellRouter,
@@ -155,7 +126,7 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
 
     console.log(`⏳ Trade sent: ${tx.hash}`);
     const receipt = await tx.wait();
-    console.log(`✅ Tx mined: ${tx.hash} | block ${receipt.blockNumber}`);
+    console.log(`✅ Tx mined: ${tx.hash} | Block ${receipt.blockNumber}`);
 
     const usdcAddress = await arbContract.USDC();
     const usdc = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns (uint256)"], provider);
@@ -164,11 +135,11 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
     const netProfit = ethers.formatUnits(balanceAfter, 6) - amount;
     cumulativeProfit += netProfit;
 
-    console.log(`💹 Net USDC change for contract this tx: ${netProfit.toFixed(6)} USDC`);
-    console.log(`📊 Cumulative USDC profit for this session: ${cumulativeProfit.toFixed(6)} USDC`);
+    console.log(`💹 Net USDC change: ${netProfit.toFixed(6)} USDC`);
+    console.log(`📊 Cumulative profit: ${cumulativeProfit.toFixed(6)} USDC`);
 
   } catch (err) {
-    console.error(`⚠️ Trade failed or reverted: ${err.reason || err.message}`);
+    console.error(`⚠️ Trade failed: ${err.reason || err.message}`);
   }
 }
 
@@ -199,20 +170,6 @@ async function scan() {
             opportunities.push({ token: symbol, buyName, sellName, profitUSDC, profitPct });
             console.log(`🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
 
-            // ─────────────────────────────────────────────
-            // 🆕 callStatic pre-check (prevents losing gas)
-            // ─────────────────────────────────────────────
-            const sim = await simulateTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
-
-            if (!sim.success) {
-              console.log(`⚠️ callStatic: Trade would fail → ${sim.reason}`);
-              continue;
-            }
-
-            console.log(`🟢 callStatic success — simulated OK.`);
-            console.log(`   Estimated gas USDC cost: ${sim.gasUSDC}`);
-
-            // Now execute real trade
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
 
@@ -237,4 +194,3 @@ async function main() {
 }
 
 main().catch(console.error);
-
