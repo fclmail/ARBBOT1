@@ -61,7 +61,7 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS 🟢6 ───────────────
-const TRADE_AMOUNT_USDC = 0.04;
+const TRADE_AMOUNT_USDC = 0.004;
 const MIN_PROFIT_PCT = 3;
 const SLIPPAGE_PCT = 0;
 
