@@ -1,32 +1,24 @@
-// ───────────────────────────────────────────── 
-// 🔹 AAVE FLASH ARB BOT — DRY RUN VERSION
-//    (NO REAL TRANSACTIONS, NO GAS USED)
 // ─────────────────────────────────────────────
-
+// 🔹 AAVE FLASH ARB BOT — Polygon (Cumulative Profit Tracking)
+// ─────────────────────────────────────────────
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-import * as XLSX from "xlsx";
-import fs from "fs";
 dotenv.config();
-
-// 🟢 DRY RUN ALWAYS ON – SAFE MODE
-const DRY_RUN = true;
-console.log(`🧪 DRY RUN MODE ENABLED — NO REAL TRADES WILL BE EXECUTED\n`);
 
 // ─────────────── CONFIG 🟢1 ───────────────
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; 
-const MIN_NET_PROFIT_USDC = 1;
-const TRADE_AMOUNT_USDC = 0.04;
-const MIN_PROFIT_PCT = 3;
-const SLIPPAGE_PCT = 0;
-const SCAN_INTERVAL_MS = 5000;
-const EXPORT_FOLDER = process.env.EXPORT_FOLDER || ".";
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // deployed contract
+const MIN_NET_PROFIT_USDC = 1; // minimum profit after gas
 
-// Provider ONLY (wallet unnecessary in dry run)
+if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
+  throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS");
+}
+
 const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// ─────────────── STUB CONTRACT (NO WALLET NEEDED) 🟢2 ───────────────
+// ─────────────── FULL CONTRACT ABI 🟢2 ───────────────
 const arbAbi = [
   {
     "inputs": [
@@ -44,14 +36,15 @@ const arbAbi = [
   { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
 ];
 
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider);
+// ─────────────── CONTRACT CONNECTION 🟢3 ───────────────
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
 (async () => {
-  console.log("🏛 Contract Address:", await arbContract.getAddress());
-  console.log("👤 Contract Owner:", await arbContract.owner());
+  console.log("✅ Connected to contract:", await arbContract.getAddress());
+  console.log("👤 Contract owner:", await arbContract.owner());
 })();
 
-// ─────────────── ROUTERS 🟢3 ───────────────
+// ─────────────── ROUTERS 🟢4 ───────────────
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -59,19 +52,21 @@ const routers = {
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-// ─────────────── TOKENS 🟢4 ───────────────
+// ─────────────── TOKENS 🟢5 ───────────────
 const tokens = {
   AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
-  CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
+  CRV: { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
   LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
 
-// ─────────────── HELPERS 🟢5 ───────────────
-function fmt(n, dec = 4) {
-  if (!n) return "0";
-  return Number(n).toFixed(dec);
-}
+// ─────────────── SETTINGS 🟢6 ───────────────
+const TRADE_AMOUNT_USDC = 0.04;
+const MIN_PROFIT_PCT = 3;
+const SLIPPAGE_PCT = 0;
+
+// ─────────────── HELPERS 🟢7 ───────────────
+function fmt(n, dec = 4) { return Number(n).toFixed(dec); }
 
 async function getAmountOut(routerAddr, token, amountIn) {
   const router = new ethers.Contract(
@@ -82,113 +77,104 @@ async function getAmountOut(routerAddr, token, amountIn) {
 
   const usdcAddress = await arbContract.USDC();
   const path = [usdcAddress, token.address];
-
   try {
-    const amounts = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), path);
+    const amounts = await router.getAmountsOut(
+      ethers.parseUnits(amountIn.toString(), 6),
+      path
+    );
     return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   } catch {
-    const fallback = [usdcAddress, tokens.WBTC.address, token.address];
-    const amounts = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), fallback);
+    const path2 = [usdcAddress, tokens.WBTC.address, token.address];
+    const amounts = await router.getAmountsOut(
+      ethers.parseUnits(amountIn.toString(), 6),
+      path2
+    );
     return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   }
 }
 
-// ─────────────── CUMULATIVE PROFIT 🟢6 ───────────────
+// ─────────────── CUMULATIVE PROFIT TRACKING 🟢8 ───────────────
 let cumulativeProfit = 0;
-const results = [];
 
-// ─────────────── SIMULATED TRADE EXECUTOR 🟢7 ───────────────
-async function executeTradeSimulated(buyRouter, sellRouter, tokenAddr, amount, profitUSDC) {
-  console.log("🧪 ---------------------------------------");
-  console.log("🧪 DRY RUN — Simulating trade execution");
-  console.log("🧪 Buy Router:", buyRouter);
-  console.log("🧪 Sell Router:", sellRouter);
-  console.log("🧪 Token:", tokenAddr);
-  console.log("🧪 AmountIn:", amount);
+// ─────────────── EXECUTE TRADE WITH NET & CUMULATIVE PROFIT LOGGING 🟢9 ───────────────
+async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
+  try {
+    const tx = await arbContract.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      tokenAddr,
+      ethers.parseUnits(amount.toString(), 6),
+      { gasLimit: 2_000_000 }
+    );
 
-  cumulativeProfit += profitUSDC;
+    console.log(`⏳ Trade sent: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`✅ Tx mined: ${tx.hash} | block ${receipt.blockNumber}`);
 
-  console.log(`🧪 Simulated Net Profit: ${profitUSDC.toFixed(6)} USDC`);
-  console.log(`🧪 Cumulative Profit: ${cumulativeProfit.toFixed(6)} USDC`);
-  console.log("🧪 ---------------------------------------\n");
+    const usdcAddress = await arbContract.USDC();
+    const usdc = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns (uint256)"], provider);
+    const balanceAfter = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-  // Store for XLSX export
-  results.push({
-    timestamp: new Date().toISOString(),
-    buyRouter, sellRouter, tokenAddr, amount, profitUSDC
-  });
+    const netProfit = ethers.formatUnits(balanceAfter, 6) - amount;
+    cumulativeProfit += netProfit;
+
+    console.log(`💹 Net USDC change for contract this tx: ${netProfit.toFixed(6)} USDC`);
+    console.log(`📊 Cumulative USDC profit for this session: ${cumulativeProfit.toFixed(6)} USDC`);
+
+  } catch (err) {
+    console.error(`⚠️ Trade failed or reverted: ${err.reason || err.message}`);
+  }
 }
 
-// ─────────────── XLSX EXPORT 🟢8 ───────────────
-function exportXLSX(resultsArray) {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const filename = `${EXPORT_FOLDER}/arb-results-${timestamp}.xlsx`;
-  const worksheet = XLSX.utils.json_to_sheet(resultsArray);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "ArbResults");
-  XLSX.writeFile(workbook, filename);
-  console.log(`💾 Exported results to ${filename}`);
-  return filename;
-}
-
-// ─────────────── SCAN LOOP 🟢9 ───────────────
+// ─────────────── SCAN LOOP 🟢10 ───────────────
 async function scan() {
-  console.log("🔍 Scanning for arbitrage opportunities...\n");
+  console.log("🔍 Scanning for arbitrage opportunities...");
   const opportunities = [];
 
   for (const [symbol, token] of Object.entries(tokens)) {
     for (const [buyName, buyRouter] of Object.entries(routers)) {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
-
         if (buyName === sellName) continue;
 
         try {
           const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
 
-          const buyPrice  = TRADE_AMOUNT_USDC / buyOut;
+          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
           const sellPrice = TRADE_AMOUNT_USDC / sellOut;
 
           let profitUSDC = sellPrice - buyPrice;
-          let profitPct  = (profitUSDC / buyPrice) * 100;
+          let profitPct = (profitUSDC / buyPrice) * 100;
 
-          profitUSDC *= 1 - SLIPPAGE_PCT / 100;
-          profitPct  *= 1 - SLIPPAGE_PCT / 100;
+          profitUSDC *= (1 - SLIPPAGE_PCT / 100);
+          profitPct *= (1 - SLIPPAGE_PCT / 100);
 
           if (profitPct >= MIN_PROFIT_PCT) {
-            opportunities.push({ symbol, buyName, sellName, profitUSDC, profitPct });
+            opportunities.push({ token: symbol, buyName, sellName, profitUSDC, profitPct });
+            console.log(`🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
 
-            console.log(
-              `🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`
-            );
-
-            await executeTradeSimulated(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC, profitUSDC);
+            // Execute trade and log net + cumulative profit
+            await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
 
-        } catch (err) {
-          console.warn(`⚠️ Error scanning ${symbol} ${buyName}->${sellName}:`, err.message);
+        } catch (e) {
+          console.warn(`⚠️ Error scanning ${symbol} ${buyName}->${sellName}: ${e.message}`);
         }
       }
     }
   }
 
-  console.log(`🔍 Scan complete. Found ${opportunities.length} profitable opportunities.\n`);
+  console.log(`🔍 Scan complete. Found ${opportunities.length} opportunities.\n`);
   return opportunities;
 }
 
-// ─────────────── MAIN LOOP 🟢10 ───────────────
+// ─────────────── MAIN LOOP 🟢11 ───────────────
 async function main() {
-  console.log("🚀 DRY RUN Aave Flash Arbitrage Bot Started\n");
-
-  process.on("SIGINT", () => { exportXLSX(results); process.exit(0); });
-  process.on("SIGTERM", () => { exportXLSX(results); process.exit(0); });
-
+  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
   while (true) {
     await scan();
-    await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
+    await new Promise(r => setTimeout(r, 5000));
   }
 }
 
 main().catch(console.error);
-
-
