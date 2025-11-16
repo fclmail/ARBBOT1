@@ -1,85 +1,110 @@
+// scripts/arbitrage.js
+
 import { ethers } from "ethers";
+import { getArbitrageOpportunities } from "../arb-lib.js"; // Replace with your library
 
-// --- CONFIG ---
-const RPC_URL = "https://polygon-rpc.com"; // Polygon mainnet RPC
-const provider = new ethers.JsonRpcProvider(RPC_URL);
+// -------------------------
+// CONFIGURATION
+// -------------------------
 
-const WALLET_PRIVATE_KEY = "YOUR_PRIVATE_KEY"; // Use .env in prod
+// Wallet private key from environment variable (GitHub Secret)
+const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
+if (!WALLET_PRIVATE_KEY) {
+  throw new Error("WALLET_PRIVATE_KEY not set in environment variables!");
+}
+
+// Polygon RPC provider (default or from env)
+const PROVIDER_URL = process.env.POLYGON_RPC || "https://polygon-rpc.com/";
+const provider = new ethers.JsonRpcProvider(PROVIDER_URL);
+
+// Connect wallet
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-// Example tokens and DEX routers
-const TOKENS = [
-  { symbol: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" },
-  { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
-  { symbol: "CRV", address: "0x172370d5cd63279efa6d502dab29171933a610af" },
+// Arbitrage contract
+const CONTRACT_ADDRESS = process.env.ARB_CONTRACT_ADDRESS || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+const CONTRACT_ABI = [
+  "function executeArbitrage(address tokenIn, address tokenOut, uint256 amount) external"
 ];
+const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-const ROUTERS = {
-  QuickSwap: "0xa5e0829caecd8ffdd4de3c43696c57f7d7a678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xc0788a3ad43d79aa53b09c2eacc313a787d1d607",
-  Dfyn: "0xa8b607aa09b6a2641cf6f90f643e76d3f6e6ff73",
-};
+// -------------------------
+// MAIN FUNCTION
+// -------------------------
 
-// Your arbitrage contract
-const ARB_CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const ARB_CONTRACT_ABI = [
-  "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amount) external returns (uint256 profit)"
-];
+async function main() {
+  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
+  console.log("👤 Contract owner:", wallet.address);
 
-const arbContract = new ethers.Contract(ARB_CONTRACT_ADDRESS, ARB_CONTRACT_ABI, wallet);
-
-// --- UTILS ---
-function checksum(address) {
+  // Fetch arbitrage opportunities
+  let opportunities;
   try {
-    return ethers.getAddress(address);
-  } catch (e) {
-    console.warn(`❌ Invalid address: ${address}`);
-    return null;
+    opportunities = await getArbitrageOpportunities();
+    if (!opportunities || opportunities.length === 0) {
+      console.log("🔍 No arbitrage opportunities found at this time.");
+      return;
+    }
+  } catch (err) {
+    console.error("⚠️ Error fetching arbitrage opportunities:", err.message);
+    return;
   }
-}
 
-// --- MAIN DRY-RUN FUNCTION ---
-async function dryRunArbitrage() {
-  console.log("🚀 Starting dry-run arbitrage scan on Polygon...");
+  console.log(`🔍 Found ${opportunities.length} opportunities`);
 
-  for (const token of TOKENS) {
-    const tokenAddress = checksum(token.address);
-    if (!tokenAddress) continue; // skip if invalid
+  // Loop through opportunities
+  for (let i = 0; i < opportunities.length; i++) {
+    const opp = opportunities[i];
 
-    for (const buyName of Object.keys(ROUTERS)) {
-      const buyRouter = checksum(ROUTERS[buyName]);
-      if (!buyRouter) continue;
+    if (!opp || !opp.buy || !opp.sell) {
+      console.log(`⚠️ Skipping undefined opportunity at index ${i}`);
+      continue;
+    }
 
-      for (const sellName of Object.keys(ROUTERS)) {
-        if (buyName === sellName) continue; // skip same router
+    console.log(`🚨 Opportunity #${i + 1}: Buy:${opp.buy.dex} @ ${opp.buy.price} → Sell:${opp.sell.dex} @ ${opp.sell.price} | Profit: ${opp.profit.toFixed(6)} USDC`);
 
-        const sellRouter = checksum(ROUTERS[sellName]);
-        if (!sellRouter) continue;
+    // Dry-run mode: just log
+    if (process.env.DRY_RUN === "true") {
+      console.log("⚡ Dry-run enabled, not executing trade.");
+      continue;
+    }
 
-        try {
-          // --- DRY-RUN using callStatic ---
-          const simulatedProfit = await arbContract.callStatic.executeArbitrage(
-            buyRouter,
-            sellRouter,
-            tokenAddress,
-            ethers.parseUnits("1", 18) // Example: 1 token
-          );
+    // Estimate gas and check wallet balance
+    try {
+      const gasEstimate = await contract.estimateGas.executeArbitrage(
+        opp.buy.tokenAddress,
+        opp.sell.tokenAddress,
+        opp.amount
+      );
 
-          // Skip if no profit or unrealistic
-          if (!simulatedProfit || simulatedProfit <= 0) continue;
+      const gasPrice = await provider.getFeeData();
+      const txCost = gasEstimate * (gasPrice.maxFeePerGas || gasPrice.gasPrice);
 
-          console.log(`✅ ${token.symbol} | Buy:${buyName} → Sell:${sellName} | Profit: ${ethers.formatUnits(simulatedProfit, 18)} USDC`);
-
-        } catch (err) {
-          console.warn(`⚠️ Skipped ${token.symbol} ${buyName}->${sellName}: ${err.reason || err.message}`);
-        }
+      const balance = await wallet.getBalance();
+      if (balance.lt(txCost)) {
+        console.log("⚠️ Skipping trade: insufficient funds for gas", ethers.formatEther(balance), "ETH");
+        continue;
       }
+
+      // Execute trade
+      const tx = await contract.executeArbitrage(
+        opp.buy.tokenAddress,
+        opp.sell.tokenAddress,
+        opp.amount
+      );
+      console.log("✅ Trade submitted:", tx.hash);
+
+      const receipt = await tx.wait();
+      console.log("✅ Trade confirmed in block", receipt.blockNumber);
+    } catch (err) {
+      console.error("⚠️ Trade failed:", err.message);
+      continue; // skip to next opportunity
     }
   }
-
-  console.log("🔍 Dry-run complete.");
 }
 
-// --- RUN ---
-dryRunArbitrage();
+// -------------------------
+// RUN
+// -------------------------
+
+main()
+  .then(() => console.log("🏁 Arbitrage scan completed"))
+  .catch(err => console.error("⚠️ Unexpected error:", err));
