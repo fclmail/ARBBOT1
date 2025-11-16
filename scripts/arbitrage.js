@@ -1,110 +1,207 @@
 // scripts/arbitrage.js
-
 import { ethers } from "ethers";
-import { getArbitrageOpportunities } from "../arb-lib.js"; // Replace with your library
+import dotenv from "dotenv";
+dotenv.config();
 
-// -------------------------
+// -----------------------------
 // CONFIGURATION
-// -------------------------
+// -----------------------------
+const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // deployed contract
+const MIN_NET_PROFIT_USDC = 1; // minimum profit after gas
+const TRADE_AMOUNT_USDC = 0.04;
+const MIN_PROFIT_PCT = 3;
+const SLIPPAGE_PCT = 0;
+const DRY_RUN = true; // ✅ dry run enabled
 
-// Wallet private key from environment variable (GitHub Secret)
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
-if (!WALLET_PRIVATE_KEY) {
-  throw new Error("WALLET_PRIVATE_KEY not set in environment variables!");
+if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
+  throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS");
 }
 
-// Polygon RPC provider (default or from env)
-const PROVIDER_URL = process.env.POLYGON_RPC || "https://polygon-rpc.com/";
-const provider = new ethers.JsonRpcProvider(PROVIDER_URL);
+// Initialize provider and wallet
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Connect wallet
-const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
-
-// Arbitrage contract
-const CONTRACT_ADDRESS = process.env.ARB_CONTRACT_ADDRESS || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const CONTRACT_ABI = [
-  "function executeArbitrage(address tokenIn, address tokenOut, uint256 amount) external"
+// -----------------------------
+// FULL CONTRACT ABI
+// -----------------------------
+const arbAbi = [
+  {
+    "inputs": [
+      { "internalType": "address", "name": "buyRouter", "type": "address" },
+      { "internalType": "address", "name": "sellRouter", "type": "address" },
+      { "internalType": "address", "name": "token", "type": "address" },
+      { "internalType": "uint256", "name": "amountIn", "type": "uint256" }
+    ],
+    "name": "executeArbitrage",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
 ];
-const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-// -------------------------
-// MAIN FUNCTION
-// -------------------------
+// -----------------------------
+// CONTRACT CONNECTION
+// -----------------------------
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+(async () => {
+  console.log("✅ Connected to contract:", CONTRACT_ADDRESS);
+  console.log("👤 Contract owner:", await arbContract.owner());
+})();
 
-async function main() {
-  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
-  console.log("👤 Contract owner:", wallet.address);
+// -----------------------------
+// ROUTERS & TOKENS
+// -----------------------------
+const routers = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  Dfyn: "0xA8b607Aa09B6A2641CF6F90F643E76D3F6E6Ff73",
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+};
 
-  // Fetch arbitrage opportunities
-  let opportunities;
+const tokens = {
+  AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
+  CRV: { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
+  LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
+  WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
+};
+
+// -----------------------------
+// HELPERS
+// -----------------------------
+function fmt(n, dec = 4) { return Number(n).toFixed(dec); }
+
+async function getAmountOut(routerAddr, token, amountIn) {
+  const router = new ethers.Contract(
+    routerAddr,
+    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
+    provider
+  );
+  const usdcAddress = await arbContract.USDC();
+  const path = [usdcAddress, token.address];
   try {
-    opportunities = await getArbitrageOpportunities();
-    if (!opportunities || opportunities.length === 0) {
-      console.log("🔍 No arbitrage opportunities found at this time.");
-      return;
-    }
-  } catch (err) {
-    console.error("⚠️ Error fetching arbitrage opportunities:", err.message);
+    const amounts = await router.getAmountsOut(
+      ethers.parseUnits(amountIn.toString(), 6),
+      path
+    );
+    return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
+  } catch {
+    const path2 = [usdcAddress, tokens.WBTC.address, token.address];
+    const amounts = await router.getAmountsOut(
+      ethers.parseUnits(amountIn.toString(), 6),
+      path2
+    );
+    return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
+  }
+}
+
+// -----------------------------
+// CUMULATIVE PROFIT
+// -----------------------------
+let cumulativeProfit = 0;
+
+// -----------------------------
+// EXECUTE TRADE WITH DRY RUN & CALL STATIC
+// -----------------------------
+async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
+  if (DRY_RUN) {
+    console.log(`💡 Dry run: simulate trade ${tokenAddr} ${amount} USDC`);
     return;
   }
 
-  console.log(`🔍 Found ${opportunities.length} opportunities`);
+  try {
+    // Call static to check for revert
+    await arbContract.callStatic.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      tokenAddr,
+      ethers.parseUnits(amount.toString(), 6)
+    );
 
-  // Loop through opportunities
-  for (let i = 0; i < opportunities.length; i++) {
-    const opp = opportunities[i];
+    // If callStatic succeeds, execute actual transaction
+    const tx = await arbContract.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      tokenAddr,
+      ethers.parseUnits(amount.toString(), 6),
+      { gasLimit: 2_000_000 }
+    );
+    console.log(`⏳ Trade sent: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`✅ Tx mined: ${tx.hash} | block ${receipt.blockNumber}`);
 
-    if (!opp || !opp.buy || !opp.sell) {
-      console.log(`⚠️ Skipping undefined opportunity at index ${i}`);
-      continue;
-    }
-
-    console.log(`🚨 Opportunity #${i + 1}: Buy:${opp.buy.dex} @ ${opp.buy.price} → Sell:${opp.sell.dex} @ ${opp.sell.price} | Profit: ${opp.profit.toFixed(6)} USDC`);
-
-    // Dry-run mode: just log
-    if (process.env.DRY_RUN === "true") {
-      console.log("⚡ Dry-run enabled, not executing trade.");
-      continue;
-    }
-
-    // Estimate gas and check wallet balance
-    try {
-      const gasEstimate = await contract.estimateGas.executeArbitrage(
-        opp.buy.tokenAddress,
-        opp.sell.tokenAddress,
-        opp.amount
-      );
-
-      const gasPrice = await provider.getFeeData();
-      const txCost = gasEstimate * (gasPrice.maxFeePerGas || gasPrice.gasPrice);
-
-      const balance = await wallet.getBalance();
-      if (balance.lt(txCost)) {
-        console.log("⚠️ Skipping trade: insufficient funds for gas", ethers.formatEther(balance), "ETH");
-        continue;
-      }
-
-      // Execute trade
-      const tx = await contract.executeArbitrage(
-        opp.buy.tokenAddress,
-        opp.sell.tokenAddress,
-        opp.amount
-      );
-      console.log("✅ Trade submitted:", tx.hash);
-
-      const receipt = await tx.wait();
-      console.log("✅ Trade confirmed in block", receipt.blockNumber);
-    } catch (err) {
-      console.error("⚠️ Trade failed:", err.message);
-      continue; // skip to next opportunity
-    }
+    const usdcAddress = await arbContract.USDC();
+    const usdc = new ethers.Contract(
+      usdcAddress,
+      ["function balanceOf(address) view returns (uint256)"],
+      provider
+    );
+    const balanceAfter = await usdc.balanceOf(CONTRACT_ADDRESS);
+    const netProfit = ethers.formatUnits(balanceAfter, 6) - amount;
+    cumulativeProfit += netProfit;
+    console.log(`💹 Net USDC change this tx: ${netProfit.toFixed(6)} USDC`);
+    console.log(`📊 Cumulative profit this session: ${cumulativeProfit.toFixed(6)} USDC`);
+  } catch (err) {
+    console.warn(`⚠️ Trade skipped (callStatic failed): ${err.reason || err.message}`);
   }
 }
 
-// -------------------------
-// RUN
-// -------------------------
+// -----------------------------
+// SCAN LOOP
+// -----------------------------
+async function scan() {
+  console.log("🔍 Scanning for arbitrage opportunities...");
+  const opportunities = [];
 
-main()
-  .then(() => console.log("🏁 Arbitrage scan completed"))
-  .catch(err => console.error("⚠️ Unexpected error:", err));
+  for (const [symbol, token] of Object.entries(tokens)) {
+    for (const [buyName, buyRouter] of Object.entries(routers)) {
+      for (const [sellName, sellRouter] of Object.entries(routers)) {
+        if (buyName === sellName) continue;
+
+        try {
+          const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
+          const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
+
+          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
+          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
+
+          let profitUSDC = sellPrice - buyPrice;
+          let profitPct = (profitUSDC / buyPrice) * 100;
+
+          profitUSDC *= (1 - SLIPPAGE_PCT / 100);
+          profitPct *= (1 - SLIPPAGE_PCT / 100);
+
+          if (profitPct >= MIN_PROFIT_PCT) {
+            opportunities.push({ token: symbol, buyName, sellName, profitUSDC, profitPct });
+            console.log(
+              `🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`
+            );
+
+            await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
+          }
+        } catch (e) {
+          console.warn(`⚠️ Error scanning ${symbol} ${buyName}->${sellName}: ${e.message}`);
+        }
+      }
+    }
+  }
+
+  console.log(`🔍 Scan complete. Found ${opportunities.length} opportunities.\n`);
+  return opportunities;
+}
+
+// -----------------------------
+// MAIN LOOP
+// -----------------------------
+async function main() {
+  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon (dry run)...");
+  while (true) {
+    await scan();
+    await new Promise(r => setTimeout(r, 5000));
+  }
+}
+
+main().catch(console.error);
