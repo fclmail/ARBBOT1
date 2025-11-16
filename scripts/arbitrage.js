@@ -1,54 +1,47 @@
-// ─────────────────────────────────────────────
-// 🔹 AAVE FLASH ARB BOT — DRY RUN VERSION
-//    (NO REAL TRANSACTIONS, NO GAS USED)
-// ─────────────────────────────────────────────
+// arb.js
+// Full arbitrage dry-run with getAmountsOut, callStatic, debug, cumulative profit, XLSX export
+// - Uses real DEX router prices (getAmountsOut) instead of random math
+// - Simulates executeArbitrage via callStatic (no txs sent)
 
 import { ethers } from "ethers";
 import dotenv from "dotenv";
+import * as XLSX from "xlsx";
+import fs from "fs";
 dotenv.config();
 
-// 🟢 DRY RUN ALWAYS ON – SAFE MODE
-const DRY_RUN = true;
-console.log(`🧪 DRY RUN MODE ENABLED — NO REAL TRADES WILL BE EXECUTED\n`);
-
-
-// ─────────────── CONFIG 🟢1 ───────────────
+// ----------------- CONFIG -----------------
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // unchanged
-const MIN_NET_PROFIT_USDC = 1;
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+const DRY_RUN = process.env.DRY_RUN ? process.env.DRY_RUN === "true" : true;
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.04);
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 3);
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0);
+const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 5000);
+const EXPORT_FOLDER = process.env.EXPORT_FOLDER || ".";
 
-// Provider ONLY (wallet unnecessary in dry run)
+// ----------------- PROVIDER & CONTRACT -----------------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-
-// ─────────────── STUB CONTRACT (NO WALLET NEEDED) 🟢2 ───────────────
-// Provides read-only access to USDC() + owner()
 const arbAbi = [
   {
-    "inputs": [
-      { "internalType": "address", "name": "buyRouter", "type": "address" },
-      { "internalType": "address", "name": "sellRouter", "type": "address" },
-      { "internalType": "address", "name": "token", "type": "address" },
-      { "internalType": "uint256", "name": "amountIn", "type": "uint256" }
+    inputs: [
+      { internalType: "address", name: "buyRouter", type: "address" },
+      { internalType: "address", name: "sellRouter", type: "address" },
+      { internalType: "address", name: "token", type: "address" },
+      { internalType: "uint256", name: "amountIn", type: "uint256" }
     ],
-    "name": "executeArbitrage",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    name: "executeArbitrage",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function"
   },
-  { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
-  { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
+  { inputs: [], name: "USDC", outputs: [{ internalType: "address", name: "", type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "owner", outputs: [{ internalType: "address", name: "", type: "address" }], stateMutability: "view", type: "function" }
 ];
 
 const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider);
 
-(async () => {
-  console.log("🏛 Contract Address:", await arbContract.getAddress());
-  console.log("👤 Contract Owner:", await arbContract.owner());
-})();
-
-
-// ─────────────── ROUTERS 🟢3 ───────────────
+// ----------------- ROUTERS & TOKENS -----------------
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -56,8 +49,6 @@ const routers = {
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-
-// ─────────────── TOKENS 🟢4 ───────────────
 const tokens = {
   AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
   CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
@@ -65,18 +56,26 @@ const tokens = {
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
 
+// ----------------- Runtime tracking -----------------
+let cumulativeProfit = 0;
+const results = [];
 
-// ─────────────── SETTINGS 🟢5 ───────────────
-const TRADE_AMOUNT_USDC = 100;
-const MIN_PROFIT_PCT = 3;
-const SLIPPAGE_PCT = 0;
-
-
-// ─────────────── HELPERS 🟢6 ───────────────
+// ----------------- UTILITIES -----------------
 function fmt(n, dec = 4) {
+  if (typeof n === "undefined" || n === null || Number.isNaN(Number(n))) return "NaN";
   return Number(n).toFixed(dec);
 }
 
+async function safeGetUSDCAddress() {
+  try {
+    return await arbContract.USDC();
+  } catch (e) {
+    console.warn("⚠️ Failed reading USDC() from contract; using default USDC address. Error:", e.message || e);
+    return "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
+  }
+}
+
+// ----------------- getAmountOut using router.getAmountsOut -----------------
 async function getAmountOut(routerAddr, token, amountIn) {
   const router = new ethers.Contract(
     routerAddr,
@@ -84,109 +83,212 @@ async function getAmountOut(routerAddr, token, amountIn) {
     provider
   );
 
-  const usdcAddress = await arbContract.USDC();
-  const path = [usdcAddress, token.address];
+  const usdcAddress = await safeGetUSDCAddress();
+  const pathDirect = [usdcAddress, token.address];
 
   try {
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), 6),
-      path
-    );
-    return Number(ethers.formatUnits(amounts[1], token.decimals));
-  } catch {
-    const fallback = [usdcAddress, tokens.WBTC.address, token.address];
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), 6),
-      fallback
-    );
-    return Number(ethers.formatUnits(amounts[2], token.decimals));
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), pathDirect);
+    const last = amounts[amounts.length - 1];
+    return Number(ethers.formatUnits(last, token.decimals));
+  } catch (errDirect) {
+    // fallback: USDC -> WBTC -> token
+    try {
+      const path2 = [usdcAddress, tokens.WBTC.address, token.address];
+      const amounts2 = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), path2);
+      const last = amounts2[amounts2.length - 1];
+      return Number(ethers.formatUnits(last, token.decimals));
+    } catch (errFallback) {
+      throw new Error(`getAmountOut failed on router ${routerAddr}: ${errFallback.message || errFallback}`);
+    }
   }
 }
 
-
-// ─────────────── CUMULATIVE PROFIT 🟢7 ───────────────
-let cumulativeProfit = 0;
-
-
-// ─────────────── SIMULATED TRADE EXECUTOR 🟢8 ───────────────
-// ❗ Safe — No real transactions sent
-async function executeTradeSimulated(buyRouter, sellRouter, tokenAddr, amount) {
-  console.log("🧪 ---------------------------------------");
-  console.log("🧪 DRY RUN — Simulating trade execution");
-  console.log("🧪 Buy Router:", buyRouter);
-  console.log("🧪 Sell Router:", sellRouter);
-  console.log("🧪 Token:", tokenAddr);
-  console.log("🧪 AmountIn:", amount);
-
-  // Generate mock profit
-  const simulatedProfit = (Math.random() * 0.04).toFixed(6); // 0–4% fake profit
-  cumulativeProfit += Number(simulatedProfit);
-
-  console.log(`🧪 Simulated Net Profit: ${simulatedProfit} USDC`);
-  console.log(`🧪 Cumulative Profit: ${cumulativeProfit.toFixed(6)} USDC`);
-  console.log("🧪 ---------------------------------------\n");
+// ----------------- simulateArbCall (callStatic) -----------------
+async function simulateArbCall(buyRouter, sellRouter, tokenAddr, amountIn) {
+  try {
+    await arbContract.callStatic.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      tokenAddr,
+      ethers.parseUnits(amountIn.toString(), 6)
+    );
+    return { success: true, error: null };
+  } catch (err) {
+    return { success: false, error: err };
+  }
 }
 
+function decodeStaticCallError(err) {
+  console.log("\n──────────────── STATIC CALL DEBUG START ────────────────");
+  try {
+    console.log("error.name:", err && err.name);
+    console.log("error.code:", err && err.code);
+    if (err && err.reason) console.log("revert reason:", err.reason);
+    if (err && err.message) console.log("message:", err.message);
+  } catch {}
+  console.log("──────────────── STATIC CALL DEBUG END ─────────────────\n");
+}
 
+// ----------------- simulated executor -----------------
+async function executeTradeSimulated(buyRouter, sellRouter, tokenAddr, amount, computedProfitUSDC) {
+  console.log("🧪 ---------- Simulated Trade Execution ----------");
+  console.log("🧪 buyRouter:", buyRouter);
+  console.log("🧪 sellRouter:", sellRouter);
+  console.log("🧪 token:", tokenAddr);
+  console.log("🧪 probeAmount (USDC):", amount);
 
-// ─────────────── SCAN LOOP 🟢9 ───────────────
+  let simulatedNet = Number(computedProfitUSDC ?? (Math.random() * 0.01));
+  cumulativeProfit += simulatedNet;
+  console.log(`💹 [SIM] Net USDC change (simulated): ${simulatedNet.toFixed(6)} USDC`);
+  console.log(`📊 [SIM] Cumulative USDC profit: ${cumulativeProfit.toFixed(6)} USDC`);
+  console.log("🧪 ---------------------------------------------\n");
+  return simulatedNet;
+}
+
+// ----------------- XLSX export -----------------
+function exportXLSX(resultsArray) {
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${EXPORT_FOLDER}/arb-results-${timestamp}.xlsx`;
+    const worksheet = XLSX.utils.json_to_sheet(resultsArray);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "ArbResults");
+    XLSX.writeFile(workbook, filename);
+    console.log(`💾 Exported results to ${filename}`);
+    return filename;
+  } catch (e) {
+    console.error("Failed to export XLSX:", e);
+    return null;
+  }
+}
+
+// ----------------- SCAN LOOP -----------------
 async function scan() {
-  console.log("🔍 Scanning for arbitrage opportunities...\n");
+  console.log("🔍 Scanning for arbitrage opportunities...");
   const opportunities = [];
 
   for (const [symbol, token] of Object.entries(tokens)) {
     for (const [buyName, buyRouter] of Object.entries(routers)) {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
-
         if (buyName === sellName) continue;
 
         try {
+          // ✅ replace random math with real getAmountsOut
           const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
 
-          const buyPrice  = TRADE_AMOUNT_USDC / buyOut;
+          if (!buyOut || !sellOut) continue;
+
+          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
           const sellPrice = TRADE_AMOUNT_USDC / sellOut;
 
           let profitUSDC = sellPrice - buyPrice;
-          let profitPct  = (profitUSDC / buyPrice) * 100;
+          let profitPct = (profitUSDC / buyPrice) * 100;
 
-          // Adjust for slippage
-          profitUSDC *= 1 - SLIPPAGE_PCT / 100;
-          profitPct  *= 1 - SLIPPAGE_PCT / 100;
+          profitUSDC *= (1 - SLIPPAGE_PCT / 100);
+          profitPct *= (1 - SLIPPAGE_PCT / 100);
+
+          console.log(`PAIR ${symbol} | ${buyName}->${sellName} | buyOut:${fmt(buyOut,6)} sellOut:${fmt(sellOut,6)} | profitUSDC:${fmt(profitUSDC,6)} pct:${fmt(profitPct,2)}%`);
 
           if (profitPct >= MIN_PROFIT_PCT) {
-            opportunities.push({ symbol, buyName, sellName });
+            const simRes = await simulateArbCall(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
 
-            console.log(
-              `🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`
-            );
+            if (!simRes.success) {
+              console.warn("❌ callStatic failed");
+              decodeStaticCallError(simRes.error);
 
-            // Simulated trade
-            await executeTradeSimulated(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
+              const row = {
+                timestamp: new Date().toISOString(),
+                token: symbol,
+                buy: buyName,
+                sell: sellName,
+                buyOut,
+                sellOut,
+                buyPrice,
+                sellPrice,
+                profitUSDC,
+                profitPct,
+                staticSuccess: false,
+                staticError: (simRes.error && (simRes.error.reason || simRes.error.message)) || "unknown"
+              };
+              results.push(row);
+              opportunities.push(row);
+            } else {
+              const simulatedNet = await executeTradeSimulated(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC, profitUSDC);
+
+              const row = {
+                timestamp: new Date().toISOString(),
+                token: symbol,
+                buy: buyName,
+                sell: sellName,
+                buyOut,
+                sellOut,
+                buyPrice,
+                sellPrice,
+                profitUSDC,
+                profitPct,
+                staticSuccess: true,
+                simulatedNet,
+              };
+              results.push(row);
+              opportunities.push(row);
+            }
           }
-
-        } catch (err) {
-          console.warn(`⚠️ Error scanning ${symbol} ${buyName}->${sellName}:`, err.message);
+        } catch (e) {
+          console.warn(`⚠️ Error scanning ${symbol} ${buyName}->${sellName}:`, e.message || e);
         }
       }
     }
   }
 
-  console.log(`🔍 Scan complete. Found ${opportunities.length} profitable opportunities.\n`);
+  console.log(`🔍 Scan complete. Opportunities found: ${opportunities.length}`);
   return opportunities;
 }
 
-
-
-// ─────────────── MAIN LOOP 🟢10 ───────────────
+// ----------------- MAIN -----------------
 async function main() {
-  console.log("🚀 DRY RUN Aave Flash Arbitrage Bot Started\n");
+  console.log("🚀 Aave Flash Arbitrage Bot (DRY-RUN with getAmountsOut + callStatic)");
+
+  try {
+    const owner = await arbContract.owner();
+    const usdc = await arbContract.USDC();
+    console.log(`👤 Contract owner: ${owner}`);
+    console.log(`💵 Contract USDC address: ${usdc}`);
+  } catch (e) {
+    console.warn("⚠️ Could not read contract owner/USDC:", e.message || e);
+  }
+
   while (true) {
-    await scan();
-    await new Promise(r => setTimeout(r, 5000));
+    try {
+      await scan();
+    } catch (err) {
+      console.error("Fatal error during scan:", err);
+    }
+    await new Promise((r) => setTimeout(r, SCAN_INTERVAL_MS));
   }
 }
 
-main().catch(console.error);
+// ----------------- graceful exit & export -----------------
+async function handleExit(signal) {
+  try {
+    console.log(`\nReceived ${signal} — exporting results (${results.length} rows) and exiting.`);
+    if (results.length > 0) exportXLSX(results);
+    else console.log("No results to export.");
+  } finally {
+    process.exit(0);
+  }
+}
+process.on("SIGINT", () => handleExit("SIGINT"));
+process.on("SIGTERM", () => handleExit("SIGTERM"));
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  handleExit("uncaughtException");
+});
+
+// Start
+main().catch((err) => {
+  console.error("Unhandled startup error:", err);
+  process.exit(1);
+});
 
 
