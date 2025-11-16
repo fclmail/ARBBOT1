@@ -107,21 +107,28 @@ let cumulativeProfit = 0;
 // EXECUTE TRADE WITH DRY RUN & CALL STATIC
 // -----------------------------
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
-  if (DRY_RUN) {
-    console.log(`💡 Dry run: simulate trade ${tokenAddr} ${amount} USDC`);
-    return;
-  }
-
   try {
-    // Call static to check for revert
-    await arbContract.callStatic.executeArbitrage(
+    // Simulate with callStatic even for dry-run
+    const simulated = await arbContract.callStatic.executeArbitrage(
       buyRouter,
       sellRouter,
       tokenAddr,
       ethers.parseUnits(amount.toString(), 6)
     );
 
-    // If callStatic succeeds, execute actual transaction
+    let netProfit;
+    if (DRY_RUN) {
+      // Simulate profit using router prices
+      const buyOut = await getAmountOut(buyRouter, { address: tokenAddr, decimals: 6 }, amount);
+      const sellOut = await getAmountOut(sellRouter, { address: tokenAddr, decimals: 6 }, amount);
+      netProfit = sellOut - buyOut;
+      cumulativeProfit += netProfit;
+      console.log(`💹 Dry run profit for this trade: ${fmt(netProfit)} USDC`);
+      console.log(`📊 Simulated cumulative profit: ${fmt(cumulativeProfit)} USDC`);
+      return;
+    }
+
+    // Actual execution
     const tx = await arbContract.executeArbitrage(
       buyRouter,
       sellRouter,
@@ -140,7 +147,7 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
       provider
     );
     const balanceAfter = await usdc.balanceOf(CONTRACT_ADDRESS);
-    const netProfit = ethers.formatUnits(balanceAfter, 6) - amount;
+    netProfit = ethers.formatUnits(balanceAfter, 6) - amount;
     cumulativeProfit += netProfit;
     console.log(`💹 Net USDC change this tx: ${netProfit.toFixed(6)} USDC`);
     console.log(`📊 Cumulative profit this session: ${cumulativeProfit.toFixed(6)} USDC`);
@@ -197,7 +204,7 @@ async function scan() {
 // MAIN LOOP
 // -----------------------------
 async function main() {
-  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon (dry run)...");
+  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon (dry run with simulated profit)...");
   while (true) {
     await scan();
     await new Promise(r => setTimeout(r, 5000));
