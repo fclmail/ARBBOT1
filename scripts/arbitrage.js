@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-// 🔹 AAVE FLASH ARB BOT — Polygon (Dry Run + CallStatic Safe)
+// 🔹 AAVE FLASH ARB BOT — Polygon (CallStatic + Decimal Normalization)
 // ─────────────────────────────────────────────
 
 import { ethers } from "ethers";
@@ -12,7 +12,6 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; 
 const MIN_NET_PROFIT_USDC = 1;
 
-// Safety check
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
   throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS");
 }
@@ -58,14 +57,14 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS ───────────────
-const TRADE_AMOUNT_USDC = 0.04;
-const MIN_PROFIT_PCT = 3;
+const TRADE_AMOUNT_USDC = 1; // simulate 1 USDC trade for normalization
+const MIN_PROFIT_PCT = 0.5; // minimum profit in %
 const SLIPPAGE_PCT = 0;
 
 // ─────────────── HELPERS ───────────────
 function fmt(n, dec = 4) { return Number(n).toFixed(dec); }
 
-async function getAmountOut(routerAddr, token, amountIn) {
+async function getAmountOut(routerAddr, token, amountUSDC) {
   const router = new ethers.Contract(
     routerAddr,
     ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
@@ -75,16 +74,15 @@ async function getAmountOut(routerAddr, token, amountIn) {
   const path = [usdcAddress, token.address];
 
   try {
-    const amounts = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), path);
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), path);
     return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   } catch {
-    // fallback: USDC → WBTC → token
     try {
       const path2 = [usdcAddress, tokens.WBTC.address, token.address];
-      const amounts2 = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), path2);
+      const amounts2 = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), path2);
       return Number(ethers.formatUnits(amounts2[amounts2.length - 1], token.decimals));
     } catch (e) {
-      console.warn(`⚠️ getAmountsOut failed for token ${token.address}: ${e.message}`);
+      console.warn(`⚠️ getAmountsOut failed for ${token.address}: ${e.message}`);
       return 0;
     }
   }
@@ -94,31 +92,37 @@ async function getAmountOut(routerAddr, token, amountIn) {
 let cumulativeProfit = 0;
 
 // ─────────────── EXECUTE TRADE ───────────────
-async function executeTrade(buyRouter, sellRouter, token, amount) {
+async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
   let canExecute = false;
 
-  // Call static to simulate trade
+  // CallStatic simulation with detailed logging
   try {
     await arbContract.callStatic.executeArbitrage(
       buyRouter,
       sellRouter,
       token.address,
-      ethers.parseUnits(amount.toString(), 6)
+      ethers.parseUnits(amountUSDC.toString(), 6)
     );
     canExecute = true;
   } catch (err) {
-    console.warn(`⚠️ Trade skipped (callStatic failed): ${err.reason || err.message}`);
+    console.warn(`⚠️ CallStatic failed for ${token.address} | Buy:${buyRouter} Sell:${sellRouter}`);
+    console.warn("💡 Debug info:", {
+      reason: err.reason,
+      code: err.code,
+      value: err.value,
+      errorMessage: err.message
+    });
   }
 
   if (!canExecute) return;
 
-  // Execute actual arbitrage
+  // Execute actual trade
   try {
     const tx = await arbContract.executeArbitrage(
       buyRouter,
       sellRouter,
       token.address,
-      ethers.parseUnits(amount.toString(), 6),
+      ethers.parseUnits(amountUSDC.toString(), 6),
       { gasLimit: 2_000_000 }
     );
     console.log(`⏳ Trade sent: ${tx.hash}`);
@@ -129,7 +133,7 @@ async function executeTrade(buyRouter, sellRouter, token, amount) {
     const usdcAddress = await arbContract.USDC();
     const usdc = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns (uint256)"], provider);
     const balanceAfter = await usdc.balanceOf(CONTRACT_ADDRESS);
-    const netProfit = ethers.formatUnits(balanceAfter, 6) - amount;
+    const netProfit = Number(ethers.formatUnits(balanceAfter, 6)) - amountUSDC;
     cumulativeProfit += netProfit;
     console.log(`💹 Net USDC this tx: ${netProfit.toFixed(6)} | Cumulative: ${cumulativeProfit.toFixed(6)}`);
   } catch (err) {
@@ -153,8 +157,8 @@ async function scan() {
 
           if (buyOut === 0 || sellOut === 0) continue;
 
-          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
-          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
+          const buyPrice = 1 / buyOut;   // 1 USDC normalized
+          const sellPrice = 1 / sellOut;
           let profitUSDC = sellPrice - buyPrice;
           let profitPct = (profitUSDC / buyPrice) * 100;
 
@@ -163,7 +167,7 @@ async function scan() {
 
           if (profitPct >= MIN_PROFIT_PCT) {
             opportunities.push({ token: symbol, buyName, sellName, profitUSDC, profitPct });
-            console.log(`🚨 ${symbol} | Buy:${buyName} @ $${fmt(buyPrice)} → Sell:${sellName} @ $${fmt(sellPrice)} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
+            console.log(`🚨 ${symbol} | Buy:${buyName} → Sell:${sellName} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
             await executeTrade(buyRouter, sellRouter, token, TRADE_AMOUNT_USDC);
           }
 
