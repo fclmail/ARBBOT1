@@ -1,23 +1,27 @@
-──────────────────────
+// ─────────────────────────────────────────────
 // 🔹 AAVE FLASH ARB BOT — Polygon
-// (SafeSim dry run + flash loan execution)
+// (SafeSim dry run + Flash Loan execution)
+// CommonJS version for Node.js
 // ─────────────────────────────────────────────
 
-import { ethers } from "ethers";
-import dotenv from "dotenv";
+const ethers = require("ethers");
+const dotenv = require("dotenv");
 dotenv.config();
 
 // ─────────────── CONFIG 🟢1 ───────────────
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-const MIN_NET_PROFIT_USDC = 1; // Minimum profit after gas
+const MIN_PROFIT_PCT = 3;        // Minimum percent profit to execute flash loan
+const TRADE_AMOUNT_USDC = 0.04;  // Trade input per opportunity
+const SCAN_INTERVAL = 30_000;    // 30 seconds
+const SLIPPAGE_PCT = 0;          // Optional slippage adjustment
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
   throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS");
 }
 
-// Initialize provider and wallet
+// Provider and wallet
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
@@ -37,13 +41,7 @@ const tokens = {
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
 
-// ─────────────── SETTINGS 🟢4 ───────────────
-const TRADE_AMOUNT_USDC = 0.04;
-const MIN_PROFIT_PCT = 3;
-const SLIPPAGE_PCT = 0;
-const SCAN_INTERVAL = 30_000; // 30 seconds
-
-// ─────────────── HELPERS 🟢5 ───────────────
+// ─────────────── HELPERS 🟢4 ───────────────
 function fmt(n, dec = 4) {
   return Number(n).toFixed(dec);
 }
@@ -55,35 +53,29 @@ async function getAmountOut(routerAddr, token, amountIn) {
     provider
   );
 
-  // Use USDC address from the flash loan contract
   const usdcAddress = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
   let path = [usdcAddress, token.address];
 
   try {
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), 6),
-      path
-    );
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), path);
     return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   } catch {
     // fallback path via WBTC
     path = [usdcAddress, tokens.WBTC.address, token.address];
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), 6),
-      path
-    );
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountIn.toString(), 6), path);
     return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   }
 }
 
-// ─────────────── CUMULATIVE PROFIT 🟢6 ───────────────
+// ─────────────── CUMULATIVE PROFIT 🟢5 ───────────────
 let cumulativeProfit = 0;
 
-// ─────────────── SAFESIM EXECUTION 🟢7 ───────────────
-async function safeSimTrade(buyRouter, sellRouter, tokenAddr, amount) {
+// ─────────────── SAFESIM DRY-RUN 🟢6 ───────────────
+async function safeSimTrade(buyRouter, sellRouter, tokenSymbol, amount) {
   try {
-    const buyOut = await getAmountOut(buyRouter, tokens[tokenAddr], amount);
-    const sellOut = await getAmountOut(sellRouter, tokens[tokenAddr], amount);
+    const token = tokens[tokenSymbol];
+    const buyOut = await getAmountOut(buyRouter, token, amount);
+    const sellOut = await getAmountOut(sellRouter, token, amount);
 
     const buyPrice = amount / buyOut;
     const sellPrice = amount / sellOut;
@@ -101,7 +93,7 @@ async function safeSimTrade(buyRouter, sellRouter, tokenAddr, amount) {
   }
 }
 
-// ─────────────── FLASH LOAN EXECUTION 🟢8 ───────────────
+// ─────────────── FLASH LOAN EXECUTION 🟢7 ───────────────
 const arbAbi = [
   {
     "inputs": [
@@ -116,15 +108,14 @@ const arbAbi = [
     "type": "function"
   }
 ];
-
 const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
-async function executeFlashLoan(buyRouter, sellRouter, tokenAddr, amount) {
+async function executeFlashLoan(buyRouter, sellRouter, tokenSymbol, amount) {
   try {
     const tx = await arbContract.executeArbitrage(
       buyRouter,
       sellRouter,
-      tokens[tokenAddr].address,
+      tokens[tokenSymbol].address,
       ethers.parseUnits(amount.toString(), 6),
       { gasLimit: 2_000_000 }
     );
@@ -136,7 +127,7 @@ async function executeFlashLoan(buyRouter, sellRouter, tokenAddr, amount) {
   }
 }
 
-// ─────────────── SCAN LOOP 🟢9 ───────────────
+// ─────────────── SCAN LOOP 🟢8 ───────────────
 async function scan() {
   console.log("🔍 Scanning for arbitrage opportunities...");
   for (const [symbol, token] of Object.entries(tokens)) {
@@ -144,7 +135,7 @@ async function scan() {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
         if (buyName === sellName) continue;
 
-        const sim = await safeSimTrade(buyName, sellName, symbol, TRADE_AMOUNT_USDC);
+        const sim = await safeSimTrade(buyRouter, sellRouter, symbol, TRADE_AMOUNT_USDC);
         if (!sim) continue;
 
         if (sim.profitPct >= MIN_PROFIT_PCT) {
@@ -154,7 +145,7 @@ async function scan() {
           );
           console.log(`📊 Cumulative simulated profit: ${cumulativeProfit.toFixed(6)} USDC`);
 
-          // Execute real flash loan arbitrage
+          // Execute flash loan only if profitable
           await executeFlashLoan(buyRouter, sellRouter, symbol, TRADE_AMOUNT_USDC);
         }
       }
@@ -162,6 +153,13 @@ async function scan() {
   }
 }
 
-// ─────────────── MAIN LOOP 🟢10 ───────────────
+// ─────────────── MAIN LOOP 🟢9 ───────────────
 async function main() {
   console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
+  while (true) {
+    await scan();
+    await new Promise(r => setTimeout(r, SCAN_INTERVAL));
+  }
+}
+
+main().catch(console.error);
