@@ -1,11 +1,12 @@
 // ─────────────────────────────────────────────
 // 🔹 AAVE FLASH ARB BOT — DRY RUN VERSION
 //    (NO REAL TRANSACTIONS, NO GAS USED)
+//    + EXPORT TRADES TO CSV
 // ─────────────────────────────────────────────
 
 import { ethers } from "ethers";
+import fs from "fs";
 import dotenv from "dotenv";
-import XLSX from "xlsx";
 dotenv.config();
 
 // 🟢 DRY RUN ALWAYS ON – SAFE MODE
@@ -72,7 +73,9 @@ const MIN_PROFIT_PCT = 0.1;
 const SLIPPAGE_PCT = 0;
 
 // ─────────────── HELPERS 🟢6 ───────────────
-function fmt(n, dec = 4) { return Number(n).toFixed(dec); }
+function fmt(n, dec = 4) {
+  return Number(n).toFixed(dec);
+}
 
 async function getAmountOut(routerAddr, token, amountIn) {
   const router = new ethers.Contract(
@@ -103,11 +106,23 @@ async function getAmountOut(routerAddr, token, amountIn) {
 // ─────────────── CUMULATIVE PROFIT 🟢7 ───────────────
 let cumulativeProfit = 0;
 
-// ─────────────── TRADE LOGS FOR EXCEL 🟢7b ───────────────
-const tradeLogs = [];
+// ─────────────── CSV LOGGING 🟢8 ───────────────
+const csvRows = [];
+function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profit }) {
+  csvRows.push([timestamp, symbol, buyRouter, sellRouter, amount, profit].join(","));
+}
 
-// ─────────────── SIMULATED TRADE EXECUTOR 🟢8 ───────────────
+function saveCSV() {
+  const header = ["Timestamp","Token","BuyRouter","SellRouter","AmountUSDC","ProfitUSDC"];
+  const csvContent = [header.join(","), ...csvRows].join("\n");
+  const filename = `arbitrage_log_${Date.now()}.csv`;
+  fs.writeFileSync(filename, csvContent);
+  console.log(`💾 Trades exported to CSV: ${filename}`);
+}
+
+// ─────────────── SIMULATED TRADE EXECUTOR 🟢9 ───────────────
 async function executeTradeSimulated(buyRouter, sellRouter, tokenAddr, amount) {
+  const timestamp = new Date().toISOString();
   console.log("🧪 ---------------------------------------");
   console.log("🧪 DRY RUN — Simulating trade execution");
   console.log("🧪 Buy Router:", buyRouter);
@@ -115,7 +130,6 @@ async function executeTradeSimulated(buyRouter, sellRouter, tokenAddr, amount) {
   console.log("🧪 Token:", tokenAddr);
   console.log("🧪 AmountIn:", amount);
 
-  // Generate mock profit 0–4% of trade
   const simulatedProfit = (Math.random() * 0.04 * amount).toFixed(6);
   cumulativeProfit += Number(simulatedProfit);
 
@@ -123,33 +137,18 @@ async function executeTradeSimulated(buyRouter, sellRouter, tokenAddr, amount) {
   console.log(`💰 Cumulative Profit: ${cumulativeProfit.toFixed(6)} USDC`);
   console.log("🧪 ---------------------------------------\n");
 
-  // Log trade for Excel
-  tradeLogs.push({
-    timestamp: new Date().toISOString(),
+  // log to CSV
+  logTradeCSV({
+    timestamp,
+    symbol: Object.entries(tokens).find(([k,t])=>t.address===tokenAddr)[0],
     buyRouter,
     sellRouter,
-    token: tokenAddr,
-    amountIn: amount,
-    profitUSDC: simulatedProfit,
-    cumulativeProfit: cumulativeProfit.toFixed(6)
+    amount,
+    profit: simulatedProfit
   });
 }
 
-// ─────────────── EXPORT TO EXCEL 🟢8b ───────────────
-function exportToExcel(filename = "trade_log.xlsx") {
-  if (tradeLogs.length === 0) {
-    console.warn("⚠️ No trades to export.");
-    return;
-  }
-
-  const ws = XLSX.utils.json_to_sheet(tradeLogs);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Trades");
-  XLSX.writeFile(wb, filename);
-  console.log(`📄 Exported ${tradeLogs.length} trades to ${filename}`);
-}
-
-// ─────────────── SCAN LOOP 🟢9 ───────────────
+// ─────────────── SCAN LOOP 🟢10 ───────────────
 async function scan() {
   console.log("🔍 Scanning for arbitrage opportunities...\n");
   const opportunities = [];
@@ -157,7 +156,6 @@ async function scan() {
   for (const [symbol, token] of Object.entries(tokens)) {
     for (const [buyName, buyRouter] of Object.entries(routers)) {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
-
         if (buyName === sellName) continue;
 
         try {
@@ -178,7 +176,6 @@ async function scan() {
           if (profitPct >= MIN_PROFIT_PCT) {
             opportunities.push({ symbol, buyName, sellName });
             console.log(`🚨 PROFITABLE: ${symbol} | Buy:${buyName} → Sell:${sellName} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
-
             await executeTradeSimulated(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
 
@@ -193,18 +190,13 @@ async function scan() {
   return opportunities;
 }
 
-// ─────────────── MAIN LOOP 🟢10 ───────────────
+// ─────────────── MAIN LOOP 🟢11 ───────────────
 async function main() {
   console.log("🚀 DRY RUN Aave Flash Arbitrage Bot Started\n");
-
   while (true) {
     await scan();
+    saveCSV(); // save CSV after each scan
     await new Promise(r => setTimeout(r, 5000));
-
-    // Optional: export Excel every 5 scans
-    if (tradeLogs.length > 0 && tradeLogs.length % 5 === 0) {
-      exportToExcel(); // will overwrite trade_log.xlsx each time
-    }
   }
 }
 
