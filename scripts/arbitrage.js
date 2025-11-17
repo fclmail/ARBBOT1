@@ -12,7 +12,7 @@ import { ethers } from "ethers";
 dotenv.config();
 
 // -------- CONFIG (you provided these) ----------
-const PRIVATE_RPC = process.env.PRIVATE_RPC || "https://polygon.mevblocker.io";
+const PRIVATE_RPC = process.env.PRIVATE_RPC || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(PRIVATE_RPC);
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
