@@ -9,8 +9,11 @@ dotenv.config();
 // optional fetch polyfill for older Node
 if (typeof globalThis.fetch !== "function") {
   try {
-    const fetchMod = await import("node-fetch");
-    globalThis.fetch = fetchMod.default;
+    // eslint-disable-next-line no-await-in-async-function
+    (async () => {
+      const fetchMod = await import("node-fetch");
+      globalThis.fetch = fetchMod.default;
+    })();
   } catch (e) {
     console.warn("⚠️ fetch not found, SafeSim may fail");
   }
@@ -22,8 +25,11 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 const MIN_NET_PROFIT_USDC = Number(process.env.MIN_NET_PROFIT_USDC || 1);
 
-if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
-  throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS in .env");
+if (!PRIVATE_KEY) {
+  throw new Error("❌ Missing PRIVATE_KEY in .env");
+}
+if (!CONTRACT_ADDRESS) {
+  throw new Error("❌ Missing CONTRACT_ADDRESS in .env");
 }
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -90,6 +96,7 @@ async function getAmountOut(routerAddr, token, amountIn) {
       ethers.parseUnits(amountIn.toString(), 6),
       path
     );
+    // amounts last element is output token amount in its decimals
     return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
   } catch {
     // fallback path via WBTC
@@ -118,8 +125,10 @@ async function simulateSafeSim(txRequestPartial) {
     }
 
     const feeData = await provider.getFeeData();
-    const maxPriorityFeePerGas = BigInt(feeData.maxPriorityFeePerGas ?? feeData.gasPrice ?? 0n);
-    const maxFeePerGas = BigInt(feeData.maxFeePerGas ?? (feeData.gasPrice ?? 0n) * 2n);
+    const maxPriorityFeePerGas =
+      BigInt(feeData.maxPriorityFeePerGas ?? feeData.gasPrice ?? 0n);
+    const maxFeePerGas =
+      BigInt(feeData.maxFeePerGas ?? (feeData.gasPrice ?? 0n) * 2n);
     const nonce = await provider.getTransactionCount(from);
 
     const tx = {
@@ -133,6 +142,7 @@ async function simulateSafeSim(txRequestPartial) {
       type: 2
     };
 
+    // Sign the transaction
     const signed = await wallet.signTransaction(tx);
 
     const body = {
@@ -151,7 +161,7 @@ async function simulateSafeSim(txRequestPartial) {
     const json = await res.json();
     return { success: true, raw: json, txMeta: { tx, signed } };
   } catch (err) {
-    return { success: false, error: err.message || String(err) };
+    return { success: false, error: err?.message ?? String(err) };
   }
 }
 
@@ -211,15 +221,21 @@ async function scan() {
           buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
         } catch (err) {
-          console.warn(`⚠️ Skipping ${symbol} ${buyName}->${sellName}: ${err.message}`);
+          console.warn(`⚠️ Skipping ${symbol} ${buyName}->${sellName}: ${err?.message ?? String(err)}`);
           continue;
         }
 
-        const buyPrice = TRADE_AMOUNT_USDC / buyOut;
+        // If either output is zero or invalid, skip
+        if (!buyOut || !sellOut) continue;
+
+        // Calculate profitability
+        const buyAmountIn = TRADE_AMOUNT_USDC;
+        const buyPrice = buyAmountIn / buyOut;
         const sellPrice = TRADE_AMOUNT_USDC / sellOut;
 
         let profitUSDC = sellPrice - buyPrice;
-        let profitPct = (profitUSDC / buyPrice) * 100;
+        let profitPct = (profitUSDC / Math.max(buyPrice, 1e-18)) * 100;
+        // Apply slippage
         profitUSDC *= (1 - SLIPPAGE_PCT / 100);
         profitPct *= (1 - SLIPPAGE_PCT / 100);
 
@@ -233,16 +249,18 @@ async function scan() {
             txRequest = await arbContract.populateTransaction.executeArbitrage(
               buyRouter, sellRouter, token.address, ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6)
             );
-          } catch {
+          } catch (e) {
+            console.warn(`⚠️ Failed to populate arbitrate TX: ${e?.message ?? String(e)}`);
             continue;
           }
 
           const simRes = await simulateSafeSim(txRequest);
-          if (!simRes.success || raw?.result?.firstRevert) {
-            console.log(`❌ SafeSim failed. Skipping ${symbol} ${buyName}->${sellName}`);
+          if (!simRes.success) {
+            console.log(`❌ SafeSim failed. Skipping ${symbol} ${buyName}->${sellName} (${simRes.error ?? ""})`);
             continue;
           }
 
+          // If SafeSim indicates a feasible path, execute
           console.log(`✅ SafeSim passed. Executing trade...`);
           await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
         }
@@ -258,7 +276,7 @@ async function scan() {
 async function main() {
   try {
     console.log("🚀 Aave Flash Arbitrage Bot (SafeSim) running on Polygon...");
-    console.log("✅ Connected to contract:", await arbContract.getAddress());
+    console.log("✅ Connected to contract:", CONTRACT_ADDRESS);
     console.log("👤 Contract owner:", await arbContract.owner());
   } catch (err) {
     console.error("❌ Startup error:", err);
@@ -266,7 +284,11 @@ async function main() {
   }
 
   while (true) {
-    await scan();
+    try {
+      await scan();
+    } catch (err) {
+      console.error("❗ Scan loop error:", err);
+    }
     await new Promise(r => setTimeout(r, 5000));
   }
 }
