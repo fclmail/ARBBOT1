@@ -1,4 +1,4 @@
-// ─────────────────────────────────────────────
+──────────────────────
 // 🔹 AAVE FLASH ARB BOT — Polygon
 // (SafeSim dry run + flash loan execution)
 // ─────────────────────────────────────────────
@@ -165,10 +165,3 @@ async function scan() {
 // ─────────────── MAIN LOOP 🟢10 ───────────────
 async function main() {
   console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
-  while (true) {
-    await scan();
-    await new Promise(r => setTimeout(r, SCAN_INTERVAL));
-  }
-}
-
-main().catch(console.error);
