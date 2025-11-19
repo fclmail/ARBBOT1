@@ -71,7 +71,7 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS 🟢5 ───────────────
-const TRADE_AMOUNT_USDC = 500; // Recommended starting amount
+const TRADE_AMOUNT_USDC = 0.002; // Recommended starting amount
 const MIN_PROFIT_PCT = 0.5;    // Only take trades >= 0.5% profit
 const SLIPPAGE_PCT = 0.2;      // 0.2% slippage tolerance
 
