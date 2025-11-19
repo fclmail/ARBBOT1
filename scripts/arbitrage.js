@@ -72,9 +72,9 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS 🟢5 ───────────────
-const TRADE_AMOUNT_USDC = 0.001; // Small starting amount
-const MIN_PROFIT_PCT = 0.5;      // Only trades >= 0.5%
-const SLIPPAGE_PCT = 0.2;        // 0.2% slippage tolerance
+const TRADE_AMOUNT_USDC = 0.001;
+const MIN_PROFIT_PCT = 0.5;
+const SLIPPAGE_PCT = 0.2;
 
 // ─────────────── HELPERS 🟢6 ───────────────
 function fmt(n, dec = 4) { return Number(n).toFixed(dec); }
@@ -120,7 +120,21 @@ function saveCSV() {
   console.log(`💾 Trades exported to CSV: ${filename}`);
 }
 
-// ─────────────── TRADE EXECUTOR 🟢9 ───────────────
+// ------------------------------------------------------------------
+// 🆕 ADD ERC20 ABI + USDC CONTRACT (REQUIRED FOR REAL BALANCE READING)
+// ------------------------------------------------------------------
+const erc20Abi = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
+
+let usdcContract;
+(async () => {
+  const usdcAddr = await arbContract.USDC();
+  usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
+})();
+
+// ─────────────── TRADE EXECUTOR 🟢9 (MODIFIED) ───────────────
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amount) {
   const timestamp = new Date().toISOString();
   console.log("💸 Executing live trade");
@@ -130,6 +144,13 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amount) {
   console.log("🧪 AmountIn:", amount);
 
   try {
+
+    // 🔹 1️⃣ Read vault balance before trade
+    const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    const before = Number(ethers.formatUnits(beforeBal, 6));
+    console.log(`🏦 Vault Balance Before Trade: ${before.toFixed(6)} USDC`);
+
+    // 🔹 2️⃣ Execute arbitrage
     const tx = await arbContract.executeArbitrage(
       buyRouter,
       sellRouter,
@@ -139,21 +160,31 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amount) {
     const receipt = await tx.wait();
     console.log(`✅ Trade executed: txHash ${receipt.transactionHash}`);
 
-    // Calculate profit (here you can implement a real USDC balance check)
-    const simulatedProfit = (Math.random() * 0.04 * amount).toFixed(6);
-    cumulativeProfit += Number(simulatedProfit);
+    // 🔹 3️⃣ Read vault balance after trade
+    const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    const after = Number(ethers.formatUnits(afterBal, 6));
+    console.log(`🏦 Vault Balance After Trade: ${after.toFixed(6)} USDC`);
+
+    // 🔹 4️⃣ Real Net Profit
+    const netProfit = after - before;
+    console.log(`💰 REAL Net Profit This Trade: ${netProfit.toFixed(6)} USDC`);
+
+    if (netProfit > 0) {
+      cumulativeProfit += netProfit;
+    }
 
     console.log(`💰 Cumulative Profit: ${cumulativeProfit.toFixed(6)} USDC`);
 
-    // Deposit profits to contract vault
+    // 🔹 5️⃣ Log real profit
     logTradeCSV({
       timestamp,
       symbol: Object.entries(tokens).find(([k,t])=>t.address===tokenAddr)[0],
       buyRouter,
       sellRouter,
       amount,
-      profit: simulatedProfit
+      profit: netProfit
     });
+
   } catch (err) {
     console.error(`⚠️ Trade failed: ${err.message}`);
   }
@@ -212,4 +243,5 @@ async function main() {
 }
 
 main().catch(console.error);
+
 
