@@ -17,7 +17,7 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY not set in .env");
 
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // Existing contract as vault
-const MIN_NET_PROFIT_USDC = 2; // Minimum profit per trade (not used in pre-check here; kept for context)
+const MIN_NET_PROFIT_USDC = 2;
 
 // Provider + Signer
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -93,7 +93,6 @@ async function getAmountOut(routerAddr, token, amountIn) {
     );
     return Number(ethers.formatUnits(amounts[1], token.decimals));
   } catch {
-    // fallback via WBTC if direct path fails
     const fallback = [usdcAddress, tokens.WBTC.address, token.address];
     const amounts = await router.getAmountsOut(
       ethers.parseUnits(amountIn.toString(), 6),
@@ -120,7 +119,7 @@ function saveCSV() {
 }
 
 // ------------------------------------------------------------------
-// 🆕 ADD ERC20 ABI + USDC CONTRACT (REQUIRED FOR REAL BALANCE READING)
+// 🆕 ADD ERC20 ABI + USDC CONTRACT
 // ------------------------------------------------------------------
 const erc20Abi = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -133,18 +132,12 @@ let usdcContract;
   usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
 })();
 
-// ─────────────── TRADE EXECUTOR 🟢9 (MODIFIED) ───────────────
+// ─────────────── TRADE EXECUTOR 🟢9 ───────────────
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amount) {
   const timestamp = new Date().toISOString();
   console.log("💸 Executing live trade");
-  console.log("🧪 Buy Router:", buyRouter);
-  console.log("🧪 Sell Router:", sellRouter);
-  console.log("🧪 Token:", tokenAddr);
-  console.log("🧪 AmountIn:", amount);
 
   try {
-
-    // 🔹 1️⃣ Read vault balance before trade
     const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
     const before = Number(ethers.formatUnits(beforeBal, 6));
     console.log(`🏦 Vault Balance Before Trade: ${before.toFixed(6)} USDC`);
@@ -156,43 +149,33 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amount) {
         data: arbContract.interface.encodeFunctionData(
           "executeArbitrage",
           [buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), 6)]
-        )
+        ),
+        from: wallet.address // ✅ FIX: simulate as the owner
       });
     } catch (simErr) {
       console.log("❌ SIMULATION FAILED — Contract would revert:", simErr.message);
       console.log("❌ Trade aborted — vault remains unchanged");
-      return;  // No real tx sent
-    }
-    // ------------------ END OPTION 6 ------------------
-
-    // ------------------ OPTION 1: JS PRE-PROFIT CHECK ------------------
-    // Find token object for decimals; default to 18 if not found
-    const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr, decimals: 18 };
-
-    let buyOut, sellOut;
-    try {
-      buyOut = await getAmountOut(buyRouter, tokenObj, amount);
-      sellOut = await getAmountOut(sellRouter, tokenObj, amount);
-    } catch (priceErr) {
-      console.log("❌ Price query failed — aborting trade:", priceErr.message);
       return;
     }
 
-    // estimate effective buy & sell price (USDC per token implied)
+    // ------------------ OPTION 1: JS PRE-PROFIT CHECK ------------------
+    const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr, decimals: 18 };
+
+    let buyOut = await getAmountOut(buyRouter, tokenObj, amount);
+    let sellOut = await getAmountOut(sellRouter, tokenObj, amount);
+
     const buyPrice  = amount / buyOut;
     const sellPrice = amount / sellOut;
-
     const expectedProfitUSDC = sellPrice - buyPrice;
-    const MIN_EXPECTED_PROFIT = 0.000001; // tweak as desired (safety floor)
+    const MIN_EXPECTED_PROFIT = 0.000001;
 
     if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) {
       console.log(`❌ PREVENTED — Expected profit too small or negative (${expectedProfitUSDC.toFixed(8)} USDC)`);
       console.log("❌ Trade aborted — vault untouched");
       return;
     }
-    // ------------------ END OPTION 1 ------------------
 
-    // ---------- NOW SAFE TO EXECUTE THE REAL TX ----------
+    // ---------- EXECUTE REAL TX ----------
     const tx = await arbContract.executeArbitrage(
       buyRouter,
       sellRouter,
@@ -200,15 +183,13 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amount) {
       ethers.parseUnits(amount.toString(), 6)
     );
 
-    // Wait for confirmation
     const receipt = await tx.wait();
-    if (!receipt || (!('status' in receipt) ? false : receipt.status === 0)) {
+    if (!receipt || receipt.status === 0) {
       console.log("❌ Transaction failed or reverted on-chain — vault unchanged");
       return;
     }
     console.log(`✅ Trade executed: txHash ${receipt.transactionHash}`);
 
-    // 🔹 3️⃣ Read vault balance after trade
     const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
     const after = Number(ethers.formatUnits(afterBal, 6));
     console.log(`🏦 Vault Balance After Trade: ${after.toFixed(6)} USDC`);
@@ -216,24 +197,18 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amount) {
     // ------------------ OPTION 5: VERIFY VAULT INCREASE ------------------
     if (after <= before) {
       console.log("❌ Trade resulted in no increase — treated as failed/ignored");
-      console.log("❌ Ignoring trade — vault never decreases");
-      return; // Do NOT log negative profit
+      return;
     }
-    // ------------------ END OPTION 5 ------------------
 
-    // 🔹 4️⃣ Real Net Profit
     const netProfit = after - before;
     console.log(`💰 REAL Net Profit This Trade: ${netProfit.toFixed(6)} USDC`);
 
-    if (netProfit > 0) {
-      cumulativeProfit += netProfit;
-    }
-
+    if (netProfit > 0) cumulativeProfit += netProfit;
     console.log(`💰 Cumulative Profit: ${cumulativeProfit.toFixed(6)} USDC`);
 
-    // 🔹 5️⃣ Log real profit
-    const symbolEntry = Object.entries(tokens).find(([k,t])=>t.address.toLowerCase()===tokenAddr.toLowerCase());
+    const symbolEntry = Object.entries(tokens).find(([k,t]) => t.address.toLowerCase() === tokenAddr.toLowerCase());
     const symbol = symbolEntry ? symbolEntry[0] : tokenAddr;
+
     logTradeCSV({
       timestamp,
       symbol,
