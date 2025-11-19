@@ -72,7 +72,7 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS 🟢5 ───────────────
-const TRADE_AMOUNT_USDC = 0.002; // Small starting amount
+const TRADE_AMOUNT_USDC = 0.001; // Small starting amount
 const MIN_PROFIT_PCT = 0.5;      // Only trades >= 0.5%
 const SLIPPAGE_PCT = 0.2;        // 0.2% slippage tolerance
 
