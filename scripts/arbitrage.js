@@ -2,16 +2,21 @@
 import { ethers } from "ethers";
 
 // ===== CONFIGURATION =====
-const PROVIDER_URL = "https://polygon-rpc.com"; // RPC endpoint
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // load from env
+const PROVIDER_URL = "https://polygon-rpc.com"; // your RPC
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // load from env for safety
+
+// ✅ Checksummed addresses using ethers.getAddress()
 const VAULT_ADDRESS = ethers.getAddress("0x19B64f74553eE0ee26BA01BF34321735E4701C43");
-const USDC_ADDRESS = ethers.getAddress("0x2791Bca1f2de4661ED88a30C99A7a9449Aa84174"); // Polygon USDC
+const USDC_ADDRESS  = ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
+
 const DEX_ROUTERS = {
   quickswap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
   sushiswap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-  apeswap: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607")
+  apeswap:   ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607")
 };
-const MIN_NET_PROFIT_USDC = 0.001; // new minimum profit
+
+const MIN_NET_PROFIT_USDC = 0.001; // updated minimum profit threshold
+const SCAN_INTERVAL_MS = 30_000; // continuous scan every 30 seconds
 
 // ===== ABIs =====
 const vaultAbi = [
@@ -73,7 +78,7 @@ async function scanArbitrage() {
   let vaultBalance = await getVaultBalance();
   console.log("🏦 Vault Before:", vaultBalance.toFixed(6), "USDC");
 
-  // Example token list
+  // Example token list for scanning
   const tokenList = [
     { symbol: "CRV", address: ethers.getAddress("0x172370d5Cd63279eFa6d502DAB29171933a610AF") },
     { symbol: "MATIC", address: ethers.getAddress("0x0000000000000000000000000000000000001010") },
@@ -85,6 +90,7 @@ async function scanArbitrage() {
   for (const token of tokenList) {
     scanNum++;
 
+    // Randomized DEX pair scans
     const dexPairs = [
       ["quickswap", "sushiswap"],
       ["quickswap", "apeswap"],
@@ -106,6 +112,7 @@ async function scanArbitrage() {
         const buyAmounts = await new ethers.Contract(buyRouter, routerAbi, provider).getAmountsOut(amountIn, buyPath);
         const sellAmounts = await new ethers.Contract(sellRouter, routerAbi, provider).getAmountsOut(buyAmounts[1], sellPath);
 
+        // Raw profit calculation
         const rawProfit = Number(ethers.formatUnits(sellAmounts[1] - amountIn, 6));
 
         if (rawProfit < MIN_NET_PROFIT_USDC) {
@@ -117,7 +124,7 @@ async function scanArbitrage() {
         try {
           await vaultContract.callStatic.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
         } catch {
-          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed");
+          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed (expected revert)");
           continue;
         }
 
@@ -142,19 +149,18 @@ async function scanArbitrage() {
     }
   }
 
-  console.log("\n🔁 Loop complete — rescan in 30s...\n");
+  console.log(`\n🔁 Loop complete — rescan in ${SCAN_INTERVAL_MS/1000}s...`);
 }
 
-// ===== RUN CONTINUOUSLY =====
+// ===== CONTINUOUS LOOP =====
 async function main() {
   while (true) {
-    try {
-      await scanArbitrage();
-    } catch (err) {
-      console.error("Fatal error in arbitrage loop:", err);
-    }
-    await new Promise(res => setTimeout(res, 30000)); // 30 seconds
+    await scanArbitrage();
+    await new Promise(resolve => setTimeout(resolve, SCAN_INTERVAL_MS));
   }
 }
 
-main();
+// ===== RUN SCRIPT =====
+main().catch(err => {
+  console.error("Fatal error in arbitrage script:", err);
+});
