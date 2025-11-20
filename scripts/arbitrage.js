@@ -25,7 +25,7 @@ const MIN_PROFIT_USDC = 0.001;       // absolute profit threshold
 const MAX_PRICE_DELTA = 0.10;        // 10% max deviation allowed
 const SLIPPAGE_PCT = 1;              // 1% slippage cushion
 const SCAN_INTERVAL = 30000;         // 30 seconds
-const TRADE_USDC = 10;               // 10 USDC test trade
+const TRADE_USDC = 0.0008;               // 10 USDC test trade
 
 // ===== ABIs =====
 const vaultAbi = [
