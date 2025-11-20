@@ -1,131 +1,114 @@
 import { ethers } from "ethers";
 
-// ---------------- CONFIG ----------------
-const RPC_URL = "https://polygon-rpc.com"; // or your preferred RPC
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // set in env
-const ARB_CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // deployed AaveFlashArb
-const ARB_CONTRACT_ABI = [/* paste your ABI here */];
+// ========== CONFIG ==========
+const ARB_CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+const USDC_ADDRESS = "0xYourUSDCAddressHere"; // update for mainnet/testnet
+const MIN_PROFIT_USDC = ethers.parseUnits("0.01", 6); // 0.01 USDC minimum net profit
 
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
-const ROUTERS = {
-    quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-    apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1dE7"
+// DEX routers
+const DEXES = {
+  quickswap: "0xQuickSwapRouterAddress",
+  sushiswap: "0xSushiSwapRouterAddress",
+  apeswap: "0xApeSwapRouterAddress",
 };
-const MIN_PROFIT_USDC = ethers.parseUnits("0.01", 6); // minimum 0.01 USDC profit
 
-// ----------------------------------------
+// Your wallet private key
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-// Initialize provider and wallet
-const provider = new ethers.JsonRpcProvider(RPC_URL);
+// Provider
+const provider = new ethers.JsonRpcProvider("https://polygon-rpc.com");
+
+// Signer
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-// Instantiate arbitrage contract
-const arbContract = new ethers.Contract(ARB_CONTRACT_ADDRESS, ARB_CONTRACT_ABI, wallet);
+// Contract ABI (only needed functions)
+const ARB_ABI = [
+  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountIn) external",
+  "function owner() view returns (address)",
+  "function minProfit() view returns (uint256)",
+];
 
-// Helper: format USDC amounts
-const formatUSDC = (value) => ethers.formatUnits(value, 6);
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+];
 
-// ----------------- MAIN LOOP -----------------
+// ========== MAIN FUNCTION ==========
 async function main() {
-    console.log("🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
+  console.log("🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
 
-    // Vault info
-    const owner = await arbContract.owner();
-    const vaultBalance = await ethers.Contract(USDC_ADDRESS, [
-        "function balanceOf(address) view returns (uint256)"
-    ], provider).balanceOf(ARB_CONTRACT_ADDRESS);
+  const arbContract = new ethers.Contract(ARB_CONTRACT_ADDRESS, ARB_ABI, wallet);
 
-    console.log("🏛 Contract Address:", ARB_CONTRACT_ADDRESS);
-    console.log("👤 Owner:", owner);
-    console.log("🏦 Vault Balance:", formatUSDC(vaultBalance), "USDC");
+  // Fetch owner for logging
+  const owner = await arbContract.owner();
+  console.log("🏛 Contract Address:", ARB_CONTRACT_ADDRESS);
+  console.log("👤 Owner:", owner);
 
-    while (true) {
-        try {
-            console.log("\n🔍 Scanning for arbitrage opportunities...");
+  // Fetch vault USDC balance
+  const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
+  let vaultBalanceBefore = await usdcContract.balanceOf(ARB_CONTRACT_ADDRESS);
+  console.log("🏦 Vault Before:", ethers.formatUnits(vaultBalanceBefore, 6), "USDC");
 
-            // Example: QuickSwap → SushiSwap
-            const tokenAddress = "0x..."; // token to arbitrage
-            const amountIn = ethers.parseUnits("100", 6); // borrow 100 USDC
+  // Example token to arbitrage
+  const tokenToArb = "0xTokenAddressHere";
 
-            // Estimate trade amounts using getAmountsOut
-            const buyRouter = ROUTERS.quickswap;
-            const sellRouter = ROUTERS.sushiswap;
+  // Example trade amount
+  const amountIn = ethers.parseUnits("10", 6); // 10 USDC
 
-            const buyAmountOut = await getAmountOut(buyRouter, USDC_ADDRESS, tokenAddress, amountIn);
-            const sellAmountOut = await getAmountOut(sellRouter, tokenAddress, USDC_ADDRESS, buyAmountOut);
+  // Example DEX pair
+  const buyRouter = DEXES.quickswap;
+  const sellRouter = DEXES.sushiswap;
 
-            const profit = sellAmountOut - amountIn;
+  console.log("🔍 Checking arbitrage opportunity...");
 
-            if (profit < MIN_PROFIT_USDC) {
-                console.log(`❌ Rejected — Profit too low: ${formatUSDC(profit)} USDC`);
-                await sleep(10000);
-                continue;
-            }
+  try {
+    // =======================
+    // Step 1: Simulate via callStatic
+    // =======================
+    const callStaticResult = await arbContract.callStatic.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      tokenToArb,
+      amountIn
+    );
 
-            console.log(`📈 Potential Profit: ${formatUSDC(profit)} USDC`);
+    console.log("🧪 callStatic: SUCCESS — Trade can execute on-chain");
 
-            // CallStatic check to prevent losing gas
-            const callStaticSuccess = await arbContract.callStatic.executeArbitrage(
-                buyRouter,
-                sellRouter,
-                tokenAddress,
-                amountIn
-            ).catch(e => false);
+    // =======================
+    // Step 2: Execute trade
+    // =======================
+    const tx = await arbContract.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      tokenToArb,
+      amountIn
+    );
 
-            if (!callStaticSuccess) {
-                console.log("❌ callStatic failed — Trade blocked BEFORE sending gas");
-                await sleep(10000);
-                continue;
-            }
+    console.log("📤 Broadcasting transaction...");
+    console.log("⏳ Pending tx...");
 
-            // Execute real trade
-            const tx = await arbContract.executeArbitrage(
-                buyRouter,
-                sellRouter,
-                tokenAddress,
-                amountIn,
-                { gasLimit: 500_000 }
-            );
-            console.log("📤 Broadcasting transaction...");
-            console.log("🔗 txHash:", tx.hash);
+    const receipt = await tx.wait();
+    console.log("✅ Trade Confirmed — status:", receipt.status);
+    console.log("⛽ Gas Used:", receipt.gasUsed.toString());
 
-            const receipt = await tx.wait();
-            if (receipt.status === 1) {
-                const newVaultBalance = await ethers.Contract(USDC_ADDRESS, [
-                    "function balanceOf(address) view returns (uint256)"
-                ], provider).balanceOf(ARB_CONTRACT_ADDRESS);
+    // =======================
+    // Step 3: Check vault after trade
+    // =======================
+    let vaultBalanceAfter = await usdcContract.balanceOf(ARB_CONTRACT_ADDRESS);
+    const netProfit = vaultBalanceAfter - vaultBalanceBefore;
 
-                console.log("✅ Trade Confirmed");
-                console.log("🏦 Vault Before:", formatUSDC(vaultBalance), "USDC");
-                console.log("🏦 Vault After:", formatUSDC(newVaultBalance), "USDC");
-                console.log("📈 Net Profit:", formatUSDC(newVaultBalance - vaultBalance), "USDC");
-            } else {
-                console.log("❌ Trade failed on-chain, no profit");
-            }
-
-        } catch (err) {
-            console.error("⚠ Error:", err.message);
-        }
-
-        await sleep(10000); // scan every 10s
+    if (netProfit > 0) {
+      console.log("🏦 Vault After:", ethers.formatUnits(vaultBalanceAfter, 6), "USDC");
+      console.log("📈 Net Profit:", ethers.formatUnits(netProfit, 6), "USDC");
+      console.log("🎉 SUCCESS — Vault balance increased");
+    } else {
+      console.warn("⚠ Vault balance did NOT increase — trade blocked or failed");
     }
+  } catch (err) {
+    console.error("❌ Trade blocked — callStatic failed or unexpected error:", err);
+  }
 }
 
-// ---------------- HELPER FUNCTIONS ----------------
-async function getAmountOut(router, fromToken, toToken, amountIn) {
-    const routerContract = new ethers.Contract(router, [
-        "function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"
-    ], provider);
-
-    const path = [fromToken, toToken];
-    const amounts = await routerContract.getAmountsOut(amountIn, path);
-    return amounts[amounts.length - 1];
-}
-
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// ---------------- RUN -----------------
-main();
+// Run main
+main()
+  .then(() => console.log("🔁 Arbitrage cycle completed"))
+  .catch((err) => console.error(err));
