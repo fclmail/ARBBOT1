@@ -70,7 +70,7 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS 🟢5 ───────────────
-const TRADE_AMOUNT_USDC = 0.001;
+const TRADE_AMOUNT_USDC = 0.05;
 const MIN_PROFIT_PCT = 0.5;
 const SLIPPAGE_PCT = 0.2;
 
