@@ -56,9 +56,10 @@ async function getAmountOut(routerAddress, token, amountInUSDC) {
     const amountInWei = ethers.parseUnits(amountInUSDC.toString(), 6);
     const amounts = await new ethers.Contract(routerAddress, routerAbi, provider).getAmountsOut(amountInWei, path);
     const tokenDecimals = await new ethers.Contract(token.address, erc20Abi, provider).decimals();
-    return Number(ethers.formatUnits(amounts[1], tokenDecimals));
+    const outAmount = Number(ethers.formatUnits(amounts[1], tokenDecimals));
+    return outAmount > 0 ? outAmount : null; // Return null if zero
   } catch {
-    return 0; // Fail-safe: return 0 on error
+    return null;
   }
 }
 
@@ -96,7 +97,8 @@ async function scanAndExecute() {
           try {
             const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
             const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
-            if (buyOut === 0 || sellOut === 0) continue;
+
+            if (!buyOut || !sellOut) continue; // Skip invalid prices
 
             const buyPrice = TRADE_AMOUNT_USDC / buyOut;
             const sellPrice = TRADE_AMOUNT_USDC / sellOut;
