@@ -65,11 +65,7 @@ const tokens = {
 
 let cumulativeProfit = 0;
 const csvRows = [];
-function logTradeCSV(r) { csvRows.push([r.timestamp,r.symbol,r.buyRouter,r.sellRouter,r.amount,r.profit].join(",")); }
-function saveCSV() {
-  if (!csvRows.length) return;
-  const header = ["Timestamp","Token","BuyRouter","SellRouter","AmountUSDC","ProfitUSDC"];
-  const csv = [header.join(","), ...csvRows].join("
+function logTradeCSV(r) { csvRows.push([r.timestamp,r.symbol,r.buyRouter,r.sellRouter,r.amount,r.profit].join("
 ");
   const f = `arbitrage_log_${Date.now()}.csv`;
   fs.writeFileSync(f, csv);
