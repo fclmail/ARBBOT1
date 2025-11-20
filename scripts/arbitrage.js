@@ -2,24 +2,26 @@
 import { ethers } from "ethers";
 
 // ===== CONFIGURATION =====
-const PROVIDER_URL = "https://polygon-rpc.com"; // RPC endpoint
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // load from env
-const VAULT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88a30C99A7a9449Aa84174";
+const PROVIDER_URL = "https://polygon-rpc.com"; // your RPC
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // load from env for safety
+const VAULT_ADDRESS = ethers.getAddress("0x19B64f74553eE0ee26BA01BF34321735E4701C43");
+const USDC_ADDRESS = ethers.getAddress("0x2791bca1f2de4661ed88a30c99a7a9449aa84174"); // Polygon USDC
+
 const DEX_ROUTERS = {
-  quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  quickswap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
+  sushiswap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
+  apeswap:   ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607")
 };
+
 const MIN_NET_PROFIT_USDC = 0.001; // minimum net profit threshold
-const SLIPPAGE_PCT = 0.5;          // slippage adjustment
-const SCAN_INTERVAL_MS = 30000;    // 30 seconds
-const TRADE_AMOUNTS_USDC = [0.001, 0.01, 10, 1000, 100000, 1000000]; // test multiple trade sizes
+const LOOP_INTERVAL_MS = 30000; // 30s loop
+const TRADE_AMOUNT_USDC = "10"; // 10 USDC per trade
 
 // ===== ABIs =====
 const vaultAbi = [
   "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountIn) external",
-  "function owner() view returns (address)"
+  "function owner() view returns (address)",
+  "function USDC() view returns (address)"
 ];
 
 const erc20Abi = [
@@ -51,7 +53,7 @@ async function getVaultBalance() {
   return Number(ethers.formatUnits(await usdcContract.balanceOf(VAULT_ADDRESS), 6));
 }
 
-function logTrade(scanNum, buyDex, sellDex, tokenSymbol, rawProfit, netProfit, executed, reason) {
+function logTradeResult(scanNum, buyDex, sellDex, tokenSymbol, rawProfit, netProfit, executed, reason) {
   console.log(`\n🔎 DEX Scan #${scanNum}`);
   console.log(`${tokenSymbol} | ${buyDex} → ${sellDex}`);
   if (executed) {
@@ -64,20 +66,23 @@ function logTrade(scanNum, buyDex, sellDex, tokenSymbol, rawProfit, netProfit, e
   }
 }
 
-// ===== ARBITRAGE SCAN FUNCTION =====
-async function scan() {
-  console.log("🔍 Scanning for arbitrage opportunities...");
-  const tokenList = [
-    { symbol: "CRV", address: "0x172370d5Cd63279eFa6d502DAB29171933a610AF" },
-    { symbol: "MATIC", address: "0x0000000000000000000000000000000000001010" },
-    { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" }
-  ];
+// ===== MAIN ARBITRAGE SCAN =====
+async function scanArbitrage() {
+  console.log("🔍 Scanning for arbitrage opportunities...\n");
 
   let vaultBalance = await getVaultBalance();
+  console.log("🏦 Vault Before Scan:", vaultBalance.toFixed(6), "USDC");
+
+  const tokenList = [
+    { symbol: "CRV", address: ethers.getAddress("0x172370d5Cd63279eFa6d502DAB29171933a610AF") },
+    { symbol: "MATIC", address: ethers.getAddress("0x0000000000000000000000000000000000001010") },
+    { symbol: "LINK", address: ethers.getAddress("0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39") }
+  ];
+
   let scanNum = 0;
 
   for (const token of tokenList) {
-    const tokenDecimals = await getTokenDecimals(token.address);
+    scanNum++;
 
     const dexPairs = [
       ["quickswap", "sushiswap"],
@@ -88,67 +93,73 @@ async function scan() {
     for (const [buyDexKey, sellDexKey] of dexPairs) {
       const buyRouter = DEX_ROUTERS[buyDexKey];
       const sellRouter = DEX_ROUTERS[sellDexKey];
-      scanNum++;
 
-      for (const amt of TRADE_AMOUNTS_USDC) {
-        try {
-          const tradeAmount = ethers.parseUnits(amt.toString(), 6);
-          const buyAmounts = await new ethers.Contract(buyRouter, routerAbi, provider).getAmountsOut(tradeAmount, [USDC_ADDRESS, token.address]);
-          const sellAmounts = await new ethers.Contract(sellRouter, routerAbi, provider).getAmountsOut(buyAmounts[1], [token.address, USDC_ADDRESS]);
+      try {
+        const tokenDecimals = await getTokenDecimals(token.address);
+        const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC, 6); // 10 USDC
 
-          const rawProfit = Number(ethers.formatUnits(sellAmounts[1] - tradeAmount, 6));
+        const buyAmounts  = await new ethers.Contract(buyRouter, routerAbi, provider).getAmountsOut(amountIn, [USDC_ADDRESS, token.address]);
+        const sellAmounts = await new ethers.Contract(sellRouter, routerAbi, provider).getAmountsOut(buyAmounts[1], [token.address, USDC_ADDRESS]);
 
-          if (rawProfit < MIN_NET_PROFIT_USDC) {
-            logTrade(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "below minimum net profit threshold");
-            continue;
-          }
+        // rawProfit = sellAmount - amountIn
+        const rawProfit = Number(ethers.formatUnits(sellAmounts[1] - amountIn, 6));
 
-          // ✅ callStatic pre-check
-          try {
-            await vaultContract.callStatic.executeArbitrage(buyRouter, sellRouter, token.address, tradeAmount);
-          } catch {
-            logTrade(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed");
-            continue;
-          }
-
-          // Execute trade
-          const tx = await vaultContract.executeArbitrage(buyRouter, sellRouter, token.address, tradeAmount);
-          const receipt = await tx.wait();
-          const newVaultBalance = await getVaultBalance();
-          const netProfit = newVaultBalance - vaultBalance;
-
-          if (netProfit <= 0) {
-            console.log(`❌ Vault loss prevented — transaction reverted or no profit`);
-          } else {
-            logTrade(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, netProfit, true);
-            vaultBalance = newVaultBalance;
-            console.log("🏦 Vault After:", vaultBalance.toFixed(6), "USDC");
-          }
-
-        } catch (err) {
-          console.warn(`⚠ Scan #${scanNum} failed: ${err.message}`);
+        if (rawProfit < MIN_NET_PROFIT_USDC) {
+          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "below minimum net profit threshold");
+          continue;
         }
+
+        // callStatic pre-check
+        try {
+          await vaultContract.callStatic.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
+        } catch (err) {
+          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed (expected revert)");
+          continue;
+        }
+
+        // Execute trade
+        const tx = await vaultContract.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
+        const receipt = await tx.wait();
+
+        const newVaultBalance = await getVaultBalance();
+        const netProfit = newVaultBalance - vaultBalance;
+
+        if (netProfit <= 0) {
+          console.log(`❌ Vault loss prevented — transaction reverted or no profit`);
+        } else {
+          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, netProfit, true);
+          vaultBalance = newVaultBalance;
+          console.log("🏦 Vault After:", vaultBalance.toFixed(6), "USDC");
+        }
+
+      } catch (err) {
+        console.warn(`⚠ Scan #${scanNum} failed:`, err.message);
       }
     }
   }
 
-  console.log(`\n🔁 Scan complete. Next scan in ${SCAN_INTERVAL_MS / 1000}s...\n`);
+  console.log(`\n🔁 Scan complete — rescan in ${LOOP_INTERVAL_MS/1000}s...\n`);
 }
 
-// ===== MAIN LOOP =====
-async function main() {
+// ===== LOOP =====
+async function mainLoop() {
   console.log("🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
   console.log("🏛 Contract Address:", VAULT_ADDRESS);
 
   const owner = await vaultContract.owner();
   console.log("👤 Owner:", owner);
 
-  // Continuous scanning every 30 seconds
   while (true) {
-    await scan();
-    await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
+    try {
+      await scanArbitrage();
+    } catch (err) {
+      console.error("Fatal error in arbitrage scan:", err);
+    }
+    await new Promise(resolve => setTimeout(resolve, LOOP_INTERVAL_MS));
   }
 }
 
 // ===== RUN SCRIPT =====
-main().catch(err => console.error("Fatal error in arbitrage script:", err));
+mainLoop().catch(err => {
+  console.error("Fatal error in mainLoop:", err);
+});
