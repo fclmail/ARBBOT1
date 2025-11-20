@@ -1,23 +1,6 @@
-// arbjs_production_ready.js // Production-ready ARBJS with real DEX reserve & router queries, Chainlink gas price conversion, // automatic function-discovery for executeArb signature, and expanded DEX list (QuickSwap V2, SushiSwap V2, QuickSwap V3/Algebra, Dfyn, ApeSwap). // All previous failsafes retained (callStatic, gas estimate, tx receipt checks, vault before/after verification, cooldowns, price deviation guards).
 
-/* IMPORTANT:
 
-This script aims to be drop-in production-ready but you MUST set environment variables: RPC_URL, PRIVATE_KEY
-
-Verify and replace ARB_CONTRACT_ADDRESS, TOKEN_PAIRS, and ensure your contract's execute function is compatible with one of the tried signatures below.
-
-I used authoritative sources for contract addresses (QuickSwap docs, PolygonScan, Chainlink docs). Citations for key addresses are below so you can verify:
-
-QuickSwap V2 factory & router: QuickSwap docs. citeturn2search8
-
-SushiSwap V2 factory: Polygonscan. citeturn2search12
-
-QuickSwap V3 / Algebra core factory & router: QuickSwap docs. citeturn0search2turn0search8
-
-Dfyn router (Polygon): Polygonscan. citeturn0search1
-
-ApeSwap router (example): Etherscan listing. citeturn2search5
-
+SushiSwap ]
 Chainlink MATIC/USD feed (Polygon): Polygonscan / Chainlink docs. citeturn1search0turn1search1
 
 
