@@ -102,7 +102,7 @@ async function scanArbitrage() {
       const sellRouter = DEX_ROUTERS[sellDexKey];
       const tokenDecimals = await getTokenDecimals(token.address);
 
-      const amountIn = ethers.parseUnits("10", 6); // 10 USDC
+      const amountIn = ethers.parseUnits("100", 6); // 10 USDC
 
       try {
         const buyPath = [USDC_ADDRESS, token.address];
