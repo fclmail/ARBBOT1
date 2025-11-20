@@ -2,16 +2,16 @@
 import { ethers } from "ethers";
 
 // ===== CONFIGURATION =====
-const PROVIDER_URL = "https://polygon-rpc.com"; // your RPC
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // load from env for safety
-const VAULT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88a30C99A7a9449Aa84174"; // example on Polygon
+const PROVIDER_URL = "https://polygon-rpc.com"; // RPC endpoint
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // load from env
+const VAULT_ADDRESS = ethers.getAddress("0x19B64f74553eE0ee26BA01BF34321735E4701C43");
+const USDC_ADDRESS = ethers.getAddress("0x2791Bca1f2de4661ED88a30C99A7a9449Aa84174"); // Polygon USDC
 const DEX_ROUTERS = {
-  quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  quickswap: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
+  sushiswap: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
+  apeswap: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607")
 };
-const MIN_NET_PROFIT_USDC = 0.001; // NEW: minimum profit threshold
+const MIN_NET_PROFIT_USDC = 0.001; // new minimum profit
 
 // ===== ABIs =====
 const vaultAbi = [
@@ -63,8 +63,8 @@ function logTradeResult(scanNum, buyDex, sellDex, tokenSymbol, rawProfit, netPro
 }
 
 // ===== MAIN ARBITRAGE LOOP =====
-async function runArbitrageLoop() {
-  console.log("🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
+async function scanArbitrage() {
+  console.log("\n🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
   console.log("🏛 Contract Address:", VAULT_ADDRESS);
 
   const owner = await vaultContract.owner();
@@ -73,11 +73,11 @@ async function runArbitrageLoop() {
   let vaultBalance = await getVaultBalance();
   console.log("🏦 Vault Before:", vaultBalance.toFixed(6), "USDC");
 
-  // Example token list for scanning
+  // Example token list
   const tokenList = [
-    { symbol: "CRV", address: "0x172370d5Cd63279eFa6d502DAB29171933a610AF" },
-    { symbol: "MATIC", address: "0x0000000000000000000000000000000000001010" },
-    { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" }
+    { symbol: "CRV", address: ethers.getAddress("0x172370d5Cd63279eFa6d502DAB29171933a610AF") },
+    { symbol: "MATIC", address: ethers.getAddress("0x0000000000000000000000000000000000001010") },
+    { symbol: "LINK", address: ethers.getAddress("0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39") }
   ];
 
   let scanNum = 0;
@@ -95,32 +95,29 @@ async function runArbitrageLoop() {
       const buyRouter = DEX_ROUTERS[buyDexKey];
       const sellRouter = DEX_ROUTERS[sellDexKey];
       const tokenDecimals = await getTokenDecimals(token.address);
+
       const amountIn = ethers.parseUnits("10", 6); // 10 USDC
 
       try {
         const buyPath = [USDC_ADDRESS, token.address];
         const sellPath = [token.address, USDC_ADDRESS];
 
+        // Get amounts out
         const buyAmounts = await new ethers.Contract(buyRouter, routerAbi, provider).getAmountsOut(amountIn, buyPath);
         const sellAmounts = await new ethers.Contract(sellRouter, routerAbi, provider).getAmountsOut(buyAmounts[1], sellPath);
 
         const rawProfit = Number(ethers.formatUnits(sellAmounts[1] - amountIn, 6));
-
-        // Log all positive opportunities
-        if (rawProfit > 0) {
-          console.log(`🔍 Potential arbitrage detected: ${token.symbol} ${buyDexKey} → ${sellDexKey} | Raw Profit: ${rawProfit.toFixed(6)} USDC`);
-        }
 
         if (rawProfit < MIN_NET_PROFIT_USDC) {
           logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "below minimum net profit threshold");
           continue;
         }
 
-        // callStatic simulation before executing
+        // callStatic simulation
         try {
           await vaultContract.callStatic.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
-        } catch (err) {
-          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed (expected revert)");
+        } catch {
+          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed");
           continue;
         }
 
@@ -145,18 +142,19 @@ async function runArbitrageLoop() {
     }
   }
 
-  console.log("\n🔁 Loop complete — rescan in 30s...");
+  console.log("\n🔁 Loop complete — rescan in 30s...\n");
 }
 
-// ===== CONTINUOUS LOOP =====
+// ===== RUN CONTINUOUSLY =====
 async function main() {
   while (true) {
-    await runArbitrageLoop();
-    await new Promise(r => setTimeout(r, 30000)); // 30 seconds
+    try {
+      await scanArbitrage();
+    } catch (err) {
+      console.error("Fatal error in arbitrage loop:", err);
+    }
+    await new Promise(res => setTimeout(res, 30000)); // 30 seconds
   }
 }
 
-// ===== RUN SCRIPT =====
-main().catch(err => {
-  console.error("Fatal error in arbitrage script:", err);
-});
+main();
