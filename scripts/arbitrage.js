@@ -12,6 +12,7 @@ const DEX_ROUTERS = {
   apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 const MIN_NET_PROFIT_USDC = 0.01; // minimum profit threshold
+const SCAN_INTERVAL_MS = 30_000; // 30 seconds
 
 // ===== ABIs =====
 const vaultAbi = [
@@ -62,92 +63,93 @@ function logTradeResult(scanNum, buyDex, sellDex, tokenSymbol, rawProfit, netPro
   }
 }
 
-// ===== MAIN ARBITRAGE LOOP =====
-async function main() {
-  console.log("🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
-  console.log("🏛 Contract Address:", VAULT_ADDRESS);
+// ===== MAIN ARBITRAGE LOGIC =====
+async function scanAndTrade() {
+  try {
+    console.log("🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
+    console.log("🏛 Contract Address:", VAULT_ADDRESS);
 
-  const owner = await vaultContract.owner();
-  console.log("👤 Owner:", owner);
+    const owner = await vaultContract.owner();
+    console.log("👤 Owner:", owner);
 
-  let vaultBalance = await getVaultBalance();
-  console.log("🏦 Vault Before:", vaultBalance.toFixed(6), "USDC");
+    let vaultBalance = await getVaultBalance();
+    console.log("🏦 Vault Before:", vaultBalance.toFixed(6), "USDC");
 
-  // Example token list for scanning
-  const tokenList = [
-    { symbol: "CRV", address: "0x172370d5Cd63279eFa6d502DAB29171933a610AF" },
-    { symbol: "MATIC", address: "0x0000000000000000000000000000000000001010" },
-    { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" }
-  ];
-
-  let scanNum = 0;
-
-  for (const token of tokenList) {
-    scanNum++;
-
-    // Randomize DEX pair scans
-    const dexPairs = [
-      ["quickswap", "sushiswap"],
-      ["quickswap", "apeswap"],
-      ["sushiswap", "quickswap"]
+    // Token list to scan
+    const tokenList = [
+      { symbol: "CRV", address: "0x172370d5Cd63279eFa6d502DAB29171933a610AF" },
+      { symbol: "MATIC", address: "0x0000000000000000000000000000000000001010" },
+      { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" }
     ];
 
-    for (const [buyDexKey, sellDexKey] of dexPairs) {
-      const buyRouter = DEX_ROUTERS[buyDexKey];
-      const sellRouter = DEX_ROUTERS[sellDexKey];
-      const tokenDecimals = await getTokenDecimals(token.address);
+    let scanNum = 0;
 
-      // Amount to try arbitrage
-      const amountIn = ethers.parseUnits("10", 6); // 10 USDC
+    for (const token of tokenList) {
+      scanNum++;
 
-      try {
-        const buyPath = [USDC_ADDRESS, token.address];
-        const sellPath = [token.address, USDC_ADDRESS];
+      const dexPairs = [
+        ["quickswap", "sushiswap"],
+        ["quickswap", "apeswap"],
+        ["sushiswap", "quickswap"]
+      ];
 
-        // Get amounts out
-        const buyAmounts = await new ethers.Contract(buyRouter, routerAbi, provider).getAmountsOut(amountIn, buyPath);
-        const sellAmounts = await new ethers.Contract(sellRouter, routerAbi, provider).getAmountsOut(buyAmounts[1], sellPath);
+      for (const [buyDexKey, sellDexKey] of dexPairs) {
+        const buyRouter = DEX_ROUTERS[buyDexKey];
+        const sellRouter = DEX_ROUTERS[sellDexKey];
+        const tokenDecimals = await getTokenDecimals(token.address);
 
-        const rawProfit = Number(ethers.formatUnits(sellAmounts[1] - amountIn, 6));
+        const amountIn = ethers.parseUnits("10", 6); // 10 USDC
 
-        if (rawProfit < MIN_NET_PROFIT_USDC) {
-          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "below minimum net profit threshold");
-          continue;
-        }
-
-        // callStatic simulation before executing
         try {
-          await vaultContract.callStatic.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
+          const buyPath = [USDC_ADDRESS, token.address];
+          const sellPath = [token.address, USDC_ADDRESS];
+
+          const buyAmounts = await new ethers.Contract(buyRouter, routerAbi, provider).getAmountsOut(amountIn, buyPath);
+          const sellAmounts = await new ethers.Contract(sellRouter, routerAbi, provider).getAmountsOut(buyAmounts[1], sellPath);
+
+          const rawProfit = Number(ethers.formatUnits(sellAmounts[1] - amountIn, 6));
+
+          if (rawProfit < MIN_NET_PROFIT_USDC) {
+            logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "below minimum net profit threshold");
+            continue;
+          }
+
+          // callStatic pre-check
+          try {
+            await vaultContract.callStatic.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
+          } catch (err) {
+            logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed (expected revert)");
+            continue;
+          }
+
+          // Execute trade
+          const tx = await vaultContract.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
+          await tx.wait();
+
+          const newVaultBalance = await getVaultBalance();
+          const netProfit = newVaultBalance - vaultBalance;
+
+          if (netProfit <= 0) {
+            console.log(`❌ Vault loss prevented — transaction reverted or no profit`);
+          } else {
+            logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, netProfit, true);
+            vaultBalance = newVaultBalance;
+            console.log("🏦 Vault After:", vaultBalance.toFixed(6), "USDC");
+          }
+
         } catch (err) {
-          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, 0, false, "callStatic failed (expected revert)");
-          continue;
+          console.log(`⚠ Scan #${scanNum} failed due to error:`, err.message);
         }
-
-        // Execute trade
-        const tx = await vaultContract.executeArbitrage(buyRouter, sellRouter, token.address, amountIn);
-        const receipt = await tx.wait();
-
-        const newVaultBalance = await getVaultBalance();
-        const netProfit = newVaultBalance - vaultBalance;
-
-        if (netProfit <= 0) {
-          console.log(`❌ Vault loss prevented — transaction reverted or no profit`);
-        } else {
-          logTradeResult(scanNum, buyDexKey, sellDexKey, token.symbol, rawProfit, netProfit, true);
-          vaultBalance = newVaultBalance;
-          console.log("🏦 Vault After:", vaultBalance.toFixed(6), "USDC");
-        }
-
-      } catch (err) {
-        console.log(`⚠ Scan #${scanNum} failed due to error:`, err.message);
       }
     }
-  }
 
-  console.log("\n🔁 Loop complete — rescan in 10s...");
+    console.log("\n🔁 Loop complete — waiting 30s for next scan...\n");
+
+  } catch (err) {
+    console.error("Fatal error during scan:", err);
+  }
 }
 
-// ===== RUN SCRIPT =====
-main().catch(err => {
-  console.error("Fatal error in arbitrage script:", err);
-});
+// ===== START CONTINUOUS LOOP =====
+scanAndTrade(); // run first time immediately
+setInterval(scanAndTrade, SCAN_INTERVAL_MS); // then repeat every 30 seconds
