@@ -22,7 +22,7 @@ const DEX_ROUTERS = {
 };
 
 // Trade settings
-const TRADE_AMOUNT_USDC = 0.05;     // amount in USDC to attempt per trade
+const TRADE_AMOUNT_USDC = 0.02;     // amount in USDC to attempt per trade
 const MIN_PROFIT_USDC = 0.001;    // minimum rawProfit (USDC) to consider executing
 const MIN_PROFIT_PCT = 0.001;     // min percent profit (for scan filter)
 const SLIPPAGE_PCT = 0.2;         // used in scanning price adjustments
