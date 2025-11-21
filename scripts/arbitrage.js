@@ -6,15 +6,17 @@ const PROVIDER_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88a30C99A7a9449Aa84174";
+
 const DEX_ROUTERS = {
   quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-const TRADE_AMOUNTS = [0.001, 0.01, 10, 1000, 100000, 1000000]; // USDC per trade
-const MIN_PROFIT_USDC = 0.0001; // Minimum rawProfit to execute
-const SCAN_INTERVAL_MS = 30000; // 30s between scans
+// Trade settings
+const TRADE_AMOUNTS_USDC = [0.001, 0.01, 10, 1000, 100000, 1000000];
+const MIN_PROFIT_USDC = 0.0001;
+const SCAN_INTERVAL_MS = 30000; // 30 seconds between scans
 
 // ===== ABIs =====
 const vaultAbi = [
@@ -59,7 +61,7 @@ async function getAmountOut(routerAddress, token, amountInUSDC) {
     const tokenDecimals = await new ethers.Contract(token.address, erc20Abi, provider).decimals();
     return Number(ethers.formatUnits(amounts[1], tokenDecimals));
   } catch {
-    return 0; // Fail-safe
+    return 0; // Fail-safe: return 0 on error
   }
 }
 
@@ -74,7 +76,7 @@ function fmt(num, dec = 6) {
 // ===== MAIN LOOP =====
 async function main() {
   console.log("🚀 LIVE MODE ENABLED — FULL FAILSAFE CHECKS");
-  console.log("🏛 Vault Address:", VAULT_ADDRESS);
+  console.log("🏛 Contract Address:", VAULT_ADDRESS);
 
   const owner = await vault.owner();
   console.log("👤 Owner:", owner);
@@ -88,18 +90,16 @@ async function main() {
     for (const [symbol, token] of Object.entries(tokens)) {
       const dexPairs = Object.entries(DEX_ROUTERS);
 
-      for (let i = 0; i < dexPairs.length; i++) {
-        const [buyName, buyRouter] = dexPairs[i];
-
-        for (let j = 0; j < dexPairs.length; j++) {
-          const [sellName, sellRouter] = dexPairs[j];
+      for (const [buyName, buyRouter] of dexPairs) {
+        for (const [sellName, sellRouter] of dexPairs) {
           if (buyName === sellName) continue;
 
-          for (const amount of TRADE_AMOUNTS) {
+          for (const amount of TRADE_AMOUNTS_USDC) {
             try {
               const buyOut = await getAmountOut(buyRouter, token, amount);
               const sellOut = await getAmountOut(sellRouter, token, amount);
-              if (!buyOut || !sellOut) continue;
+
+              if (!buyOut || !sellOut) continue; // Fail-safe
 
               const buyPrice = amount / buyOut;
               const sellPrice = amount / sellOut;
@@ -107,7 +107,7 @@ async function main() {
 
               if (!isFinite(rawProfit) || rawProfit < MIN_PROFIT_USDC) continue;
 
-              console.log(`${symbol} | amount:${amount} USDC | buy:${buyName} $${fmt(buyPrice)} → sell:${sellName} $${fmt(sellPrice)} | rawProfit: ${fmt(rawProfit)} USDC`);
+              console.log(`${symbol} | buy:${buyName} $${fmt(buyPrice)} → sell:${sellName} $${fmt(sellPrice)} | amount: ${amount} | rawProfit: ${fmt(rawProfit)} USDC`);
 
               console.log("💰 PROFITABLE — checking callStatic...");
               try {
@@ -147,9 +147,9 @@ async function main() {
               }
 
             } catch (err) {
-              console.log(`⚠ Error scanning ${symbol} ${buyName}->${sellName} amount:${amount}:`, err.message);
+              console.log(`⚠ Error scanning ${symbol} ${buyName}->${sellName} for amount ${amount}:`, err.message);
             }
-          } // TRADE_AMOUNTS loop
+          }
         }
       }
     }
