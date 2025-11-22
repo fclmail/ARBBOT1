@@ -493,4 +493,8 @@ async function main() {
   console.log("👋 Exiting.");
 }
 
-main().
+main().catch(err => {
+  console.error("Fatal error:", err && err.stack ? err.stack : err);
+  saveCSV();
+  process.exit(1);
+});
