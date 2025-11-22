@@ -11,7 +11,7 @@ const DEX_ROUTERS = {
   sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
-const MIN_NET_PROFIT_USDC = 0.01; // minimum profit threshold
+const MIN_NET_PROFIT_USDC = 0.000001; // minimum profit threshold
 const SCAN_INTERVAL_MS = 30_000; // 30 seconds
 
 // ===== ABIs =====
