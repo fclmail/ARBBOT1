@@ -17,7 +17,7 @@ const DRY_RUN = process.env.DRY_RUN === "true" || false;
 // Safety / tuning
 const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.50"); // conservative USDC buffer for gas & slippage
 const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC ?? "0.001"); // absolute floor (human USDC)
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "1"); // percent (user requested 5%)
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.01"); // percent (user requested 5%)
 const MAX_PROFIT_PCT = Number(process.env.MAX_PROFIT_PCT ?? "400"); // reject absurd profit% > 400%
 const MAX_PRICE_MULTIPLIER = Number(process.env.MAX_PRICE_MULTIPLIER ?? "1000");
 
