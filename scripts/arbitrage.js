@@ -34,7 +34,7 @@ const DEX_ROUTERS = {
 };
 
 // Scan settings
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? "0.0002"); // human USDC
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? "2"); // human USDC
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT ?? "0.2"); // percent slippage to be conservative
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS ?? "5000");
 
