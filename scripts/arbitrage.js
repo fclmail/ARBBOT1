@@ -1,7 +1,7 @@
 // scripts/arbitrage.js
 // Vault-only arbitrage runner (ethers v6)
-// Uses staticCall simulation first, then executes the real tx only if safe.
-// Defaults tuned for a proof-of-increase run.
+// Verbose logging: shows buy/sell DEX, prices, static call pass, execution, vault before/after, net profit.
+// Default proof-run settings: TRADE_AMOUNT_USDC = 0.02
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
@@ -15,14 +15,14 @@ if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY not set in .env");
 
 const DRY_RUN = process.env.DRY_RUN === "true" || false;
 
-// Safety / tuning (defaults tuned for proof run)
-const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.5");     // conservative gas buffer (USDC)
-const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC ?? "1");   // require at least 1 USDC profit before execution
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.25");  // minimal percent profit (0.25%)
+// Safety / tuning (tuned for small proof run)
+const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.0004");   // estimate gas expressed in USDC units
+const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC ?? "0.00001"); // tiny absolute profit to allow very small tests
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.01");   // 0.01% minimal percent profit
 const MAX_PROFIT_PCT = Number(process.env.MAX_PROFIT_PCT ?? "400");
 const MAX_PRICE_MULTIPLIER = Number(process.env.MAX_PRICE_MULTIPLIER ?? "1000");
 
-// Addresses (your contract + common tokens)
+// Addresses (set CONTRACT_ADDRESS in .env to override)
 const CONTRACT_ADDRESS_RAW = process.env.CONTRACT_ADDRESS || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 const USDC_ADDRESS_RAW = process.env.USDC_ADDRESS || "0x2791Bca1f2de4661ED88a30C99A7a9449Aa84174";
 
@@ -33,9 +33,9 @@ const DEX_ROUTERS = {
   ApeSwap: process.env.APESWAP_ROUTER || "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-// Scan settings (default TRADE_AMOUNT_USDC set to 50 for an observable profit run)
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? "50");
-const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT ?? "0.5"); // 0.5% slippage
+// Scan settings (YOU REQUESTED trade amount 0.02)
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? "0.02");
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT ?? "0.5"); // 0.5% slippage default
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS ?? "5000");
 
 // ===== ABIs =====
@@ -72,7 +72,7 @@ const routerAbi = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new Wallet(PRIVATE_KEY, provider);
 
-// canonicalize/validate addresses
+// canonicalize addresses
 let CONTRACT_ADDRESS, USDC_ADDRESS;
 try { CONTRACT_ADDRESS = ethers.getAddress(CONTRACT_ADDRESS_RAW); } catch { CONTRACT_ADDRESS = CONTRACT_ADDRESS_RAW.toLowerCase(); }
 try { USDC_ADDRESS = ethers.getAddress(USDC_ADDRESS_RAW); } catch { USDC_ADDRESS = USDC_ADDRESS_RAW.toLowerCase(); }
@@ -82,6 +82,7 @@ const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 let usdcContract = null;
 
 // ===== TOKENS =====
+// Keep this small list; add more tokens to your `tokens` object as needed.
 const tokens = {
   AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
   CRV:  { address: "0x172370d5Cd63279eFa6d502DAB29171933a610AF", decimals: 18 },
@@ -192,11 +193,12 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     return;
   }
 
-  // ensure owner & signer are same
+  // make sure our signer is the owner
   try {
     const owner = await arbContract.owner();
+    console.log(`👤 Contract owner on-chain: ${owner}`);
     if (owner.toLowerCase() !== wallet.address.toLowerCase()) {
-      console.log(`❌ Wallet (${wallet.address}) is not owner (${owner}). Abort.`);
+      console.log(`❌ Wallet (${wallet.address}) is not owner. Abort.`);
       return;
     }
   } catch (e) {
@@ -204,7 +206,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     return;
   }
 
-  // read contract on-chain minProfit (USDC)
+  // read contract on-chain minProfit
   let contractMinProfitRaw = 0;
   try {
     const mp = await arbContract.minProfit();
@@ -214,30 +216,30 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     contractMinProfitRaw = 0;
   }
 
-  // read vault before trade (for logging; final check occurs on-chain)
+  // read vault before trade
   const beforeBalRaw = await getVaultBalance();
   console.log(`🏦 Vault Before Trade: ${fmt(beforeBalRaw)} USDC`);
 
   const amountInWei = ethers.parseUnits(amountUSDC.toString(), 6);
 
-  // 1) static simulation (callStatic) - MUST PASS
+  // 1) static simulation (callStatic)
+  console.log("🔬 Running callStatic simulation (on-chain dry-run)...");
   try {
-    // If executeArbitrage returns a value on-chain, staticCall may return it. If not, it simply must not revert.
-    // Using previous pattern: arbContract.executeArbitrage.staticCall(...)
+    // prefer the staticCall form you use; this will run contract logic and must not revert
     await arbContract.executeArbitrage.staticCall(buyRouter, sellRouter, tokenAddr, amountInWei);
-    console.log("✅ static simulation passed");
+    console.log("✅ staticCall passed: contract simulation did NOT revert");
   } catch (simErr) {
-    console.log("❌ static simulation failed — abort:", simErr?.message || simErr);
+    console.log("❌ staticCall reverted — aborting execution. Reason:", (simErr && (simErr.reason || simErr.message)) || simErr);
     return;
   }
 
-  // 2) DEX quote simulation (off-chain sanity check)
+  // 2) off-chain DEX quotes for sanity & profit estimate
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr };
   const buyOutTokens = await getAmountOut(buyRouter, tokenObj, amountUSDC);
   const sellOutTokens = await getAmountOut(sellRouter, tokenObj, amountUSDC);
 
   if (buyOutTokens === 0 || sellOutTokens === 0) {
-    console.log("❌ Missing or zero DEX quotes — abort.");
+    console.log("❌ DEX quote missing/zero — abort.");
     return;
   }
 
@@ -249,14 +251,18 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const adjustedProfitUSDC = rawProfitUSDC * (1 - SLIPPAGE_PCT / 100);
   const adjustedProfitPct = profitPct * (1 - SLIPPAGE_PCT / 100);
 
-  console.log(`Simulated prices: buy ${fmt(buyPrice,6)} sell ${fmt(sellPrice,6)} => est profit ${fmt(adjustedProfitUSDC,6)} USDC (${fmt(adjustedProfitPct,2)}%)`);
+  console.log("🔎 DEX Quote Summary:");
+  console.log(`   BUY  on ${getKeyByValue(DEX_ROUTERS, buyRouter)} @ ${fmt(buyPrice,6)} USDC per token -> tokenAmount ${fmt(tokenAmount,6)}`);
+  console.log(`   SELL on ${getKeyByValue(DEX_ROUTERS, sellRouter)} @ ${fmt(sellPrice,6)} USDC per token`);
+  console.log(`   Est raw profit: ${fmt(rawProfitUSDC,6)} USDC   (pct: ${fmt(profitPct,4)}%)`);
+  console.log(`   Adjusted profit (slippage ${SLIPPAGE_PCT}%): ${fmt(adjustedProfitUSDC,6)} USDC   (pct: ${fmt(adjustedProfitPct,4)}%)`);
 
   if (!isReasonablePrice(buyPrice, sellPrice)) {
-    console.log("❌ Unreasonable price delta — abort.");
+    console.log("❌ Unreasonable price delta between DEXes — abort.");
     return;
   }
   if (!isReasonableProfit(adjustedProfitUSDC, adjustedProfitPct)) {
-    console.log(`❌ Profit ${fmt(adjustedProfitUSDC)} USDC (${fmt(adjustedProfitPct,2)}%) below threshold — abort.`);
+    console.log(`❌ Off-chain profit check failed: ${fmt(adjustedProfitUSDC,6)} USDC (${fmt(adjustedProfitPct,4)}%) — abort.`);
     return;
   }
 
@@ -266,68 +272,75 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     if (arbContract.estimateGas && arbContract.estimateGas.executeArbitrage) {
       estimatedGas = await arbContract.estimateGas.executeArbitrage(buyRouter, sellRouter, tokenAddr, amountInWei);
     } else {
-      const data = arbContract.interface.encodeFunctionData("executeArbitrage", [buyRouter, sellRouter, tokenAddr, amountInWei]);
-      estimatedGas = await provider.estimateGas({
-        to: CONTRACT_ADDRESS,
-        data
-      });
+      const data = arbContract.interface.encodeFunctionData("executeArbitrage",[buyRouter, sellRouter, tokenAddr, amountInWei]);
+      estimatedGas = await provider.estimateGas({ to: CONTRACT_ADDRESS, data });
     }
   } catch (gErr) {
     console.log("❌ estimateGas failed — abort:", gErr?.message || gErr);
     return;
   }
-
   const gasLimit = (typeof estimatedGas === "bigint" ? (estimatedGas + 10000n) : (BigInt(estimatedGas) + 10000n));
   console.log(`⛽ Gas estimate (with buffer): ${gasLimit.toString()}`);
 
-  // native balance check for wallet (owner must have MATIC)
+  // wallet native balance check
   try {
-    const balNative = await provider.getBalance(wallet.address);
-    if (balNative <= 0n) {
-      console.log("❌ Owner wallet native balance is 0 — fund MATIC to send tx. Abort.");
+    const nativeBal = await provider.getBalance(wallet.address);
+    console.log(`⛽ Owner native balance: ${ethers.formatEther(nativeBal)} MATIC`);
+    if (nativeBal <= 0n) {
+      console.log("❌ Owner has insufficient native balance for gas — abort.");
       return;
     }
   } catch (e) {
-    console.warn("⚠ Could not fetch native balance:", e?.message || e);
+    console.warn("⚠ Could not fetch wallet native balance:", e?.message || e);
   }
 
-  // required profit check: must exceed gas buffer + contract minimum + MIN_PROFIT_USDC
+  // required profit buffer check
   const requiredProfitBuffer = GAS_COST_USDC + contractMinProfitRaw + MIN_PROFIT_USDC;
+  console.log(`🔢 Required profit buffer (GAS + contractMin + MIN_PROFIT_USDC): ${fmt(requiredProfitBuffer)} USDC`);
   if (adjustedProfitUSDC < requiredProfitBuffer) {
     console.log(`❌ Adjusted profit ${fmt(adjustedProfitUSDC)} USDC < required buffer ${fmt(requiredProfitBuffer)} USDC — abort.`);
     return;
   }
 
   if (DRY_RUN) {
-    console.log("🔬 DRY_RUN enabled — skipping real execution (would have executed).");
+    console.log("🔬 DRY_RUN enabled — skipping real tx (would have executed).");
     logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profit: fmt(adjustedProfitUSDC,6) });
     return;
   }
 
-  // 4) SEND TX
+  // 4) SEND executeArbitrage
   try {
-    console.log("📤 Sending executeArbitrage tx...");
+    console.log("🚀 staticCall passed and off-chain checks OK — sending on-chain executeArbitrage...");
     const tx = await arbContract.executeArbitrage(buyRouter, sellRouter, tokenAddr, amountInWei, { gasLimit });
     console.log("📤 txHash:", tx.hash);
     const receipt = await tx.wait();
     if (!receipt || receipt.status === 0) {
-      console.log("❌ Transaction reverted on-chain.");
+      console.log("❌ Transaction reverted or failed on-chain.");
       return;
     }
     console.log("✅ Transaction confirmed:", receipt.transactionHash);
 
-    // 5) read vault after trade
+    // 5) read vault after trade and compute net profit
     const afterBalRaw = await getVaultBalance();
     console.log(`🏦 Vault After Trade: ${fmt(afterBalRaw)} USDC`);
     const netProfit = afterBalRaw - beforeBalRaw;
     const pctGain = (beforeBalRaw > 0) ? (netProfit / beforeBalRaw * 100) : (netProfit * 1000);
-    console.log(`💰 Net Profit: ${fmt(netProfit)} USDC (+${fmt(pctGain,2)}%)`);
+    console.log(`💰 Net Profit (on-chain): ${fmt(netProfit)} USDC   (+${fmt(pctGain,4)}%)`);
 
-    logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profit: fmt(netProfit,6) });
+    // Emit CSV log
+    logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter: getKeyByValue(DEX_ROUTERS, buyRouter), sellRouter: getKeyByValue(DEX_ROUTERS, sellRouter), amount: amountUSDC, profit: fmt(netProfit,6) });
 
   } catch (err) {
-    console.error("⚠ Error executing trade:", err?.message || err);
+    console.error("⚠ Error executing trade:", (err && (err.reason || err.message)) || err);
   }
+}
+
+// helper to find key by value in DEX_ROUTERS
+function getKeyByValue(obj, val) {
+  for (const k of Object.keys(obj)) {
+    if (obj[k].toLowerCase() === (val || "").toLowerCase()) return k;
+  }
+  return String(val).slice(0,12);
 }
 
 // ===== SCAN LOOP =====
@@ -336,7 +349,7 @@ async function scan() {
   if (isScanning) return;
   isScanning = true;
 
-  console.log("🔍 Scanning for arbitrage opportunities...\n");
+  console.log("🔍 Scanning for arbitrage opportunities (verbose) ...\n");
   try {
     for (const [symbol, token] of Object.entries(tokens)) {
       if (!token || !token.address) continue;
@@ -354,9 +367,12 @@ async function scan() {
             const profitPct = (buyPrice > 0) ? (((sellPrice - buyPrice) / buyPrice) * 100) : 0;
             const adjustedProfit = rawProfit * (1 - SLIPPAGE_PCT / 100);
 
-            console.log(`${symbol} | ${buyName} $${fmt(buyPrice,6)} → ${sellName} $${fmt(sellPrice,6)} | Est. Profit: ${fmt(adjustedProfit,6)} USDC (${fmt(profitPct,2)}%)`);
+            // verbose scan output
+            console.log(`→ ${symbol} | BUY:${buyName} @ ${fmt(buyPrice,6)} → SELL:${sellName} @ ${fmt(sellPrice,6)} | EstProfit: ${fmt(adjustedProfit,6)} USDC (${fmt(profitPct,4)}%)`);
 
+            // decision: if off-chain adjustedProfit >= MIN_PROFIT_USDC and profitPct >= MIN_PROFIT_PCT => try execute trade
             if (adjustedProfit >= MIN_PROFIT_USDC && profitPct >= MIN_PROFIT_PCT) {
+              console.log(`   Candidate qualifies for executeAttempt: amount ${TRADE_AMOUNT_USDC} USDC, estProfit ${fmt(adjustedProfit,6)} USDC`);
               await executeTradeLive(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
             }
           } catch (err) {
@@ -376,8 +392,9 @@ process.on("SIGINT", () => { console.log("\n🛑 SIGINT received — exiting gra
 process.on("SIGTERM", () => { console.log("\n🛑 SIGTERM received — exiting gracefully"); stopping = true; });
 
 async function main() {
-  console.log("🚀 Starting vault-only arb scanner (staticCall first)");
+  console.log("🚀 Starting vault-only verbose arb scanner (staticCall first)");
   console.log("🏛 Vault Contract:", CONTRACT_ADDRESS);
+  console.log(`🔧 Settings: TRADE_AMOUNT_USDC=${TRADE_AMOUNT_USDC}, MIN_PROFIT_USDC=${MIN_PROFIT_USDC}, MIN_PROFIT_PCT=${MIN_PROFIT_PCT}, SLIPPAGE_PCT=${SLIPPAGE_PCT}`);
 
   try {
     const owner = await arbContract.owner();
