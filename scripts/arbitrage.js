@@ -15,18 +15,18 @@ if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY not set in .env");
 const DRY_RUN = process.env.DRY_RUN === "true" || false;
 
 // Safety / tuning
-const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.0004"); // conservative USDC buffer for gas & slippage
-const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC ?? "0.0000001"); // absolute floor (human USDC)
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.05"); // percent (user requested 5%)
-const MAX_PROFIT_PCT = Number(process.env.MAX_PROFIT_PCT ?? "400"); // reject absurd profit% > 400%
+const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.0004");
+const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC ?? "0.0000001");
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.05");
+const MAX_PROFIT_PCT = Number(process.env.MAX_PROFIT_PCT ?? "400");
 const MAX_PRICE_MULTIPLIER = Number(process.env.MAX_PRICE_MULTIPLIER ?? "1000");
 
-// Addresses (provided)
+// Addresses
 const CONTRACT_ADDRESS_RAW = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 const USDC_ADDRESS_RAW = "0x2791Bca1f2de4661ED88a30C99A7a9449Aa84174";
 const AAVE_POOL_RAW = "0x794a61358D6845594F94dc1DB02A252b5b4814aD";
 
-// Routers to scan
+// DEX Routers
 const DEX_ROUTERS = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -34,8 +34,8 @@ const DEX_ROUTERS = {
 };
 
 // Scan settings
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? ".02"); // human USDC
-const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT ?? "0.001"); // percent slippage to be conservative
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? ".02");
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT ?? "0.001");
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS ?? "5000");
 
 // ===== ABIs =====
@@ -106,13 +106,11 @@ async function safeGetDecimals(tokenAddr) {
   }
 }
 
-// fetch DEX quote safely with fallback
 async function getAmountOut(routerAddr, tokenObj, amountInUSDC) {
   try {
     if (!routerAddr || !tokenObj || !tokenObj.address) return 0;
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
-    const amountInWei = ethers.parseUnits(amountInUSDC.toString(), 6); // USDC 6 decimals
-
+    const amountInWei = ethers.parseUnits(amountInUSDC.toString(), 6);
     const primaryPath = [USDC_ADDRESS, tokenObj.address];
     let amounts = null;
     try { amounts = await router.getAmountsOut(amountInWei, primaryPath); } catch { amounts = null; }
@@ -141,7 +139,6 @@ async function getAmountOut(routerAddr, tokenObj, amountInUSDC) {
   }
 }
 
-// read vault USDC balance (human)
 async function getVaultBalance() {
   try {
     if (!usdcContract) {
@@ -159,7 +156,6 @@ async function getVaultBalance() {
   }
 }
 
-// CSV logging
 const csvRows = [];
 function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profit }) {
   csvRows.push([timestamp, symbol, buyRouter, sellRouter, amount, profit].join(","));
@@ -173,7 +169,6 @@ function saveCSV() {
   console.log(`💾 Trades exported to CSV: ${filename}`);
 }
 
-// ===== SAFETY HELPERS =====
 function isReasonableProfit(profitUSDC, profitPct) {
   if (!isFinite(profitUSDC) || !isFinite(profitPct)) return false;
   if (profitUSDC <= 0) return false;
@@ -191,22 +186,119 @@ function isReasonablePrice(buyPrice, sellPrice) {
 }
 
 // ===== EXECUTOR (strict checks) =====
-// [same as original executeTradeLive function, no changes]
-
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
-  // ... full original code unchanged ...
+  const timestamp = new Date().toISOString();
+  if (!arbContract || typeof arbContract.executeArbitrage !== "function") {
+    console.log("❌ executeArbitrage missing — abort.");
+    return;
+  }
+
+  let contractMinProfitRaw = 0;
+  try {
+    const mp = await arbContract.minProfit();
+    contractMinProfitRaw = Number(ethers.formatUnits(mp, 6));
+  } catch {
+    console.log("❌ Couldn't read contract.minProfit — abort.");
+    return;
+  }
+
+  const beforeBalRaw = await getVaultBalance();
+  console.log(`🏦 Vault Before Trade: ${fmt(beforeBalRaw)} USDC`);
+
+  const amountInWei = ethers.parseUnits(amountUSDC.toString(), 6);
+
+  // 1) static simulation
+  try {
+    await arbContract.executeArbitrage.staticCall(buyRouter, sellRouter, tokenAddr, amountInWei);
+    console.log("✅ static simulation passed");
+  } catch (simErr) {
+    console.log("❌ static simulation failed — abort:", simErr?.message || simErr);
+    return;
+  }
+
+  // 2) DEX quote simulation
+  const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr };
+  const buyOutTokens = await getAmountOut(buyRouter, tokenObj, amountUSDC);
+  const sellOutTokens = await getAmountOut(sellRouter, tokenObj, amountUSDC);
+
+  if (buyOutTokens === 0 || sellOutTokens === 0) {
+    console.log("❌ Missing or zero DEX quotes — abort.");
+    return;
+  }
+
+  const buyPrice = TRADE_AMOUNT_USDC / buyOutTokens;
+  const sellPrice = TRADE_AMOUNT_USDC / sellOutTokens;
+  const tokenAmount = buyOutTokens;
+  const rawProfitUSDC = (sellPrice - buyPrice) * tokenAmount;
+  const profitPct = (buyPrice > 0) ? (((sellPrice - buyPrice) / buyPrice) * 100) : 0;
+  const adjustedProfitUSDC = rawProfitUSDC * (1 - SLIPPAGE_PCT / 100);
+  const adjustedProfitPct = profitPct * (1 - SLIPPAGE_PCT / 100);
+
+  console.log(`Simulated prices: buy ${fmt(buyPrice,6)} sell ${fmt(sellPrice,6)} => est profit ${fmt(adjustedProfitUSDC,6)} USDC (${fmt(adjustedProfitPct,2)}%)`);
+
+  if (!isReasonablePrice(buyPrice, sellPrice)) {
+    console.log("❌ Unreasonable price delta — abort.");
+    return;
+  }
+  if (!isReasonableProfit(adjustedProfitUSDC, adjustedProfitPct)) {
+    console.log(`❌ Profit ${fmt(adjustedProfitUSDC)} USDC (${fmt(adjustedProfitPct,2)}%) below threshold — abort.`);
+    return;
+  }
+
+  // 3) estimateGas
+  let estimatedGas;
+  try {
+    estimatedGas = await arbContract.estimateGas.executeArbitrage(buyRouter, sellRouter, tokenAddr, amountInWei);
+  } catch (gErr) {
+    console.log("❌ estimateGas failed — abort:", gErr?.message || gErr);
+    return;
+  }
+
+  const gasLimit = (typeof estimatedGas === "bigint" ? (estimatedGas + 10000n) : (BigInt(estimatedGas) + 10000n));
+  console.log(`⛽ Gas estimate (with buffer): ${gasLimit.toString()}`);
+
+  const requiredProfitBuffer = GAS_COST_USDC + contractMinProfitRaw + MIN_PROFIT_USDC;
+  if (adjustedProfitUSDC < requiredProfitBuffer) {
+    console.log(`❌ Adjusted profit ${fmt(adjustedProfitUSDC)} USDC < required buffer ${fmt(requiredProfitBuffer)} USDC — abort.`);
+    return;
+  }
+
+  if (DRY_RUN) {
+    console.log("🔬 DRY_RUN enabled — trade considered PASS under dry-run.");
+    logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profit: fmt(adjustedProfitUSDC,6) });
+    return;
+  }
+
+  try {
+    const tx = await arbContract.executeArbitrage(buyRouter, sellRouter, tokenAddr, amountInWei, { gasLimit });
+    console.log("📤 txHash:", tx.hash);
+    const receipt = await tx.wait();
+    if (!receipt || receipt.status === 0) {
+      console.log("❌ Transaction reverted on-chain.");
+      return;
+    }
+    console.log("✅ Transaction confirmed:", receipt.transactionHash);
+
+    const afterBalRaw = await getVaultBalance();
+    console.log(`🏦 Vault After Trade: ${fmt(afterBalRaw)} USDC`);
+    const netProfit = afterBalRaw - beforeBalRaw;
+    const pctGain = (beforeBalRaw > 0) ? (netProfit / beforeBalRaw * 100) : (netProfit * 1000);
+    console.log(`💰 Net Profit: ${fmt(netProfit)} USDC (+${fmt(pctGain,2)}%)`);
+
+    logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profit: fmt(netProfit,6) });
+
+  } catch (err) {
+    console.error("⚠ Error executing trade:", err?.message || err);
+  }
 }
 
 // ===== SCAN LOOP =====
 let isScanning = false;
-
 async function scan() {
   if (isScanning) return;
   isScanning = true;
 
   console.log("🔍 Scanning for arbitrage opportunities...\n");
-  const opportunities = [];
-
   try {
     for (const [symbol, token] of Object.entries(tokens)) {
       if (!token || !token.address) continue;
@@ -214,8 +306,6 @@ async function scan() {
         for (const [sellName, sellRouter] of Object.entries(DEX_ROUTERS)) {
           if (buyName === sellName) continue;
           try {
-            if (!buyRouter || !sellRouter) continue;
-
             const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
             const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
             if (buyOut === 0 || sellOut === 0) continue;
@@ -226,19 +316,18 @@ async function scan() {
             const profitPct = (buyPrice > 0) ? (((sellPrice - buyPrice) / buyPrice) * 100) : 0;
             const adjustedProfit = rawProfit * (1 - SLIPPAGE_PCT / 100);
 
-            if (adjustedProfit >= MIN_PROFIT_USDC && profitPct >= MIN_PROFIT_PCT && adjustedProfit < 1e6) {
-              opportunities.push({ symbol, buyName, sellName, buyRouter, sellRouter, tokenAddress: token.address, estProfit: adjustedProfit, estPct: profitPct });
+            console.log(`${symbol} | ${buyName} $${fmt(buyPrice,6)} → ${sellName} $${fmt(sellPrice,6)} | Est. Profit: ${fmt(adjustedProfit,6)} USDC (${fmt(profitPct,2)}%)`);
+
+            if (adjustedProfit >= MIN_PROFIT_USDC && profitPct >= MIN_PROFIT_PCT) {
               await executeTradeLive(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
             }
+
           } catch (err) {
             console.warn(`⚠️ Scan error ${symbol} ${buyName}->${sellName}:`, (err && err.message) ? err.message : err);
           }
         }
       }
     }
-
-    console.log(`🔍 Scan complete. Opportunities found: ${opportunities.length}\n`);
-    saveCSV();
   } finally {
     isScanning = false;
   }
@@ -250,7 +339,7 @@ process.on("SIGINT", () => { console.log("\n🛑 SIGINT received — exiting gra
 process.on("SIGTERM", () => { console.log("\n🛑 SIGTERM received — exiting gracefully"); stopping = true; });
 
 async function main() {
-  console.log("🚀 Starting arb scanner (safe mode)");
+  console.log("🚀 Starting arb scanner (full logs restored)");
   console.log("🏛 Vault Contract:", CONTRACT_ADDRESS);
 
   try {
@@ -260,7 +349,6 @@ async function main() {
     console.warn("⚠ Could not fetch owner:", e?.message || e);
   }
 
-  // warm up usdcContract
   try {
     const usdcAddr = await arbContract.USDC();
     usdcContract = new ethers.Contract(usdcAddr || USDC_ADDRESS, erc20Abi, provider);
