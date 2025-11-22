@@ -15,7 +15,7 @@ if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY not set in .env");
 const DRY_RUN = process.env.DRY_RUN === "true" || false;
 
 // Safety / tuning
-const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.00002"); // conservative USDC buffer for gas & slippage
+const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.02"); // conservative USDC buffer for gas & slippage
 const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC ?? "0.000001"); // absolute floor (human USDC)
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.001"); // percent (user requested 5%)
 const MAX_PROFIT_PCT = Number(process.env.MAX_PROFIT_PCT ?? "400"); // reject absurd profit% > 400%
