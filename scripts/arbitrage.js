@@ -15,9 +15,9 @@ if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY not set in .env");
 const DRY_RUN = process.env.DRY_RUN === "true" || false;
 
 // Safety / tuning
-const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.03"); // conservative USDC buffer for gas & slippage
+const GAS_COST_USDC = Number(process.env.GAS_COST_USDC ?? "0.0004"); // conservative USDC buffer for gas & slippage
 const MIN_PROFIT_USDC = Number(process.env.MIN_PROFIT_USDC ?? "0.0000001"); // absolute floor (human USDC)
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.0001"); // percent (user requested 5%)
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT ?? "0.05"); // percent (user requested 5%)
 const MAX_PROFIT_PCT = Number(process.env.MAX_PROFIT_PCT ?? "400"); // reject absurd profit% > 400%
 const MAX_PRICE_MULTIPLIER = Number(process.env.MAX_PRICE_MULTIPLIER ?? "1000");
 
@@ -34,8 +34,8 @@ const DEX_ROUTERS = {
 };
 
 // Scan settings
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? ".025"); // human USDC
-const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT ?? "21"); // percent slippage to be conservative
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC ?? ".02"); // human USDC
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT ?? "0.001"); // percent slippage to be conservative
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS ?? "5000");
 
 // ===== ABIs =====
