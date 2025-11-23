@@ -1,3 +1,4 @@
+// improved-arbitrage-live-test.js
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
 import dotenv from "dotenv";
@@ -67,8 +68,8 @@ const arbAbi = [
   { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
   { "inputs": [], "name": "minProfit", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" }
 ];
-
 const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+
 let usdcContract;
 const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
 
@@ -101,7 +102,6 @@ async function getAmountOut(routerAddr, token, amountUSDC) {
   }
 }
 
-// ---------- EXECUTE TRADE LIVE (NO CHANGE) ----------
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const timestamp = new Date().toISOString();
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr, decimals: 18 };
@@ -127,7 +127,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   console.log(`📈 Quoted: buy=${fmt(buyPrice)} sell=${fmt(sellPrice)} expected=${fmt(expectedProfitUSDC)}`);
 
   if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) {
-    console.log("❌ PREVENTED — profit too low");
+    console.log("❌ PREVENTED — profit too low, no gas spent");
     return;
   }
 
@@ -150,38 +150,21 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 
   const netProfit = after - before;
   console.log(`💰 REAL Net Profit: ${fmt(netProfit)} USDC`);
-  logTradeCSV({ timestamp, symbol: "LINK", buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit });
+  logTradeCSV({ timestamp, symbol: tokenObj.address, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit });
   saveCSV();
 }
 
-// ---------- FULL SCAN FUNCTION (NEW) ----------
-async function fullScan() {
+// ---------- FULL SCAN ----------
+async function scanOnce() {
   console.log("🌲 Starting full scan of all tokens and routers...");
   for (const token of Object.values(tokens)) {
-    for (const buyRouter of Object.values(routers)) {
-      for (const sellRouter of Object.values(routers)) {
-        if (buyRouter === sellRouter) continue;
-
-        const amountUSDC = 0.03;
-        const tokenAddr = token.address;
-
+    for (const buyRouterName of Object.keys(routers)) {
+      for (const sellRouterName of Object.keys(routers)) {
+        if (buyRouterName === sellRouterName) continue;
         try {
-          // simulate profitable trade using callStatic to avoid gas
-          const expectedProfit = await arbContract.callStatic.executeArbitrage(
-            buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(), 6)
-          );
-          const profitUSDC = Number(ethers.formatUnits(expectedProfit, 6));
-          console.log(`${new Date().toISOString()} | Token: ${tokenAddr} | Buy: ${buyRouter} | Sell: ${sellRouter} | Expected Profit: ${profitUSDC} USDC`);
-
-          if (profitUSDC < MIN_EXPECTED_PROFIT || amountUSDC < MIN_TRADE_USDC) {
-            console.log(`⛔ Skipped trade — not profitable or below min amount`);
-            continue;
-          }
-
-          // execute profitable trade
-          await executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC);
+          await executeTradeLive(routers[buyRouterName], routers[sellRouterName], token.address, MIN_TRADE_USDC);
         } catch (err) {
-          console.log(`⚠️ Simulation/Trade failed for ${tokenAddr} ${buyRouter}→${sellRouter}: ${err.message}`);
+          console.error(`⚠️ Simulation/Trade failed for ${token.address} ${buyRouterName}→${sellRouterName}:`, err.message);
         }
       }
     }
@@ -189,22 +172,14 @@ async function fullScan() {
   console.log("✅ Full scan completed — restarting in 30s...");
 }
 
-// ---------- MAIN LOOP ----------
+// ---------- MAIN ----------
 (async function main() {
   await init();
-  console.log("🚀 LIVE TEST — executing 1 trade with 0.03 USDC");
-  const tokenAddr = tokens.LINK.address;
-  const buyRouter = routers.QuickSwap;
-  const sellRouter = routers.SushiSwap;
-  await executeTradeLive(buyRouter, sellRouter, tokenAddr, 0.03);
-  console.log("✅ TEST TRADE COMPLETE — check vault and CSV for results");
-
-  // continuous scan every 30s
   while (true) {
     try {
-      await fullScan();
-    } catch (e) {
-      console.error("❌ Full scan error:", e.message);
+      await scanOnce();
+    } catch (err) {
+      console.error("Unexpected error in scan:", err.message);
     }
     await new Promise(r => setTimeout(r, 30000));
   }
