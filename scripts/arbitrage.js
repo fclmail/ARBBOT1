@@ -164,15 +164,15 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const buyRouter = routers.QuickSwap;
   const sellRouter = routers.SushiSwap;
 
-  await executeTradeLive(buyRouter, sellRouter, tokenAddr, 0.10);
+  await executeTradeLive(buyRouter, sellRouter, tokenAddr, 0.03);
 
   console.log("✅ TEST TRADE COMPLETE — check vault and CSV for results");
 
   // OPTIONAL: continue normal 30-second loop
-  /*
+  
   while (true) {
     try { await scanOnce(); } catch (e) { console.error(e.message); }
     await new Promise(r => setTimeout(r, 30000));
   }
-  */
+  
 })();
