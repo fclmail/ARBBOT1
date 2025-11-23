@@ -242,7 +242,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 }
 
 // ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.01);
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 111);
 
 async function scanOnce() {
   console.log("\n🔍 Scanning for arbitrage opportunities...");
