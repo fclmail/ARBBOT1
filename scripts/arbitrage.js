@@ -132,7 +132,7 @@ async function scanOnce() {
   for (const token of Object.values(tokens)) {
     for (const buyRouterName of Object.keys(routers)) {
       for (const sellRouterName of Object.keys(routers)) {
-        if (buyRouterName === sellRouterNa inme) continue;
+        if (buyRouterName === sellRouterName) continue;
         await executeTradeSafe(routers[buyRouterName], routers[sellRouterName], token.address, MIN_TRADE_USDC);
       }
     }
