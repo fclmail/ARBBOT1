@@ -1,5 +1,3 @@
-Full arbjs failsafes x 1 scan only
-
 // improved-arbitrage-live-test.js
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
