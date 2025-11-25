@@ -34,7 +34,7 @@ const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 1.5); // percent
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.005); // tiny test trades allowed
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.5); // 0.5% slippage tolerance
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.01); // USDC expected profit (incl gas)
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 2); // live test 0.02 USDC
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 1000); // live test 0.02 USDC
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 30000);
 
 // Routers and tokens
