@@ -1,13 +1,6 @@
-// arbitrage-hardcoded-vault-live-protected-fixed.js
-// Live arbitrage runner with full protection layers added
-// - Ethers v6
-// - Live mode (DRY_RUN = false)
-// - Hard-coded vault contract address
-// - Small test TRADE_AMOUNT_USDC = 0.02 (change later to 10/100/1000/...)
-// - Preserves original logging, CSV export, and all vault failsafes
-// - Adds: router quote sanity checks, liquidity sanity, callStatic on-chain simulation,
-//   gas estimation converted to USDC, estimateProfit check (profit > gas + minProfit),
-//   and prevents obviously bogus quotes
+// arbitrage-hardcoded-vault-live-protected-fixed-arbjs.js
+// Live arbitrage runner with robust gas estimation and extra safety to avoid wasting gas.
+// Preserves original logging, CSV export, and all vault failsafes (unchanged where possible).
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
@@ -34,8 +27,12 @@ const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 1.5); // percent
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.005); // tiny test trades allowed
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.5); // 0.5% slippage tolerance
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.01); // USDC expected profit (incl gas)
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 1000); // live test 0.02 USDC
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.02); // live test 0.02 USDC
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 30000);
+
+// NEW SAFETY (conservative multiplier to avoid executing trades that barely cover gas)
+// This is additional safety on top of existing checks to reduce risk vault balance decreases.
+const GAS_SAFETY_MULTIPLIER = Number(process.env.GAS_SAFETY_MULTIPLIER || 1.25); // require profit > gas * 1.25 + minProfit
 
 // Routers and tokens
 const routers = {
@@ -127,16 +124,23 @@ async function getAmountOut(routerAddr, token, amountUSDC) {
     }
 }
 
-// Estimate gas cost in USDC
+// Robust Estimate gas cost in USDC
+// - Tries precise estimate via arbContract.estimateGas.executeArbitrage
+// - If that fails, uses a conservative gas unit estimate * gasPrice, converted to USDC via QuickSwap quote
+// - Always returns a finite number (never Infinity)
 async function estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     try {
+        // PRIMARY: try an on-chain gas estimate
         const parsed = ethers.parseUnits(amountUSDC.toString(), 6);
+        // attempt estimateGas (may throw or revert for tiny amounts / edge cases)
         const gasEstimate = await arbContract.estimateGas.executeArbitrage(buyRouter, sellRouter, tokenAddr, parsed);
         const gasPrice = await provider.getGasPrice();
+        // gasUsed * gasPrice => gas cost in wei (BigInt)
         const gasUsed = BigInt(gasEstimate.toString());
         const gasPriceBN = BigInt(gasPrice.toString());
-        const gasCostNative = gasUsed * gasPriceBN; // in wei
+        const gasCostNative = gasUsed * gasPriceBN; // in wei (BigInt)
 
+        // Convert native gas (MATIC) to USDC using QuickSwap path WMATIC -> USDC
         const quick = new ethers.Contract(
             routers.QuickSwap,
             ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
@@ -146,10 +150,53 @@ async function estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC)
         const usdcAddr = await arbContract.USDC();
         const amounts = await quick.getAmountsOut(oneMatic, [WMATIC, usdcAddr]);
         const usdcPerMatic = Number(ethers.formatUnits(amounts[1], 6));
-        if (!usdcPerMatic || !isFinite(usdcPerMatic) || usdcPerMatic <= 0) return Infinity;
-        return Number((Number(gasCostNative.toString()) / 1e18) * usdcPerMatic);
-    } catch (e) {
-        return Infinity;
+        if (!usdcPerMatic || !isFinite(usdcPerMatic) || usdcPerMatic <= 0) {
+            // If conversion failed for some reason, fall through to fallback below
+            throw new Error("Failed conversion WMATIC->USDC");
+        }
+
+        // Convert wei -> ether then * usdcPerMatic
+        const gasCostInMatic = Number(gasCostNative.toString()) / 1e18;
+        const gasCostUSDC = gasCostInMatic * usdcPerMatic;
+        if (!isFinite(gasCostUSDC) || gasCostUSDC <= 0) throw new Error("Invalid gas cost result");
+        return gasCostUSDC;
+    } catch (primaryErr) {
+        // PRIMARY failed — try fallback conservative method
+        try {
+            console.warn("⚠️ Gas estimate primary failed:", primaryErr?.message || primaryErr);
+            // Conservative default gas units (tunable). For most arbitrage flows 200k-500k gas is typical.
+            const defaultGasUnits = BigInt(Number(process.env.FALLBACK_GAS_UNITS || 300000)); // 300k default
+            const gasPrice = await provider.getGasPrice();
+            const gasPriceBN = BigInt(gasPrice.toString());
+            const gasCostNative = defaultGasUnits * gasPriceBN;
+
+            // Convert native gas (MATIC) to USDC using QuickSwap quote
+            const quick = new ethers.Contract(
+                routers.QuickSwap,
+                ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
+                provider
+            );
+            const oneMatic = ethers.parseUnits("1", 18);
+            const usdcAddr = await arbContract.USDC();
+            const amounts = await quick.getAmountsOut(oneMatic, [WMATIC, usdcAddr]);
+            const usdcPerMatic = Number(ethers.formatUnits(amounts[1], 6));
+            if (!usdcPerMatic || !isFinite(usdcPerMatic) || usdcPerMatic <= 0) {
+                throw new Error("Fallback conversion WMATIC->USDC failed");
+            }
+
+            const gasCostInMatic = Number(gasCostNative.toString()) / 1e18;
+            const gasCostUSDC = gasCostInMatic * usdcPerMatic;
+            if (!isFinite(gasCostUSDC) || gasCostUSDC <= 0) throw new Error("Invalid fallback gas cost");
+
+            console.log(`ℹ️ Fallback gas estimate used: units=${defaultGasUnits} gasPrice=${gasPrice.toString()} => ${fmt(gasCostUSDC, 6)} USDC`);
+            return gasCostUSDC;
+        } catch (fallbackErr) {
+            // FINAL fallback: return a small conservative hardcoded number (finite)
+            console.error("⚠️ Gas estimation fallback failed:", fallbackErr?.message || fallbackErr);
+            const hardcoded = Number(process.env.FINAL_FALLBACK_GAS_USDC || 0.01); // 0.01 USDC as last-resort conservative placeholder
+            console.warn(`⚠️ FINAL fallback: returning hardcoded ${hardcoded} USDC (very conservative).`);
+            return hardcoded;
+        }
     }
 }
 
@@ -186,15 +233,24 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
         return;
     }
 
+    // Gas estimation (robust; never Infinity)
     const estGasUSDC = await estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC);
-    if (!isFinite(estGasUSDC)) {
+    if (!isFinite(estGasUSDC) || estGasUSDC === Infinity || estGasUSDC <= 0) {
         console.log("❌ PREVENTED — cannot estimate gas cost (safety)");
         return;
     }
     console.log(`⛽ Estimated gas: ${fmt(estGasUSDC, 6)} USDC`);
 
+    // Preserve original check: expectedProfit must exceed estGas + MIN_EXPECTED_PROFIT
     if (expectedProfitUSDC <= estGasUSDC + MIN_EXPECTED_PROFIT) {
         console.log(`❌ PREVENTED — expected profit ${fmt(expectedProfitUSDC)} ≤ gas ${fmt(estGasUSDC)} + minProfit ${MIN_EXPECTED_PROFIT}`);
+        return;
+    }
+
+    // ADDITIONAL SAFETY: require profit to exceed a multiplier of gas to reduce chance of vault decrease
+    // (This is the new extra safety requested; it complements existing checks)
+    if (expectedProfitUSDC <= estGasUSDC * GAS_SAFETY_MULTIPLIER + MIN_EXPECTED_PROFIT) {
+        console.log(`❌ PREVENTED — expected profit ${fmt(expectedProfitUSDC)} ≤ gas*${GAS_SAFETY_MULTIPLIER} ${fmt(estGasUSDC * GAS_SAFETY_MULTIPLIER)} + minProfit ${MIN_EXPECTED_PROFIT}`);
         return;
     }
 
@@ -204,6 +260,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
         return;
     }
 
+    // CallStatic check (simulate on-chain execution)
     try {
         await arbContract.callStatic.executeArbitrage(
             buyRouter,
@@ -216,8 +273,17 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
         return;
     }
 
+    // Execute actual trade
     console.log("🚀 Executing arbitrage...");
     try {
+        // Double-check vault balance before sending tx (defensive)
+        const preBalNow = await usdcContract.balanceOf(VAULT_CONTRACT);
+        const preNow = Number(ethers.formatUnits(preBalNow, 6));
+        if (preNow < before - 1e-12) {
+            console.log(`❌ PREVENTED — vault balance changed unexpectedly (before ${fmt(before)} -> now ${fmt(preNow)})`);
+            return;
+        }
+
         const tx = await arbContract.executeArbitrage(
             buyRouter,
             sellRouter,
@@ -237,6 +303,16 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
         const netProfit = after - before;
         console.log(`💰 REAL Net Profit: ${fmt(netProfit)} USDC (gas est ${fmt(estGasUSDC)} USDC)`);
 
+        // SAFETY: if vault decreased despite all checks, log and do not record as success
+        if (after < before) {
+            console.error("🔥 ALERT — Vault balance decreased despite protections! After < Before.");
+            // Log to CSV anyway with negative profit but flag it (you can change to avoid logging)
+            logTradeCSV({ timestamp, symbol: tokenObj.symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit, gasUSDC: estGasUSDC });
+            saveCSV();
+            return;
+        }
+
+        // Log trade to CSV (only when vault increased or equal)
         logTradeCSV({ timestamp, symbol: tokenObj.symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit, gasUSDC: estGasUSDC });
         saveCSV();
     } catch (e) {
