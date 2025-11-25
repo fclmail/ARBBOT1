@@ -30,10 +30,10 @@ if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 const VAULT_CONTRACT = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 
 // Safety parameters
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 1.5); // percent
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.005); // tiny test trades allowed
-const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.5); // 0.5% slippage tolerance
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.01); // USDC expected profit (incl gas)
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.00005); // percent
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.00005); // tiny test trades allowed
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.05); // 0.5% slippage tolerance
+const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0000001); // USDC expected profit (incl gas)
 const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.02); // live test 0.02 USDC
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 30000);
 
