@@ -1,15 +1,3 @@
-Conversation opened. 1 read message.
-
-Skip to content
-Using Gmail with screen readers
-4 of 1,248
-1 ARB J's s tel fully functional notes
-Inbox
-
-CASHCOIN <cashcoinmail@gmail.com>
-4:30 PM (1 hour ago)
-to me
-
 // arbitrage-hardcoded-vault-live-protected-fixed.js
 // Live arbitrage runner with full protection layers added
 // - Ethers v6
