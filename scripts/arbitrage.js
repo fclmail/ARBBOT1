@@ -1,40 +1,37 @@
-// arbitrage-hardcoded-vault-live-protected-fixed-final.js
-// Drop-in replacement for your ARBBOT1 runner
-// - Uses Ethers v6
-// - Keeps all original failsafes and CSV logging
-// - Fixes contract initialization and robust gas estimation
-// - Ensures vault balance should not decrease (defensive checks)
-
+// arbitrage-hardcoded-vault-live-protected-fixed-final-multiamounts.js
+// Drop-in replacement for your ARBBOT1 runner with robust estimate/call fallbacks,
+// retries, WMATIC->USDC caching, and a sweep over specified trade amounts.
+// Uses Ethers v6
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
 import dotenv from "dotenv";
 dotenv.config();
 
 // ---------- CONFIG ----------
-const DRY_RUN = false;
+const DRY_RUN = process.env.DRY_RUN === "true" || false;
 console.log(
     DRY_RUN
         ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS"
         : "🚀 LIVE MODE ENABLED — REAL TRADES WILL EXECUTE"
 );
 
-const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
-if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
+// RPCS: comma-separated env or single RPC
+const RPC_URLS = (process.env.RPC_URLS || (process.env.RPC_URL || "https://polygon-rpc.com")).split(",");
+let provider = new ethers.JsonRpcProvider(RPC_URLS[0]);
+let wallet = new Wallet(process.env.PRIVATE_KEY || "", provider);
+if (!process.env.PRIVATE_KEY && !DRY_RUN) throw new Error("PRIVATE_KEY required for live mode");
 
 // ---------- HARDCODED VAULT ----------
-const VAULT_CONTRACT = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // provided by you
+const VAULT_CONTRACT = process.env.VAULT_CONTRACT || "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // provided by you
 
 // Safety parameters
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || .0005); // percent
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.0005); // percent
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.005); // tiny test trades allowed
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.5); // 0.5% slippage tolerance
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001); // USDC expected profit (incl gas)
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.08); // live test 0.02 USDC
-const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 30000);
-
-// NEW: conservative multiplier to avoid executing trades that barely cover gas
 const GAS_SAFETY_MULTIPLIER = Number(process.env.GAS_SAFETY_MULTIPLIER || 1.25); // require profit > gas*1.25 + minProfit
+const FALLBACK_GAS_UNITS = BigInt(Number(process.env.FALLBACK_GAS_UNITS || 300000)); // fallback gas units
+const FINAL_FALLBACK_GAS_USDC = Number(process.env.FINAL_FALLBACK_GAS_USDC || 0.01); // last resort
 
 // Routers and tokens (unchanged)
 const routers = {
@@ -52,6 +49,9 @@ const tokens = {
 
 const WMATIC = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"; // WMATIC on Polygon
 
+// The exact trade amounts requested by you:
+const TRADE_AMOUNTS = [0.02, 0.2, 20, 200, 2000, 20000, 200000];
+
 // CSV logging (unchanged)
 const csvRows = [];
 function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC, gasUSDC }) {
@@ -65,11 +65,12 @@ function saveCSV() {
     console.log(`💾 CSV exported: ${filename}`);
 }
 
-// provider and wallet
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new Wallet(PRIVATE_KEY, provider);
+// vault & ERC20
+let arbContract; // will be instantiated in init()
+let usdcContract;
+const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
 
-// vault ABI (kept inline as in your original script)
+// basic vault ABI (same)
 const arbAbi = [
     {
         inputs: [
@@ -88,10 +89,21 @@ const arbAbi = [
     { inputs: [], name: "minProfit", outputs: [{ internalType: "uint256", name: "", type: "uint256" }], stateMutability: "view", type: "function" },
 ];
 
-// NOTE: create contract instance inside init() and validate methods exist (prevents undefined errors)
-let arbContract; // will be instantiated in init()
-let usdcContract;
-const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
+async function rotateProvider() {
+    // rotate to next RPC in RPC_URLS and recreate provider/wallet/contract instances
+    if (RPC_URLS.length <= 1) return;
+    RPC_URLS.push(RPC_URLS.shift());
+    provider = new ethers.JsonRpcProvider(RPC_URLS[0]);
+    wallet = new Wallet(process.env.PRIVATE_KEY || "", provider);
+    arbContract = new ethers.Contract(VAULT_CONTRACT, arbAbi, wallet);
+    try {
+        const usdcAddr = await arbContract.USDC();
+        usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
+    } catch (e) {
+        // ignore, init() will re-run proper set
+    }
+    console.log("ℹ️ Rotated provider to:", RPC_URLS[0]);
+}
 
 async function init() {
     // instantiate contract with wallet signer
@@ -102,6 +114,13 @@ async function init() {
         console.error("❌ arbContract.executeArbitrage is not a function — aborting. Contract or ABI mismatch.");
         throw new Error("arbContract.executeArbitrage missing");
     }
+
+    // diagnostics for missing estimateGas / callStatic
+    console.log("ℹ️ Contract helper namespaces:",
+        "hasEstimateGas=", !!arbContract.estimateGas,
+        "hasCallStatic=", !!arbContract.callStatic,
+        "wallet.addr=", wallet.address
+    );
 
     // ensure USDC address resolved correctly
     const usdcAddr = await arbContract.USDC();
@@ -121,69 +140,92 @@ function fmt(n, dec = 6) {
     return Number(n).toFixed(dec);
 }
 
-// Soft sanity checks for router quotes (unchanged)
-async function getAmountOut(routerAddr, token, amountUSDC) {
+// small retry helper
+async function retry(fn, attempts = 3, delayMs = 200) {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await fn();
+        } catch (e) {
+            lastErr = e;
+            await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+        }
+    }
+    throw lastErr;
+}
+
+// getAmountsOut helper (returns numeric amount in token units, or 0)
+async function getAmountOut(routerAddr, path, amountInRaw) {
     const router = new ethers.Contract(
         routerAddr,
         ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
         provider
     );
-    const usdcAddr = await arbContract.USDC();
-    const path = [usdcAddr, token.address];
     try {
-        const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), path);
-        const out = Number(ethers.formatUnits(amounts[1], token.decimals));
-        if (!out || !isFinite(out) || out <= Number.EPSILON) return 0;
-        const ratio = amountUSDC / out;
-        if (!isFinite(ratio) || ratio <= 0 || ratio > 1e6) return 0;
-        return out;
-    } catch (err) {
-        return 0;
+        const amounts = await retry(() => router.getAmountsOut(amountInRaw, path), 3, 150);
+        if (!amounts || amounts.length < 2) return 0;
+        return amounts;
+    } catch (e) {
+        // propagate as failure for caller to handle
+        throw e;
     }
 }
 
 // Robust helper to get gas price (works with provider.getGasPrice() or RPC eth_gasPrice)
 async function getGasPriceBigInt() {
-    // Try provider.getGasPrice() (ethers built-in)
     try {
         const gp = await provider.getGasPrice();
         if (gp) return BigInt(gp.toString());
     } catch (e) {
-        // fall through to RPC call
+        // fall through
     }
-    // Fallback: provider.send("eth_gasPrice", [])
     try {
         const hex = await provider.send("eth_gasPrice", []);
-        // hex is like '0x...' convert to BigInt
         return BigInt(hex.toString());
     } catch (e) {
         console.warn("⚠️ getGasPrice fallback failed:", e?.message || e);
-        // Final fallback: small default gas price (in wei)
         const fallbackGwei = Number(process.env.FINAL_FALLBACK_GAS_GWEI || 30); // 30 gwei default
         return BigInt(Math.floor(fallbackGwei * 1e9));
     }
 }
 
+// Cache WMATIC->USDC for a short TTL to avoid repeated RPC calls when estimating gas
+let maticToUSDCCache = { value: null, ts: 0, ttl: 30_000 }; // 30 seconds
+async function getMaticToUSDC() {
+    const now = Date.now();
+    if (maticToUSDCCache.value && now - maticToUSDCCache.ts < maticToUSDCCache.ttl) {
+        return maticToUSDCCache.value;
+    }
+    try {
+        const quick = new ethers.Contract(
+            routers.QuickSwap,
+            ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
+            provider
+        );
+        const oneMatic = ethers.parseUnits("1", 18);
+        const usdcAddr = await arbContract.USDC();
+        const amounts = await retry(() => quick.getAmountsOut(oneMatic, [WMATIC, usdcAddr]), 3, 150);
+        const usdcPerMatic = Number(ethers.formatUnits(amounts[1], 6));
+        if (!usdcPerMatic || !isFinite(usdcPerMatic) || usdcPerMatic <= 0) {
+            throw new Error("WMATIC->USDC quote invalid");
+        }
+        maticToUSDCCache = { value: usdcPerMatic, ts: now, ttl: maticToUSDCCache.ttl };
+        return usdcPerMatic;
+    } catch (e) {
+        console.warn("⚠️ getMaticToUSDC failed:", e?.message || e);
+        throw e;
+    }
+}
+
 // Robust Estimate gas cost in USDC
-// - Primary: arbContract.estimateGas.executeArbitrage
-// - Fallback: conservative fixed gas units * gasPrice
-// - Always return finite number
 async function estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC) {
-    // Helper to convert native MATIC amount (wei BigInt) to USDC using QuickSwap quote
+    // convert amount to raw (USDC decimals = 6)
+    const parsed = ethers.parseUnits(amountUSDC.toString(), 6);
+
+    // Helper to convert native MATIC wei BigInt to USDC
     async function nativeWeiToUSDC(weiBigInt) {
         try {
-            const quick = new ethers.Contract(
-                routers.QuickSwap,
-                ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-                provider
-            );
-            const oneMatic = ethers.parseUnits("1", 18);
-            const usdcAddr = await arbContract.USDC();
-            const amounts = await quick.getAmountsOut(oneMatic, [WMATIC, usdcAddr]);
-            const usdcPerMatic = Number(ethers.formatUnits(amounts[1], 6));
-            if (!usdcPerMatic || !isFinite(usdcPerMatic) || usdcPerMatic <= 0) {
-                throw new Error("WMATIC->USDC quote invalid");
-            }
+            const usdcPerMatic = await getMaticToUSDC();
             const maticAmount = Number(weiBigInt.toString()) / 1e18;
             return maticAmount * usdcPerMatic;
         } catch (e) {
@@ -191,11 +233,15 @@ async function estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC)
         }
     }
 
-    // PRIMARY: try estimateGas on contract
+    // PRIMARY: try estimateGas using populated tx + provider.estimateGas
     try {
-        const parsed = ethers.parseUnits(amountUSDC.toString(), 6);
-        // estimateGas may throw for many reasons; wrap in try/catch
-        const gasEstimate = await arbContract.estimateGas.executeArbitrage(buyRouter, sellRouter, tokenAddr, parsed);
+        const populated = await arbContract.populateTransaction.executeArbitrage(buyRouter, sellRouter, tokenAddr, parsed);
+        const txForEst = {
+            to: VAULT_CONTRACT,
+            data: populated.data,
+            from: wallet.address,
+        };
+        const gasEstimate = await provider.estimateGas(txForEst);
         const gasUsed = BigInt(gasEstimate.toString());
         const gasPrice = await getGasPriceBigInt();
         const gasCostNativeWei = gasUsed * gasPrice;
@@ -203,33 +249,24 @@ async function estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC)
         if (!isFinite(gasCostUSDC) || gasCostUSDC <= 0) throw new Error("Invalid primary gasCostUSDC");
         return gasCostUSDC;
     } catch (primaryErr) {
-        console.warn("⚠️ Gas estimate primary failed:", primaryErr?.message || primaryErr);
-        // FALLBACK: use conservative gas units * gasPrice
+        console.warn("⚠️ Gas estimate primary failed (populate/provider.estimateGas):", primaryErr?.message || primaryErr);
+        // FALLBACK: conservative units * gasPrice
         try {
-            const defaultGasUnits = BigInt(Number(process.env.FALLBACK_GAS_UNITS || 300000)); // 300k default
             const gasPrice = await getGasPriceBigInt();
-            const gasCostNativeWei = defaultGasUnits * gasPrice;
-            const gasCostUSDC = await (async () => {
-                try {
-                    return await nativeWeiToUSDC(gasCostNativeWei);
-                } catch (convErr) {
-                    throw convErr;
-                }
-            })();
+            const gasCostNativeWei = FALLBACK_GAS_UNITS * gasPrice;
+            const gasCostUSDC = await nativeWeiToUSDC(gasCostNativeWei);
             if (!isFinite(gasCostUSDC) || gasCostUSDC <= 0) throw new Error("Invalid fallback gasCostUSDC");
-            console.log(`ℹ️ Fallback gas estimate used: units=${defaultGasUnits} => ${fmt(gasCostUSDC, 6)} USDC`);
+            console.log(`ℹ️ Fallback gas estimate used: units=${FALLBACK_GAS_UNITS} => ${fmt(gasCostUSDC, 6)} USDC`);
             return gasCostUSDC;
         } catch (fallbackErr) {
             console.warn("⚠️ Gas estimation fallback failed:", fallbackErr?.message || fallbackErr);
-            // FINAL fallback: small conservative hardcoded USDC (finite)
-            const hardcoded = Number(process.env.FINAL_FALLBACK_GAS_USDC || 0.01); // 0.01 USDC last resort
-            console.warn(`⚠️ FINAL fallback: returning hardcoded ${hardcoded} USDC (very conservative).`);
-            return hardcoded;
+            console.warn(`⚠️ FINAL fallback: returning hardcoded ${FINAL_FALLBACK_GAS_USDC} USDC (very conservative).`);
+            return FINAL_FALLBACK_GAS_USDC;
         }
     }
 }
 
-// Execute trade with protections (kept original logic, added small defensive checks)
+// Execute trade with protections
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     const timestamp = new Date().toISOString();
     const tokenObj =
@@ -246,117 +283,147 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
         return;
     }
 
-    // Get quotes
-    const buyOut = await getAmountOut(buyRouter, tokenObj, amountUSDC);
-    const sellOut = await getAmountOut(sellRouter, tokenObj, amountUSDC);
-    if (!buyOut || !sellOut) {
-        console.log("❌ Skipping — failed to get price");
-        return;
-    }
-
-    // Compute expected profit (USDC)
-    const buyPrice = amountUSDC / buyOut;
-    const sellPrice = amountUSDC / sellOut;
-    const expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
-    console.log(`📈 Quoted: buy=${fmt(buyPrice)} sell=${fmt(sellPrice)} expected=${fmt(expectedProfitUSDC)}`);
-
-    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) {
-        console.log("❌ PREVENTED — profit too low");
-        return;
-    }
-
-    // Estimate gas cost robustly
-    const estGasUSDC = await estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC);
-    if (!isFinite(estGasUSDC) || estGasUSDC === Infinity || estGasUSDC <= 0) {
-        console.log("❌ PREVENTED — cannot estimate gas cost (safety)");
-        return;
-    }
-    console.log(`⛽ Estimated gas: ${fmt(estGasUSDC, 6)} USDC`);
-
-    // Original check: expectedProfit must exceed estGas + MIN_EXPECTED_PROFIT
-    if (expectedProfitUSDC <= estGasUSDC + MIN_EXPECTED_PROFIT) {
-        console.log(`❌ PREVENTED — expected profit ${fmt(expectedProfitUSDC)} ≤ gas ${fmt(estGasUSDC)} + minProfit ${MIN_EXPECTED_PROFIT}`);
-        return;
-    }
-
-    // Additional safety multiplier
-    if (expectedProfitUSDC <= estGasUSDC * GAS_SAFETY_MULTIPLIER + MIN_EXPECTED_PROFIT) {
-        console.log(`❌ PREVENTED — expected profit ${fmt(expectedProfitUSDC)} ≤ gas*${GAS_SAFETY_MULTIPLIER} ${fmt(estGasUSDC * GAS_SAFETY_MULTIPLIER)} + minProfit ${MIN_EXPECTED_PROFIT}`);
-        return;
-    }
-
-    const profitPct = (expectedProfitUSDC / amountUSDC) * 100;
-    if (profitPct < MIN_PROFIT_PCT) {
-        console.log(`❌ PREVENTED — profit pct ${fmt(profitPct, 4)}% < MIN_PROFIT_PCT ${MIN_PROFIT_PCT}%`);
-        return;
-    }
-
-    // CallStatic simulation (unchanged)
+    // GET QUOTES carefully: buy USDC -> token, then token -> USDC back
+    const usdcAddr = await arbContract.USDC();
     try {
-        await arbContract.callStatic.executeArbitrage(
-            buyRouter,
-            sellRouter,
-            tokenAddr,
-            ethers.parseUnits(amountUSDC.toString(), 6)
-        );
-    } catch (err) {
-        console.log("❌ On-chain profitability check failed:", err?.reason || err?.message || err);
-        return;
-    }
-
-    // Execute actual trade with an extra pre-send vault balance check
-    console.log("🚀 Executing arbitrage...");
-    try {
-        // Double-check vault balance right before sending tx
-        const preBalNow = await usdcContract.balanceOf(VAULT_CONTRACT);
-        const preNow = Number(ethers.formatUnits(preBalNow, 6));
-        if (preNow < before - 1e-12) {
-            console.log(`❌ PREVENTED — vault balance changed unexpectedly (before ${fmt(before)} -> now ${fmt(preNow)})`);
+        // buy: USDC -> token
+        const amountInRaw = ethers.parseUnits(amountUSDC.toString(), 6);
+        const buyAmounts = await getAmountOut(buyRouter, [usdcAddr, tokenObj.address], amountInRaw); // returns array [in, out]
+        const tokenOutRaw = buyAmounts[1]; // raw token units
+        if (!tokenOutRaw) {
+            console.log("❌ Skipping — failed to get buy quote");
+            return;
+        }
+        // sell: token -> USDC
+        const sellAmounts = await getAmountOut(sellRouter, [tokenObj.address, usdcAddr], tokenOutRaw);
+        const usdcBackRaw = sellAmounts[1];
+        if (!usdcBackRaw) {
+            console.log("❌ Skipping — failed to get sell quote");
             return;
         }
 
-        if (DRY_RUN) {
-            console.log("🔬 DRY_RUN enabled — would have executed transaction here (skipping send).");
+        // Convert to numbers
+        const tokenOut = Number(ethers.formatUnits(tokenOutRaw, tokenObj.decimals));
+        const usdcBack = Number(ethers.formatUnits(usdcBackRaw, 6));
+
+        const expectedProfitUSDC = (usdcBack - amountUSDC) * (1 - SLIPPAGE_PCT / 100);
+        // For logs show per-unit prices (USDC per token)
+        const buyPrice = amountUSDC / (tokenOut || Number.EPSILON);
+        const sellPrice = usdcBack / (tokenOut || Number.EPSILON);
+        console.log(`📈 Quoted: buy=${fmt(buyPrice)} sell=${fmt(sellPrice)} expected=${fmt(expectedProfitUSDC)}`);
+
+        if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) {
+            console.log("❌ PREVENTED — profit too low");
             return;
         }
 
-        const tx = await arbContract.executeArbitrage(
-            buyRouter,
-            sellRouter,
-            tokenAddr,
-            ethers.parseUnits(amountUSDC.toString(), 6)
-        );
-        console.log(`🔁 TX SENT — hash: ${tx.hash}`);
-        const receipt = await tx.wait();
-        if (!receipt || receipt.status === 0) {
-            console.log("❌ Transaction reverted");
+        // Estimate gas cost robustly
+        const estGasUSDC = await estimateGasCostUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC);
+        if (!isFinite(estGasUSDC) || estGasUSDC === Infinity || estGasUSDC <= 0) {
+            console.log("❌ PREVENTED — cannot estimate gas cost (safety)");
+            return;
+        }
+        console.log(`⛽ Estimated gas: ${fmt(estGasUSDC, 6)} USDC`);
+
+        if (expectedProfitUSDC <= estGasUSDC + MIN_EXPECTED_PROFIT) {
+            console.log(`❌ PREVENTED — expected profit ${fmt(expectedProfitUSDC)} ≤ gas ${fmt(estGasUSDC)} + minProfit ${MIN_EXPECTED_PROFIT}`);
             return;
         }
 
-        const afterBal = await usdcContract.balanceOf(VAULT_CONTRACT);
-        const after = Number(ethers.formatUnits(afterBal, 6));
-        console.log(`🏦 Vault Balance After: ${fmt(after)} USDC`);
-        const netProfit = after - before;
-        console.log(`💰 REAL Net Profit: ${fmt(netProfit)} USDC (gas est ${fmt(estGasUSDC)} USDC)`);
+        if (expectedProfitUSDC <= estGasUSDC * GAS_SAFETY_MULTIPLIER + MIN_EXPECTED_PROFIT) {
+            console.log(`❌ PREVENTED — expected profit ${fmt(expectedProfitUSDC)} ≤ gas*${GAS_SAFETY_MULTIPLIER} ${fmt(estGasUSDC * GAS_SAFETY_MULTIPLIER)} + minProfit ${MIN_EXPECTED_PROFIT}`);
+            return;
+        }
 
-        // If vault decreased despite all checks, raise alert and record for audit
-        if (after < before) {
-            console.error("🔥 ALERT — Vault balance decreased despite protections! After < Before.");
+        const profitPct = (expectedProfitUSDC / amountUSDC) * 100;
+        if (profitPct < MIN_PROFIT_PCT) {
+            console.log(`❌ PREVENTED — profit pct ${fmt(profitPct, 4)}% < MIN_PROFIT_PCT ${MIN_PROFIT_PCT}%`);
+            return;
+        }
+
+        // Robust on-chain simulation using provider.call + populated tx
+        try {
+            const parsed = ethers.parseUnits(amountUSDC.toString(), 6);
+            const populated = await arbContract.populateTransaction.executeArbitrage(buyRouter, sellRouter, tokenAddr, parsed);
+            const callTx = { to: VAULT_CONTRACT, data: populated.data, from: wallet.address };
+            await provider.call(callTx);
+        } catch (err) {
+            console.log("❌ On-chain profitability check failed:", err?.reason || err?.message || err);
+            // rotate provider and try once more (common fix for flaky RPC)
+            try {
+                await rotateProvider();
+                const parsed = ethers.parseUnits(amountUSDC.toString(), 6);
+                const populated = await arbContract.populateTransaction.executeArbitrage(buyRouter, sellRouter, tokenAddr, parsed);
+                const callTx = { to: VAULT_CONTRACT, data: populated.data, from: wallet.address };
+                await provider.call(callTx);
+            } catch (err2) {
+                console.log("❌ On-chain profitability check failed after provider rotate:", err2?.reason || err2?.message || err2);
+                return;
+            }
+        }
+
+        // Execute actual trade with an extra pre-send vault balance check
+        console.log("🚀 Executing arbitrage...");
+        try {
+            // Double-check vault balance right before sending tx
+            const preBalNow = await usdcContract.balanceOf(VAULT_CONTRACT);
+            const preNow = Number(ethers.formatUnits(preBalNow, 6));
+            if (preNow < before - 1e-12) {
+                console.log(`❌ PREVENTED — vault balance changed unexpectedly (before ${fmt(before)} -> now ${fmt(preNow)})`);
+                return;
+            }
+
+            if (DRY_RUN) {
+                console.log("🔬 DRY_RUN enabled — would have executed transaction here (skipping send).");
+                // Log the simulated successful row
+                logTradeCSV({ timestamp, symbol: tokenObj.symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: expectedProfitUSDC, gasUSDC: estGasUSDC });
+                return;
+            }
+
+            // Send tx
+            const tx = await arbContract.executeArbitrage(
+                buyRouter,
+                sellRouter,
+                tokenAddr,
+                ethers.parseUnits(amountUSDC.toString(), 6)
+            );
+            console.log(`🔁 TX SENT — hash: ${tx.hash}`);
+            const receipt = await tx.wait();
+            if (!receipt || receipt.status === 0) {
+                console.log("❌ Transaction reverted");
+                return;
+            }
+
+            const afterBal = await usdcContract.balanceOf(VAULT_CONTRACT);
+            const after = Number(ethers.formatUnits(afterBal, 6));
+            console.log(`🏦 Vault Balance After: ${fmt(after)} USDC`);
+            const netProfit = after - before;
+            console.log(`💰 REAL Net Profit: ${fmt(netProfit)} USDC (gas est ${fmt(estGasUSDC)} USDC)`);
+
+            // If vault decreased despite all checks, raise alert and record for audit
+            if (after < before) {
+                console.error("🔥 ALERT — Vault balance decreased despite protections! After < Before.");
+                logTradeCSV({ timestamp, symbol: tokenObj.symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit, gasUSDC: estGasUSDC });
+                saveCSV();
+                return;
+            }
+
+            // Log success
             logTradeCSV({ timestamp, symbol: tokenObj.symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit, gasUSDC: estGasUSDC });
             saveCSV();
-            return;
+        } catch (e) {
+            console.error("scan error during execution:", e?.message || e);
+            // Attempt provider rotation if errors look RPC-related
+            await rotateProvider();
         }
-
-        // Log success
-        logTradeCSV({ timestamp, symbol: tokenObj.symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit, gasUSDC: estGasUSDC });
-        saveCSV();
     } catch (e) {
-        console.error("scan error:", e?.message || e);
+        console.log("❌ Skipping — failed to get price or encountered error:", e?.message || e);
+        return;
     }
 }
 
-// scan over tokens & routers (unchanged)
-async function scanOnce(tradeAmountUSDC = TRADE_AMOUNT_USDC) {
+// scan over tokens & routers (unchanged except takes custom trade amount)
+async function scanOnce(tradeAmountUSDC = 1) {
     for (const token of Object.values(tokens)) {
         for (const buyRouter of Object.values(routers)) {
             for (const sellRouter of Object.values(routers)) {
@@ -373,13 +440,28 @@ async function scanOnce(tradeAmountUSDC = TRADE_AMOUNT_USDC) {
 
 (async function main() {
     await init();
-    console.log(`🚀 AUTO-SCAN ENABLED — scanning every ${SCAN_INTERVAL_MS / 1000} seconds`);
-    await scanOnce(TRADE_AMOUNT_USDC);
+    console.log(`🚀 AUTO-SCAN ENABLED — will sweep trade amounts: ${TRADE_AMOUNTS.join(", ")}`);
+    // Sweep through requested trade amounts sequentially (one scan per amount)
+    for (const amt of TRADE_AMOUNTS) {
+        try {
+            console.log(`\n===== SCANNING with TRADE_AMOUNT = ${amt} USDC =====`);
+            await scanOnce(amt);
+        } catch (e) {
+            console.error("sweep error:", e?.message || e);
+        }
+        // brief pause between amount sweeps to reduce rate pressure
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    // Continue periodic scanning on the largest (or default) amount every 30s if desired
+    const scanIntervalMs = Number(process.env.SCAN_INTERVAL_MS || 30000);
+    console.log(`🚀 Entering continuous auto-scan every ${scanIntervalMs / 1000}s using last amount ${TRADE_AMOUNTS[TRADE_AMOUNTS.length - 1]} USDC`);
     setInterval(async () => {
         try {
-            await scanOnce(TRADE_AMOUNT_USDC);
+            await scanOnce(TRADE_AMOUNTS[TRADE_AMOUNTS.length - 1]);
         } catch (e) {
             console.error("loop error", e?.message || e);
+            await rotateProvider();
         }
-    }, SCAN_INTERVAL_MS);
+    }, scanIntervalMs);
 })();
