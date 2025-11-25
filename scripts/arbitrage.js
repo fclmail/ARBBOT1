@@ -1,15 +1,3 @@
- Conversation opened. 1 unread message.
-
-Skip to content
-Using Gmail with screen readers
-1 of 1,280
-30 second scan included
-Inbox
-
-CASHCOIN <cashcoinmail@gmail.com>
-1:03 AM (1 minute ago)
-to me
-
 // improved-arbitrage.js
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
