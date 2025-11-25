@@ -26,13 +26,13 @@ if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required (set env PRIVATE_KEY)");
  */
 const VAULT_CONTRACT = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // hardcoded vault
 // ---------- POLICY / GUARDS ----------
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1.0); // min trade size in USDC (increase from tiny)
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.5); // absolute minimum profit in USDC
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.01); // min trade size in USDC (increase from tiny)
+const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.00005); // absolute minimum profit in USDC
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 30000);
 const MAX_PROFIT_PCT = 40; // cap: reject opportunities where expected profit > 40% of amount
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.5); // 0.5% slippage assumption
 const MAX_CONCURRENCY = 6; // how many concurrent callStatic checks
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 10); // default trade size (use meaningful amount)
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.02); // default trade size (use meaningful amount)
 const CSV_PATH = process.env.CSV_PATH || "./arb_log.csv";
 
 // ---------- ROUTERS & TOKENS ----------
