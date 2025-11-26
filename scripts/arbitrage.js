@@ -1,25 +1,24 @@
-// improved-arb-full.js
-import { ethers, Wallet } from "ethers";
+// improved-arb-full-live.js
+import { ethers, Wallet, Interface } from "ethers";
 import fs from "fs";
 import dotenv from "dotenv";
 dotenv.config();
 
 // ---------- CONFIG ----------
-const DRY_RUN = false; // force dry run for testing
+const DRY_RUN = false; // Set to false for live trading
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
-
 if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
 // Deployed contract
 const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trading defaults
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.05);
-const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.005);
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0001);
-const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5); // % profit over buy
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.05);    // min trade size in USDC
+const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.005);    // gas conservative estimate
+const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.00001);
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);     // slippage allowance %
 const STABILITY_SAMPLES = Number(process.env.STABILITY_SAMPLES || 3);
 const STABILITY_DELAY_MS = Number(process.env.STABILITY_DELAY_MS || 150);
 
@@ -100,15 +99,9 @@ async function getAmountsOutRaw(routerAddr, path, amountInUnits){
 }
 async function getAmountOut(routerAddr, token, amountUSDC){
   const usdcAddress = await arbContract.USDC();
-  if (token.address.toLowerCase() === usdcAddress.toLowerCase()) return amountUSDC;
   const path = [usdcAddress, token.address];
-  try {
-    const amounts = await getAmountsOutRaw(routerAddr, path, ethers.parseUnits(amountUSDC.toString(), 6));
-    return Number(ethers.formatUnits(amounts[amounts.length-1], token.decimals));
-  } catch(e) {
-    if(DRY_RUN) return 0;
-    throw e;
-  }
+  const amounts = await getAmountsOutRaw(routerAddr, path, ethers.parseUnits(amountUSDC.toString(), 6));
+  return Number(ethers.formatUnits(amounts[amounts.length-1], token.decimals));
 }
 
 // ---------- MIN RETURN COMPUTE ----------
@@ -153,41 +146,27 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amountUSDC){
 
 // ---------- SCAN LOOP ----------
 const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || MIN_TRADE_USDC);
-
 async function scanOnce(){
   console.log("🔍 Scanning for arbitrage opportunities...");
   for(const [symbol, token] of Object.entries(tokens)){
-    const prices = [];
     for(const [buyName, buyRouter] of Object.entries(routers)){
       for(const [sellName, sellRouter] of Object.entries(routers)){
         if(buyRouter===sellRouter) continue;
         try {
           const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
-          if(buyOut <= 0 || sellOut <= 0) continue;
           const buyPrice = TRADE_AMOUNT_USDC / buyOut;
           const sellPrice = TRADE_AMOUNT_USDC / sellOut;
           const expectedProfit = (sellPrice - buyPrice)*(1 - SLIPPAGE_PCT/100);
-          prices.push({ buyName, sellName, buyPrice, sellPrice, expectedProfit });
+          const profitPct = (expectedProfit/buyPrice)*100;
 
-          if(expectedProfit/ buyPrice*100 >= MIN_PROFIT_PCT){
-            console.log(`🚨 Arbitrage detected: ${symbol} ${buyName}->${sellName} estProfit ${fmt(expectedProfit)} USDC`);
+          console.log(`💹 ${symbol} Price Summary: Buy: ${buyName} ${buyOut.toFixed(6)} | Sell: ${sellName} ${sellOut.toFixed(6)} | 💰 Profit: ${expectedProfit.toFixed(6)} USDC`);
+
+          if(profitPct>=MIN_PROFIT_PCT){
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
-        } catch(e){
-          if(DRY_RUN) continue; 
-          else console.warn("⚠️ Scan error:", e.message);
-        }
+        } catch(e){ console.warn("⚠️ Scan error:", e.message); }
       }
-    }
-
-    // print summary table for token
-    if(prices.length){
-      console.log(`\n💹 ${symbol} Price Summary:`);
-      prices.forEach(p=>{
-        console.log(`Buy: ${p.buyName} ${fmt(p.buyPrice)} | Sell: ${p.sellName} ${fmt(p.sellPrice)} | 💰 Profit: ${fmt(p.expectedProfit)} USDC`);
-      });
-      console.log("");
     }
   }
   saveCSV();
@@ -196,7 +175,9 @@ async function scanOnce(){
 // ---------- MAIN LOOP ----------
 (async()=>{
   await init();
-  console.log("🚀 Arbitrage bot started (DRY_RUN=true)");
-
-  setInterval(scanOnce, 30000); // every 30s
+  console.log(`🚀 Arbitrage bot started (DRY_RUN=${DRY_RUN})`);
+  while(true){
+    await scanOnce();
+    await new Promise(r => setTimeout(r, 30_000)); // 30s loop
+  }
 })();
