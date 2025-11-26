@@ -18,7 +18,7 @@ const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // ---------- SETTINGS ----------
 const TRADE_AMOUNT_USDC = 0.05; // trade size in USDC
-const MIN_EXPECTED_PROFIT_USDC = 0.0001; // minimum profit to execute trade
+const MIN_EXPECTED_PROFIT_USDC = 0.000001; // minimum profit to execute trade
 const SLIPPAGE_PCT = 0.3; // slippage allowance %
 
 const ROUTERS = {
@@ -28,6 +28,7 @@ const ROUTERS = {
 
 const TOKENS = {
   WETH: { address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimals: 18 },
+    CRV:{address:"0x172370d5cd63279efa6d502dab29171933a610af",decimals:18},
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
   USDC: { address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 }
 };
