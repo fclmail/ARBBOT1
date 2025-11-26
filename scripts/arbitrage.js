@@ -1,15 +1,13 @@
-// improved-arb-loop.js
+// improved-arb-loop-dry.js
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
 import dotenv from "dotenv";
 dotenv.config();
 
 // ---------- CONFIG ----------
-const DRY_RUN = process.env.DRY_RUN === "true";
+const DRY_RUN = true; // FORCED TO TRUE
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
-if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
-
+const PRIVATE_KEY = process.env.PRIVATE_KEY || ""; // not used in dry run
 const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 const TRADE_INTERVAL_MS = 30000; // 30 seconds
 
@@ -45,7 +43,7 @@ function saveCSV() {
 
 // ---------- PROVIDER + WALLET ----------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
+const wallet = null; // DRY_RUN
 
 // ---------- VAULT CONTRACT ----------
 const arbAbi = [
@@ -58,16 +56,13 @@ const arbAbi = [
       { "internalType": "uint256","name": "minReturnUSDC","type": "uint256" }
     ],
     "name": "executeArbitrage",
-    "outputs": [], "stateMutability": "nonpayable","type": "function"
+    "outputs": [], "stateMutability": "nonpayable","type":"function"
   },
   { "inputs": [], "name": "USDC", "outputs":[{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" },
   { "inputs": [], "name": "owner", "outputs":[{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" }
 ];
-const arbContract = DRY_RUN
-  ? new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider)
-  : new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
-// ERC20 helper
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider);
 const erc20Abi = ["function balanceOf(address owner) view returns (uint256)"];
 let usdcContract;
 
@@ -111,8 +106,6 @@ async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDC)
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amountUSDC){
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase());
   if(!tokenObj){ console.log("⛔ Token not whitelisted"); return; }
-
-  // Safety: skip identical routers
   if(buyRouter.toLowerCase() === sellRouter.toLowerCase()) return;
 
   const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
@@ -123,31 +116,11 @@ async function executeTrade(buyRouter, sellRouter, tokenAddr, amountUSDC){
   }
 
   const minReturnBN = await computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDC);
-
-  if(DRY_RUN){
-    console.log(`🧪 DRY_RUN: would trade ${amountUSDC} USDC on ${tokenAddr} | minReturn ${ethers.formatUnits(minReturnBN,6)}`);
-    return;
-  }
-
-  try {
-    const tx = await arbContract.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(),6), minReturnBN
-    );
-    console.log(`🚀 Tx sent: ${tx.hash}`);
-    const receipt = await tx.wait();
-    if(receipt.status === 1){
-      const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-      const after = Number(ethers.formatUnits(afterBal,6));
-      console.log(`✅ Trade success. Profit: ${fmt(after-before)} USDC`);
-      logTradeCSV({ timestamp: new Date().toISOString(), symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: fmt(after-before) });
-    } else console.log("❌ Trade failed or reverted");
-  } catch(e){
-    console.log("❌ Trade execution error:", e.reason || e.message);
-  }
+  console.log(`🧪 DRY_RUN: would trade ${amountUSDC} USDC on ${tokenAddr} | minReturn ${ethers.formatUnits(minReturnBN,6)}`);
 }
 
 // ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || MIN_TRADE_USDC);
+const TRADE_AMOUNT_USDC = MIN_TRADE_USDC;
 async function scanOnce(){
   for(const [symbol, token] of Object.entries(tokens)){
     for(const [buyName, buyRouter] of Object.entries(routers)){
@@ -164,7 +137,7 @@ async function scanOnce(){
             console.log(`🚨 Arbitrage detected: ${symbol} ${buyName}->${sellName} estProfit ${fmt(expectedProfit)} USDC`);
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
-        } catch(e){ console.warn("⚠️ Scan error:", e.message); }
+        } catch(e){ console.warn("⚠️ Scan error:", e.reason || e.message); }
       }
     }
   }
