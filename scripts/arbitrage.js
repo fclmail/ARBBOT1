@@ -1,10 +1,3 @@
-/**
- * 🔥 FINAL PRODUCTION ARBITRAGE BOT 🔥
- * - DRY_RUN = false (LIVE TRADING ENABLED)
- * - Trade Amount: 0.05 USDC
- * - Vault Balance: 0.07 USDC
- */
-
 import { ethers } from "ethers";
 import {
     getTokenPrice,
