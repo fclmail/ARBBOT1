@@ -30,6 +30,7 @@ const routers = {
 
 const tokens = {
   WETH: { address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimals: 18 },
+    CRV:{address:"0x172370d5cd63279efa6d502dab29171933a610af",decimals:18},
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
   USDC: { address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 }
 };
