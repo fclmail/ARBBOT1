@@ -14,10 +14,10 @@ if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mod
 const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trading defaults
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5); // % profit over buy
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.005); // % profit over buy
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.05); // low trade amount
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.005);    // gas conservative estimate
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0001); // very low
+const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001); // very low
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);     // slippage allowance %
 const STABILITY_SAMPLES = Number(process.env.STABILITY_SAMPLES || 3);
 const STABILITY_DELAY_MS = Number(process.env.STABILITY_DELAY_MS || 150);
