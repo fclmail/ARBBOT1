@@ -1,40 +1,182 @@
-Skip to content
-Navigation Menu
-fclmail
-ARBBOT1
+// improved-arb-loop.js
+import { ethers, Wallet } from "ethers";
+import fs from "fs";
+import dotenv from "dotenv";
+dotenv.config();
 
-Type / to search
-Code
-Issues
-Pull requests
-Actions
-Projects
-Wiki
-Security
-Insights
-Settings
-ARB Bot
-Update arbitrage.js #879
-Jobs
-Run details
-run-arb
-succeeded now in 15s
-Search logs
-2s
-1s
-2s
-0s
-3s
-3s
-Run node scripts/arbitrage.js
-🏛 Contract Address: 0x7DadE334120e659eDE4999c8813c183648b1bd19
-👤 Contract Owner: 0x9e63CDc3D66714f0FCe5B3347139E117a04A75b3
-💱 USDC token address: ***
-🚀 Arbitrage bot started
-🚨 Arbitrage detected: WBTC QuickSwap->SushiSwap estProfit 489.034333 USDC
-execution reverted: "INSUFFICIENT_VAULT_USDC" (action="estimateGas", data="0x08c379a000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000017494e53554646494349454e545f5641554c545f55534443000000000000000000", reason="INSUFFICIENT_VAULT_USDC", transaction={ "data": "0x49507ca7000000000000000000000000a5e0829caced8ffdd4de3c43696c57f7d7a678ff0000000000000000000000001b02da8cb0d097eb8d57a175b88c7d8b479975060000000000000000000000001bfd67037b42cf73acf2047067bd4f2c47d9bfd600000000000000000000000000000000000000000000000000000000000f424000000000000000000000000000000000000000000000000000000000000f086d", "from": "0x9e63CDc3D66714f0FCe5B3347139E117a04A75b3", "to": "0x7DadE334120e659eDE4999c8813c183648b1bd19" }, invocation=null, revert={ "args": [ "INSUFFICIENT_VAULT_USDC" ], "name": "Error", "signature": "Error(string)" }, code=CALL_EXCEPTION, version=6.15.0)
-execution reverted: "UniswapV2Library: IDENTICAL_ADDRESSES" (action="call", data="0x08c379a000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000025556e697377617056324c6962726172793a204944454e544943414c5f414444524553534553000000000000000000000000000000000000000000000000000000", reason="UniswapV2Library: IDENTICAL_ADDRESSES", transaction={ "data": "0xd06ca61f00000000000000000000000000000000000000000000000000000000000f4240000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000020000000000000000000000002791bca1f2de4661ed88a30c99a7a9449aa841740000000000000000000000002791bca1f2de4661ed88a30c99a7a9449aa84174", "to": "***" }, invocation=null, revert={ "args": [ "UniswapV2Library: IDENTICAL_ADDRESSES" ], "name": "Error", "signature": "Error(string)" }, code=CALL_EXCEPTION, version=6.15.0)
-execution reverted: "UniswapV2Library: IDENTICAL_ADDRESSES" (action="call", data="0x08c379a000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000025556e697377617056324c6962726172793a204944454e544943414c5f414444524553534553000000000000000000000000000000000000000000000000000000", reason="UniswapV2Library: IDENTICAL_ADDRESSES", transaction={ "data": "0xd06ca61f00000000000000000000000000000000000000000000000000000000000f4240000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000020000000000000000000000002791bca1f2de4661ed88a30c99a7a9449aa841740000000000000000000000002791bca1f2de4661ed88a30c99a7a9449aa84174", "to": "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506" }, invocation=null, revert={ "args": [ "UniswapV2Library: IDENTICAL_ADDRESSES" ], "name": "Error", "signature": "Error(string)" }, code=CALL_EXCEPTION, version=6.15.0)
-0s
-1s
-0s
+// ---------- CONFIG ----------
+const DRY_RUN = process.env.DRY_RUN === "true";
+const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
+if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
+
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const TRADE_INTERVAL_MS = 30000; // 30 seconds
+
+// Trading defaults
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1);
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);
+
+// ---------- Routers & tokens ----------
+const routers = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+};
+
+const tokens = {
+  WETH: { address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimals: 18 },
+  WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
+  USDC: { address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 }
+};
+
+// ---------- CSV Logging ----------
+const csvRows = [];
+function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC }) {
+  csvRows.push([timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC].join(","));
+}
+function saveCSV() {
+  if (!csvRows.length) return;
+  const header = ["Timestamp","Token","BuyRouter","SellRouter","AmountUSDC","ProfitUSDC"];
+  const filename = `arbitrage_log_${Date.now()}.csv`;
+  fs.writeFileSync(filename, [header.join(","), ...csvRows].join("\n"));
+  console.log(`💾 CSV exported: ${filename}`);
+}
+
+// ---------- PROVIDER + WALLET ----------
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
+
+// ---------- VAULT CONTRACT ----------
+const arbAbi = [
+  {
+    "inputs": [
+      { "internalType": "address","name": "buyRouter","type": "address" },
+      { "internalType": "address","name": "sellRouter","type": "address" },
+      { "internalType": "address","name": "token","type": "address" },
+      { "internalType": "uint256","name": "amountIn","type": "uint256" },
+      { "internalType": "uint256","name": "minReturnUSDC","type": "uint256" }
+    ],
+    "name": "executeArbitrage",
+    "outputs": [], "stateMutability": "nonpayable","type": "function"
+  },
+  { "inputs": [], "name": "USDC", "outputs":[{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" },
+  { "inputs": [], "name": "owner", "outputs":[{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" }
+];
+const arbContract = DRY_RUN
+  ? new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider)
+  : new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+
+// ERC20 helper
+const erc20Abi = ["function balanceOf(address owner) view returns (uint256)"];
+let usdcContract;
+
+// ---------- INIT ----------
+async function init() {
+  const usdcAddr = await arbContract.USDC();
+  usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
+  const owner = await arbContract.owner();
+  console.log("🏛 Contract Address:", CONTRACT_ADDRESS);
+  console.log("👤 Contract Owner:", owner);
+  console.log("💱 USDC token address:", usdcAddr);
+}
+
+// ---------- HELPERS ----------
+function fmt(n, dec=6){ return Number(n).toFixed(dec); }
+async function getAmountsOutRaw(routerAddr, path, amountInUnits){
+  const router = new ethers.Contract(routerAddr,
+    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
+    provider
+  );
+  return await router.getAmountsOut(amountInUnits, path);
+}
+async function getAmountOut(routerAddr, token, amountUSDC){
+  const usdcAddress = await arbContract.USDC();
+  const path = [usdcAddress, token.address];
+  const amounts = await getAmountsOutRaw(routerAddr, path, ethers.parseUnits(amountUSDC.toString(), 6));
+  return Number(ethers.formatUnits(amounts[amounts.length-1], token.decimals));
+}
+async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDC){
+  const usdcAddr = await arbContract.USDC();
+  const amountInUnits = ethers.parseUnits(amountUSDC.toString(), 6);
+  const buyAmounts = await getAmountsOutRaw(buyRouter, [usdcAddr, tokenObj.address], amountInUnits);
+  const tokenAmount = buyAmounts[buyAmounts.length-1];
+  const sellAmounts = await getAmountsOutRaw(sellRouter, [tokenObj.address, usdcAddr], tokenAmount);
+  const expectedUSDCAfter = Number(ethers.formatUnits(sellAmounts[sellAmounts.length-1], 6));
+  const safetyMultiplier = 1 - (SLIPPAGE_PCT/100) - 0.0025;
+  return ethers.parseUnits((expectedUSDCAfter * safetyMultiplier).toFixed(6),6);
+}
+
+// ---------- EXECUTE TRADE ----------
+async function executeTrade(buyRouter, sellRouter, tokenAddr, amountUSDC){
+  const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase());
+  if(!tokenObj){ console.log("⛔ Token not whitelisted"); return; }
+
+  // Safety: skip identical routers
+  if(buyRouter.toLowerCase() === sellRouter.toLowerCase()) return;
+
+  const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+  const before = Number(ethers.formatUnits(beforeBal,6));
+  if(amountUSDC > before) {
+    console.log(`⚠️ Skipping trade — vault has insufficient USDC (${fmt(before)} < ${amountUSDC})`);
+    return;
+  }
+
+  const minReturnBN = await computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDC);
+
+  if(DRY_RUN){
+    console.log(`🧪 DRY_RUN: would trade ${amountUSDC} USDC on ${tokenAddr} | minReturn ${ethers.formatUnits(minReturnBN,6)}`);
+    return;
+  }
+
+  try {
+    const tx = await arbContract.executeArbitrage(
+      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(),6), minReturnBN
+    );
+    console.log(`🚀 Tx sent: ${tx.hash}`);
+    const receipt = await tx.wait();
+    if(receipt.status === 1){
+      const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+      const after = Number(ethers.formatUnits(afterBal,6));
+      console.log(`✅ Trade success. Profit: ${fmt(after-before)} USDC`);
+      logTradeCSV({ timestamp: new Date().toISOString(), symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: fmt(after-before) });
+    } else console.log("❌ Trade failed or reverted");
+  } catch(e){
+    console.log("❌ Trade execution error:", e.reason || e.message);
+  }
+}
+
+// ---------- SCAN LOOP ----------
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || MIN_TRADE_USDC);
+async function scanOnce(){
+  for(const [symbol, token] of Object.entries(tokens)){
+    for(const [buyName, buyRouter] of Object.entries(routers)){
+      for(const [sellName, sellRouter] of Object.entries(routers)){
+        if(buyRouter === sellRouter) continue;
+        try{
+          const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
+          const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
+          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
+          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
+          const expectedProfit = (sellPrice - buyPrice)*(1 - SLIPPAGE_PCT/100);
+          const profitPct = (expectedProfit/buyPrice)*100;
+          if(profitPct >= MIN_PROFIT_PCT){
+            console.log(`🚨 Arbitrage detected: ${symbol} ${buyName}->${sellName} estProfit ${fmt(expectedProfit)} USDC`);
+            await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
+          }
+        } catch(e){ console.warn("⚠️ Scan error:", e.message); }
+      }
+    }
+  }
+  saveCSV();
+}
+
+// ---------- MAIN LOOP ----------
+(async function main(){
+  await init();
+  console.log(`🚀 Arbitrage bot started (DRY_RUN=${DRY_RUN})`);
+  setInterval(async ()=>{
+    console.log("\n🔍 Scanning for arbitrage opportunities...");
+    await scanOnce();
+  }, TRADE_INTERVAL_MS);
+})();
