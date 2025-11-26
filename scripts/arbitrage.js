@@ -1,20 +1,27 @@
-// improved-arb-loop-dry.js
+// improved-arb-full.js
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
 import dotenv from "dotenv";
 dotenv.config();
 
 // ---------- CONFIG ----------
-const DRY_RUN = true; // FORCED TO TRUE
+const DRY_RUN = true; // force dry run for testing
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const PRIVATE_KEY = process.env.PRIVATE_KEY || ""; // not used in dry run
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
+
+if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
+
+// Deployed contract
 const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const TRADE_INTERVAL_MS = 30000; // 30 seconds
 
 // Trading defaults
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.012);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1);
+const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.005);
+const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0001);
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);
+const STABILITY_SAMPLES = Number(process.env.STABILITY_SAMPLES || 3);
+const STABILITY_DELAY_MS = Number(process.env.STABILITY_DELAY_MS || 150);
 
 // ---------- Routers & tokens ----------
 const routers = {
@@ -28,7 +35,7 @@ const tokens = {
   USDC: { address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 }
 };
 
-// ---------- CSV Logging ----------
+// CSV Logging
 const csvRows = [];
 function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC }) {
   csvRows.push([timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC].join(","));
@@ -43,27 +50,33 @@ function saveCSV() {
 
 // ---------- PROVIDER + WALLET ----------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = null; // DRY_RUN
+const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
 
-// ---------- VAULT CONTRACT ----------
+// ---------- VAULT CONTRACT ABIs ----------
 const arbAbi = [
   {
     "inputs": [
-      { "internalType": "address","name": "buyRouter","type": "address" },
-      { "internalType": "address","name": "sellRouter","type": "address" },
-      { "internalType": "address","name": "token","type": "address" },
-      { "internalType": "uint256","name": "amountIn","type": "uint256" },
-      { "internalType": "uint256","name": "minReturnUSDC","type": "uint256" }
+      { "internalType": "address", "name": "buyRouter", "type": "address" },
+      { "internalType": "address", "name": "sellRouter", "type": "address" },
+      { "internalType": "address", "name": "token", "type": "address" },
+      { "internalType": "uint256", "name": "amountIn", "type": "uint256" },
+      { "internalType": "uint256", "name": "minReturnUSDC", "type": "uint256" }
     ],
     "name": "executeArbitrage",
-    "outputs": [], "stateMutability": "nonpayable","type":"function"
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
   },
-  { "inputs": [], "name": "USDC", "outputs":[{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" },
-  { "inputs": [], "name": "owner", "outputs":[{"internalType":"address","name":"","type":"address"}], "stateMutability":"view","type":"function" }
+  { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
 ];
 
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider);
-const erc20Abi = ["function balanceOf(address owner) view returns (uint256)"];
+const arbContract = DRY_RUN
+  ? new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider)
+  : new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+
+// USDC ERC20 helper
+const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
 let usdcContract;
 
 // ---------- INIT ----------
@@ -87,69 +100,103 @@ async function getAmountsOutRaw(routerAddr, path, amountInUnits){
 }
 async function getAmountOut(routerAddr, token, amountUSDC){
   const usdcAddress = await arbContract.USDC();
+  if (token.address.toLowerCase() === usdcAddress.toLowerCase()) return amountUSDC;
   const path = [usdcAddress, token.address];
-  const amounts = await getAmountsOutRaw(routerAddr, path, ethers.parseUnits(amountUSDC.toString(), 6));
-  return Number(ethers.formatUnits(amounts[amounts.length-1], token.decimals));
+  try {
+    const amounts = await getAmountsOutRaw(routerAddr, path, ethers.parseUnits(amountUSDC.toString(), 6));
+    return Number(ethers.formatUnits(amounts[amounts.length-1], token.decimals));
+  } catch(e) {
+    if(DRY_RUN) return 0;
+    throw e;
+  }
 }
+
+// ---------- MIN RETURN COMPUTE ----------
 async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDC){
   const usdcAddr = await arbContract.USDC();
   const amountInUnits = ethers.parseUnits(amountUSDC.toString(), 6);
-  const buyAmounts = await getAmountsOutRaw(buyRouter, [usdcAddr, tokenObj.address], amountInUnits);
+  let buyAmounts = await getAmountsOutRaw(buyRouter, [usdcAddr, tokenObj.address], amountInUnits);
   const tokenAmount = buyAmounts[buyAmounts.length-1];
-  const sellAmounts = await getAmountsOutRaw(sellRouter, [tokenObj.address, usdcAddr], tokenAmount);
+  let sellAmounts = await getAmountsOutRaw(sellRouter, [tokenObj.address, usdcAddr], tokenAmount);
   const expectedUSDCAfter = Number(ethers.formatUnits(sellAmounts[sellAmounts.length-1], 6));
   const safetyMultiplier = 1 - (SLIPPAGE_PCT/100) - 0.0025;
   return ethers.parseUnits((expectedUSDCAfter * safetyMultiplier).toFixed(6),6);
 }
 
-// ---------- EXECUTE TRADE ----------
+// ---------- EXECUTE ARBITRAGE ----------
 async function executeTrade(buyRouter, sellRouter, tokenAddr, amountUSDC){
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase());
   if(!tokenObj){ console.log("⛔ Token not whitelisted"); return; }
-  if(buyRouter.toLowerCase() === sellRouter.toLowerCase()) return;
-
   const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-  const before = Number(ethers.formatUnits(beforeBal,6));
-  if(amountUSDC > before) {
-    console.log(`⚠️ Skipping trade — vault has insufficient USDC (${fmt(before)} < ${amountUSDC})`);
+  const before = Number(ethers.formatUnits(beforeBal, 6));
+  const minReturnBN = await computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDC);
+
+  if(DRY_RUN){
+    console.log(`🧪 DRY_RUN: would trade ${amountUSDC} USDC on ${tokenAddr} | minReturn ${ethers.formatUnits(minReturnBN,6)}`);
     return;
   }
 
-  const minReturnBN = await computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDC);
-  console.log(`🧪 DRY_RUN: would trade ${amountUSDC} USDC on ${tokenAddr} | minReturn ${ethers.formatUnits(minReturnBN,6)}`);
+  const tx = await arbContract.executeArbitrage(
+    buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(), 6), minReturnBN
+  );
+  console.log(`🚀 Tx sent: ${tx.hash}`);
+  const receipt = await tx.wait();
+  if(receipt.status === 1){
+    const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    const after = Number(ethers.formatUnits(afterBal, 6));
+    console.log(`✅ Trade success. Profit: ${fmt(after-before)} USDC`);
+    csvRows.push([new Date().toISOString(), tokenAddr, buyRouter, sellRouter, amountUSDC, fmt(after-before)].join(","));
+  } else {
+    console.log("❌ Trade failed or reverted");
+  }
 }
 
 // ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = MIN_TRADE_USDC;
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || MIN_TRADE_USDC);
+
 async function scanOnce(){
+  console.log("🔍 Scanning for arbitrage opportunities...");
   for(const [symbol, token] of Object.entries(tokens)){
+    const prices = [];
     for(const [buyName, buyRouter] of Object.entries(routers)){
       for(const [sellName, sellRouter] of Object.entries(routers)){
-        if(buyRouter === sellRouter) continue;
-        try{
+        if(buyRouter===sellRouter) continue;
+        try {
           const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
+          if(buyOut <= 0 || sellOut <= 0) continue;
           const buyPrice = TRADE_AMOUNT_USDC / buyOut;
           const sellPrice = TRADE_AMOUNT_USDC / sellOut;
           const expectedProfit = (sellPrice - buyPrice)*(1 - SLIPPAGE_PCT/100);
-          const profitPct = (expectedProfit/buyPrice)*100;
-          if(profitPct >= MIN_PROFIT_PCT){
+          prices.push({ buyName, sellName, buyPrice, sellPrice, expectedProfit });
+
+          if(expectedProfit/ buyPrice*100 >= MIN_PROFIT_PCT){
             console.log(`🚨 Arbitrage detected: ${symbol} ${buyName}->${sellName} estProfit ${fmt(expectedProfit)} USDC`);
             await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
-        } catch(e){ console.warn("⚠️ Scan error:", e.reason || e.message); }
+        } catch(e){
+          if(DRY_RUN) continue; 
+          else console.warn("⚠️ Scan error:", e.message);
+        }
       }
+    }
+
+    // print summary table for token
+    if(prices.length){
+      console.log(`\n💹 ${symbol} Price Summary:`);
+      prices.forEach(p=>{
+        console.log(`Buy: ${p.buyName} ${fmt(p.buyPrice)} | Sell: ${p.sellName} ${fmt(p.sellPrice)} | 💰 Profit: ${fmt(p.expectedProfit)} USDC`);
+      });
+      console.log("");
     }
   }
   saveCSV();
 }
 
 // ---------- MAIN LOOP ----------
-(async function main(){
+(async()=>{
   await init();
-  console.log(`🚀 Arbitrage bot started (DRY_RUN=${DRY_RUN})`);
-  setInterval(async ()=>{
-    console.log("\n🔍 Scanning for arbitrage opportunities...");
-    await scanOnce();
-  }, TRADE_INTERVAL_MS);
+  console.log("🚀 Arbitrage bot started (DRY_RUN=true)");
+
+  setInterval(scanOnce, 30000); // every 30s
 })();
