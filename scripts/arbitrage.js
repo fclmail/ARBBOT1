@@ -15,7 +15,7 @@ const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trading defaults
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.01); // % profit over buy
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.055);    // min trade size in USDC
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.06);    // min trade size in USDC
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.002);    // gas conservative estimate
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.00001);
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);     // slippage allowance %
