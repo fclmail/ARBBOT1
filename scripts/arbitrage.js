@@ -13,7 +13,7 @@ const TRADE_INTERVAL_MS = 30000; // 30 seconds
 
 // Trading defaults
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.05);
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);
 
 // ---------- Routers & tokens ----------
