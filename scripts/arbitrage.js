@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ---------- CONFIG ----------
-const DRY_RUN = true; // force dry run for testing
+const DRY_RUN = false; // force dry run for testing
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 
@@ -16,7 +16,7 @@ const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trading defaults
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.01);
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.005);
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0001);
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.3);
