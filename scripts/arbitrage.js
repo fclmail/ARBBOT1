@@ -13,12 +13,10 @@ const DRY_RUN = (process.env.DRY_RUN || "false").toLowerCase() === "true";
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const TRADE_USDC = 1;              // 1 USDC per trade
-const MIN_PROFIT_PCT = 0.0002;     // 0.02% minimum profit
+const TRADE_USDC = 1;          // 1 USDC per trade
+const MIN_PROFIT_PCT = 0.0002; // 0.02%
 const USDC_DECIMALS = 6;
-
-// Simple gas/fee placeholder in USDC units
-const ESTIMATED_GAS_COST_USDC = 0.001; // adjust as needed
+const ESTIMATED_GAS_COST_USDC = 0.001;
 
 // ---------------- PROVIDER & WALLET ----------------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -59,7 +57,8 @@ const toDisplay = (n, d = 6) => Number(n).toFixed(d);
 async function getVaultUSDCBalanceBN() {
   const usdcAddr = await vaultContract.USDC();
   const usdc = new ethers.Contract(usdcAddr, erc20Abi, provider);
-  return await usdc.balanceOf(VAULT_ADDRESS);
+  const balance = await usdc.balanceOf(VAULT_ADDRESS);
+  return ethers.BigNumber.from(balance);
 }
 
 // Compute expected profit for a trade
@@ -74,10 +73,10 @@ async function getExpectedProfit(buyRouterAddr, sellRouterAddr, tokenObj, tradeA
 
   try {
     const bought = await buyRouter.getAmountsOut(amountInBN, buyPath);
-    const tokenAmountBN = bought[bought.length - 1];
+    const tokenAmountBN = ethers.BigNumber.from(bought[bought.length - 1]);
 
     const sold = await sellRouter.getAmountsOut(tokenAmountBN, sellPath);
-    const usdcOutBN = sold[sold.length - 1];
+    const usdcOutBN = ethers.BigNumber.from(sold[sold.length - 1]);
 
     const profitBN = usdcOutBN.sub(amountInBN);
     const profitUSDC = fromUSDCbn(profitBN);
@@ -94,11 +93,7 @@ async function getExpectedProfit(buyRouterAddr, sellRouterAddr, tokenObj, tradeA
 async function simulateAndExecute(buyRouterAddr, sellRouterAddr, tokenObj, amountInBN, minReturnUSDCBN) {
   try {
     await vaultContract.callStatic.executeArbitrage(
-      buyRouterAddr,
-      sellRouterAddr,
-      tokenObj.address,
-      amountInBN,
-      minReturnUSDCBN
+      buyRouterAddr, sellRouterAddr, tokenObj.address, amountInBN, minReturnUSDCBN
     );
   } catch (e) {
     throw new Error(`Simulation failed: ${e?.message ?? e}`);
@@ -107,25 +102,17 @@ async function simulateAndExecute(buyRouterAddr, sellRouterAddr, tokenObj, amoun
   if (DRY_RUN) return { txHash: null, profitRealUSDC: 0 };
 
   const before = await getVaultUSDCBalanceBN();
-
   let txOpts = { gasLimit: 1_200_000 };
   try {
     const feeData = await provider.getFeeData();
     if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
       txOpts.maxFeePerGas = feeData.maxFeePerGas;
       txOpts.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
-    } else if (feeData.gasPrice) {
-      txOpts.gasPrice = feeData.gasPrice;
-    }
+    } else if (feeData.gasPrice) txOpts.gasPrice = feeData.gasPrice;
   } catch {}
 
   const tx = await vaultContract.executeArbitrage(
-    buyRouterAddr,
-    sellRouterAddr,
-    tokenObj.address,
-    amountInBN,
-    minReturnUSDCBN,
-    txOpts
+    buyRouterAddr, sellRouterAddr, tokenObj.address, amountInBN, minReturnUSDCBN, txOpts
   );
   console.log(`TX sent: ${tx.hash}`);
   const receipt = await tx.wait();
@@ -139,7 +126,6 @@ async function simulateAndExecute(buyRouterAddr, sellRouterAddr, tokenObj, amoun
 // ---------------- MAIN LOOP ----------------
 async function mainLoop() {
   const tokenList = [tokens.WETH, tokens.WBTC, tokens.CRV];
-
   console.log(`🚀 Starting continuous arb bot (DRY_RUN=${DRY_RUN})...`);
 
   while (true) {
@@ -159,12 +145,12 @@ async function mainLoop() {
             console.log(
               `SCAN: Buy=${buyName} Sell=${sellName} Token=${tokenObj.address} ` +
               `TRADE_USDC=${TRADE_USDC} grossProfitUSDC=${toDisplay(profitUSDC)} ` +
-              `profitPct=${(profitPct * 100).toFixed(4)}% netProfitUSDC=${toDisplay(netProfitUSDC)} ` +
-              `netProfitPct=${(netProfitPct * 100).toFixed(4)}%`
+              `profitPct=${(profitPct*100).toFixed(4)}% netProfitUSDC=${toDisplay(netProfitUSDC)} ` +
+              `netProfitPct=${(netProfitPct*100).toFixed(4)}%`
             );
 
             if (netProfitUSDC > 0 && profitPct >= MIN_PROFIT_PCT) {
-              console.log(`✅ ARB VIABLE (net positive). Attempting execution...`);
+              console.log(`✅ ARB VIABLE. Attempting execution...`);
               try {
                 const { txHash, profitRealUSDC, receipt } = await simulateAndExecute(
                   buyAddr, sellAddr, tokenObj, amountInBN, toUSDCbn(TRADE_USDC)
@@ -178,7 +164,6 @@ async function mainLoop() {
               console.log(`ARB SKIPPED: netProfitUSDC=${toDisplay(netProfitUSDC)} USDC`);
             }
 
-            // Gentle pacing between pairs
             await new Promise(r => setTimeout(r, 100));
           }
         }
@@ -187,7 +172,6 @@ async function mainLoop() {
       console.error(`Error in mainLoop: ${err?.message ?? err}`);
     }
 
-    // Sleep 10s before next full scan
     await new Promise(r => setTimeout(r, 10000));
   }
 }
