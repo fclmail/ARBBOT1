@@ -13,7 +13,7 @@ dotenv.config();
 
 // ---------------- CONFIG ----------------
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const DRY_RUN = true;             // <--- set false to go live
+const DRY_RUN = false;             // <--- set false to go live
 const LOOP_DELAY_MS = 5000;       // 5s loop
 const PRIVATE_KEY = process.env.PRIVATE_KEY || ""; // required if DRY_RUN=false
 const TRADE_USDC = 0.05;          // USDC per arbitrage
