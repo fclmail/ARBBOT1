@@ -1,10 +1,19 @@
-/* arb.js
-   - HTML-style profit calc (price per 1 token)
-   - TRADE_USDC = 0.05
-   - DRY_RUN toggle (true/false)
-   - callStatic safety
-   - accurate decimal normalization and profit accounting
-*/
+// arb.js — Live-ready arbitrage bot
+// FEATURES
+// - Uses provided vault ABI + contract address
+// - USDC fixed to 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 (Polygon)
+// - TRADE_USDC = 0.05
+// - DRY_RUN toggle (default false = LIVE)
+// - callStatic pre-flight safety
+// - Accurate decimal normalization
+// - Uses getAmountsOut for token->USDC price per 1 token
+// - Executes vault.executeArbitrage(...) when profitable (>= MIN_PROFIT_PCT)
+// - Uses provider feeData (EIP-1559) when possible
+// - Decodes ArbitrageExecuted event from receipt
+// - Logs estimated & real net profit and cumulative totals
+//
+// WARNING: This file WILL send real transactions if DRY_RUN = false and PRIVATE_KEY is set.
+// Make sure you understand the financial risks and have funds available.
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
@@ -13,222 +22,259 @@ dotenv.config();
 
 // ---------------- CONFIG ----------------
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const DRY_RUN = false;             // <--- set false to go live
-const LOOP_DELAY_MS = 5000;       // 5s loop
-const PRIVATE_KEY = process.env.PRIVATE_KEY || ""; // required if DRY_RUN=false
-const TRADE_USDC = 0.05;          // USDC per arbitrage
-const MIN_PROFIT_PCT = 0.2;       // require >= 0.2% to execute
+const PRIVATE_KEY = process.env.PRIVATE_KEY || ""; // REQUIRED if DRY_RUN=false
+let DRY_RUN = false; // <--- set to false for live execution (you asked LIVE)
+const LOOP_DELAY_MS = 5000; // 5s loop
+const TRADE_USDC = 0.05; // USDC per arbitrage (0.05)
+const MIN_PROFIT_PCT = 0.2; // 0.2% threshold (relative to price per 1 token)
+const VERBOSE = true; // set false to quiet logs
 
-if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY is required for live mode");
+if (!DRY_RUN && !PRIVATE_KEY) {
+  throw new Error("PRIVATE_KEY is required for live mode (DRY_RUN=false)");
+}
 
 // ---------------- PROVIDER & WALLET ----------------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
 
-// ---------------- ROUTERS (UniswapV2-style) ----------------
+// ---------------- ROUTERS ----------------
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
 // ---------------- TOKENS ----------------
-// Keep token symbol, address, decimals for normalization
 const tokens = {
   WETH: { address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", symbol: "WETH", decimals: 18 },
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", symbol: "WBTC", decimals: 8 },
   CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", symbol: "CRV",  decimals: 18 }
 };
 
-// ---------------- VAULT ----------------
+// ---------------- VAULT & ABI (provided) ----------------
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const vaultAbi = [
-  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountInUSDC,uint256 minReturnUSDC) external",
-  "function USDC() view returns(address)"
+const VAULT_ABI = [
+  {
+    "inputs":[{"internalType":"address","name":"_usdc","type":"address"},{"internalType":"uint256","name":"_minProfitUSDC","type":"uint256"}],
+    "stateMutability":"nonpayable","type":"constructor"
+  },
+  {"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"executor","type":"address"},{"indexed":true,"internalType":"address","name":"buyRouter","type":"address"},{"indexed":true,"internalType":"address","name":"sellRouter","type":"address"},{"indexed":false,"internalType":"address","name":"token","type":"address"},{"indexed":false,"internalType":"uint256","name":"amountIn","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"beforeUSDC","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"afterUSDC","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"profitUSDC","type":"uint256"}],"name":"ArbitrageExecuted","type":"event"},
+  {"inputs":[{"internalType":"address","name":"buyRouter","type":"address"},{"internalType":"address","name":"sellRouter","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountInUSDC","type":"uint256"},{"internalType":"uint256","name":"minReturnUSDC","type":"uint256"}],"name":"executeArbitrage","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"anonymous":false,"inputs":[{"indexed":false,"internalType":"uint256","name":"newMinProfit","type":"uint256"}],"name":"MinProfitUpdated","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"previousOwner","type":"address"},{"indexed":true,"internalType":"address","name":"newOwner","type":"address"}],"name":"OwnershipTransferred","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":false,"internalType":"bool","name":"isPaused","type":"bool"}],"name":"Paused","type":"event"},
+  {"anonymous":false,"inputs":[{"indexed":false,"internalType":"address","name":"token","type":"address"},{"indexed":false,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"}],"name":"Rescue","type":"event"},
+  {"inputs":[{"internalType":"address","name":"token","type":"address"},{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"rescueToken","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"uint256","name":"_minProfitUSDC","type":"uint256"}],"name":"setMinProfit","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"bool","name":"_p","type":"bool"}],"name":"setPaused","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"address","name":"newOwner","type":"address"}],"name":"transferOwnership","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[],"name":"minProfitUSDC","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"paused","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"USDC","outputs":[{"internalType":"contract IERC20","name":"","type":"address"}],"stateMutability":"view","type":"function"}
 ];
-// When live, instantiate with signer (wallet), else use provider-only contract
-const vaultContract = (DRY_RUN) ? new ethers.Contract(VAULT_ADDRESS, vaultAbi, provider) : new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+
+// instantiate vault contract with provider or signer
+const vaultContract = DRY_RUN ? new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, provider) : new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 
 // ---------------- ABIs ----------------
 const routerAbi = ["function getAmountsOut(uint256 amountIn, address[] memory path) view returns (uint256[])"];
-const erc20Abi = [
-  "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)"
-];
+const erc20Abi = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
+
+// ---------------- USDC (explicit) ----------------
+const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // polygon USDC
+const USDC_DECIMALS = 6;
 
 // ---------------- STATE ----------------
-let cumulativeProfitEstimated = 0; // running estimated profit (USDC)
-let cumulativeProfitReal = 0;      // running real profit (USDC) when DRY_RUN=false
+let cumulativeProfitEstimated = 0; // USDC estimated
+let cumulativeProfitReal = 0;      // USDC real (vault balance delta)
 
-// ---------------- UTIL HELPERS ----------------
+// ---------------- LOGGING HELPERS ----------------
 function logLine(msg, profitPct = null) {
   const t = new Date().toISOString();
   if (profitPct !== null) {
-    if (profitPct > 0) msg = `\x1b[32m${msg}\x1b[0m`; // green
-    else if (profitPct < 0) msg = `\x1b[31m${msg}\x1b[0m`; // red
+    if (profitPct > 0) msg = `\x1b[32m${msg}\x1b[0m`; // green for profit
+    else if (profitPct < 0) msg = `\x1b[31m${msg}\x1b[0m`; // red for negative
   }
   const line = `[${t}] ${msg}`;
   console.log(line);
   try { fs.appendFileSync("arb.log", line + "\n"); } catch (e) { /* ignore */ }
 }
 
-// safe callAmountsOut (returns BigInt[])
-async function getAmountsOutSafe(routerAddr, path, amountIn) {
+// ---------------- UTIL HELPERS ----------------
+
+// parse decimal-normalized BigInt for token decimals
+function parseAmountToBN(amountStrOrNum, decimals) {
+  return ethers.parseUnits(amountStrOrNum.toString(), decimals);
+}
+function formatBN(amountBn, decimals) {
+  return Number(ethers.formatUnits(amountBn, decimals));
+}
+
+// safe getAmountsOut (propagate errors)
+async function getAmountsOutSafe(routerAddr, path, amountInBn) {
+  const router = new ethers.Contract(routerAddr, routerAbi, provider);
+  return await router.getAmountsOut(amountInBn, path);
+}
+
+// get token decimals (use provided table or fall back to on-chain)
+const tokenDecimalsCache = {};
+async function getTokenDecimals(addr, fallback) {
+  if (tokenDecimalsCache[addr]) return tokenDecimalsCache[addr];
   try {
-    const router = new ethers.Contract(routerAddr, routerAbi, provider);
-    return await router.getAmountsOut(amountIn, path);
-  } catch (e) {
-    // propagate error upward so caller can decide
-    throw new Error(`getAmountsOut failed: ${e?.message ?? e}`);
+    const t = new ethers.Contract(addr, erc20Abi, provider);
+    const d = Number(await t.decimals());
+    tokenDecimalsCache[addr] = d;
+    return d;
+  } catch {
+    tokenDecimalsCache[addr] = fallback ?? 18;
+    return tokenDecimalsCache[addr];
   }
 }
 
-// get decimals for ERC20 (cached)
-const decimalsCache = {};
-async function getTokenDecimals(addr) {
-  if (decimalsCache[addr]) return decimalsCache[addr];
-  const token = new ethers.Contract(addr, erc20Abi, provider);
-  const d = await token.decimals();
-  decimalsCache[addr] = Number(d);
-  return Number(d);
-}
-
-// format big-int amount using decimals -> number
-function formatAmount(amountBn, decimals) {
-  try {
-    return Number(ethers.formatUnits(amountBn, decimals));
-  } catch (e) {
-    // fallback safe
-    return Number(amountBn.toString()) / Math.pow(10, decimals);
-  }
-}
-
-// parse number to BigInt units
-function parseAmount(num, decimals) {
-  return ethers.parseUnits(num.toString(), decimals);
-}
-
-// Get vault USDC address + decimals once
-let USDC_ADDRESS = null;
-let USDC_DECIMALS = 6;
-async function ensureUSDCInfo() {
-  if (!USDC_ADDRESS) {
-    USDC_ADDRESS = await vaultContract.USDC();
-    try { USDC_DECIMALS = await getTokenDecimals(USDC_ADDRESS); } catch (e) { USDC_DECIMALS = 6; }
-  }
-}
-
-// Get vault USDC balance (number)
-async function getVaultUSDCBalance() {
-  await ensureUSDCInfo();
+// get vault USDC balance (number)
+async function getVaultUSDCBalanceNumber() {
   const usdc = new ethers.Contract(USDC_ADDRESS, erc20Abi, provider);
   const bal = await usdc.balanceOf(VAULT_ADDRESS);
   return Number(ethers.formatUnits(bal, USDC_DECIMALS));
 }
 
-// compute buyPrice and sellPrice (USDC per 1 token) with normalization
-async function getPrices(buyRouter, sellRouter, tokenObj) {
-  await ensureUSDCInfo();
+// compute prices: USDC per 1 token (normalized numbers)
+async function getPrices_USDCperToken(buyRouter, sellRouter, tokenObj) {
   const tokenDecimals = tokenObj.decimals;
-  // amount = 1 token (raw)
-  const oneTokenUnits = parseAmount("1", tokenDecimals);
+  const oneTokenBN = parseAmountToBN("1", tokenDecimals);
 
-  // buyPrice: USDC required to buy 1 token (getAmountsOut from USDC->token for 1 USDC doesn't work; we want USDC per token)
-  // Use getAmountsOut with input = 1 token -> output in USDC by path [token, USDC]
-  // But to get USDC per 1 token: call getAmountsOut(buyRouter, [USDC, token], amountIn = x USDC) to compute token output for x USDC,
-  // easier approach: getAmountsOut(router, [token, USDC], oneTokenUnits) => USDC amount for 1 token => price
-  let buyPriceUSDC, sellPriceUSDC;
+  let buyPrice = 0;
+  let sellPrice = 0;
 
+  // For buyPrice: amount of USDC you'd get if you SOLD 1 token on the buyRouter (token -> USDC)
   try {
-    // Price on buy router: how many USDC do you get if you SELL 1 token on buy router? That gives USDC per token
-    const buyAmounts = await getAmountsOutSafe(buyRouter, [tokenObj.address, USDC_ADDRESS], oneTokenUnits);
-    buyPriceUSDC = formatAmount(buyAmounts[buyAmounts.length - 1], USDC_DECIMALS);
+    const buyOut = await getAmountsOutSafe(buyRouter, [tokenObj.address, USDC_ADDRESS], oneTokenBN);
+    const usdcOutBn = buyOut[buyOut.length - 1];
+    buyPrice = formatBN(usdcOutBn, USDC_DECIMALS);
   } catch (e) {
-    // fallback: try reverse path (USDC -> token) and compute invert; but only if previous fails
+    // fallback attempt: invert USDC -> token quote for 1 USDC and compute 1/(tokens per USDC)
     try {
-      const guess = await getAmountsOutSafe(buyRouter, [USDC_ADDRESS, tokenObj.address], parseAmount("1", USDC_DECIMALS));
-      const tokensPer1USDC = formatAmount(guess[guess.length - 1], tokenDecimals);
-      if (tokensPer1USDC === 0) buyPriceUSDC = 0;
-      else buyPriceUSDC = 1.0 / tokensPer1USDC;
-    } catch (e2) {
-      buyPriceUSDC = 0;
+      const guess = await getAmountsOutSafe(buyRouter, [USDC_ADDRESS, tokenObj.address], parseAmountToBN("1", USDC_DECIMALS));
+      const tokensPer1USDC = formatBN(guess[guess.length - 1], tokenDecimals);
+      buyPrice = tokensPer1USDC === 0 ? 0 : (1 / tokensPer1USDC);
+    } catch {
+      buyPrice = 0;
     }
   }
 
+  // For sellPrice: amount of USDC you'd get if you SOLD 1 token on the sellRouter (token -> USDC)
   try {
-    // Price on sell router: USDC per 1 token
-    const sellAmounts = await getAmountsOutSafe(sellRouter, [tokenObj.address, USDC_ADDRESS], oneTokenUnits);
-    sellPriceUSDC = formatAmount(sellAmounts[sellAmounts.length - 1], USDC_DECIMALS);
+    const sellOut = await getAmountsOutSafe(sellRouter, [tokenObj.address, USDC_ADDRESS], oneTokenBN);
+    const usdcOutBn = sellOut[sellOut.length - 1];
+    sellPrice = formatBN(usdcOutBn, USDC_DECIMALS);
   } catch (e) {
     try {
-      const guess = await getAmountsOutSafe(sellRouter, [USDC_ADDRESS, tokenObj.address], parseAmount("1", USDC_DECIMALS));
-      const tokensPer1USDC = formatAmount(guess[guess.length - 1], tokenDecimals);
-      if (tokensPer1USDC === 0) sellPriceUSDC = 0;
-      else sellPriceUSDC = 1.0 / tokensPer1USDC;
-    } catch (e2) {
-      sellPriceUSDC = 0;
+      const guess = await getAmountsOutSafe(sellRouter, [USDC_ADDRESS, tokenObj.address], parseAmountToBN("1", USDC_DECIMALS));
+      const tokensPer1USDC = formatBN(guess[guess.length - 1], tokenDecimals);
+      sellPrice = tokensPer1USDC === 0 ? 0 : (1 / tokensPer1USDC);
+    } catch {
+      sellPrice = 0;
     }
   }
 
-  return { buyPriceUSDC, sellPriceUSDC };
+  return { buyPrice, sellPrice };
 }
 
-// estimate net profit (USDC) based on TRADE_USDC and price difference (HTML-style)
-function estimateNetProfit_USDC(tradeUSDC, buyPrice, sellPrice) {
+// estimate net profit in USDC (HTML-style): tradeUSDC * (sellPrice - buyPrice) / buyPrice
+function estimateNetProfitUSDC(tradeUSDC, buyPrice, sellPrice) {
   if (!buyPrice || buyPrice === 0) return 0;
   const profitPct = (sellPrice - buyPrice) / buyPrice;
-  const net = tradeUSDC * profitPct;
-  return net;
+  return tradeUSDC * profitPct;
 }
 
-// Execute arbitrage via vault; amountInUSDC is BigInt with USDC_DECIMALS
-async function doExecuteArbitrage(buyRouter, sellRouter, tokenObj, amountInUSDC_BN) {
-  // callStatic simulation first (uses same signature)
+// do callStatic + send tx; returns object with txHash/receipt/profitReal (if calculated)
+async function executeOnVault(buyRouter, sellRouter, tokenObj, amountInUSDC_BN, minReturnUSDC_BN) {
+  // 1) callStatic (simulate)
   try {
-    // callStatic will throw if it would revert; if it returns undefined it's fine
+    // callStatic will throw if execution would revert
     await vaultContract.callStatic.executeArbitrage(
       buyRouter,
       sellRouter,
       tokenObj.address,
       amountInUSDC_BN,
-      0
+      minReturnUSDC_BN
     );
   } catch (e) {
-    // simulation failed
     throw new Error(`callStatic simulation failed: ${e?.message ?? e}`);
   }
 
-  // If DRY_RUN, do not send tx
-  if (DRY_RUN) {
-    return { success: true, txHash: null };
+  // 2) measure vault USDC before
+  const before = await getVaultUSDCBalanceNumber();
+
+  // 3) build gas options (prefer EIP-1559 fee data)
+  let txOptions = { gasLimit: 1_200_000 }; // upper bound, adjust if needed
+  try {
+    const feeData = await provider.getFeeData();
+    // feeData.maxFeePerGas and maxPriorityFeePerGas may be null on some providers
+    if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+      txOptions.maxFeePerGas = feeData.maxFeePerGas;
+      txOptions.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
+    } else if (feeData.gasPrice) {
+      txOptions.gasPrice = feeData.gasPrice;
+    }
+  } catch (e) {
+    // ignore fee suggestion errors
   }
 
-  // live: measure vault USDC before/after
-  const usdcBefore = await getVaultUSDCBalance();
-
-  // send tx
+  // 4) send tx (live)
   const tx = await vaultContract.executeArbitrage(
     buyRouter,
     sellRouter,
     tokenObj.address,
     amountInUSDC_BN,
-    0,
-    { gasLimit: 1000000 }
+    minReturnUSDC_BN,
+    txOptions
   );
   logLine(`TX sent: ${tx.hash}`);
   const receipt = await tx.wait();
-  const usdcAfter = await getVaultUSDCBalance();
-  const profitReal = usdcAfter - usdcBefore;
-  return { success: true, txHash: tx.hash, receipt, profitReal };
+
+  // 5) measure vault USDC after
+  const after = await getVaultUSDCBalanceNumber();
+
+  // 6) try to decode ArbitrageExecuted event from receipt logs (optional)
+  let eventDecoded = null;
+  try {
+    for (const log of receipt.logs) {
+      try {
+        const parsed = vaultContract.interface.parseLog(log);
+        if (parsed && parsed.name === "ArbitrageExecuted") {
+          eventDecoded = {
+            executor: parsed.args.executor,
+            buyRouter: parsed.args.buyRouter,
+            sellRouter: parsed.args.sellRouter,
+            token: parsed.args.token,
+            amountIn: parsed.args.amountIn.toString(),
+            beforeUSDC: Number(ethers.formatUnits(parsed.args.beforeUSDC, USDC_DECIMALS)),
+            afterUSDC: Number(ethers.formatUnits(parsed.args.afterUSDC, USDC_DECIMALS)),
+            profitUSDC: Number(ethers.formatUnits(parsed.args.profitUSDC, USDC_DECIMALS))
+          };
+          break;
+        }
+      } catch {
+        // parse may throw for logs that aren't our event; ignore
+      }
+    }
+  } catch {
+    eventDecoded = null;
+  }
+
+  const profitReal = after - before;
+  return { txHash: tx.hash, receipt, before, after, profitReal, eventDecoded };
 }
 
 // ---------------- MAIN LOOP ----------------
 async function mainLoop() {
-  await ensureUSDCInfo();
-  logLine(`Starting arb scanner. DRY_RUN=${DRY_RUN}, TRADE_USDC=${TRADE_USDC}`);
+  logLine(`Starting arb scanner. DRY_RUN=${DRY_RUN}, TRADE_USDC=${TRADE_USDC}, MIN_PROFIT_PCT=${MIN_PROFIT_PCT}%`);
 
-  // Pre-parse amountInUSDC BigInt for calls (USDC decimals)
-  const amountInUSDC_BN = ethers.parseUnits(TRADE_USDC.toString(), USDC_DECIMALS);
+  const amountInUSDC_BN = parseAmountToBN(TRADE_USDC.toString(), USDC_DECIMALS);
+  const minReturnUSDC_BN = 0n; // we use 0 for minReturn here (vault may require non-zero in production)
 
+  // token objects array
   const tokenList = Object.values(tokens);
 
   while (true) {
@@ -238,70 +284,64 @@ async function mainLoop() {
           if (buyRouter.toLowerCase() === sellRouter.toLowerCase()) continue;
 
           try {
-            // 1) Get normalized prices (USDC per 1 token)
-            const { buyPriceUSDC, sellPriceUSDC } = await getPrices(buyRouter, sellRouter, tokenObj);
+            // 1) compute buy/sell price (USDC per 1 token)
+            const { buyPrice, sellPrice } = await getPrices_USDCperToken(buyRouter, sellRouter, tokenObj);
 
-            // guard against invalid prices
-            if (!buyPriceUSDC || buyPriceUSDC === 0 || !Number.isFinite(buyPriceUSDC)) {
-              logLine(`Skipped ${tokenObj.symbol} ${buyName}->${sellName} | Invalid buyPrice: ${String(buyPriceUSDC)}`);
+            // validate numbers
+            if (!Number.isFinite(buyPrice) || buyPrice === 0) {
+              logLine(`Skipped ${tokenObj.symbol} ${buyName}->${sellName} | Invalid buyPrice: ${String(buyPrice)}`);
               continue;
             }
-            if (!sellPriceUSDC || !Number.isFinite(sellPriceUSDC)) {
-              logLine(`Skipped ${tokenObj.symbol} ${buyName}->${sellName} | Invalid sellPrice: ${String(sellPriceUSDC)}`);
+            if (!Number.isFinite(sellPrice) || sellPrice === 0) {
+              logLine(`Skipped ${tokenObj.symbol} ${buyName}->${sellName} | Invalid sellPrice: ${String(sellPrice)}`);
               continue;
             }
 
-            // 2) Compute profit % (HTML-style relative to price per 1 token)
-            const profitPct = ((sellPriceUSDC - buyPriceUSDC) / buyPriceUSDC) * 100;
+            // 2) compute profit pct (HTML-style relative to price per 1 token)
+            const profitPct = ((sellPrice - buyPrice) / buyPrice) * 100;
 
-            // 3) Estimate net profit for TRADE_USDC
-            const netProfitEstimated = estimateNetProfit_USDC(TRADE_USDC, buyPriceUSDC, sellPriceUSDC);
+            // 3) estimate net profit for TRADE_USDC
+            const netEst = estimateNetProfitUSDC(TRADE_USDC, buyPrice, sellPrice);
 
-            // 4) Logging colorized and detailed
-            const shortMsg = `Token=${tokenObj.symbol} | Buy:${buyName} | Sell:${sellName} | BuyPrice:${buyPriceUSDC.toFixed(6)} | SellPrice:${sellPriceUSDC.toFixed(6)} | ProfitPct:${profitPct.toFixed(3)}% | NetProfit💰:${netProfitEstimated.toFixed(6)}`;
+            // short log message
+            const msgShort = `Token=${tokenObj.symbol} | Buy:${buyName} | Sell:${sellName} | BuyPrice:${buyPrice.toFixed(6)} | SellPrice:${sellPrice.toFixed(6)} | ProfitPct:${profitPct.toFixed(3)}% | EstNet💰:${netEst.toFixed(6)}`;
 
-            // If profitable over threshold, attempt execution
+            // 4) take decision
             if (profitPct >= MIN_PROFIT_PCT) {
+              // candidate
               if (DRY_RUN) {
-                cumulativeProfitEstimated += netProfitEstimated;
-                logLine(`DRY RUN: Would execute → ${shortMsg} | CumProfitEst💰💰:${cumulativeProfitEstimated.toFixed(6)}`, profitPct);
+                cumulativeProfitEstimated += netEst;
+                logLine(`DRY RUN: WOULD EXECUTE → ${msgShort} | CumEst💰💰:${cumulativeProfitEstimated.toFixed(6)}`, profitPct);
               } else {
-                // Live mode: call doExecuteArbitrage with amountInUSDC_BN
+                // live attempt (callStatic inside executeOnVault)
                 try {
-                  // Real pre-check: simulate with callStatic inside doExecuteArbitrage
-                  const res = await doExecuteArbitrage(buyRouter, sellRouter, tokenObj, amountInUSDC_BN);
-                  if (res && res.success) {
-                    // If profitReal available, use it; else use estimate
-                    let profitReal = 0;
-                    if (res.hasOwnProperty("profitReal") && typeof res.profitReal === "number") {
-                      profitReal = res.profitReal;
-                      cumulativeProfitReal += profitReal;
-                    } else {
-                      // fallback: use estimated profit
-                      profitReal = netProfitEstimated;
-                      cumulativeProfitReal += profitReal;
-                    }
-                    logLine(`${shortMsg} | TX:${res.txHash} | NetReal💰:${profitReal.toFixed(6)} | CumProfitReal💰💰:${cumulativeProfitReal.toFixed(6)}`, profitPct);
+                  const res = await executeOnVault(buyRouter, sellRouter, tokenObj, amountInUSDC_BN, minReturnUSDC_BN);
+                  // prefer event-decoded profit if available
+                  let profitReal = 0;
+                  if (res.eventDecoded && typeof res.eventDecoded.profitUSDC === "number") {
+                    profitReal = res.eventDecoded.profitUSDC;
                   } else {
-                    logLine(`Execution aborted (no result): ${shortMsg}`, profitPct);
+                    profitReal = res.profitReal;
                   }
-                } catch (e) {
-                  logLine(`⚠️ Execution failed for ${tokenObj.symbol} ${buyName}->${sellName}: ${e.message}`, null);
+                  cumulativeProfitReal += profitReal;
+                  logLine(`${msgShort} | TX:${res.txHash} | NetReal💰:${profitReal.toFixed(6)} | CumProfitReal💰💰:${cumulativeProfitReal.toFixed(6)}`, profitPct);
+                } catch (execErr) {
+                  logLine(`⚠️ Execution failed for ${tokenObj.symbol} ${buyName}->${sellName}: ${execErr?.message ?? execErr}`, null);
                 }
               }
             } else {
-              // Not profitable enough
-              logLine(`Skipped ${tokenObj.symbol} ${buyName}->${sellName} | ProfitPct:${profitPct.toFixed(3)}% | EstNet💰:${netProfitEstimated.toFixed(6)}`, profitPct);
+              // skip
+              logLine(`Skipped ${tokenObj.symbol} ${buyName}->${sellName} | ProfitPct:${profitPct.toFixed(3)}% | EstNet💰:${netEst.toFixed(6)}`, profitPct);
             }
 
-          } catch (err) {
-            logLine(`⚠️ Error scanning ${tokenObj.symbol} ${buyName}->${sellName}: ${err?.message ?? err}`, null);
+          } catch (e) {
+            logLine(`⚠️ Error scanning ${tokenObj.symbol} ${buyName}->${sellName}: ${e?.message ?? e}`, null);
           }
+        }
+      }
+    }
 
-        } // sellRouter loop
-      } // buyRouter loop
-    } // tokens loop
-
+    // loop delay
     await new Promise(r => setTimeout(r, LOOP_DELAY_MS));
   }
 }
