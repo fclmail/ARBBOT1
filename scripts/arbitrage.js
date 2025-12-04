@@ -12,9 +12,9 @@ if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mod
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
-const TRADE_AMOUNT_USDC = 0.05; // 0.05 USDC per arbitrage
+const TRADE_AMOUNT_USDC = 10.05; // 0.05 USDC per arbitrage
 const PROFIT_PCT_THRESHOLD = 0.002; // 0.2% minimum profit (0.002 as fraction)
-const SLIPPAGE_PCT = 1; // 0.2% slippage (adjustable)
+const SLIPPAGE_PCT = .2; // 0.2% slippage (adjustable)
 const LOOP_DELAY_MS = 5000; // 5s loop
 
 // Vault balance hint (for decision context). If you want to fetch live balance, implement here.
