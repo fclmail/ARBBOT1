@@ -12,8 +12,8 @@ if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mod
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
-const TRADE_AMOUNT_USDC = 0.05; // 0.05 USDC
-const PROFIT_PCT_THRESHOLD = 0.002; // 0.2% minimum profit
+const TRADE_AMOUNT_USDC = 0.05; // 0.05 USDC per arbitrage opportunity
+const PROFIT_PCT_THRESHOLD = 0.002; // 0.2% minimum profit (0.002 as fraction)
 const SLIPPAGE_PCT = 0.1; // 0.1% slippage
 const LOOP_DELAY_MS = 5000; // 5s loop
 
@@ -49,6 +49,19 @@ const erc20Abi = ["function balanceOf(address) view returns(uint256)"];
 const routerAbi = ["function getAmountsOut(uint256 amountIn, address[] memory path) view returns (uint256[])"];
 
 function fmt(n, dec=6){ return Number(n).toFixed(dec); }
+
+// Logging helper
+function logLine(msg){
+  const t = new Date().toISOString();
+  const line = `[${t}] ${msg}`;
+  console.log(line);
+  // Append to a log file if desired
+  try {
+    fs.appendFileSync("arb.log", line + "\n");
+  } catch(e){
+    // ignore
+  }
+}
 
 async function getVaultUSDCBalanceBN(){
   const usdcAddr = await vaultContract.USDC();
@@ -92,82 +105,81 @@ async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDCF
   return (expectedUSDCOutBn * multiplierInt) / BASE;
 }
 
-async function executeTradeIfProfitable(buyRouter, sellRouter, tokenObj, amountUSDCFloat){
-  if (buyRouter.toLowerCase() === sellRouter.toLowerCase()) return;
+// Entry point: main loop
+async function mainLoop(){
+  // Example: scan for a known token to arbitrage against USDC
+  // We'll attempt arbitrage on each token we defined (WETH, WBTC, CRV)
+  const tokenList = [tokens.WETH, tokens.WBTC, tokens.CRV];
 
-  const beforeBn = await getVaultUSDCBalanceBN();
-  const minReturnBn = await computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDCFloat);
-  const amountInBn = ethers.parseUnits(amountUSDCFloat.toString(), 6);
+  while (true){
+    try {
+      for (const tokenObj of tokenList){
+        // We can try combinations: buy with USDC on buyRouter, sell back to USDC on sellRouter
+        // Choose routers (could be dynamic; here we iterate over pairs)
+        for (const [buyName, buyAddr] of Object.entries(routers)){
+          for (const [sellName, sellAddr] of Object.entries(routers)){
+            if (buyAddr.toLowerCase() === sellAddr.toLowerCase()) continue;
 
-  // calculate required min return using 0.2% threshold
-  const minProfitBn = (amountInBn * BigInt(Math.floor(PROFIT_PCT_THRESHOLD * 1e6))) / 1_000_000n;
-  const requiredReturnBn = amountInBn + minProfitBn;
+            // Compute min return USDC for amount TRADE_AMOUNT_USDC
+            const minReturnUSDCbn = await computeMinReturnUSDC(
+              buyAddr, sellAddr, tokenObj, TRADE_AMOUNT_USDC
+            );
+            // Convert to a number with decimals for comparison
+            // minReturnUSDCbn is in USDC with 6 decimals
+            const minReturnUSDC = Number(minReturnUSDCbn) / 1e6;
 
-  if (minReturnBn < requiredReturnBn) {
-    console.log(`💤 Not profitable: expected=${ethers.formatUnits(minReturnBn,6)} < required=${ethers.formatUnits(requiredReturnBn,6)}`);
-    return;
-  }
+            // Calculate profit as (minReturnUSDC - TRADE_AMOUNT_USDC) / TRADE_AMOUNT_USDC
+            // We want raw profit in USDC terms
+            const rawProfitUSDC = minReturnUSDC - TRADE_AMOUNT_USDC;
+            const profitPct = rawProfitUSDC / TRADE_AMOUNT_USDC;
 
-  if (DRY_RUN) {
-    console.log(`🧪 DRY_RUN: would execute arbitrage on ${tokenObj.address}`);
-    return;
-  }
+            // Log detail
+            logLine(`Scan: Buy on ${buyName}, Sell on ${sellName}, Token=${tokenObj.address}, TradeAmountUSDC=${TRADE_AMOUNT_USDC}, MinReturnUSDC=${minReturnUSDC.toFixed(6)}, ProfitUSDC=${rawProfitUSDC.toFixed(6)}, ProfitPct=${(profitPct*100).toFixed(4)}%`);
 
-  const iface = new ethers.Interface(vaultAbi);
-  const data = iface.encodeFunctionData("executeArbitrage", [buyRouter, sellRouter, tokenObj.address, amountInBn, minReturnBn]);
+            // Check threshold: 0.2% profit threshold
+            const requiredProfitUSDC = TRADE_AMOUNT_USDC * PROFIT_PCT_THRESHOLD;
+            if (rawProfitUSDC >= requiredProfitUSDC){
+              // Execute arbitrage via Vault
+              logLine(`Arb viable. Executing: buy ${buyName}, sell ${sellName}, token ${tokenObj.address}, amountUSDC=${TRADE_AMOUNT_USDC}, minReturnUSDC=${minReturnUSDC.toFixed(6)}`);
+              if (DRY_RUN){
+                logLine(`DRY RUN: would call vault.executeArbitrage(...) with minReturnUSDC=${minReturnUSDC.toFixed(6)}`);
+              } else {
+                try {
+                  const tx = await vaultContract.executeArbitrage(
+                    buyAddr,
+                    sellAddr,
+                    tokenObj.address,
+                    ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6),
+                    ethers.parseUnits(minReturnUSDC.toFixed(6).toString(), 6)
+                  );
+                  logLine(`TX sent: ${tx.hash}`);
+                  const receipt = await tx.wait();
+                  logLine(`TX mined in block ${receipt.blockNumber}, status ${receipt.status}`);
+                } catch (e) {
+                  logLine(`Arb execute failed: ${e.message || e}`);
+                }
+              }
+            } else {
+              // Not profitable enough; skip
+              logLine(`Arb skipped: profit ${ (rawProfitUSDC).toFixed(6) } USDC (< threshold ${ requiredProfitUSDC.toFixed(6) } USDC)`);
+            }
 
-  try {
-    await provider.call({ to: VAULT_ADDRESS, data, from: wallet.address });
-  } catch {
-    console.warn("❌ Simulation failed, skipping trade");
-    return;
-  }
-
-  try {
-    const gasEstimate = await provider.estimateGas({ to: VAULT_ADDRESS, data, from: wallet.address });
-    const gasLimit = gasEstimate * 120n / 100n;
-    const tx = await wallet.sendTransaction({ to: VAULT_ADDRESS, data, gasLimit });
-    console.log("🚀 Tx sent:", tx.hash);
-    const receipt = await tx.wait();
-    if (receipt && receipt.status === 1) {
-      const afterBn = await getVaultUSDCBalanceBN();
-      const realProfitBn = afterBn - beforeBn;
-      console.log(`✅ Trade completed. Profit: ${fmt(Number(ethers.formatUnits(realProfitBn,6)))} USDC`);
-    } else {
-      console.log("❌ Transaction failed");
-    }
-  } catch (e) {
-    console.warn("❌ Transaction error:", e.message || e);
-  }
-}
-
-async function scanOnce(){
-  const vaultBalBn = await getVaultUSDCBalanceBN();
-  const vaultBalFloat = Number(ethers.formatUnits(vaultBalBn, 6));
-  if (vaultBalFloat < TRADE_AMOUNT_USDC) {
-    console.log(`⚠️ Vault balance too low: ${vaultBalFloat} USDC (need ${TRADE_AMOUNT_USDC})`);
-    return;
-  }
-
-  for (const tokenObj of Object.values(tokens)) {
-    for (const buyRouter of Object.values(routers)) {
-      for (const sellRouter of Object.values(routers)) {
-        await executeTradeIfProfitable(buyRouter, sellRouter, tokenObj, TRADE_AMOUNT_USDC);
+            // Small delay between checks to avoid spamming
+            await new Promise(r => setTimeout(r, 50));
+          }
+        }
       }
+
+    } catch (err) {
+      logLine(`Error in mainLoop: ${err?.message ?? err}`);
     }
-  }
-}
 
-(async () => {
-  const owner = await vaultContract.owner();
-  const usdcAddr = await vaultContract.USDC();
-  console.log("🏛 Vault:", VAULT_ADDRESS);
-  console.log("👤 Owner:", owner);
-  console.log("💱 USDC:", usdcAddr);
-  console.log("🚀 Bot started (LIVE)");
-
-  while (true) {
-    await scanOnce();
+    // Wait before next scan iteration
     await new Promise(r => setTimeout(r, LOOP_DELAY_MS));
   }
-})();
+}
+
+// Start
+mainLoop().catch(err => {
+  logLine(`Fatal error: ${err?.message ?? err}`);
+});
