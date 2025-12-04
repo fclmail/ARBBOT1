@@ -16,7 +16,7 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
 // Hardcoded vault contract address
-const VAULT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
 const TRADE_AMOUNT_USDC = 0.05; // 0.05 USDC per trade
