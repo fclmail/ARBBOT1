@@ -112,7 +112,7 @@ async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDCF
   const expectedUSDCOutBn = sellAmounts[sellAmounts.length - 1]; // bigint
 
   // apply conservative safety multiplier: (1 - SLIPPAGE_PCT/100 - 0.0025)
-  const multFloat = Math.max(0, 1 - (SLIPPAGE_PCT / 100) - 0.0025);
+  const multFloat = Math.max(0, 1 - (SLIPPAGE_PCT / 100) - 1.0025);
   // Using integer math with 1e6 base
   const BASE = 1_000_000n;
   const multiplierInt = BigInt(Math.floor(multFloat * Number(BASE)));
