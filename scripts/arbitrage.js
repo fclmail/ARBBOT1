@@ -7,7 +7,7 @@ dotenv.config();
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const DRY_RUN = false; // true = simulation, false = live execution
 const LOOP_DELAY_MS = 5000; // 5s per scan
-const PRIVATE_KEY = process.env.PRIVATE_KEY || ""; // required for live trades
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 
 if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY is required for live mode");
 
@@ -29,9 +29,9 @@ const tokens = {
 };
 
 // ---------------- VAULT ----------------
-const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; // your vault
+const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; 
 const vaultAbi = [
-  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountIn,uint256 minReturnUSDC) external",
+  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountInUSDC,uint256 minReturnUSDC) external",
   "function USDC() view returns(address)"
 ];
 const vaultContract = DRY_RUN 
@@ -44,14 +44,14 @@ const erc20Abi = ["function balanceOf(address) view returns(uint256)"];
 
 // ---------------- TRADE SETTINGS ----------------
 const TRADE_USDC = 0.05; // USDC per arbitrage
-let cumulativeProfit = 0; // total profit 💰💰
+let cumulativeProfit = 0;
 
 // ---------------- HELPERS ----------------
 function logLine(msg, profitPct = null) {
   const t = new Date().toISOString();
   if (profitPct !== null) {
-    if (profitPct > 0) msg = `\x1b[32m${msg}\x1b[0m`; // green
-    else if (profitPct < 0) msg = `\x1b[31m${msg}\x1b[0m`; // red
+    if (profitPct > 0) msg = `\x1b[32m${msg}\x1b[0m`;
+    else if (profitPct < 0) msg = `\x1b[31m${msg}\x1b[0m`;
   }
   console.log(`[${t}] ${msg}`);
   try { fs.appendFileSync("arb.log", `[${t}] ${msg}\n`); } catch {}
@@ -62,7 +62,7 @@ async function getAmountsOut(routerAddr, path, amountIn) {
   return await router.getAmountsOut(amountIn, path);
 }
 
-// Convert USDC to token amount
+// Convert TRADE_USDC to token amount
 async function usdcToTokenAmount(buyRouter, tokenObj, usdcAmount) {
   const usdcAddr = await vaultContract.USDC();
   try {
@@ -74,19 +74,18 @@ async function usdcToTokenAmount(buyRouter, tokenObj, usdcAmount) {
 }
 
 // Execute arbitrage with callStatic safety
-async function executeArbitrage(buyRouter, sellRouter, tokenObj, amountTokens) {
+async function executeArbitrage(buyRouter, sellRouter, tokenObj, amountInUSDC) {
   if (DRY_RUN) {
-    logLine(`DRY RUN: Would execute arbitrage: ${tokenObj.symbol} Buy:${buyRouter} Sell:${sellRouter} Amount:${ethers.formatUnits(amountTokens, tokenObj.decimals)}`);
+    logLine(`DRY RUN: Would execute arbitrage: ${tokenObj.symbol} Buy:${buyRouter} Sell:${sellRouter} AmountUSDC:${TRADE_USDC}`);
     return 0;
   }
 
   try {
-    // callStatic simulation to prevent failed tx
     const canExecute = await vaultContract.callStatic.executeArbitrage(
       buyRouter,
       sellRouter,
       tokenObj.address,
-      amountTokens,
+      amountInUSDC,
       0
     ).catch(() => false);
 
@@ -99,16 +98,14 @@ async function executeArbitrage(buyRouter, sellRouter, tokenObj, amountTokens) {
       buyRouter,
       sellRouter,
       tokenObj.address,
-      amountTokens,
+      amountInUSDC,
       0
     );
     logLine(`TX sent: ${tx.hash}`);
     const receipt = await tx.wait();
     logLine(`TX mined: block ${receipt.blockNumber}, status ${receipt.status}`);
 
-    // For simplicity, net profit 💰 estimated from executed token amount * (sellPrice - buyPrice)
-    // Note: Real profit in USDC requires fetching vault USDC balance before/after
-    return amountTokens; // placeholder, could calculate exact USDC
+    return amountInUSDC; // USDC value of executed trade
   } catch (e) {
     logLine(`⚠️ Arb execution failed: ${e?.message ?? e}`);
     return 0;
@@ -118,6 +115,7 @@ async function executeArbitrage(buyRouter, sellRouter, tokenObj, amountTokens) {
 // ---------------- MAIN LOOP ----------------
 async function mainLoop() {
   const tokenList = Object.values(tokens);
+  const usdcAddr = await vaultContract.USDC();
 
   while (true) {
     for (const tokenObj of tokenList) {
@@ -128,39 +126,37 @@ async function mainLoop() {
           if (buyAddr.toLowerCase() === sellAddr.toLowerCase()) continue;
 
           try {
-            // Simulate buying TRADE_USDC worth of token
+            // Amount of tokens for TRADE_USDC
             const amountTokens = await usdcToTokenAmount(buyAddr, tokenObj, TRADE_USDC);
 
-            // Buy price (1 token)
-            const buyAmounts = await getAmountsOut(buyAddr, [tokens.WETH.address, tokenObj.address], ethers.parseUnits("1", tokenObj.decimals))
+            // Prices in USDC per 1 token
+            const buyAmounts = await getAmountsOut(buyAddr, [usdcAddr, tokenObj.address], ethers.parseUnits("1", tokenObj.decimals))
               .catch(() => [ethers.parseUnits("1", tokenObj.decimals), ethers.parseUnits("1", tokenObj.decimals)]);
-            const buyPrice = Number(ethers.formatUnits(buyAmounts[buyAmounts.length - 1], tokenObj.decimals));
+            const buyPrice = Number(ethers.formatUnits(buyAmounts[buyAmounts.length - 1], 6));
 
-            // Sell price (1 token)
-            const sellAmounts = await getAmountsOut(sellAddr, [tokenObj.address, tokens.WETH.address], ethers.parseUnits("1", tokenObj.decimals))
+            const sellAmounts = await getAmountsOut(sellAddr, [tokenObj.address, usdcAddr], ethers.parseUnits("1", tokenObj.decimals))
               .catch(() => [ethers.parseUnits("1", tokenObj.decimals), ethers.parseUnits("1", tokenObj.decimals)]);
-            const sellPrice = Number(ethers.formatUnits(sellAmounts[sellAmounts.length - 1], tokenObj.decimals));
+            const sellPrice = Number(ethers.formatUnits(sellAmounts[sellAmounts.length - 1], 6));
 
-            // Profit per token
+            if (buyPrice === 0) continue;
+
             const profitPct = ((sellPrice - buyPrice) / buyPrice) * 100;
-            const netProfit = TRADE_USDC * profitPct / 100; // approximate
+            const netProfit = TRADE_USDC * profitPct / 100;
 
-            if (profitPct >= 0.2) { // threshold
-              const executedAmount = await executeArbitrage(buyAddr, sellAddr, tokenObj, amountTokens);
+            if (profitPct >= 0.2) {
+              const executedUSDC = await executeArbitrage(buyAddr, sellAddr, tokenObj, ethers.parseUnits(TRADE_USDC.toString(), 6));
               cumulativeProfit += netProfit;
 
               logLine(`Token=${tokenObj.symbol} | Buy:${buyName} | Sell:${sellName} | BuyPrice:${buyPrice.toFixed(6)} | SellPrice:${sellPrice.toFixed(6)} | ProfitPct:${profitPct.toFixed(3)}% | NetProfit💰:${netProfit.toFixed(6)} | CumProfit💰💰:${cumulativeProfit.toFixed(6)}`, profitPct);
             } else {
               logLine(`Skipped ${tokenObj.symbol} ${buyName}->${sellName} | ProfitPct:${profitPct.toFixed(3)}%`, profitPct);
             }
-
           } catch (e) {
             logLine(`⚠️ Error ${tokenObj.symbol} ${buyName}->${sellName}: ${e.message}`);
           }
         }
       }
     }
-
     await new Promise(r => setTimeout(r, LOOP_DELAY_MS));
   }
 }
