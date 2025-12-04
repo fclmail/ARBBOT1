@@ -9,7 +9,7 @@ const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 const DRY_RUN = false;          // true = simulate only
 const TRADE_USDC = 1;        // Amount per trade in USDC
-const MIN_PROFIT_PCT = 0.2;     // Minimum profit % to execute
+const MIN_PROFIT_PCT = 0.0002;     // Minimum profit % to execute
 
 const USDC_DECIMALS = 6;
 
