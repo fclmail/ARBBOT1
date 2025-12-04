@@ -16,7 +16,7 @@ const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 // Trade settings (as requested)
 const TRADE_AMOUNT_USDC = 0.05; // 0.05 USDC
 const MIN_EXPECTED_PROFIT_USDC = 0.0000005; // tiny floor, still conservative
-const SLIPPAGE_PCT = 0.0; // slippage allowance %
+const SLIPPAGE_PCT = 0.2; // slippage allowance %
 const LOOP_DELAY_MS = 5000; // 5 seconds loop
 
 // Provider & wallet
@@ -112,7 +112,7 @@ async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDCF
   const expectedUSDCOutBn = sellAmounts[sellAmounts.length - 1]; // bigint
 
   // apply conservative safety multiplier: (1 - SLIPPAGE_PCT/100 - 0.0025)
-  const multFloat = Math.max(0, 1 - (SLIPPAGE_PCT / 100) - 1.0025);
+  const multFloat = Math.max(0, 1 - (SLIPPAGE_PCT / 100) - 0.000025);
   // Using integer math with 1e6 base
   const BASE = 1_000_000n;
   const multiplierInt = BigInt(Math.floor(multFloat * Number(BASE)));
