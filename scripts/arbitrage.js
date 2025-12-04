@@ -25,7 +25,7 @@ const VAULT_BALANCE_USDC_E_HINT = 0.12; // example: "0.12 USDC.e" as per your lo
 //   const usdc = new ethers.Contract(usdcAddr, erc20Abi, provider);
 //   const bal = await usdc.balanceOf(VAULT_ADDRESS);
 //   // convert to USDC units (assuming 6 decimals for USDC)
- //   return Number(bal) / 1e6;
+//   return Number(bal) / 1e6;
 // }
 
 // Provider & wallet
@@ -74,7 +74,12 @@ function logLine(msg){
   }
 }
 
-// Fetch current vault USDC balance (optional utility)
+
+
+
+
+// Core helpers
+
 async function getVaultUSDCBalanceBN(){
   const usdcAddr = await vaultContract.USDC();
   const usdc = new ethers.Contract(usdcAddr, erc20Abi, provider);
@@ -121,36 +126,8 @@ async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDCF
 
 
 
+// Main loop and execution logic
 
-async function computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDCFloat){
-  const usdcAddr = await vaultContract.USDC();
-  const amountInUnits = ethers.parseUnits(amountUSDCFloat.toString(), 6);
-
-  let buyAmounts;
-  try {
-    buyAmounts = await safeGetAmountsOut(buyRouter, [usdcAddr, tokenObj.address], amountInUnits);
-  } catch {
-    buyAmounts = await safeGetAmountsOut(buyRouter, [usdcAddr, tokens.WBTC.address, tokenObj.address], amountInUnits);
-  }
-
-  const tokenAmountBn = buyAmounts[buyAmounts.length - 1];
-  if (!tokenAmountBn || tokenAmountBn === 0n) return 0n;
-
-  let sellAmounts;
-  try {
-    sellAmounts = await safeGetAmountsOut(sellRouter, [tokenObj.address, usdcAddr], tokenAmountBn);
-  } catch {
-    sellAmounts = await safeGetAmountsOut(sellRouter, [tokenObj.address, tokens.WBTC.address, usdcAddr], tokenAmountBn);
-  }
-
-  const expectedUSDCOutBn = sellAmounts[sellAmounts.length - 1];
-  const multFloat = 1 - SLIPPAGE_PCT / 100;
-  const BASE = 1_000_000n;
-  const multiplierInt = BigInt(Math.floor(multFloat * Number(BASE)));
-  return (expectedUSDCOutBn * multiplierInt) / BASE;
-}
-
-// Main scanning loop with profit gate
 async function mainLoop(){
   // Define tokens to check; adjust as needed
   const tokenList = [tokens.WETH, tokens.WBTC, tokens.CRV];
@@ -199,10 +176,6 @@ async function mainLoop(){
                   const receipt = await tx.wait();
                   logLine(`TX mined: block ${receipt.blockNumber}, status ${receipt.status}`);
                 } catch (e) {
-
-
-
-                  // continue after a failed transaction
                   logLine(`Arb execution failed: ${e?.message ?? e}`);
                 }
               }
@@ -232,3 +205,24 @@ async function mainLoop(){
 mainLoop().catch(err => {
   logLine(`Fatal error: ${err?.message ?? err}`);
 });
+
+
+
+
+
+
+// Extra notes and optional enhancements (not required for core arb.js)
+
+// Optional vault balance gating (uncomment to enable dynamic checks)
+// You can add a balance check at the top of the inner loop to skip trades when vault balance is too low.
+// async function vaultHasSufficientBalance(requiredUSDC) {
+//   const balBN = await getVaultUSDCBalanceBN();
+//   // balBN is in the token's smallest unit; convert to USDC with 6 decimals
+//   const balUSDC = Number(balBN) / 1e6;
+//   return balUSDC >= requiredUSDC;
+// }
+
+// Example: tiny helper to format numbers consistently for logs
+function nf(n, d=6){ return Number(n).toFixed(d); }
+
+// End of script
