@@ -14,7 +14,7 @@ if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mod
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings (as requested)
-const TRADE_AMOUNT_USDC = 0.05; // 0.05 USDC
+const TRADE_AMOUNT_USDC = 0.10; // 0.05 USDC
 const MIN_EXPECTED_PROFIT_USDC = 0.00005; // tiny floor, still conservative
 const SLIPPAGE_PCT = 0.3; // slippage allowance %
 const LOOP_DELAY_MS = 5000; // 5 seconds loop
