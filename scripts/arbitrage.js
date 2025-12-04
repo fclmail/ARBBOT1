@@ -179,5 +179,20 @@ async function scanAndTrade() {
   }
 }
 
-// ---------------- RUN ----------------
-scanAndTrade().catch(console.error);
+// ---------------- RUN CONTINUOUSLY ----------------
+async function startBot() {
+  console.log("🚀 Starting continuous arb bot (every 10s)...");
+
+  while (true) {
+    try {
+      await scanAndTrade();
+    } catch (e) {
+      console.error("Scan error:", e.message);
+    }
+
+    // Wait 10 seconds before next iteration
+    await new Promise((resolve) => setTimeout(resolve, 10000));
+  }
+}
+
+startBot();
