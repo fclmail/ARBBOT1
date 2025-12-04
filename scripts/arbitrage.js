@@ -13,8 +13,8 @@ const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
 const TRADE_AMOUNT_USDC = 0.05; // 0.05 USDC
-const PROFIT_PCT_THRESHOLD = 0.0002; // 0.02% minimum profit
-const SLIPPAGE_PCT = 0.1; // 0.1% optional slippage
+const PROFIT_PCT_THRESHOLD = 0.002; // 0.2% minimum profit
+const SLIPPAGE_PCT = 0.1; // 0.1% slippage
 const LOOP_DELAY_MS = 5000; // 5s loop
 
 // Provider & wallet
@@ -27,11 +27,11 @@ const routers = {
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-// Tokens
+// Tokens (fixed checksum)
 const tokens = {
   WETH: { address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimals: 18 },
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
-  CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 } // fixed checksum
+  CRV:  { address: "0x172370d5Cd63279eFa6d502Dab29171933a610Af", decimals: 18 }
 };
 
 // Vault ABI
@@ -99,6 +99,7 @@ async function executeTradeIfProfitable(buyRouter, sellRouter, tokenObj, amountU
   const minReturnBn = await computeMinReturnUSDC(buyRouter, sellRouter, tokenObj, amountUSDCFloat);
   const amountInBn = ethers.parseUnits(amountUSDCFloat.toString(), 6);
 
+  // calculate required min return using 0.2% threshold
   const minProfitBn = (amountInBn * BigInt(Math.floor(PROFIT_PCT_THRESHOLD * 1e6))) / 1_000_000n;
   const requiredReturnBn = amountInBn + minProfitBn;
 
