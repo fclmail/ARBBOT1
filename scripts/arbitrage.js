@@ -2,18 +2,32 @@ import { ethers } from "ethers";
 
 // ---------------- CONFIG ----------------
 // All sensitive info comes from environment variables / secrets
-const RPC_URL = process.env.RPC_URL;
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
+const RPC_URL = process.env.RPC_URL?.trim();
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
+const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19").trim();
+const USDC_ADDRESS = (process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").trim();
 
 const SLIPPAGE_PERCENT = 0.2; // 0.2%
 const TRADE_AMOUNT_USDC = 0.01; // per trade
 const ROUTERS = {
-  quickSwap: process.env.QUICKSWAP_ROUTER,
-  sushiSwap: process.env.SUSHISWAP_ROUTER,
-  apeSwap: process.env.APESWAP_ROUTER
+  quickSwap: process.env.QUICKSWAP_ROUTER?.trim(),
+  sushiSwap: process.env.SUSHISWAP_ROUTER?.trim(),
+  apeSwap: process.env.APESWAP_ROUTER?.trim()
 };
+
+// ---------------- VALIDATION ----------------
+if (!RPC_URL || !WALLET_PRIVATE_KEY) {
+  throw new Error("RPC_URL or PRIVATE_KEY is missing in environment variables.");
+}
+
+for (const [name, addr] of Object.entries(ROUTERS)) {
+  if (!addr || !ethers.isAddress(addr)) {
+    throw new Error(`Invalid router address for ${name}: "${addr}"`);
+  }
+}
+
+if (!ethers.isAddress(CONTRACT_ADDRESS)) throw new Error(`Invalid contract address: "${CONTRACT_ADDRESS}"`);
+if (!ethers.isAddress(USDC_ADDRESS)) throw new Error(`Invalid USDC address: "${USDC_ADDRESS}"`);
 
 // ---------------- EMBEDDED CONTRACT ABI ----------------
 const arbAbi = [
@@ -69,29 +83,22 @@ const contract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
 // ---------------- HELPERS ----------------
 function parseUSDC(amount) {
-  return ethers.parseUnits(amount.toFixed(6), 6); // USDC has 6 decimals
+  return ethers.parseUnits(amount.toFixed(6), 6);
 }
 
 function formatUSDC(amountBN) {
   return Number(ethers.formatUnits(amountBN, 6));
 }
 
-// ---------------- ON-CHAIN PRICE FETCHING ----------------
-// Router ABI snippet for getAmountsOut()
-const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory amounts)"
-];
-
-// Get token price from DEX router
-async function getTokenPrice(tokenAddress, routerAddress, reverse = false) {
+// Mock fetch function for token prices (replace with real on-chain DEX calls)
+async function getTokenPrice(tokenAddress, router) {
   try {
-    const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
-    const amountIn = ethers.parseUnits("1", 6); // 1 USDC
-    const path = reverse ? [tokenAddress, USDC_ADDRESS] : [USDC_ADDRESS, tokenAddress];
-    const amountsOut = await router.getAmountsOut(amountIn, path);
-    return parseFloat(ethers.formatUnits(amountsOut[1], 18)); // assuming token has 18 decimals
+    const url = `https://api.mockdex.com/price?token=${tokenAddress}&router=${router}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    return parseFloat(data.price);
   } catch (err) {
-    console.error("⚠️ DEX getAmountsOut failed:", err.message);
+    console.error("⚠️ Failed to fetch price:", err.message);
     return null;
   }
 }
