@@ -1,24 +1,21 @@
 // improved-arbitrage.js
 //🟢1 Imports core libraries
-import { ethers, Wallet } from "ethers";        // ethers for RPC, wallet, contracts
-import fs from "fs";                            // filesystem for CSV writing
-import dotenv from "dotenv";                    // load .env
+import { ethers, Wallet } from "ethers";        
+import fs from "fs";                            
+import dotenv from "dotenv";                    
 dotenv.config();
 
 // ---------- CONFIG ----------
-//🟢4 Script mode (Dry-run or live)
 const DRY_RUN = process.env.DRY_RUN === "true" ? true : false;
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
-//🟢5 RPC endpoint + wallet config
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
-//🟢6 Vault contract address
 const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 
-//🟢7 Trading configuration
+// Trading configuration
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);     
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.01);    
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.002);     
@@ -26,14 +23,14 @@ const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.2);
 const MAX_PROFIT_PCT = 40;
 
-//🟢8 Router addresses
+// Router addresses
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-//🟢9 Token map
+// Token map
 const tokens = {
   AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
   CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
@@ -41,7 +38,7 @@ const tokens = {
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
 
-//🟢10 CSV logging helper
+// CSV logging helper
 const csvRows = [];
 function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC }) {
   csvRows.push([timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC].join(","));
@@ -137,6 +134,8 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const timestamp = new Date().toISOString();
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) 
                    || { address: tokenAddr, decimals: 18 };
+  const buyName = Object.entries(routers).find(([k,v]) => v.toLowerCase() === buyRouter.toLowerCase())[0];
+  const sellName = Object.entries(routers).find(([k,v]) => v.toLowerCase() === sellRouter.toLowerCase())[0];
 
   try {
     console.log("\n🔍 ---------- New Trade Attempt ----------");
@@ -148,26 +147,27 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 
     if (amountUSDC < MIN_TRADE_USDC || amountUSDC > before) return;
 
-    let buyOut = await getAmountOut(buyRouter, tokenObj, amountUSDC);
-    let sellOut = await getAmountOut(sellRouter, tokenObj, amountUSDC);
+    const buyOut = await getAmountOut(buyRouter, tokenObj, amountUSDC);
+    const sellOut = await getAmountOut(sellRouter, tokenObj, amountUSDC);
 
-    let buyPrice = amountUSDC / buyOut;
-    let sellPrice = amountUSDC / sellOut;
-    let expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
+    const buyPrice = amountUSDC / buyOut;
+    const sellPrice = amountUSDC / sellOut;
+    const expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
     const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
 
-    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT || expectedProfitPct > MAX_PROFIT_PCT) return;
+    console.log(`💹 DEX: ${buyName} → ${sellName} | Token: ${tokenAddr}`);
+    console.log(`📈 Buy Price: ${fmt(buyPrice)} | Sell Price: ${fmt(sellPrice)} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC`);
+
+    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT || expectedProfitPct > MAX_PROFIT_PCT) {
+      console.log("❌ PREVENTED — Not profitable or exceeds max profit cap");
+      return;
+    }
 
     if (!await priceSanityCheck(buyRouter, tokenObj, amountUSDC) ||
-        !await priceSanityCheck(sellRouter, tokenObj, amountUSDC)) return;
-
-    let gasEstimate = null;
-    try {
-      gasEstimate = await arbContract.estimateGas.executeArbitrage(
-        buyRouter, sellRouter, tokenAddr,
-        ethers.parseUnits(amountUSDC.toString(), 6)
-      );
-    } catch {}
+        !await priceSanityCheck(sellRouter, tokenObj, amountUSDC)) {
+      console.log("⚠️ Price sanity check failed");
+      return;
+    }
 
     try {
       await provider.call({
@@ -178,13 +178,18 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
         ]),
         from: wallet ? wallet.address : undefined
       });
-      console.log("🔬 Simulation OK");
+      console.log("🔬 Simulation PASS ✅");
     } catch {
       console.log("❌ SIM FAILED — would revert");
       return;
     }
 
     if (DRY_RUN) return;
+
+    const gasEstimate = await arbContract.estimateGas.executeArbitrage(
+      buyRouter, sellRouter, tokenAddr,
+      ethers.parseUnits(amountUSDC.toString(), 6)
+    ).catch(() => null);
 
     const tx = await arbContract.executeArbitrage(
       buyRouter, sellRouter, tokenAddr,
@@ -194,13 +199,21 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     console.log(`🔁 TX SENT — ${tx.hash}`);
 
     const receipt = await tx.wait();
-    if (!receipt || receipt.status === 0) return;
+    if (!receipt || receipt.status === 0) {
+      console.log("❌ TX failed");
+      return;
+    }
+    console.log(`✅ Trade SUCCESS — ${receipt.transactionHash}`);
 
     const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
     const after = Number(ethers.formatUnits(afterBal, 6));
-    if (after <= before) return;
-
     const netProfit = after - before;
+    if (netProfit <= 0) {
+      console.log("⚠️ No net profit — ignored");
+      return;
+    }
+
+    console.log(`💰 REAL NET PROFIT: ${fmt(netProfit)} USDC`);
     cumulativeProfit += netProfit;
 
     const symbolEntry = Object.entries(tokens).find(([k,t]) => t.address.toLowerCase() === tokenAddr.toLowerCase());
