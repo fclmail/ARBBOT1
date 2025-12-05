@@ -16,7 +16,7 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
 //🟢6 Vault contract address
-const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT || "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 
 //🟢7 Trading configuration (minimum profit, min trade, gas est.)
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);     
