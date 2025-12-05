@@ -1,33 +1,27 @@
 import { ethers } from "ethers";
 
 // ---------------- CONFIG ----------------
-// All sensitive info comes from environment variables / secrets
-const RPC_URL = process.env.RPC_URL?.trim();
+const RPC_URL = process.env.RPC_URL?.trim() || "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
-const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19").trim();
-const USDC_ADDRESS = (process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").trim();
+if (!WALLET_PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in env");
+
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
 
 const SLIPPAGE_PERCENT = 0.2; // 0.2%
 const TRADE_AMOUNT_USDC = 0.01; // per trade
+
+// Routers: use env secrets or fallback placeholders
 const ROUTERS = {
-  quickSwap: process.env.QUICKSWAP_ROUTER?.trim(),
-  sushiSwap: process.env.SUSHISWAP_ROUTER?.trim(),
-  apeSwap: process.env.APESWAP_ROUTER?.trim()
+  quickSwap: process.env.QUICKSWAP_ROUTER?.trim() || "0x0000000000000000000000000000000000000001",
+  sushiSwap: process.env.SUSHISWAP_ROUTER?.trim() || "0x0000000000000000000000000000000000000002",
+  apeSwap: process.env.APESWAP_ROUTER?.trim() || "0x0000000000000000000000000000000000000003",
 };
 
-// ---------------- VALIDATION ----------------
-if (!RPC_URL || !WALLET_PRIVATE_KEY) {
-  throw new Error("RPC_URL or PRIVATE_KEY is missing in environment variables.");
-}
-
+// Validate router addresses
 for (const [name, addr] of Object.entries(ROUTERS)) {
-  if (!addr || !ethers.isAddress(addr)) {
-    throw new Error(`Invalid router address for ${name}: "${addr}"`);
-  }
+  if (!ethers.isAddress(addr)) throw new Error(`Invalid router address for ${name}: "${addr}"`);
 }
-
-if (!ethers.isAddress(CONTRACT_ADDRESS)) throw new Error(`Invalid contract address: "${CONTRACT_ADDRESS}"`);
-if (!ethers.isAddress(USDC_ADDRESS)) throw new Error(`Invalid USDC address: "${USDC_ADDRESS}"`);
 
 // ---------------- EMBEDDED CONTRACT ABI ----------------
 const arbAbi = [
@@ -90,9 +84,10 @@ function formatUSDC(amountBN) {
   return Number(ethers.formatUnits(amountBN, 6));
 }
 
-// Mock fetch function for token prices (replace with real on-chain DEX calls)
+// Mock fetch function for prices (replace with on-chain DEX calls)
 async function getTokenPrice(tokenAddress, router) {
   try {
+    // Placeholder example: in real bot call DEX getAmountsOut
     const url = `https://api.mockdex.com/price?token=${tokenAddress}&router=${router}`;
     const res = await fetch(url);
     const data = await res.json();
@@ -166,6 +161,6 @@ async function scanAndExecuteArbitrage() {
 (async () => {
   while (true) {
     await scanAndExecuteArbitrage();
-    await new Promise(r => setTimeout(r, 5000)); // scan every 5s
+    await new Promise(r => setTimeout(r, 5000));
   }
 })();
