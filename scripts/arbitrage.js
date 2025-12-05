@@ -2,17 +2,17 @@ import { ethers } from "ethers";
 
 // ---------------- CONFIG ----------------
 // All sensitive info comes from environment variables / secrets
-const RPC_URL = process.env.RPC_URL;
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; 
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const USDC_ADDRESS = process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const RPC_URL = process.env.RPC_URL?.trim();
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim(); 
+const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19").trim();
+const USDC_ADDRESS = (process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").trim();
 
 const SLIPPAGE_PERCENT = 0.2; // 0.2%
 const TRADE_AMOUNT_USDC = 0.01; // per trade
 const ROUTERS = {
-  quickSwap: process.env.QUICKSWAP_ROUTER,
-  sushiSwap: process.env.SUSHISWAP_ROUTER,
-  apeSwap: process.env.APESWAP_ROUTER
+  quickSwap: process.env.QUICKSWAP_ROUTER?.trim(),
+  sushiSwap: process.env.SUSHISWAP_ROUTER?.trim(),
+  apeSwap: process.env.APESWAP_ROUTER?.trim()
 };
 
 // ---------------- EMBEDDED CONTRACT ABI ----------------
