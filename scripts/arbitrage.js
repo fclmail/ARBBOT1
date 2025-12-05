@@ -1,17 +1,18 @@
 import { ethers } from "ethers";
 
 // ---------------- CONFIG ----------------
-const RPC_URL = "https://your_rpc_url"; // Polygon / Ethereum RPC
-const WALLET_PRIVATE_KEY = "your_private_key";
-const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // change if needed
+// All sensitive info comes from environment variables / secrets
+const RPC_URL = process.env.RPC_URL;
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; 
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const USDC_ADDRESS = process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 
 const SLIPPAGE_PERCENT = 0.2; // 0.2%
 const TRADE_AMOUNT_USDC = 0.01; // per trade
 const ROUTERS = {
-  quickSwap: "0xYourQuickSwapRouter",
-  sushiSwap: "0xYourSushiSwapRouter",
-  apeSwap: "0xYourApeSwapRouter"
+  quickSwap: process.env.QUICKSWAP_ROUTER,
+  sushiSwap: process.env.SUSHISWAP_ROUTER,
+  apeSwap: process.env.APESWAP_ROUTER
 };
 
 // ---------------- EMBEDDED CONTRACT ABI ----------------
@@ -61,12 +62,12 @@ const arbAbi = [
   }
 ];
 
-// ---------------- SETUP PROVIDER ----------------
+// ---------------- PROVIDER & CONTRACT ----------------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 const contract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
-// ---------------- HELPER FUNCTIONS ----------------
+// ---------------- HELPERS ----------------
 function parseUSDC(amount) {
   return ethers.parseUnits(amount.toFixed(6), 6); // USDC has 6 decimals
 }
@@ -75,20 +76,22 @@ function formatUSDC(amountBN) {
   return Number(ethers.formatUnits(amountBN, 6));
 }
 
-// Mock price fetching using fetch (replace with real on-chain calls if needed)
+// Mock fetch function for prices (replace with on-chain DEX calls for real bot)
 async function getTokenPrice(tokenAddress, router) {
-  // Example API fetch (replace this with real chain data)
-  // If you have a real DEX contract, you can call getAmountsOut() via ethers instead
-  const url = `https://api.mockdex.com/price?token=${tokenAddress}&router=${router}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return parseFloat(data.price);
+  try {
+    const url = `https://api.mockdex.com/price?token=${tokenAddress}&router=${router}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    return parseFloat(data.price);
+  } catch (err) {
+    console.error("⚠️ Failed to fetch price:", err.message);
+    return null;
+  }
 }
 
 // ---------------- ARBITRAGE LOGIC ----------------
 async function scanAndExecuteArbitrage() {
   try {
-    // Get vault USDC balance
     const usdcContract = new ethers.Contract(USDC_ADDRESS, [
       "function balanceOf(address owner) view returns (uint256)"
     ], provider);
@@ -97,7 +100,6 @@ async function scanAndExecuteArbitrage() {
     const vaultBalance = formatUSDC(vaultBalanceBN);
     console.log("🏦 Vault Balance Before:", vaultBalance, "USDC");
 
-    // Tokens to scan
     const tokens = [
       { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
       { symbol: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" }
@@ -109,18 +111,17 @@ async function scanAndExecuteArbitrage() {
         prices[routerName] = await getTokenPrice(token.address, ROUTERS[routerName]);
       }
 
-      // Check arbitrage opportunities
       for (const buyRouter in prices) {
         for (const sellRouter in prices) {
           if (buyRouter === sellRouter) continue;
-
           const buyPrice = prices[buyRouter];
           const sellPrice = prices[sellRouter];
+          if (!buyPrice || !sellPrice) continue;
+
           const expectedProfit = TRADE_AMOUNT_USDC * (sellPrice / buyPrice - 1);
+          if (expectedProfit <= 0) continue;
 
-          if (expectedProfit <= 0) continue; // skip losing trades
-
-          const minReturnUSDC = parseUSDC(expectedProfit * (1 - SLIPPAGE_PERCENT / 100));
+          const minReturnUSDC = parseUSDC(TRADE_AMOUNT_USDC + expectedProfit * (1 - SLIPPAGE_PERCENT / 100));
           const amountInUSDC = parseUSDC(TRADE_AMOUNT_USDC);
 
           console.log(`🚨 PROFITABLE: ${token.symbol} | ${buyRouter} → ${sellRouter} | est profit: ${expectedProfit.toFixed(6)} USDC`);
