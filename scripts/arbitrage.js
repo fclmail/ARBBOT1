@@ -5,7 +5,7 @@ import { ethers } from "ethers";
 const RPC_URL = process.env.RPC_URL;
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const USDC_ADDRESS = process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
 const SLIPPAGE_PERCENT = 0.2; // 0.2%
 const TRADE_AMOUNT_USDC = 0.01; // per trade
