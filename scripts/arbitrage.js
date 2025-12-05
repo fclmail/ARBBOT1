@@ -2,17 +2,17 @@ import { ethers } from "ethers";
 
 // ---------------- CONFIG ----------------
 // All sensitive info comes from environment variables / secrets
-const RPC_URL = process.env.RPC_URL?.trim();
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim(); 
-const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19").trim();
-const USDC_ADDRESS = (process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48").trim();
+const RPC_URL = process.env.RPC_URL;
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const USDC_ADDRESS = process.env.USDC_ADDRESS || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 
 const SLIPPAGE_PERCENT = 0.2; // 0.2%
 const TRADE_AMOUNT_USDC = 0.01; // per trade
 const ROUTERS = {
-  quickSwap: process.env.QUICKSWAP_ROUTER?.trim(),
-  sushiSwap: process.env.SUSHISWAP_ROUTER?.trim(),
-  apeSwap: process.env.APESWAP_ROUTER?.trim()
+  quickSwap: process.env.QUICKSWAP_ROUTER,
+  sushiSwap: process.env.SUSHISWAP_ROUTER,
+  apeSwap: process.env.APESWAP_ROUTER
 };
 
 // ---------------- EMBEDDED CONTRACT ABI ----------------
@@ -76,15 +76,22 @@ function formatUSDC(amountBN) {
   return Number(ethers.formatUnits(amountBN, 6));
 }
 
-// Mock fetch function for prices (replace with on-chain DEX calls for real bot)
-async function getTokenPrice(tokenAddress, router) {
+// ---------------- ON-CHAIN PRICE FETCHING ----------------
+// Router ABI snippet for getAmountsOut()
+const ROUTER_ABI = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory amounts)"
+];
+
+// Get token price from DEX router
+async function getTokenPrice(tokenAddress, routerAddress, reverse = false) {
   try {
-    const url = `https://api.mockdex.com/price?token=${tokenAddress}&router=${router}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    return parseFloat(data.price);
+    const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+    const amountIn = ethers.parseUnits("1", 6); // 1 USDC
+    const path = reverse ? [tokenAddress, USDC_ADDRESS] : [USDC_ADDRESS, tokenAddress];
+    const amountsOut = await router.getAmountsOut(amountIn, path);
+    return parseFloat(ethers.formatUnits(amountsOut[1], 18)); // assuming token has 18 decimals
   } catch (err) {
-    console.error("⚠️ Failed to fetch price:", err.message);
+    console.error("⚠️ DEX getAmountsOut failed:", err.message);
     return null;
   }
 }
