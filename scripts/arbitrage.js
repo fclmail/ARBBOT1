@@ -63,7 +63,7 @@ const arbAbi = [
       { "internalType": "address", "name": "sellRouter", "type": "address" },
       { "internalType": "address", "name": "token", "type": "address" },
       { "internalType": "uint256", "name": "amountInUSDC", "type": "uint256" },
-      { "internalType": "uint256", "name": "minReturnUSDC", "type": "uint256" }  // <-- FIXED
+      { "internalType": "uint256", "name": "minReturnUSDC", "type": "uint256" }
     ],
     "name": "executeArbitrage",
     "outputs": [],
@@ -187,13 +187,22 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
           sellRouter,
           tokenAddr,
           ethers.parseUnits(amountUSDC.toString(), 6),
-          minReturnUSDC                                   // <-- FIXED
+          minReturnUSDC
         ]),
         from: wallet ? wallet.address : undefined
       });
       console.log("🔬 Simulation PASS ✅");
-    } catch {
+    } catch (err) {
       console.log("❌ SIM FAILED — would revert");
+      console.log("🔹 Detailed Simulation Debug Info 🔹");
+      console.log("  Token Address:", tokenAddr);
+      console.log("  Token Decimals:", tokenObj.decimals);
+      console.log("  AmountIn USDC:", amountUSDC);
+      console.log("  AmountIn (parseUnits):", ethers.parseUnits(amountUSDC.toFixed(6), 6).toString());
+      console.log("  minReturnUSDC (units):", minReturnUSDC.toString());
+      console.log("  Buy Router:", buyName, buyRouter);
+      console.log("  Sell Router:", sellName, sellRouter);
+      console.log("  Error:", err.reason || err.message || err);
       return;
     }
 
@@ -205,7 +214,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       sellRouter,
       tokenAddr,
       ethers.parseUnits(amountUSDC.toString(), 6),
-      minReturnUSDC                                        // <-- FIXED
+      minReturnUSDC
     ).catch(() => null);
 
     // Execute TX
@@ -214,7 +223,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       sellRouter,
       tokenAddr,
       ethers.parseUnits(amountUSDC.toString(), 6),
-      minReturnUSDC,                                       // <-- FIXED
+      minReturnUSDC,
       { gasLimit: gasEstimate ? gasEstimate.mul(120).div(100) : undefined }
     );
     console.log(`🔁 TX SENT — ${tx.hash}`);
