@@ -17,9 +17,9 @@ const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT || "0x19B64f74553eE0ee26BA01
 
 // Trading configuration
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.0005);     
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || .05);    
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || .10);    
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.02);     
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0001);
+const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.0002);
 const MAX_PROFIT_PCT = 40;
 
@@ -171,10 +171,9 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     }
 
     // -------------------------------
-    // ADD minReturnUSDC for safety
+    // ADD minReturnUSDC for safety (tiny fixed value for debugging)
     // -------------------------------
-  const minReturnUSDC = ethers.parseUnits("0.0001", 6);
-  
+    const minReturnUSDC = ethers.parseUnits("0.00001", 6);
 
     // Simulation
     try {
@@ -254,7 +253,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 }
 
 // ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || .05);
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || .10);
 
 async function scanAllPairs() {
   for (const [symbol, token] of Object.entries(tokens)) {
