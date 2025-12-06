@@ -20,7 +20,7 @@ const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || .10);    
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.02);     
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
-const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.2);
+const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.0002);
 const MAX_PROFIT_PCT = 40;
 
 // Router addresses
