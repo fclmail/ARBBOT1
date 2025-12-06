@@ -175,7 +175,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     // -------------------------------
     const minReturnUSDC = ethers.parseUnits(
       (amountUSDC * (1 - 0.01 / 100)).toFixed(6),
-      6
+      
     );
 
     // Simulation
