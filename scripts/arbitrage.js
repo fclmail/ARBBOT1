@@ -17,7 +17,7 @@ const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT || "0x19B64f74553eE0ee26BA01
 
 // Trading configuration
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);     
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.10);    
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1000);    
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.02);     
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.2);
@@ -247,7 +247,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 }
 
 // ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.1);
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 1000);
 
 async function scanAllPairs() {
   for (const [symbol, token] of Object.entries(tokens)) {
