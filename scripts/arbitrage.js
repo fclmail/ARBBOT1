@@ -265,7 +265,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 }
 
 // ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.01); 
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 10.00); 
 
 async function scanAllPairs() {
   console.log("\n🔍 Scanning all tokens & routers...");
