@@ -1,4 +1,3 @@
-```javascript
 // improved-arbitrage.js
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
@@ -231,6 +230,5 @@ async function scanAllPairs() {
         }
     }, 10000);
 })();
-```
 
-  
+
