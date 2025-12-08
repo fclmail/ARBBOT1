@@ -1,5 +1,5 @@
-// improved-arbitrage.js
-// EXACT SAME CODE — ONLY LIVE EXECUTION FIXES APPLIED
+// improved-arbitrage-live.js
+// FULL LIVE EXECUTION + VERBOSE LOGGING
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
@@ -51,7 +51,7 @@ const csvRows = [];
 function logTradeCSV(r) {
   csvRows.push([
     r.timestamp, r.symbol, r.buyRouter, r.sellRouter, r.amount, 
-    r.profitUSDC, r.cumulative, r.note
+    r.profitUSDC, r.cumulative, r.note || ""
   ].join(","));
 }
 function saveCSV() {
@@ -62,18 +62,13 @@ function saveCSV() {
   console.log(`💾 CSV exported: ${fn}`);
 }
 
+// Provider & wallet
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
 
-// ABI
+// Minimal vault ABI
 const arbAbi = [
-  {
-    "inputs":[{"internalType":"address","name":"buyRouter","type":"address"},{"internalType":"address","name":"sellRouter","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"}],
-    "name":"executeArbitrage",
-    "outputs":[],
-    "stateMutability":"nonpayable",
-    "type":"function"
-  },
+  { "inputs":[{"internalType":"address","name":"buyRouter","type":"address"},{"internalType":"address","name":"sellRouter","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"}],"name":"executeArbitrage","outputs":[],"stateMutability":"nonpayable","type":"function" },
   { "inputs":[], "name":"USDC","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function" },
   { "inputs":[], "name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function" }
 ];
@@ -91,7 +86,9 @@ async function init() {
     usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
     console.log("🏛 Contract:", CONTRACT_ADDRESS);
     console.log("💱 USDC:", usdcAddr);
-  } catch (e) {}
+  } catch (e) {
+    console.warn("⚠️ Failed to init contract:", e.message);
+  }
 }
 
 function toDecimalString(value, decimals = 18) {
@@ -100,24 +97,20 @@ function toDecimalString(value, decimals = 18) {
   return s.indexOf('.') === -1 ? s : s.replace(/\.?0+$/, '');
 }
 
-// Helpers
+// Router helpers
 async function routerGetAmountsOut(routerAddr, amountInWei, path) {
-  const r = new ethers.Contract(
-    routerAddr,
-    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-    provider
-  );
+  const r = new ethers.Contract(routerAddr, ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"], provider);
   return r.getAmountsOut(amountInWei, path);
 }
 
 async function getTokenAmountFromUSDC(routerAddr, token, amountUSDC, usdcAddr) {
-  const amt = ethers.parseUnits(toDecimalString(amountUSDC,6), 6);
+  const amt = ethers.parseUnits(toDecimalString(amountUSDC,6),6);
   try {
     const a = await routerGetAmountsOut(routerAddr, amt, [usdcAddr, token.address]);
-    return Number(ethers.formatUnits(a[a.length - 1], token.decimals));
+    return Number(ethers.formatUnits(a[a.length-1], token.decimals));
   } catch {
     const a = await routerGetAmountsOut(routerAddr, amt, [usdcAddr, WMATIC.address, token.address]);
-    return Number(ethers.formatUnits(a[a.length - 1], token.decimals));
+    return Number(ethers.formatUnits(a[a.length-1], token.decimals));
   }
 }
 
@@ -125,122 +118,107 @@ async function getUSDCFromToken(routerAddr, token, tokenAmount, usdcAddr) {
   const amt = ethers.parseUnits(toDecimalString(tokenAmount, token.decimals), token.decimals);
   try {
     const a = await routerGetAmountsOut(routerAddr, amt, [token.address, usdcAddr]);
-    return Number(ethers.formatUnits(a[a.length - 1], 6));
+    return Number(ethers.formatUnits(a[a.length-1],6));
   } catch {
     const a = await routerGetAmountsOut(routerAddr, amt, [token.address, WMATIC.address, usdcAddr]);
-    return Number(ethers.formatUnits(a[a.length - 1], 6));
+    return Number(ethers.formatUnits(a[a.length-1],6));
   }
 }
 
-// *** FIXED gas-cost BigInt math ***
+// Gas cost estimation
 async function estimateGasCostInUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   try {
-    const amountWei = ethers.parseUnits(toDecimalString(amountUSDC,6), 6);
-
-    const gasEstimate = await arbContract.estimateGas.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, amountWei
-    );
-
+    const amt = ethers.parseUnits(toDecimalString(amountUSDC,6),6);
+    const gasEstimate = await arbContract.estimateGas.executeArbitrage(buyRouter, sellRouter, tokenAddr, amt);
     const fee = await provider.getFeeData();
     const gp = fee.maxFeePerGas || fee.gasPrice;
-
-    const gasCostWei = gasEstimate * gp;     // both are BigInt
-    const gasCostNative = Number(ethers.formatUnits(gasCostWei, 18));
-
+    const gasCostWei = gasEstimate * gp;
+    const gasCostNative = Number(ethers.formatUnits(gasCostWei,18));
     const usdcAddr = await arbContract.USDC();
-    const amounts = await routerGetAmountsOut(
-      routers.QuickSwap,
-      ethers.parseUnits(gasCostNative.toString(),18),
-      [WMATIC.address, usdcAddr]
-    );
+    const amounts = await routerGetAmountsOut(routers.QuickSwap, ethers.parseUnits(gasCostNative.toString(),18), [WMATIC.address, usdcAddr]);
     return { gasEstimate, gasCostNative, gasCostUSDC:Number(ethers.formatUnits(amounts[1],6)) };
   } catch {
     return { gasEstimate:null, gasCostNative:null, gasCostUSDC:Infinity };
   }
 }
 
-// EXECUTION
+// CORE EXECUTION
 let cumulativeProfit = 0;
 
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const timestamp = new Date().toISOString();
-
+  const tokenObj = Object.values(tokens).find(t=>t.address.toLowerCase()===tokenAddr.toLowerCase()) || { address:tokenAddr, decimals:18 };
   const usdcAddr = await arbContract.USDC();
-  const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase()===tokenAddr.toLowerCase()) || { address:tokenAddr, decimals:18 };
 
   let beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
   const before = Number(ethers.formatUnits(beforeBal,6));
 
-  const tokenOut = await getTokenAmountFromUSDC(buyRouter, tokenObj, amountUSDC, usdcAddr);
-  const usdcReturned = await getUSDCFromToken(sellRouter, tokenObj, tokenOut, usdcAddr);
+  let tokenOut, usdcReturned;
+  try {
+    tokenOut = await getTokenAmountFromUSDC(buyRouter, tokenObj, amountUSDC, usdcAddr);
+    usdcReturned = await getUSDCFromToken(sellRouter, tokenObj, tokenOut, usdcAddr);
+  } catch(e) {
+    console.warn("⚠️ Failed to quote round-trip:", e.message);
+    return;
+  }
 
   const expectedProfitUSDC = (usdcReturned - amountUSDC) * (1 - SLIPPAGE_PCT/100);
   const pct = (expectedProfitUSDC / amountUSDC) * 100;
 
-  if (pct < MIN_PROFIT_PCT) return;
+  console.log(`[QUOTE] ${tokenObj.address} | ${buyRouter}→${sellRouter} | tokenOut=${tokenOut} | returnedUSDC=${usdcReturned.toFixed(6)} | profit=${expectedProfitUSDC.toFixed(6)} USDC (${pct.toFixed(2)}%)`);
 
-  // Gas
-  const { gasEstimate, gasCostUSDC } = await estimateGasCostInUSDC(
-    buyRouter, sellRouter, tokenAddr, amountUSDC
-  );
-
-  const profitAfterGas = expectedProfitUSDC - gasCostUSDC;
-  if (profitAfterGas <= 0) return;
-
-  // *** FIXED SIMULATION — use wallet or null, NOT contract address ***
-  try {
-    await provider.call({
-      to: CONTRACT_ADDRESS,
-      data: arbContract.interface.encodeFunctionData("executeArbitrage", [
-        buyRouter, sellRouter, tokenAddr,
-        ethers.parseUnits(toDecimalString(amountUSDC,6),6)
-      ]),
-      from: wallet ? wallet.address : undefined
-    });
-  } catch {
-    console.log("SIM FAILED — skipping");
+  if (pct < MIN_PROFIT_PCT) {
+    console.log("❌ Skipping — profit below threshold");
     return;
   }
 
-  // *** LIVE TX ***
+  // Gas estimation
+  const { gasEstimate, gasCostNative, gasCostUSDC } = await estimateGasCostInUSDC(buyRouter, sellRouter, tokenAddr, amountUSDC);
+  const profitAfterGas = expectedProfitUSDC - gasCostUSDC;
+  console.log(`⛽ Gas estimate: ${gasEstimate?.toString() || "n/a"} | ${gasCostNative?.toFixed(6)} MATIC ≈ ${gasCostUSDC?.toFixed(6)} USDC`);
+  if (profitAfterGas <= 0) {
+    console.log("❌ Skipping — profit after gas <= 0");
+    return;
+  }
+
+  // Simulation
+  try {
+    await provider.call({
+      to: CONTRACT_ADDRESS,
+      data: arbContract.interface.encodeFunctionData("executeArbitrage", [buyRouter,sellRouter,tokenAddr,ethers.parseUnits(toDecimalString(amountUSDC,6),6)]),
+      from: wallet?.address
+    });
+    console.log("🔬 Simulation OK");
+  } catch(e) {
+    console.warn("❌ Simulation failed:", e.message);
+    return;
+  }
+
+  // LIVE TX
   if (!DRY_RUN) {
     const amountWei = ethers.parseUnits(toDecimalString(amountUSDC,6),6);
-
-    // FIXED: replace .mul() with native BigInt
-    const gasLimit = gasEstimate ? BigInt(gasEstimate) * 120n / 100n : undefined;
-
-    const tx = await arbContract.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, amountWei,
-      { gasLimit }
-    );
-
-    console.log("TX SENT:", tx.hash);
-    const receipt = await tx.wait();
-
-    if (receipt.status !== 1) {
-      console.log("TX FAILED");
+    const gasLimit = gasEstimate ? BigInt(gasEstimate)*120n/100n : undefined;
+    try {
+      const tx = await arbContract.executeArbitrage(buyRouter,sellRouter,tokenAddr,amountWei,{gasLimit});
+      console.log("🔁 TX SENT:", tx.hash);
+      const receipt = await tx.wait();
+      if (receipt.status !== 1) console.log("❌ TX FAILED"); 
+      else console.log("✅ TX SUCCESS:", receipt.transactionHash);
+    } catch(e) {
+      console.error("❌ TX error:", e.message);
       return;
     }
-
-    console.log("TX SUCCESS:", receipt.transactionHash);
   }
 
   // After balance
   let afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
   const after = Number(ethers.formatUnits(afterBal,6));
-
   const realProfit = after - before;
-  console.log("REAL PROFIT:", realProfit, "USDC");
+  console.log("💰 REAL PROFIT:", realProfit.toFixed(6), "USDC");
 
   cumulativeProfit += realProfit;
 
-  logTradeCSV({
-    timestamp, symbol:getSymbol(tokenAddr),
-    buyRouter, sellRouter,
-    amount:amountUSDC,
-    profitUSDC:realProfit,
-    cumulative:cumulativeProfit
-  });
+  logTradeCSV({timestamp,symbol:getSymbol(tokenAddr),buyRouter,sellRouter,amount:amountUSDC,profitUSDC:realProfit,cumulative:cumulativeProfit});
 }
 
 function getSymbol(addr){
@@ -248,38 +226,47 @@ function getSymbol(addr){
   return e ? e[0] : addr;
 }
 
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || MIN_TRADE_USDC);
+
+// SCAN LOOP
 async function scanAllPairs(){
   const usdc = await arbContract.USDC();
+  console.log(`\n🔍 Scanning all pairs at ${new Date().toISOString()}`);
 
   for (const [symbol, token] of Object.entries(tokens)) {
     for (const [bn,buy] of Object.entries(routers)) {
       for (const [sn,sell] of Object.entries(routers)) {
         if (bn===sn) continue;
-
         try {
           const tokenOut = await getTokenAmountFromUSDC(buy, token, TRADE_AMOUNT_USDC, usdc);
           const usdcReturned = await getUSDCFromToken(sell, token, tokenOut, usdc);
-          const profit = (usdcReturned - TRADE_AMOUNT_USDC) * (1 - SLIPPAGE_PCT/100);
-          const pct = (profit / TRADE_AMOUNT_USDC) * 100;
-
-          if (pct >= MIN_PROFIT_PCT) {
-            await executeTradeLive(buy, sell, token.address, TRADE_AMOUNT_USDC);
+          const profit = (usdcReturned - TRADE_AMOUNT_USDC)*(1-SLIPPAGE_PCT/100);
+          const pct = (profit/TRADE_AMOUNT_USDC)*100;
+          console.log(`${symbol} | ${bn}→${sn} | profit=${profit.toFixed(6)} USDC | pct=${pct.toFixed(2)}%`);
+          if (pct>=MIN_PROFIT_PCT){
+            console.log(`🚨 PROFITABLE — executing trade`);
+            await executeTradeLive(buy,sell,token.address,TRADE_AMOUNT_USDC);
           }
-        } catch {}
+        } catch(e){
+          console.warn(`${symbol} | ${bn}→${sn} | scan error: ${e.message}`);
+        }
       }
     }
   }
 }
 
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || MIN_TRADE_USDC);
-
 // MAIN
 (async()=>{
   await init();
-  console.log("RUNNER STARTED");
+  console.log("🚀 ARBITRAGE RUNNER STARTED");
 
   setInterval(async()=>{
-    await scanAllPairs();
-    saveCSV();
+    try {
+      await scanAllPairs();
+      saveCSV();
+      console.log(`📊 CUMULATIVE PROFIT: ${cumulativeProfit.toFixed(6)} USDC`);
+    } catch(e){
+      console.error("Fatal scanner error:", e.message);
+    }
   }, 10000);
 })();
