@@ -16,7 +16,7 @@ const CLI_LIVE = CLI_ARGS.includes("--live") || CLI_ARGS.includes("-l");
 
 // DRY_RUN logic: .env DRY_RUN === "true" => dry. Absent => default true (safe). CLI --live forces live.
 const ENV_DRY = process.env.DRY_RUN;
-const DRY_RUN = CLI_LIVE ? false : (typeof ENV_DRY === "string" ? (ENV_DRY === "false") : true);
+const DRY_RUN = CLI_LIVE ? false : (typeof ENV_DRY === "string" ? (ENV_DRY === "false") : false);
 
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
