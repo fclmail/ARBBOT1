@@ -1,34 +1,34 @@
-//🟢✅ ARB8 FULL LIVE ARBITRAGE
+//🟢✅ARB8 - FULL LIVE ARBITRAGE SCRIPT
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
 
 // ---------- CONFIG ----------
-const DRY_RUN = false; // 🚀 LIVE TRADES
+const DRY_RUN = false; // Live trades
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
-// Hardcoded Polygon RPC + Vault Contract
-const RPC_URL = "https://polygon-rpc.com"; 
+// Hardcoded Polygon RPC and Vault contract
+const RPC_URL = "https://polygon-rpc.com";
+const PRIVATE_KEY = process.env.PRIVATE_KEY || ""; // must exist for live trades
+if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
+
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const PRIVATE_KEY = process.env.PRIVATE_KEY; // stored in secrets
 
-if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
-
-// Trading thresholds
+// Trading & safety configuration
 const MIN_PROFIT_PCT = 20;
 const MIN_TRADE_USDC = 0.04;
 const MIN_EXPECTED_PROFIT = 0.001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
-const TRADE_AMOUNT_USDC = 0.04;
 
-// Routers and Tokens
+// Router addresses
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
+// Tokens
 const tokens = {
   AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
   CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
@@ -51,7 +51,7 @@ function saveCSV() {
 
 // ---------- PROVIDER + WALLET ----------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new Wallet(PRIVATE_KEY, provider);
+const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
 
 // ---------- VAULT CONTRACT ----------
 const arbAbi = [
@@ -71,11 +71,13 @@ const arbAbi = [
   { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
 ];
 
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+const arbContract = DRY_RUN ? new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider)
+                            : new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
 let usdcContract;
 const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
 
+// ---------- INIT ----------
 async function init() {
   try {
     const usdcAddr = await arbContract.USDC();
@@ -90,70 +92,135 @@ async function init() {
 
 // ---------- HELPERS ----------
 function fmt(n, dec = 6) { return Number(n).toFixed(dec); }
-const colors = { reset:"\x1b[0m", red:"\x1b[31m", green:"\x1b[32m", yellow:"\x1b[33m", cyan:"\x1b[36m" };
 
-async function safeGetAmountOut(routerAddr, token, amountUSDC) {
+async function getAmountOut(routerAddr, token, amountUSDC) {
+  const router = new ethers.Contract(
+    routerAddr,
+    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
+    provider
+  );
+  const usdcAddress = await arbContract.USDC();
+  const path = [usdcAddress, token.address];
   try {
-    const router = new ethers.Contract(
-      routerAddr,
-      ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-      provider
-    );
-    const path = [await arbContract.USDC(), token.address];
     const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), path);
     return Number(ethers.formatUnits(amounts[1], token.decimals));
-  } catch (err) {
-    console.log(`${colors.yellow}⚠️ ${token.address} | Router ${routerAddr} quote failed, skipping${colors.reset}`);
-    return null;
+  } catch {
+    const fallback = [usdcAddress, tokens.WBTC.address, token.address];
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), fallback);
+    return Number(ethers.formatUnits(amounts[2], token.decimals));
   }
 }
 
-// ---------- CORE TRADE EXECUTION ----------
+async function priceSanityCheck(routerAddr, token, amountUSDC) {
+  try {
+    const out = await getAmountOut(routerAddr, token, amountUSDC);
+    return out > 0 && Number.isFinite(out);
+  } catch {
+    return false;
+  }
+}
+
+// ---------- TRADE EXECUTION ----------
 let cumulativeProfit = 0;
 
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const timestamp = new Date().toISOString();
-  const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr, decimals: 18 };
+  const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) 
+                   || { address: tokenAddr, decimals: 18 };
+
   try {
-    const before = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
-    console.log(`${colors.cyan}🏦 Vault Balance Before: ${fmt(before)} USDC${colors.reset}`);
+    console.log("\n🔍 ---------- New Trade Attempt ----------");
+    console.log(`🔹 ${timestamp} • Token: ${tokenAddr} • AmountIn: ${amountUSDC} USDC`);
 
-    if (amountUSDC < MIN_TRADE_USDC) return;
+    const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    const before = Number(ethers.formatUnits(beforeBal, 6));
+    console.log(`🏦 Vault Balance Before: ${fmt(before)} USDC`);
 
-    const buyOut = await safeGetAmountOut(buyRouter, tokenObj, amountUSDC);
-    const sellOut = await safeGetAmountOut(sellRouter, tokenObj, amountUSDC);
-    if (buyOut === null || sellOut === null) return;
+    if (amountUSDC > before) {
+      console.log(`⚠️ Skipping trade — TRADE_AMOUNT_USDC (${amountUSDC}) exceeds vault balance (${fmt(before)})`);
+      return;
+    }
 
-    const buyPrice = amountUSDC / buyOut;
+    if (amountUSDC < MIN_TRADE_USDC) {
+      console.log(`⛔️ Skipping — Amount ${amountUSDC} < MIN_TRADE_USDC`);
+      return;
+    }
+
+    const buyOut = await getAmountOut(buyRouter, tokenObj, amountUSDC);
+    const sellOut = await getAmountOut(sellRouter, tokenObj, amountUSDC);
+
+    const buyPrice  = amountUSDC / buyOut;
     const sellPrice = amountUSDC / sellOut;
     let expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
     const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
-    if (expectedProfitPct > MAX_PROFIT_PCT) return;
-    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) return;
 
-    console.log(`${expectedProfitUSDC > 0 ? colors.green : colors.red}${tokenAddr} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC | pct=${fmt(expectedProfitPct)}%${colors.reset}`);
+    if (expectedProfitPct > MAX_PROFIT_PCT) {
+      console.log(`⚠️ Skipping — profit ${fmt(expectedProfitPct)}% exceeds 40% cap`);
+      return;
+    }
 
-    // Live trade
+    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) {
+      console.log("❌ PREVENTED — Not enough expected profit");
+      return;
+    }
+
+    if (!await priceSanityCheck(buyRouter, tokenObj, amountUSDC) ||
+        !await priceSanityCheck(sellRouter, tokenObj, amountUSDC)) {
+      console.log("⚠️ Price sanity check failed");
+      return;
+    }
+
+    if (DRY_RUN) {
+      console.log("🧪 DRY RUN — not sending tx");
+      return;
+    }
+
+    let gasEstimate = null;
+    try {
+      gasEstimate = await arbContract.estimateGas.executeArbitrage(
+        buyRouter, sellRouter, tokenAddr,
+        ethers.parseUnits(amountUSDC.toString(), 6)
+      );
+    } catch { console.warn("⚠️ Gas estimate failed, continuing"); }
+
     const tx = await arbContract.executeArbitrage(
       buyRouter, sellRouter, tokenAddr,
-      ethers.parseUnits(amountUSDC.toString(), 6)
+      ethers.parseUnits(amountUSDC.toString(), 6),
+      { gasLimit: gasEstimate ? gasEstimate.mul(120).div(100) : undefined }
     );
-    console.log(`${colors.green}🔁 TX SENT — ${tx.hash}${colors.reset}`);
-    const receipt = await tx.wait();
-    if (!receipt || receipt.status === 0) console.log(`${colors.red}❌ TX failed${colors.reset}`);
+    console.log(`🔁 TX SENT — ${tx.hash}`);
 
-    const after = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
+    const receipt = await tx.wait();
+    if (!receipt || receipt.status === 0) {
+      console.log("❌ TX failed");
+      return;
+    }
+    console.log(`✅ Transaction success — ${receipt.transactionHash}`);
+
+    const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+    const after = Number(ethers.formatUnits(afterBal, 6));
+    console.log(`🏦 Vault After: ${fmt(after)} USDC`);
+
+    if (after <= before) {
+      console.log("⚠️ No net profit — ignored");
+      return;
+    }
+
     const netProfit = after - before;
+    console.log(`💰 REAL PROFIT: ${fmt(netProfit)}`);
     cumulativeProfit += netProfit;
-    console.log(`${colors.green}💰 REAL PROFIT: ${fmt(netProfit)} USDC${colors.reset}`);
-    logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit });
+
+    const symbolEntry = Object.entries(tokens).find(([k,t]) => t.address.toLowerCase() === tokenAddr.toLowerCase());
+    const symbol = symbolEntry ? symbolEntry[0] : tokenAddr;
+    logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit });
 
   } catch (err) {
-    console.log(`${colors.red}⚠️ Unexpected trade error: ${err.message}${colors.reset}`);
+    console.error("⚠️ Unexpected trade error:", err.message);
   }
 }
 
 // ---------- SCAN LOOP ----------
+const TRADE_AMOUNT_USDC = 0.04; // Adjust trade size
 async function scanAllPairs() {
   console.log("\n🔍 Scanning all tokens & routers...");
   for (const [symbol, token] of Object.entries(tokens)) {
@@ -161,27 +228,25 @@ async function scanAllPairs() {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
         if (buyName === sellName) continue;
         try {
-          const buyOut = await safeGetAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
-          const sellOut = await safeGetAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
-          if (buyOut === null || sellOut === null) continue;
+          const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
+          const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
 
-          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
+          const buyPrice  = TRADE_AMOUNT_USDC / buyOut;
           const sellPrice = TRADE_AMOUNT_USDC / sellOut;
-          const profitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
-          const profitPct = (profitUSDC / buyPrice) * 100;
+          let profitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
+          let profitPct = (profitUSDC / buyPrice) * 100;
 
-          if (profitUSDC > 0) {
-            console.log(`${colors.green}${symbol} | ${buyName}→${sellName} | profit=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%${colors.reset}`);
-          } else {
-            console.log(`${colors.red}${symbol} | ${buyName}→${sellName} | loss=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%${colors.reset}`);
-          }
+          if (profitPct > MAX_PROFIT_PCT) continue;
+
+          console.log(`${symbol} | ${buyName}→${sellName} | profit=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%`);
 
           if (profitPct >= MIN_PROFIT_PCT) {
+            console.log(`🚨 PROFITABLE — executing`);
             await executeTradeLive(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
 
         } catch (e) {
-          console.log(`${colors.yellow}${symbol} | ${buyName}→${sellName} | scan error: ${e.message}${colors.reset}`);
+          console.warn(`${symbol} | ${buyName}→${sellName} | scan error:`, e.message);
         }
       }
     }
@@ -190,12 +255,15 @@ async function scanAllPairs() {
 }
 
 // ---------- MAIN ----------
-(async function main() {
+(async function main(){
   await init();
   console.log("🚀 Live arbitrage runner started");
 
   setInterval(async () => {
-    try { await scanAllPairs(); }
-    catch (e) { console.log(`${colors.red}Fatal scanner error: ${e.message}${colors.reset}`); }
+    try {
+      await scanAllPairs();
+    } catch (e) {
+      console.error("Fatal scanner error:", e.message);
+    }
   }, 10000);
 })();
