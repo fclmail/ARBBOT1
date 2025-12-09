@@ -20,7 +20,7 @@ const MIN_TRADE_USDC = 0.01;
 const MIN_EXPECTED_PROFIT = 0.001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
-const TRADE_AMOUNT_USDC = 0.01;
+const TRADE_AMOUNT_USDC = 0.1;
 
 // Routers and Tokens
 const routers = {
