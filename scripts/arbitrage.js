@@ -1,33 +1,28 @@
-// ARB8_FULL_1TO5.js - Single-file, Part 1..5 (with explicit connect points)
-// Note: Review and adapt environment vars, addresses, and thresholds before running live.
+//🟢✅ ARB8 FULL LIVE ARBITRAGE - Part 1
 
-import { ethers } from "ethers";
+import { ethers, Wallet } from "ethers";
 import fs from "fs";
 
-// ---------------------------------------------------------------------
-// PART 1: Config & constants
-// ---------------------------------------------------------------------
-const DRY_RUN = true; // true = no on-chain txs; false = live trades
+// ---------- CONFIG ----------
+const DRY_RUN = false; // 🚀 LIVE TRADES
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
-// RPC & contract
-const RPC_URL = "https://polygon-rpc.com";
+// Hardcoded Polygon RPC + Vault Contract
+const RPC_URL = "https://polygon-rpc.com"; 
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const PRIVATE_KEY = process.env.PRIVATE_KEY; // Only used if not DRY_RUN
+const PRIVATE_KEY = process.env.PRIVATE_KEY; // stored in secrets
 
-if (!DRY_RUN && !PRIVATE_KEY) {
-  throw new Error("PRIVATE_KEY required for live mode");
-}
+if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
-// Trading thresholds (tweak as needed)
-const MIN_PROFIT_PCT = .20;
+// Trading thresholds
+const MIN_PROFIT_PCT = 20;
 const MIN_TRADE_USDC = 0.01;
-const MIN_EXPECTED_PROFIT = 0.000001;
+const MIN_EXPECTED_PROFIT = 0.001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
 const TRADE_AMOUNT_USDC = 0.01;
 
-// Routers and Tokens (addresses are placeholders; replace with real ones)
+// Routers and Tokens
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -35,67 +30,13 @@ const routers = {
 };
 
 const tokens = {
-  AAVE:  { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
-  CRV:   { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
-  LINK:  { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
-  WBTC:  { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
+  AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
+  CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
+  LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
+  WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
 
-// ---------------------------------------------------------------------
-// PART 2: Initialization
-// ---------------------------------------------------------------------
-// Initialize provider, wallet (if not DRY_RUN), and contract instances
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = DRY_RUN ? null : new ethers.Wallet(PRIVATE_KEY, provider);
-
-const arbContractAbi = [
-  { "inputs": [
-      { "internalType": "address", "name": "buyRouter", "type": "address" },
-      { "internalType": "address", "name": "sellRouter", "type": "address" },
-      { "internalType": "address", "name": "token", "type": "address" },
-      { "internalType": "uint256", "name": "amountIn", "type": "uint256" }
-    ],
-    "name": "executeArbitrage",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function" }
-];
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbContractAbi, wallet);
-
-// usdcContract pointer will be set after init
-let usdcContract = null;
-
-// PART 2 END --> PART 3 START
-// ---------------------------------------------------------------------
-// PART 3: Helpers (safeGetAmountOut, logging, and a trade scaffold)
-// ---------------------------------------------------------------------
-
-// Simple utility: format numbers
-
-
-
-
-
-// PART 3: Helpers (continued)
-
-// 1) Safe quote for a token from a router (getAmountsOut-like behavior)
-async function safeGetAmountOut(routerAddr, token, amountUSDC) {
-  try {
-    // Lightweight mock: replace with real router ABI and call if you have on-chain access
-    // Example path: USDC -> token
-    const usdcToTokenPath = [/* USDC address placeholder */ "0x0000000000000000000000000000000000000000", token.address];
-    // This is a placeholder to illustrate wiring; in production you’d call router.getAmountsOut(...)
-    // Return a mock value proportional to amountUSDC for now
-    const mockRate = 1; // replace with real quote
-    const amountToken = amountUSDC * mockRate;
-    return amountToken;
-  } catch (err) {
-    console.log(`⚠️ Quote failed for token ${token.address} from router ${routerAddr}: ${err.message}`);
-    return null;
-  }
-}
-
-// 2) Simple CSV logging helper (wired in Part 5 for finalization)
+// CSV logging
 const csvRows = [];
 function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC, txHash = "" }) {
   csvRows.push([timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC, txHash].join(","));
@@ -104,155 +45,276 @@ function saveCSV() {
   if (csvRows.length === 0) return;
   const header = ["Timestamp","Token","BuyRouter","SellRouter","AmountUSDC","ProfitUSDC","TxHash"];
   const filename = `arbitrage_log_${Date.now()}.csv`;
-  require('fs').writeFileSync(filename, [header.join(","), ...csvRows].join("\n"));
+  fs.writeFileSync(filename, [header.join(","), ...csvRows].join("\n"));
   console.log(`💾 CSV exported: ${filename}`);
 }
 
-// 3) Trade scaffold (live execution)
+
+
+
+
+//🟢✅ ARB8 FULL LIVE ARBITRAGE - Part 2
+
+// ---------- CONTINUATION OF Part 1 ----------
+/*  
+We continue from where Part 1 ends. This section will complete:
+- Initialization of provider, wallet, and vault contract interface
+- Helpers for safe quotes and price logging (normalized decimals)
+- Core trade execution skeleton (without altering existing logic from Part 1)
+*/
+
+const arbAbi = [
+  {
+    "inputs": [
+      { "internalType": "address", "name": "buyRouter", "type": "address" },
+      { "internalType": "address", "name": "sellRouter", "type": "address" },
+      { "internalType": "address", "name": "token", "type": "address" },
+      { "internalType": "uint256", "name": "amountIn", "type": "uint256" }
+    ],
+    "name": "executeArbitrage",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },
+  { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
+];
+
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+
+let usdcContract;
+const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
+
+// Initialize on startup
+async function init() {
+  try {
+    const usdcAddr = await arbContract.USDC();
+    usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
+    const owner = await arbContract.owner();
+    console.log("🏛 Contract Address:", CONTRACT_ADDRESS);
+    console.log("👤 Contract Owner:", owner);
+  } catch (e) {
+    console.warn("⚠️ Initialization warning:", e.message);
+  }
+}
+
+
+
+
+
+
+
+//🟢✅ ARB8 FULL LIVE ARBITRAGE - Part 3
+
+// ---------- CONTINUATION OF Part 2 ----------
+/*  
+In this part we add:
+- safeGetAmountOut: obtains quotes from AMMs with normalized decimals
+- price logging helpers (buyPrice, sellPrice, profitPct)
+- core trade execution hook (executeTradeLive) with vault delta calculation
+- monotonicity guidance: logs only count profit when vault increases
+- keep color coding intact
+*/
+
+async function safeGetAmountOut(routerAddr, token, amountUSDC) {
+  try {
+    const router = new ethers.Contract(
+      routerAddr,
+      ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
+      provider
+    );
+    const path = [await arbContract.USDC(), token.address];
+    // amountUSDC has 6 decimals (USDC)
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), path);
+    return Number(ethers.formatUnits(amounts[1], token.decimals));
+  } catch (err) {
+    console.log(`${colors.yellow}⚠️ ${token.address} | Router ${routerAddr} quote failed, skipping${colors.reset}`);
+    return null;
+  }
+}
+
+// Extend log helper to include buy/sell prices if needed later
+function logPrices(label, buyPrice, sellPrice, profitUSDC, profitPct) {
+  console.log(`${colors.cyan}${label} | BuyPrice=${fmt(buyPrice, 6)} | SellPrice=${fmt(sellPrice, 6)} | Profit=${fmt(profitUSDC, 6)} USDC | Pct=${fmt(profitPct, 2)}%${colors.reset}`);
+}
+
+// ---------- CORE TRADE EXECUTION (LIVE) ----------
+let cumulativeProfit = 0;
+
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const timestamp = new Date().toISOString();
-  // Resolve token info from addresses map
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr, decimals: 18 };
-
-  // Pre-trade checks
-  if (amountUSDC < MIN_TRADE_USDC) {
-    console.log(`⚠️ Trade amount ${amountUSDC} below minimum ${MIN_TRADE_USDC}, skipping.`);
-    return;
-  }
-
-  // Get quotes (mocked in this skeleton)
-  const buyOut = await safeGetAmountOut(buyRouter, tokenObj, amountUSDC);
-  const sellOut = await safeGetAmountOut(sellRouter, tokenObj, amountUSDC);
-
-  if (buyOut === null || sellOut === null) {
-    console.log("⚠️ Skipping trade due to missing quotes.");
-    return;
-  }
-
-  // Basic profitability estimate (placeholder)
-  const profitUSDC = Math.max(0, (amountUSDC / (buyOut || 1)) - (amountUSDC / (sellOut || 1)));
-
-  // Logging
-  console.log(`[${timestamp}] Attempting arb: buy ${tokenObj.address} via ${buyRouter}, sell via ${sellRouter}, est profit ${profitUSDC.toFixed(6)} USDC`);
-
-  // If DRY_RUN, skip actual on-chain txs
-  if (DRY_RUN) {
-    logTradeCSV({ timestamp, symbol: tokenObj.address, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: profitUSDC.toFixed(6) });
-    return;
-  }
-
-  // Live path: call arbContract.executeArbitrage(...) with appropriate arguments
   try {
-    const tx = await arbContract.executeArbitrage(buyRouter, sellRouter, tokenObj.address, ethers.parseUnits(amountUSDC.toString(), 6));
+    // Vault balance before trade (to compute net profit)
+    const before = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
+    console.log(`${colors.cyan}🏦 Vault Balance Before: ${fmt(before)} USDC${colors.reset}`);
+
+    if (amountUSDC < MIN_TRADE_USDC) return;
+
+    const buyOut = await safeGetAmountOut(buyRouter, tokenObj, amountUSDC);
+    const sellOut = await safeGetAmountOut(sellRouter, tokenObj, amountUSDC);
+    if (buyOut === null || sellOut === null) return;
+
+    const buyPrice = amountUSDC / buyOut;
+    const sellPrice = amountUSDC / sellOut;
+    let expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
+    const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
+
+    // Bound checks
+    if (expectedProfitPct > MAX_PROFIT_PCT) return;
+    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) return;
+
+    // Display expected profit details
+    console.log(`${expectedProfitUSDC > 0 ? colors.green : colors.red}${tokenAddr} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC | pct=${fmt(expectedProfitPct)}%${colors.reset}`);
+    console.log(`${colors.yellow}📊 BuyPrice=${fmt(buyPrice, 6)} | SellPrice=${fmt(sellPrice, 6)}${colors.reset}`);
+
+    // Live trade
+    const tx = await arbContract.executeArbitrage(
+      buyRouter, sellRouter, tokenAddr,
+      ethers.parseUnits(amountUSDC.toString(), 6)
+    );
+    console.log(`${colors.green}🔁 TX SENT — ${tx.hash}${colors.reset}`);
     const receipt = await tx.wait();
-    console.log(`✅ Trade executed. TxHash: ${receipt.transactionHash}`);
-    logTradeCSV({ timestamp, symbol: tokenObj.address, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: profitUSDC.toFixed(6), txHash: receipt.transactionHash });
+
+    if (!receipt || receipt.status === 0) {
+      console.log(`${colors.red}❌ TX failed${colors.reset}`);
+    } else {
+      // Re-evaluate vault balance after settlement
+      const after = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
+      const netProfit = after - before;
+      cumulativeProfit += netProfit;
+
+      // Keep monotonicity check: only count as profit if vault increased
+      if (after >= before) {
 
 
 
 
 
-  // continue from previous try-catch
+
+      // Re-evaluate vault balance after settlement
+      const after = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
+      const netProfit = after - before;
+      cumulativeProfit += netProfit;
+
+      // Monotonicity guard: only count as profit if vault balance did not decrease
+      if (after >= before) {
+        console.log(`${colors.green}💰 REAL PROFIT: ${fmt(netProfit)} USDC${colors.reset}`);
+        logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit, txHash: tx.hash });
+        console.log(`${colors.cyan}🔔 Trade settled, profits deposited to vault (approx).${colors.reset}`);
+      } else {
+        console.log(`${colors.yellow}⚠️ Vault balance decreased after trade; did not count as profit. Review on-chain settlement.${colors.reset}`);
+      }
+    }
+
   } catch (err) {
-    console.log(`⚠️ Live trade failed: ${err.message}`);
+    console.log(`${colors.red}⚠️ Unexpected trade error: ${err.message}${colors.reset}`);
   }
 }
 
-// Part 3 END -> Part 4 START
-// ---------------------------------------------------------------------
-// PART 4: Scan loop skeleton and main loop wiring
-// ---------------------------------------------------------------------
-
-// 4.1: Scan all pairs (skeleton)
-// This is a minimal skeleton you can replace with real on-chain price fetches.
+// ---------- SCAN LOOP ----------
 async function scanAllPairs() {
-  // Example: pretend we have a list of token addresses to check
-  const tokensToScan = Object.values(tokens).map(t => t.address);
-  const results = [];
+  console.log("\n🔍 Scanning all tokens & routers...");
+  for (const [symbol, token] of Object.entries(tokens)) {
+    for (const [buyName, buyRouter] of Object.entries(routers)) {
+      for (const [sellName, sellRouter] of Object.entries(routers)) {
+        if (buyName === sellName) continue;
+        try {
+          const buyOut = await safeGetAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
+          const sellOut = await safeGetAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
+          if (buyOut === null || sellOut === null) continue;
 
-  for (const tokenAddr of tokensToScan) {
-    // Pick two routers to compare quotes
-    const buyRouter = routers.QuickSwap;
-    const sellRouter = routers.SushiSwap;
+          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
+          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
+          const profitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
+          const profitPct = (profitUSDC / buyPrice) * 100;
 
-    // Use a small amount for scan
-    const amountUSDC = TRADE_AMOUNT_USDC;
+          if (profitUSDC > 0) {
+            console.log(`${colors.green}${symbol} | ${buyName}→${sellName} | profit=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%${colors.reset}`);
+          } else {
+            console.log(`${colors.red}${symbol} | ${buyName}→${sellName} | loss=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%${colors.reset}`);
+          }
 
-    // Get quotes (use real on-chain calls in your final code)
-    const buyOut = await safeGetAmountOut(buyRouter, { address: tokenAddr, decimals: 18 }, amountUSDC);
-    const sellOut = await safeGetAmountOut(sellRouter, { address: tokenAddr, decimals: 18 }, amountUSDC);
+          if (profitPct >= MIN_PROFIT_PCT) {
+            await executeTradeLive(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
+          }
 
-    results.push({
-      token: tokenAddr,
-      buyRouter,
-      sellRouter,
-      amountUSDC,
-      buyOut,
-      sellOut
-    });
-  }
-
-  return results;
-}
-
-// 4.2: Main loop (skeleton)
-// You can wire this into a timer or your event-driven hook.
-async function mainLoop() {
-  console.log("🔄 Starting main scanning loop (skeleton)...");
-  // Ensure usdcContract is initialized if you plan real calls
-  // await initUsdcContract();
-
-  // Run a single scan (repeat as needed)
-  const scan = await scanAllPairs();
-  console.log("Scan results (skeleton):", scan);
-
-  // Example: pick any profitable opportunity and execute (dry-run-safe)
-  for (const r of scan) {
-    // Very naive threshold check (replace with your real logic)
-    if (r.buyOut && r.sellOut && r.buyOut > r.sellOut) {
-      await executeTradeLive(r.buyRouter, r.sellRouter, r.token, r.amountUSDC);
+        } catch (e) {
+          console.log(`${colors.yellow}${symbol} | ${buyName}→${sellName} | scan error: ${e.message}${colors.reset}`);
+        }
+      }
     }
   }
-
-  // After processing, optionally save CSV
   saveCSV();
 }
 
-// PART 4 END -> PART 5 START
-// ---------------------------------------------------------------------
-// PART 5: Startup/shutdown glue and usage notes
-// ---------------------------------------------------------------------
+// ---------- MAIN ----------
+(async function main() {
+  await init();
+  console.log("🚀 Live arbitrage runner started");
 
-async function startup() {
-  console.log("🚀 Starting Arb8 single-file (1-5) script");
-  // Initialize usdcContract placeholder (if you have ABI/addresses)
-  // usdcContract = new ethers.Contract(USDC_ADDRESS, usdcAbi, wallet || provider);
+  setInterval(async () => {
+    try { await scanAllPairs(); }
+    catch (e) { console.log(`${colors.red}Fatal scanner error: ${e.message}${colors.reset}`); }
+  }, 10000);
+})();
 
-  // If you want, run a one-shot mainLoop or setInterval
-  await mainLoop();
 
-  // Schedule repeated loops (e.g., every 30 seconds)
-  // const intervalMs = 30000;
-  // setInterval(mainLoop, intervalMs);
-}
 
-async function shutdown() {
-  console.log("⏏️ Shutting down Arb8 script");
-  // Finalize CSV if needed
-  saveCSV();
-  // Close provider if using a custom provider that supports it
-  // await provider.disconnect?.();
-}
 
-// Start
-startup()
-  .then(() => {
-    // You could listen for process signals to gracefully shutdown
-    process.on("SIGINT", async () => {
-      await shutdown();
-      process.exit(0);
-    });
-  })
-  .catch(err => {
-    console.error("Unhandled error in startup:", err);
-  });
+
+//🟢✅ ARB8 FULL LIVE ARBITRAGE - Part 5
+
+/*  
+This final part completes:
+- Main bootstrap to run the script (wrapping up any missing pieces)
+- Optional strict invariant notice and graceful shutdown hooks
+- Final notes on usage, testing, and deployment considerations
+- Ensures color-coded logs and CSV logging remain intact
+*/
+
+// ---------- CONTINUATION OF Part 4 ----------
+/*  
+We assume Part 4 included the core loop and monotonicity checks.
+This Part 5 adds a clean entry point, optional shutdown handling, and a quick usage guide.
+*/
+
+// Graceful shutdown (optional)
+let shuttingDown = false;
+process.on("SIGINT", () => {
+  if (!shuttingDown) {
+    shuttingDown = true;
+    console.log(`${colors.yellow}⚡ Shutting down gracefully...${colors.reset}`);
+    // If you accumulate resources or need to flush, do it here
+    saveCSV();
+    process.exit(0);
+  }
+});
+
+// Start-up glue: ensure init runs before scanning loop
+(async function startup() {
+  try {
+    await init();
+    console.log("🚀 Initial setup complete. Entering scan loop...");
+  } catch (err) {
+    console.log(`${colors.red}Initialization failed: ${err.message}${colors.reset}`);
+  }
+})();
+
+// The main loop is already defined in Part 4 as part of main().
+// We rely on the existing setInterval to drive scanAllPairs.
+// No further changes required here unless you want to adjust frequency or add more logging.
+
+
+// Usage tips and quick checklist
+// - Ensure PRIVATE_KEY is set in environment for live mode
+// - Verify USDC contract address logic on your chain; if vault holds differently, adjust balance queries
+// - Consider enabling DRY_RUN = true for dry-run validation without on-chain txs
+// - If you want stronger invariants, you can uncomment and adapt the monotonicity guard to pause trading upon detected deficits
+
+/*
+What to customize next (optional, minimal touch):
+- Add an on-chain alert when monotonicity is violated (e.g., email/SMS)
+- Extend logTradeCSV to include txHash for easier reconciliation with blockchain explorers
+- Introduce an on-chain nonce or run-id tagging in CSV to group trades per run
+*/
