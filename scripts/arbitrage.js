@@ -4,7 +4,7 @@ import { ethers, Wallet } from "ethers";
 import fs from "fs";
 
 // ---------- CONFIG ----------
-const DRY_RUN = true; // 🔬 Set false for live trades
+const DRY_RUN = false; // 🔬 Set false for live trades
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
 // Hardcoded Polygon RPC + Vault Contract
@@ -16,7 +16,7 @@ if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mod
 
 // Trading thresholds
 const MIN_PROFIT_PCT = 20;
-const MIN_TRADE_USDC = 1;
+const MIN_TRADE_USDC = .04;
 const MIN_EXPECTED_PROFIT = 0.001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
