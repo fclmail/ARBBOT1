@@ -4,7 +4,7 @@ import { ethers, Wallet } from "ethers";
 import fs from "fs";
 
 // ---------- CONFIG ----------
-const DRY_RUN = false; // 🚀 LIVE TRADES
+const DRY_RUN = true; // 🚀 LIVE TRADES
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
 // Hardcoded Polygon RPC + Vault Contract
@@ -20,7 +20,7 @@ const MIN_TRADE_USDC = 0.01;
 const MIN_EXPECTED_PROFIT = 0.00001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
-const TRADE_AMOUNT_USDC = 0.1;
+const TRADE_AMOUNT_USDC = 1000;
 
 // Routers and Tokens
 const routers = {
