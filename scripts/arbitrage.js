@@ -1,14 +1,31 @@
 // =============================================================
 // ARB-8 — SAFE ARBITRAGE ENGINE WITH FULL DIAGNOSTIC LOGGING
 // =============================================================
-// DRY RUN: node arb8.js --dry
-// LIVE RUN: node arb8.js --live
+// DRY RUN: node scripts/arbitrage.js --dry
+// LIVE RUN: node scripts/arbitrage.js --live
 // =============================================================
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 dotenv.config();
+
+// -------------------------------------------------------------
+// PATH FIX (WORKS IN GITHUB ACTIONS AND LOCAL MACHINES)
+// -------------------------------------------------------------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load ABIs safely from repo root
+const ABI = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "..", "vault_abi.json"), "utf8")
+);
+
+const routerABI = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "..", "router_abi.json"), "utf8")
+);
 
 // -------------------------------------------------------------
 // CONFIG
@@ -19,11 +36,8 @@ const DRY = !LIVE;
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC);
 
-// Wallet (your private key must belong to you)
+// Wallet
 const wallet = new Wallet(process.env.PRIVATE_KEY, provider);
-
-// Contract ABI
-const ABI = JSON.parse(fs.readFileSync("./vault_abi.json", "utf8"));
 
 // Vault contract
 const vault = new ethers.Contract(
@@ -32,23 +46,20 @@ const vault = new ethers.Contract(
     wallet
 );
 
-// Routers (example)
+// Routers
 const ROUTERS = {
     quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
     sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
 };
-
-const routerABI = JSON.parse(fs.readFileSync("./router_abi.json", "utf8"));
 
 const routerContracts = {
     quickswap: new ethers.Contract(ROUTERS.quickswap, routerABI, provider),
     sushiswap: new ethers.Contract(ROUTERS.sushiswap, routerABI, provider),
 };
 
-// Target pair
+// Tokens (from .env)
 const TOKEN_IN = process.env.TOKEN_IN;
 const TOKEN_OUT = process.env.TOKEN_OUT;
-
 const amount = ethers.parseUnits(process.env.AMOUNT, process.env.DECIMALS);
 
 console.log("\n====================================================");
@@ -73,20 +84,20 @@ const detail = (label, value) => {
 
 
 // -------------------------------------------------------------
-// GET QUOTES FROM ALL ROUTERS
+// GET QUOTE FROM A ROUTER
 // -------------------------------------------------------------
 async function getQuote(routerName, router, amountIn) {
     block(`QUOTE — ${routerName}`);
 
     try {
-        const path = [TOKEN_IN, TOKEN_OUT];
-        detail("Path", path);
+        const pathArr = [TOKEN_IN, TOKEN_OUT];
+        detail("Path", pathArr);
 
-        const quote = await router.getAmountsOut(amountIn, path);
+        const quote = await router.getAmountsOut(amountIn, pathArr);
 
         const output = quote[quote.length - 1];
 
-        detail("Raw quote", quote);
+        detail("Raw Router Output", quote);
         detail("AmountOut", output.toString());
 
         return output;
@@ -98,7 +109,7 @@ async function getQuote(routerName, router, amountIn) {
 
 
 // -------------------------------------------------------------
-// SCAN ARBITRAGE OPPORTUNITIES
+// SCAN ALL ROUTERS FOR BEST QUOTE
 // -------------------------------------------------------------
 async function scan() {
     block("SCAN START");
@@ -117,8 +128,8 @@ async function scan() {
         }))
     );
 
-    // Find highest
-    const best = Object.entries(quotes).sort((a, b) => Number(b[1] - a[1]))[0];
+    const best = Object.entries(quotes)
+        .sort((a, b) => Number(b[1] - a[1]))[0];
 
     block("BEST ROUTER");
 
@@ -154,7 +165,7 @@ function checkProfit(bestAmount) {
 
 
 // -------------------------------------------------------------
-// EXECUTE TRADE (LIVE OR DRY)
+// EXECUTE TRADE
 // -------------------------------------------------------------
 async function execute(bestRouter, bestAmount) {
     block("TRADE EXECUTION");
@@ -163,8 +174,8 @@ async function execute(bestRouter, bestAmount) {
     detail("Router", bestRouter);
     detail("Router Address", routerAddr);
 
-    // Build basic swap calldata
     const iface = new ethers.Interface(routerABI);
+
     const calldata = iface.encodeFunctionData("swapExactTokensForTokens", [
         amount,
         bestAmount * 98n / 100n, // 2% slippage
@@ -200,13 +211,12 @@ async function execute(bestRouter, bestAmount) {
 
 
 // -------------------------------------------------------------
-// MAIN LOOP
+// MAIN EXECUTION
 // -------------------------------------------------------------
 async function main() {
     console.log("Starting ARB-8 engine…");
 
     const scanResult = await scan();
-
     const profit = checkProfit(scanResult.bestAmount);
 
     if (profit <= 0) {
