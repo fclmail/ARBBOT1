@@ -1,22 +1,22 @@
-//🟢✅ ARB8 FULL IMPROVED
+//🟢✅ ARB8 FULL LIVE ARBITRAGE
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
 
 // ---------- CONFIG ----------
-const DRY_RUN = false; // 🔬 Set false for live trades
+const DRY_RUN = false; // 🚀 LIVE TRADES
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
 // Hardcoded Polygon RPC + Vault Contract
 const RPC_URL = "https://polygon-rpc.com"; 
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const PRIVATE_KEY = ""; // Fill in for live mode
+const PRIVATE_KEY = process.env.PRIVATE_KEY; // stored in secrets
 
-if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
+if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
 // Trading thresholds
 const MIN_PROFIT_PCT = 20;
-const MIN_TRADE_USDC = .04;
+const MIN_TRADE_USDC = 0.04;
 const MIN_EXPECTED_PROFIT = 0.001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
@@ -51,7 +51,7 @@ function saveCSV() {
 
 // ---------- PROVIDER + WALLET ----------
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
+const wallet = new Wallet(PRIVATE_KEY, provider);
 
 // ---------- VAULT CONTRACT ----------
 const arbAbi = [
@@ -71,8 +71,7 @@ const arbAbi = [
   { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
 ];
 
-const arbContract = DRY_RUN ? new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider)
-                            : new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
 
 let usdcContract;
 const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
@@ -91,11 +90,8 @@ async function init() {
 
 // ---------- HELPERS ----------
 function fmt(n, dec = 6) { return Number(n).toFixed(dec); }
-
-// ANSI colors
 const colors = { reset:"\x1b[0m", red:"\x1b[31m", green:"\x1b[32m", yellow:"\x1b[33m", cyan:"\x1b[36m" };
 
-// Safe getAmountsOut wrapper
 async function safeGetAmountOut(routerAddr, token, amountUSDC) {
   try {
     const router = new ethers.Contract(
@@ -133,13 +129,11 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     let expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
     const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
     if (expectedProfitPct > MAX_PROFIT_PCT) return;
-
     if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) return;
 
     console.log(`${expectedProfitUSDC > 0 ? colors.green : colors.red}${tokenAddr} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC | pct=${fmt(expectedProfitPct)}%${colors.reset}`);
 
-    if (DRY_RUN) return;
-
+    // Live trade
     const tx = await arbContract.executeArbitrage(
       buyRouter, sellRouter, tokenAddr,
       ethers.parseUnits(amountUSDC.toString(), 6)
@@ -198,7 +192,7 @@ async function scanAllPairs() {
 // ---------- MAIN ----------
 (async function main() {
   await init();
-  console.log("🚀 Improved arbitrage runner started");
+  console.log("🚀 Live arbitrage runner started");
 
   setInterval(async () => {
     try { await scanAllPairs(); }
