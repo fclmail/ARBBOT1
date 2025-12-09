@@ -13,7 +13,7 @@ const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // hardco
 
 // ---------- TRADING CONFIG ----------
 const MIN_PROFIT_PCT = 20;
-const MIN_TRADE_USDC = 0.01;
+const MIN_TRADE_USDC = 0.0.1;
 const GAS_EST_USDC = 0.002;
 const MIN_EXPECTED_PROFIT = 0.001;
 const SLIPPAGE_PCT = 0.0;
@@ -172,7 +172,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 }
 
 // ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = 0.01;
+const TRADE_AMOUNT_USDC = 1;
 
 async function scanAllPairs() {
   console.log("\n🔍 Scanning all tokens & routers...");
