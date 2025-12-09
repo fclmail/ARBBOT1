@@ -15,9 +15,9 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY; // stored in secrets
 if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
 // Trading thresholds
-const MIN_PROFIT_PCT = 20;
+const MIN_PROFIT_PCT = .20;
 const MIN_TRADE_USDC = 0.01;
-const MIN_EXPECTED_PROFIT = 0.001;
+const MIN_EXPECTED_PROFIT = 0.00001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
 const TRADE_AMOUNT_USDC = 0.1;
