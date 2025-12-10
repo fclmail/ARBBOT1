@@ -1,5 +1,5 @@
-//🟢✅ ARB8 FULL LIVE ARBITRAGE — PROFIT-SAFE
-// Updated: vault-only increase, negative trades skipped, Fix #1 + #3 kept
+//🟢✅ ARB8 FULL LIVE ARBITRAGE — VAULT PROFIT SAFE + LOGS
+// Updated: Vault balance & net profits restored, Fix #1 + #3 intact
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
@@ -11,14 +11,14 @@ console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE M
 // Hardcoded Polygon RPC + Vault Contract
 const RPC_URL = "https://polygon-rpc.com"; 
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const PRIVATE_KEY = process.env.PRIVATE_KEY; // stored in secrets
+const PRIVATE_KEY = process.env.PRIVATE_KEY; 
 
 if (!PRIVATE_KEY && !DRY_RUN) throw new Error("PRIVATE_KEY required for live mode");
 
 // Trading thresholds
-const MIN_PROFIT_PCT = 20;        // minimum profit %
-const MIN_TRADE_USDC = 0.01;      // min trade size
-const MIN_EXPECTED_PROFIT = 0.001; // min profit in USDC
+const MIN_PROFIT_PCT = 20;
+const MIN_TRADE_USDC = 0.01;
+const MIN_EXPECTED_PROFIT = 0.001;
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
 const TRADE_AMOUNT_USDC = 0.01;
@@ -100,10 +100,10 @@ function isV3RouterByName(name) {
 }
 
 const BASE_FALLBACKS = [
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
-  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"  // WMATIC
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
 ];
 
 async function safeGetAmountOut(routerName, routerAddr, token, amountUSDC) {
@@ -151,27 +151,37 @@ async function safeGetAmountOut(routerName, routerAddr, token, amountUSDC) {
 }
 
 // ---------- CORE TRADE EXECUTION ----------
+let cumulativeProfit = 0;
+
 async function executeTradeLive(buyRouterName, buyRouterAddr, sellRouterName, sellRouterAddr, tokenAddr, amountUSDC) {
   const timestamp = new Date().toISOString();
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr, decimals: 18 };
 
   try {
+    const before = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
+    console.log(`${colors.cyan}🏦 Vault Balance Before: ${fmt(before)} USDC${colors.reset}`);
+
     if (amountUSDC < MIN_TRADE_USDC) return;
 
     const buyOut = await safeGetAmountOut(buyRouterName, buyRouterAddr, tokenObj, amountUSDC);
     const sellOut = await safeGetAmountOut(sellRouterName, sellRouterAddr, tokenObj, amountUSDC);
     if (buyOut === null || sellOut === null) return;
 
-    const expectedProfitUSDC = amountUSDC * (sellOut / buyOut - 1);
-    if (expectedProfitUSDC < MIN_EXPECTED_PROFIT) {
+    const buyPrice = amountUSDC / buyOut;
+    const sellPrice = amountUSDC / sellOut;
+    const expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
+    const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
+
+    if (expectedProfitPct > MAX_PROFIT_PCT) return;
+    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) {
       console.log(`${colors.yellow}⚠️ Skipping trade ${tokenAddr} — expected profit too low${colors.reset}`);
       return;
     }
 
-    console.log(`${colors.green}${tokenAddr} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC${colors.reset}`);
+    console.log(`${expectedProfitUSDC > 0 ? colors.green : colors.red}${tokenAddr} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC | pct=${fmt(expectedProfitPct)}%${colors.reset}`);
 
     if (DRY_RUN) {
-      console.log(`${colors.cyan}[DRY RUN] Would execute: ${buyRouterName} -> ${sellRouterName} amount ${amountUSDC} USDC${colors.reset}`);
+      console.log(`${colors.cyan}[DRY RUN] Would execute trade${colors.reset}`);
       return;
     }
 
@@ -185,8 +195,12 @@ async function executeTradeLive(buyRouterName, buyRouterAddr, sellRouterName, se
     if (!receipt || receipt.status === 0) {
       console.log(`${colors.red}❌ TX failed${colors.reset}`);
     } else {
-      console.log(`${colors.green}💰 Trade executed — profit stored in vault${colors.reset}`);
-      logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter: buyRouterName, sellRouter: sellRouterName, amount: amountUSDC, profitUSDC: expectedProfitUSDC });
+      const after = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
+      const netProfit = after - before;
+      cumulativeProfit += netProfit;
+      console.log(`${colors.green}💰 REAL PROFIT: ${fmt(netProfit)} USDC${colors.reset}`);
+      logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter: buyRouterName, sellRouter: sellRouterName, amount: amountUSDC, profitUSDC: netProfit });
+      console.log(`${colors.cyan}🔔 Trade settled, profits deposited to vault${colors.reset}`);
     }
 
   } catch (err) {
@@ -201,22 +215,23 @@ async function scanAllPairs() {
     for (const [buyName, buyRouter] of Object.entries(routers)) {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
         if (buyName === sellName) continue;
-
         try {
           const buyOut = await safeGetAmountOut(buyName, buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await safeGetAmountOut(sellName, sellRouter, token, TRADE_AMOUNT_USDC);
           if (buyOut === null || sellOut === null) continue;
 
-          const expectedProfitUSDC = TRADE_AMOUNT_USDC * (sellOut / buyOut - 1);
-          const expectedProfitPct = (expectedProfitUSDC / TRADE_AMOUNT_USDC) * 100;
+          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
+          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
+          const profitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
+          const profitPct = (profitUSDC / buyPrice) * 100;
 
-          if (expectedProfitUSDC > 0) {
-            console.log(`${colors.green}${symbol} | ${buyName}→${sellName} | expected profit=${fmt(expectedProfitUSDC)} USDC | profitPct=${fmt(expectedProfitPct)}%${colors.reset}`);
+          if (profitUSDC > 0) {
+            console.log(`${colors.green}${symbol} | ${buyName}→${sellName} | profit=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%${colors.reset}`);
           } else {
-            console.log(`${colors.red}${symbol} | ${buyName}→${sellName} | expected loss skipped${colors.reset}`);
+            console.log(`${colors.red}${symbol} | ${buyName}→${sellName} | loss skipped${colors.reset}`);
           }
 
-          if (expectedProfitUSDC >= MIN_EXPECTED_PROFIT) {
+          if (profitPct >= MIN_PROFIT_PCT) {
             await executeTradeLive(buyName, buyRouter, sellName, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
 
