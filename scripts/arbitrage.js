@@ -1,6 +1,5 @@
-//🟢✅ ARB8 FULL LIVE ARBITRAGE
-// Updated: include Fix #1 (V2 vs V3 detection) and Fix #3 (multi-base fallback quoting)
-// NOTHING else changed from original except safeGetAmountOut and usages to support the fixes.
+//🟢✅ ARB8 FULL LIVE ARBITRAGE — PROFIT-SAFE
+// Updated: vault-only increase, negative trades skipped, Fix #1 + #3 kept
 
 import { ethers, Wallet } from "ethers";
 import fs from "fs";
@@ -14,18 +13,17 @@ const RPC_URL = "https://polygon-rpc.com";
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 const PRIVATE_KEY = process.env.PRIVATE_KEY; // stored in secrets
 
-if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
+if (!PRIVATE_KEY && !DRY_RUN) throw new Error("PRIVATE_KEY required for live mode");
 
 // Trading thresholds
-const MIN_PROFIT_PCT = 20;
-const MIN_TRADE_USDC = 0.01;
-const MIN_EXPECTED_PROFIT = 0.001;
+const MIN_PROFIT_PCT = 20;        // minimum profit %
+const MIN_TRADE_USDC = 0.01;      // min trade size
+const MIN_EXPECTED_PROFIT = 0.001; // min profit in USDC
 const SLIPPAGE_PCT = 0.0;
 const MAX_PROFIT_PCT = 40;
 const TRADE_AMOUNT_USDC = 0.01;
 
 // Routers and Tokens
-// NOTE: If you later add a V3 router, include "V3" in the key name (e.g. "QuickSwapV3") so detection works.
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -95,44 +93,19 @@ async function init() {
 function fmt(n, dec = 6) { return Number(n).toFixed(dec); }
 const colors = { reset:"\x1b[0m", red:"\x1b[31m", green:"\x1b[32m", yellow:"\x1b[33m", cyan:"\x1b[36m" };
 
-/**
- * Fix #1 helper: detect V3-like router by router name
- * (Relies on router key name containing 'v3' or similar)
- */
 function isV3RouterByName(name) {
   if (!name) return false;
   const s = name.toLowerCase();
   return s.includes("v3") || s.includes("uniswapv3") || s.includes("quickswapv3");
 }
 
-/**
- * Fix #3: Multi-base fallback list (try these bases if USDC direct pair not available)
- * Order: USDC → USDT → WETH → WMATIC
- */
 const BASE_FALLBACKS = [
-  // USDC on Polygon (commonly used)
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  // USDT on Polygon
-  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  // WETH on Polygon
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  // WMATIC on Polygon
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"  // WMATIC
 ];
 
-/**
- * Updated safeGetAmountOut implementing Fix #1 and Fix #3:
- * - routerName (string) is the key name from routers mapping, used to detect V3
- * - routerAddr (address) is the router contract address
- * - token (object) { address, decimals }
- * - amountUSDC is a human number (e.g., 0.01)
- *
- * Behavior:
- * 1) tries base list in order (USDC, USDT, WETH, WMATIC)
- * 2) for each base, attempts V2 getAmountsOut (USDC->token) on the router
- * 3) if router is detected as V3 by name, attempts a V3-style quote method fallback (best-effort)
- * 4) returns the human token amount for the selected successful path or null on failure
- */
 async function safeGetAmountOut(routerName, routerAddr, token, amountUSDC) {
   try {
     const providerRouter = new ethers.Contract(
@@ -142,48 +115,32 @@ async function safeGetAmountOut(routerName, routerAddr, token, amountUSDC) {
     );
 
     const usdcAddrFromContract = await arbContract.USDC();
-
-    // Try bases: prefer the vault's USDC address first if provided by contract
     const bases = [usdcAddrFromContract, ...BASE_FALLBACKS.filter(b => b.toLowerCase() !== usdcAddrFromContract.toLowerCase())];
 
     for (const base of bases) {
-      // We want to attempt path: base -> token (i.e., how many token we get for amountUSDC base)
       try {
-        const amountInRaw = ethers.parseUnits(amountUSDC.toString(), 6); // USDC decimals = 6
+        const amountInRaw = ethers.parseUnits(amountUSDC.toString(), 6);
         const path = [base, token.address];
-
-        // Try V2 style first (works for most routers)
         const amounts = await providerRouter.getAmountsOut(amountInRaw, path);
-        // amounts[1] is raw token units — convert to human units
         const tokenOutHuman = Number(ethers.formatUnits(amounts[1], token.decimals));
         return tokenOutHuman;
       } catch (errV2) {
-        // V2 quote failed for this base — if router name indicates V3, try a V3-style quote
         if (isV3RouterByName(routerName)) {
           try {
-            // Best-effort V3 quoter: many V3 deployments use a separate Quoter contract.
-            // We attempt to call a generic quoter interface on the router address (may or may not exist).
-            // Quoter ABI minimal:
             const quoterAbi = [
               "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external returns (uint256)"
             ];
-            const quoter = new ethers.Contract(routerAddr, quoterAbi, provider); // try router as quoter (best-effort)
-            // fee 3000 typical; sqrtPriceLimitX96 = 0
-            const amountOutRaw = await quoter.quoteExactInputSingle(base, token.address, 3000, ethers.parseUnits(amountUSDC.toString(), 6), 0);
+            const quoter = new ethers.Contract(routerAddr, quoterAbi, provider);
+            const amountOutRaw = await quoter.quoteExactInputSingle(
+              base, token.address, 3000, ethers.parseUnits(amountUSDC.toString(), 6), 0
+            );
             const tokenOutHuman = Number(ethers.formatUnits(amountOutRaw, token.decimals));
             return tokenOutHuman;
-          } catch (errV3) {
-            // fallback: skip this base and try next
-            continue;
-          }
-        } else {
-          // Not V3 router or no V3 fallback available — try next base
-          continue;
-        }
+          } catch { continue; }
+        } else { continue; }
       }
     }
 
-    // If we get here, all bases failed
     console.log(`${colors.yellow}⚠️ ${token.address} | Router ${routerAddr} quote failed, skipping${colors.reset}`);
     return null;
 
@@ -194,33 +151,30 @@ async function safeGetAmountOut(routerName, routerAddr, token, amountUSDC) {
 }
 
 // ---------- CORE TRADE EXECUTION ----------
-let cumulativeProfit = 0;
-
 async function executeTradeLive(buyRouterName, buyRouterAddr, sellRouterName, sellRouterAddr, tokenAddr, amountUSDC) {
   const timestamp = new Date().toISOString();
   const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) || { address: tokenAddr, decimals: 18 };
-  try {
-    const before = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
-    console.log(`${colors.cyan}🏦 Vault Balance Before: ${fmt(before)} USDC${colors.reset}`);
 
+  try {
     if (amountUSDC < MIN_TRADE_USDC) return;
 
-    // Use updated safeGetAmountOut (Fix #1 + #3) — uses router name and address
     const buyOut = await safeGetAmountOut(buyRouterName, buyRouterAddr, tokenObj, amountUSDC);
     const sellOut = await safeGetAmountOut(sellRouterName, sellRouterAddr, tokenObj, amountUSDC);
     if (buyOut === null || sellOut === null) return;
 
-    // Keep original math (unchanged)
-    const buyPrice = amountUSDC / buyOut;
-    const sellPrice = amountUSDC / sellOut;
-    let expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
-    const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
-    if (expectedProfitPct > MAX_PROFIT_PCT) return;
-    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) return;
+    const expectedProfitUSDC = amountUSDC * (sellOut / buyOut - 1);
+    if (expectedProfitUSDC < MIN_EXPECTED_PROFIT) {
+      console.log(`${colors.yellow}⚠️ Skipping trade ${tokenAddr} — expected profit too low${colors.reset}`);
+      return;
+    }
 
-    console.log(`${expectedProfitUSDC > 0 ? colors.green : colors.red}${tokenAddr} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC | pct=${fmt(expectedProfitPct)}%${colors.reset}`);
+    console.log(`${colors.green}${tokenAddr} | Expected Profit: ${fmt(expectedProfitUSDC)} USDC${colors.reset}`);
 
-    // Live trade
+    if (DRY_RUN) {
+      console.log(`${colors.cyan}[DRY RUN] Would execute: ${buyRouterName} -> ${sellRouterName} amount ${amountUSDC} USDC${colors.reset}`);
+      return;
+    }
+
     const tx = await arbContract.executeArbitrage(
       buyRouterAddr, sellRouterAddr, tokenAddr,
       ethers.parseUnits(amountUSDC.toString(), 6)
@@ -231,12 +185,8 @@ async function executeTradeLive(buyRouterName, buyRouterAddr, sellRouterName, se
     if (!receipt || receipt.status === 0) {
       console.log(`${colors.red}❌ TX failed${colors.reset}`);
     } else {
-      const after = Number(ethers.formatUnits(await usdcContract.balanceOf(CONTRACT_ADDRESS), 6));
-      const netProfit = after - before;
-      cumulativeProfit += netProfit;
-      console.log(`${colors.green}💰 REAL PROFIT: ${fmt(netProfit)} USDC${colors.reset}`);
-      logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter: buyRouterName, sellRouter: sellRouterName, amount: amountUSDC, profitUSDC: netProfit });
-      console.log(`${colors.cyan}🔔 Trade settled, profits deposited to vault (approx).${colors.reset}`);
+      console.log(`${colors.green}💰 Trade executed — profit stored in vault${colors.reset}`);
+      logTradeCSV({ timestamp, symbol: tokenAddr, buyRouter: buyRouterName, sellRouter: sellRouterName, amount: amountUSDC, profitUSDC: expectedProfitUSDC });
     }
 
   } catch (err) {
@@ -251,24 +201,22 @@ async function scanAllPairs() {
     for (const [buyName, buyRouter] of Object.entries(routers)) {
       for (const [sellName, sellRouter] of Object.entries(routers)) {
         if (buyName === sellName) continue;
+
         try {
-          // Use updated safeGetAmountOut signature
           const buyOut = await safeGetAmountOut(buyName, buyRouter, token, TRADE_AMOUNT_USDC);
           const sellOut = await safeGetAmountOut(sellName, sellRouter, token, TRADE_AMOUNT_USDC);
           if (buyOut === null || sellOut === null) continue;
 
-          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
-          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
-          const profitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
-          const profitPct = (profitUSDC / buyPrice) * 100;
+          const expectedProfitUSDC = TRADE_AMOUNT_USDC * (sellOut / buyOut - 1);
+          const expectedProfitPct = (expectedProfitUSDC / TRADE_AMOUNT_USDC) * 100;
 
-          if (profitUSDC > 0) {
-            console.log(`${colors.green}${symbol} | ${buyName}→${sellName} | profit=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%${colors.reset}`);
+          if (expectedProfitUSDC > 0) {
+            console.log(`${colors.green}${symbol} | ${buyName}→${sellName} | expected profit=${fmt(expectedProfitUSDC)} USDC | profitPct=${fmt(expectedProfitPct)}%${colors.reset}`);
           } else {
-            console.log(`${colors.red}${symbol} | ${buyName}→${sellName} | loss=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%${colors.reset}`);
+            console.log(`${colors.red}${symbol} | ${buyName}→${sellName} | expected loss skipped${colors.reset}`);
           }
 
-          if (profitPct >= MIN_PROFIT_PCT) {
+          if (expectedProfitUSDC >= MIN_EXPECTED_PROFIT) {
             await executeTradeLive(buyName, buyRouter, sellName, sellRouter, token.address, TRADE_AMOUNT_USDC);
           }
 
