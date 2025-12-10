@@ -26,27 +26,39 @@ const ERC20_ABI = [
 const arbContract = new ethers.Contract(ARB_CONTRACT_ADDRESS, ARB_ABI, wallet);
 const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-// --------- HELPER FUNCTIONS ---------
+// --------- DEX ROUTERS & TOKENS ---------
+// Restore all previous DEX routers and tokens
+const DEXES = {
+  QuickSwap: "0xa5E0829CaCED8FFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  ApeSwap:   "0xc0788a3ad43d79aa53b09c2eacc313a787d1d607"
+};
 
-// Get vault balance
+const TOKENS = {
+  AAVE: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+  CRV:  "0x172370d5cd63279efa6d502dab29171933a610af",
+  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  // Add more tokens if previously supported
+};
+
+// --------- HELPERS ---------
 async function getVaultBalance() {
   const balance = await usdcContract.balanceOf(ARB_CONTRACT_ADDRESS);
   const decimals = await usdcContract.decimals();
   return balance / (10 ** decimals);
 }
 
-// Log vault balance
 async function logVaultBalance(label = "") {
   const vaultBalance = await getVaultBalance();
   console.log(`🏦 Vault Balance ${label}: ${vaultBalance.toFixed(6)} USDC`);
 }
 
-// Execute single arbitrage trade and log profit
 async function executeTrade(buyRouter, sellRouter, token, amountIn, tokenSymbol) {
   try {
     const vaultBalanceBefore = await getVaultBalance();
-
-    console.log(`🔹 Executing trade ${tokenSymbol} | Amount In: ${amountIn}`);
+    console.log(`🔹 Executing trade ${tokenSymbol} | Amount In: ${ethers.utils.formatUnits(amountIn, 6)}`);
+    
     const tx = await arbContract.executeArbitrage(buyRouter, sellRouter, token, amountIn);
     await tx.wait();
 
@@ -65,7 +77,6 @@ async function executeTrade(buyRouter, sellRouter, token, amountIn, tokenSymbol)
   }
 }
 
-// Withdraw profit to owner wallet
 async function withdrawUSDCProfit() {
   try {
     const tx = await arbContract.withdrawProfit(USDC_ADDRESS);
@@ -82,25 +93,31 @@ async function runArbitrage() {
   console.log("🚀 Starting ARB J's bot in LIVE MODE");
   await logVaultBalance("Initial");
 
-  // Example tokens & routers (replace with your actual token/router pairs)
-  const trades = [
-    { buyRouter: "0x1...", sellRouter: "0x2...", token: "0xA...", symbol: "AAVE", amountIn: ethers.utils.parseUnits("1000", 6) },
-    { buyRouter: "0x1...", sellRouter: "0x3...", token: "0xB...", symbol: "CRV", amountIn: ethers.utils.parseUnits("500", 6) },
-    { buyRouter: "0x2...", sellRouter: "0x3...", token: "0xC...", symbol: "LINK", amountIn: ethers.utils.parseUnits("200", 6) }
-  ];
+  // Loop through all token and router combinations
+  for (let tokenSymbol in TOKENS) {
+    const tokenAddress = TOKENS[tokenSymbol];
+    for (let buyName in DEXES) {
+      for (let sellName in DEXES) {
+        if (buyName === sellName) continue; // skip same-router trades
 
-  for (let trade of trades) {
-    await executeTrade(trade.buyRouter, trade.sellRouter, trade.token, trade.amountIn, trade.symbol);
+        const buyRouter = DEXES[buyName];
+        const sellRouter = DEXES[sellName];
+
+        const amountIn = ethers.utils.parseUnits("1000", 6); // example, adjust per token
+
+        await executeTrade(buyRouter, sellRouter, tokenAddress, amountIn, tokenSymbol);
+      }
+    }
   }
 
   console.log("🚀 Arbitrage loop completed");
   await logVaultBalance("Final");
+
+  // Optional: Withdraw profits
+  // await withdrawUSDCProfit();
 }
 
-// Run
+// Run bot
 (async () => {
   await runArbitrage();
-
-  // Optional: Withdraw profits to wallet
-  // await withdrawUSDCProfit();
 })();
