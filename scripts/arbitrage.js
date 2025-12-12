@@ -16,7 +16,7 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found in environment (GitHub Secrets).");
 
 const DRY_RUN = true; // set true to simulate (no on-chain execute)
-const MIN_TRADE_USDC = 1000000;        // minimum trade size (USDC)
+const MIN_TRADE_USDC = 1000;        // minimum trade size (USDC)
 const MIN_EXPECTED_PROFIT = 0.001;  // minimum expected profit (USDC)
 const MIN_PROFIT_PCT = 0.02;         // percent (e.g. 0.2% profit threshold)
 const SLIPPAGE_PCT = 0.5;           // slippage tolerance applied to expectations
