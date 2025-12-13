@@ -18,9 +18,9 @@ if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found in environment (
 const DRY_RUN = false; // set true to simulate (no on-chain execute)
 const MIN_TRADE_USDC = 0.018;        // minimum trade size (USDC)
 const MIN_EXPECTED_PROFIT = 0.000001;  // minimum expected profit (USDC)
-const MIN_PROFIT_PCT = 1;         // percent (e.g. 0.2% profit threshold)
-const SLIPPAGE_PCT = 0.5;           // slippage tolerance applied to expectations
-const MAX_PROFIT_PCT = 50;        // sanity cap for absurd quoted profit %
+const MIN_PROFIT_PCT = .41;         // percent (e.g. 0.2% profit threshold)
+const SLIPPAGE_PCT = 0.05;           // slippage tolerance applied to expectations
+const MAX_PROFIT_PCT = 550;        // sanity cap for absurd quoted profit %
 
 // ----------------- COLORS -----------------
 const colors = {
