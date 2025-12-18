@@ -89,11 +89,9 @@ const BASE_FALLBACKS = [
 ];
 
 // ----------------- HELPERS -----------------
-
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function safeGetAmountOut(routerAddr, tokenObj, amountUSDC) {
-  // Try multiple bases in order, prefer the vault's USDC address if available
   try {
     let usdcAddr;
     try { usdcAddr = (await vaultContract.USDC()).toLowerCase(); } catch { usdcAddr = BASE_FALLBACKS[0].toLowerCase(); }
@@ -105,10 +103,8 @@ async function safeGetAmountOut(routerAddr, tokenObj, amountUSDC) {
     for (const base of bases) {
       try {
         const amounts = await router.getAmountsOut(amountInRaw, [base, tokenObj.address]);
-        const out = amounts[1];
-        return Number(ethers.formatUnits(out, tokenObj.decimals));
+        return Number(ethers.formatUnits(amounts[1], tokenObj.decimals));
       } catch (e) {
-        // try next base
         continue;
       }
     }
@@ -123,7 +119,6 @@ async function getVaultUsdcContract() {
     const usdcAddr = await vaultContract.USDC();
     return new ethers.Contract(usdcAddr, erc20Abi, provider);
   } catch (err) {
-    // fallback to canonical USDC
     return new ethers.Contract(BASE_FALLBACKS[0], erc20Abi, provider);
   }
 }
@@ -134,7 +129,6 @@ async function getVaultBalanceHuman() {
   return Number(ethers.formatUnits(raw, 6));
 }
 
-// Sanity filter for quoted numbers (avoid absurd/garbage quotes)
 function saneProfitPct(pct) {
   if (!Number.isFinite(pct)) return false;
   if (pct < -1000 || pct > MAX_PROFIT_PCT) return false;
@@ -142,7 +136,6 @@ function saneProfitPct(pct) {
 }
 
 // ----------------- CORE: executeTradeLive -----------------
-
 let cumulativeProfit = 0;
 
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
@@ -154,12 +147,15 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     const before = Number(ethers.formatUnits(await usdcContract.balanceOf(VAULT_ADDRESS), 6));
     console.log(`${colors.cyan}🏦 Vault Balance Before: ${fmtNum(before)} USDC${colors.reset}`);
 
+    // --- LOG WALLET BALANCE BEFORE TX ---
+    const walletBalBefore = await provider.getBalance(wallet.address);
+    console.log(`${colors.magenta}⛽ Wallet Balance Before: ${ethers.formatEther(walletBalBefore)} MATIC${colors.reset}`);
+
     if (amountUSDC < MIN_TRADE_USDC) {
       console.log(`${colors.yellow}⚠️ amount below MIN_TRADE_USDC, skipping${colors.reset}`);
       return;
     }
 
-    // Quoting using safeGetAmountOut (multi-base)
     const buyOut = await safeGetAmountOut(buyRouter, tokenObj, amountUSDC);
     const sellOut = await safeGetAmountOut(sellRouter, tokenObj, amountUSDC);
     if (buyOut === null || sellOut === null) {
@@ -189,13 +185,11 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       return;
     }
 
-    // Call on-chain vault executeArbitrage
     const amountInRaw = ethers.parseUnits(amountUSDC.toString(), 6);
     let tx;
     try {
       tx = await vaultContract.executeArbitrage(buyRouter, sellRouter, tokenAddr, amountInRaw);
     } catch (err) {
-      // common estimator/revert problems -> try to decode
       console.log(`${colors.red}⚠️ tx send error: ${err?.message || err}${colors.reset}`);
       return;
     }
@@ -208,16 +202,49 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       return;
     }
 
-    // read vault balance AFTER trade
+    // --- GAS LOG: receipt-based ---
+    const gasUsed = receipt.gasUsed;
+    const gasPrice = receipt.effectiveGasPrice;
+    const gasFeeWei = gasUsed * gasPrice;
+    const gasFeeNative = ethers.formatEther(gasFeeWei);
+
+    console.log(`${colors.magenta}⛽ Gas Used: ${gasUsed.toString()}${colors.reset}`);
+    console.log(`${colors.magenta}⛽ Gas Price: ${ethers.formatUnits(gasPrice, "gwei")} gwei${colors.reset}`);
+    console.log(`${colors.magenta}⛽ Network Fee: ${gasFeeNative} MATIC${colors.reset}`);
+
+    // --- LOG WALLET BALANCE AFTER ---
+    const walletBalAfter = await provider.getBalance(wallet.address);
+    const walletGasDelta = walletBalBefore - walletBalAfter;
+    console.log(`${colors.magenta}⛽ Wallet Balance After: ${ethers.formatEther(walletBalAfter)} MATIC${colors.reset}`);
+    console.log(`${colors.magenta}⛽ Gas Paid (wallet delta): ${ethers.formatEther(walletGasDelta)} MATIC${colors.reset}`);
+
+    // --- Vault balance after ---
     const after = Number(ethers.formatUnits(await usdcContract.balanceOf(VAULT_ADDRESS), 6));
     const netProfit = after - before;
     cumulativeProfit += netProfit;
 
-    console.log(`${colors.green}💰 REAL PROFIT: ${fmtNum(netProfit)} USDC${colors.reset}`);
+    // --- PROFIT VS GAS SEPARATION ---
+    console.log(`${colors.cyan}🏦 Vault Balance After: ${fmtNum(after)} USDC${colors.reset}`);
+    console.log(`${colors.green}💰 Vault Profit (NO gas): ${fmtNum(netProfit)} USDC${colors.reset}`);
+    console.log(`${colors.yellow}⚠️ Network fees were paid by wallet, NOT vault${colors.reset}`);
+
+    // --- TRANSACTION SUMMARY ---
+    console.log(`
+──────── TRANSACTION SUMMARY ────────
+Tx Hash: ${receipt.hash}
+
+Vault Profit:     ${fmtNum(netProfit)} USDC
+Gas Fee:          ${gasFeeNative} MATIC
+Gas Paid By:      Wallet (${wallet.address})
+
+Vault Impact:     ✅ PROFIT ONLY
+Wallet Impact:    ⛽ GAS ONLY
+─────────────────────────────────────
+`);
+
     console.log(`${colors.cyan}🔔 Trade settled, profits retained in vault.${colors.reset}`);
 
   } catch (err) {
-    // handle rate limit / RPC issues gracefully
     const msg = err?.message || String(err);
     if (msg && (msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("too many requests"))) {
       console.log(`${colors.yellow}⚠️ RPC rate limit hit — backing off 10s${colors.reset}`);
@@ -229,7 +256,6 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 }
 
 // ----------------- SCAN LOOP -----------------
-
 async function scanAllPairs() {
   console.log("\n🔍 Scanning all tokens & routers...");
   for (const [symbol, token] of Object.entries(tokens)) {
@@ -251,13 +277,11 @@ async function scanAllPairs() {
           if (profitUSDC > 0) {
             console.log(`${colors.green}${symbol} | ${buyName}→${sellName} | expected profit=${fmtNum(profitUSDC)} USDC | profitPct=${fmtNum(profitPct)}%${colors.reset}`);
           } else {
-            // small negative results printed as red for visibility but not run
             console.log(`${colors.red}${symbol} | ${buyName}→${sellName} | expected loss=${fmtNum(profitUSDC)} USDC | profitPct=${fmtNum(profitPct)}%${colors.reset}`);
           }
 
           if (profitPct >= MIN_PROFIT_PCT) {
             await executeTradeLive(buyRouter, sellRouter, token.address, MIN_TRADE_USDC);
-            // small delay between trades to avoid rate-limits / nonce issues
             await sleep(1200);
           }
         } catch (e) {
@@ -273,7 +297,6 @@ async function scanAllPairs() {
 }
 
 // ----------------- MAIN -----------------
-
 (async function main() {
   console.log(`${colors.cyan}🚀 Live arbitrage runner started${colors.reset}`);
   try {
@@ -291,7 +314,6 @@ async function scanAllPairs() {
     } catch (e) {
       console.log(`${colors.red}Fatal scanner error: ${e.message}${colors.reset}`);
     }
-    // main loop pause
     await sleep(8000);
   }
 })();
