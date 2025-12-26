@@ -7,7 +7,7 @@ dotenv.config();
 
 // ---------- CONFIG ----------
 //🟢4 Script mode (Dry-run or live)
-const DRY_RUN = process.env.DRY_RUN === "true" ? true : true;
+const DRY_RUN = process.env.DRY_RUN === "true" ? true : false;
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
 //🟢5 RPC endpoint + wallet config
@@ -19,7 +19,7 @@ if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mod
 const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 
 //🟢7 Trading configuration (minimum profit, min trade, gas est.)
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.5);     
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 1);     
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.01);    
 const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.002);     
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
