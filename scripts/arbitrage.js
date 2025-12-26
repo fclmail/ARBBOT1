@@ -8,10 +8,11 @@ dotenv.config();
 const DRY_RUN = process.env.DRY_RUN === "true";
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
+
 if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
 const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT;
-if (!CONTRACT_ADDRESS || CONTRACT_ADDRESS.length !== 42)
+if (!CONTRACT_ADDRESS || !ethers.isAddress(CONTRACT_ADDRESS))
   throw new Error("❌ Invalid VAULT_CONTRACT");
 
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 1);
@@ -24,7 +25,18 @@ const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
 
 // ---------- VAULT CONTRACT ----------
 const arbAbi = [
-  { "inputs":[{"internalType":"address","name":"buyRouter","type":"address"},{"internalType":"address","name":"sellRouter","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"}],"name":"executeArbitrage","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {
+    "inputs":[
+      {"internalType":"address","name":"buyRouter","type":"address"},
+      {"internalType":"address","name":"sellRouter","type":"address"},
+      {"internalType":"address","name":"token","type":"address"},
+      {"internalType":"uint256","name":"amountIn","type":"uint256"}
+    ],
+    "name":"executeArbitrage",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  },
   { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address","name":"","type":"address"}], "stateMutability":"view","type":"function"},
   { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address","name":"","type":"address"}], "stateMutability":"view","type":"function"}
 ];
@@ -76,7 +88,7 @@ async function init() {
   console.log("🚀", DRY_RUN ? "DRY RUN" : "LIVE MODE");
 }
 
-// ---------- VAULT BALANCE HELPER ----------
+// ---------- VAULT BALANCE ----------
 async function vaultBalance() {
   const bal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
   return Number(ethers.formatUnits(bal, 6));
@@ -99,7 +111,7 @@ async function vaultGuard(amount) {
   return true;
 }
 
-// ---------- TRADE EXECUTOR ----------
+// ---------- TRADE EXECUTION ----------
 async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   if (!(await vaultGuard(amountUSDC))) return;
 
@@ -110,7 +122,6 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
   const before = await vaultBalance();
   console.log(`🏦 Vault Before: ${before} USDC`);
 
-  // SIMULATION
   const buyOut = await getAmountOut(buyRouter, tokenObj, amountUSDC);
   const sellOut = await getAmountOut(sellRouter, tokenObj, amountUSDC);
   const expectedProfit = sellOut - buyOut;
