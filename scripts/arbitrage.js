@@ -25,7 +25,7 @@ if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mod
 
 // Trading parameters
 const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 1);     
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.2);    
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.02);    
 const MIN_TRADE_USDC = 0.01;    
 const GAS_EST_USDC = 0.002;     
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.2);
