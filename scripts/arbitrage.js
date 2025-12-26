@@ -7,7 +7,7 @@ dotenv.config();
 
 // ---------- CONFIG ----------
 //🟢4 Script mode (Dry-run or live)
-const DRY_RUN = process.env.DRY_RUN === "true" ? true : false;
+const DRY_RUN = process.env.DRY_RUN === "true" ? true : true;
 console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
 
 //🟢5 RPC endpoint + wallet config
