@@ -21,8 +21,8 @@ const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
 
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.2);
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.02);
+const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 0.002);
+const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || 0.01);
 const MIN_TRADE_USDC = 0.01;
 const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.2);
 const MAX_PROFIT_PCT = 40;
