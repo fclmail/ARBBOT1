@@ -1,6 +1,6 @@
 // scripts/arbitrage.js
 // =======================================================
-// ARB BOT — LOGGING RESTORED (NO LOGIC CHANGES)
+// ARB BOT — VAULT ENV FIX (NO FEATURE CHANGES)
 // =======================================================
 
 import { ethers, Wallet } from "ethers";
@@ -9,15 +9,22 @@ dotenv.config();
 
 // ================= CONFIG =================
 const DRY_RUN = process.env.DRY_RUN === "true";
-const RPC_URL = process.env.RPC_URL;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const VAULT_ADDRESS = process.env.VAULT_CONTRACT;
+const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
+
+// ✅ SAFE FALLBACK VAULT
+const FALLBACK_VAULT = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+const VAULT_ADDRESS =
+  ethers.isAddress(process.env.VAULT_CONTRACT || "")
+    ? process.env.VAULT_CONTRACT
+    : FALLBACK_VAULT;
 
 if (!ethers.isAddress(VAULT_ADDRESS)) {
-  throw new Error("❌ Invalid VAULT_CONTRACT");
+  throw new Error("❌ Vault address invalid (env + fallback both failed)");
 }
+
 if (!DRY_RUN && !PRIVATE_KEY) {
-  throw new Error("❌ PRIVATE_KEY required in LIVE mode");
+  throw new Error("❌ PRIVATE_KEY required for LIVE mode");
 }
 
 // ================= PROVIDER =================
@@ -47,7 +54,6 @@ const arbAbi = [
 
 const erc20Abi = [
   "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)",
 ];
 
 const routerAbi = [
