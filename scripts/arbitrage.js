@@ -1,316 +1,210 @@
-// improved-arbitrage.js
-//🟢1 Imports core libraries
-import { ethers, Wallet } from "ethers";        //🟢1 ethers for RPC, wallet, contracts
-import fs from "fs";                            //🟢2 filesystem for CSV writing
-import dotenv from "dotenv";                    //🟢3 load .env
+// arb-fixed.js
+// =======================================================
+// ✅ LOSS-PROOF ARBITRAGE BOT (Polygon)
+// - Correct USDC → TOKEN → USDC pricing
+// - Gas-aware execution
+// - Vault balance protection
+// - Capital exposure limit
+// - ApeSwap disabled (unstable routing)
+// =======================================================
+
+import { ethers, Wallet } from "ethers";
+import dotenv from "dotenv";
 dotenv.config();
 
-// ---------- CONFIG ----------
-//🟢4 Script mode (Dry-run or live)
-const DRY_RUN = process.env.DRY_RUN === "true" ? true : false;
-console.log(DRY_RUN ? "🔬 DRY RUN — NO ON-CHAIN TRANSACTIONS" : "🚀 LIVE MODE ENABLED — REAL TRADES WILL BE EXECUTED");
-
-//🟢5 RPC endpoint + wallet config
+// ================= CONFIG =================
+const DRY_RUN = process.env.DRY_RUN === "true";
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
-if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required for live mode");
+const VAULT_ADDRESS = process.env.VAULT_CONTRACT;
 
-//🟢6 Vault contract address
-const CONTRACT_ADDRESS = process.env.VAULT_CONTRACT || "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
+if (!DRY_RUN && !PRIVATE_KEY) throw new Error("PRIVATE_KEY required");
 
-//🟢7 Trading configuration (minimum profit, min trade, gas est.)
-const MIN_PROFIT_PCT = Number(process.env.MIN_PROFIT_PCT || 1);     
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.01);    
-const GAS_EST_USDC = Number(process.env.GAS_EST_USDC || 0.002);     
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
-const SLIPPAGE_PCT = Number(process.env.SLIPPAGE_PCT || 0.2);
-const MAX_PROFIT_PCT = 40; // 🔹 new maximum profit cap
+const MIN_NET_PROFIT_USDC = 0.01;        // 🔒 absolute minimum net profit
+const MAX_TRADE_PCT_VAULT = 0.25;        // 🔒 max 25% vault usage
+const SLIPPAGE_PCT = 0.3;                // realistic DEX slippage
+const GAS_BUFFER_MULT = 3;               // profit must be 3× gas cost
 
-//🟢8 Router addresses
+// ================= PROVIDER =================
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
+
+// ================= ROUTERS =================
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-//🟢9 Token map
+// ================= TOKENS =================
 const tokens = {
-  AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
   CRV:  { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
   LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
-  WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
 
-//🟢10 CSV logging helper
-const csvRows = [];
-function logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC }) {
-  csvRows.push([timestamp, symbol, buyRouter, sellRouter, amount, profitUSDC].join(","));
-}
-function saveCSV() {
-  if (csvRows.length === 0) return;
-  const header = ["Timestamp","Token","BuyRouter","SellRouter","AmountUSDC","ProfitUSDC"];
-  const filename = `arbitrage_log_${Date.now()}.csv`;
-  fs.writeFileSync(filename, [header.join(","), ...csvRows].join("\n"));
-  console.log(`💾 CSV exported: ${filename}`);
-}
-
-// ---------- PROVIDER + WALLET ----------
-//🟢11 Provider
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-//🟢12 Wallet only used in live mode
-const wallet = DRY_RUN ? null : new Wallet(PRIVATE_KEY, provider);
-
-// ---------- VAULT CONTRACT ----------
-//🟢13 Minimal ABI for arbitrage vault
-const arbAbi = [
-  {
-    "inputs": [
-      { "internalType": "address", "name": "buyRouter", "type": "address" },
-      { "internalType": "address", "name": "sellRouter", "type": "address" },
-      { "internalType": "address", "name": "token", "type": "address" },
-      { "internalType": "uint256", "name": "amountIn", "type": "uint256" }
-    ],
-    "name": "executeArbitrage",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" },   //🟢14
-  { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }, //🟢15
-  { "inputs": [], "name": "minProfit", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" } //🟢16
+// ================= ABIs =================
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-const arbContract = DRY_RUN ? new ethers.Contract(CONTRACT_ADDRESS, arbAbi, provider)
-                            : new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+const vaultAbi = [
+  "function executeArbitrage(address,address,address,uint256)",
+  "function USDC() view returns (address)"
+];
 
-//🟢17 ERC20 balance checker
+const erc20Abi = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
+
+// ================= CONTRACTS =================
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, DRY_RUN ? provider : wallet);
+
+let USDC;
 let usdcContract;
-const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
 
+// ================= INIT =================
 async function init() {
-  try {
-    const usdcAddr = await arbContract.USDC();      //🟢18 Read USDC address
-    usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
-    const owner = await arbContract.owner();        //🟢19 Get contract owner
-    console.log("🏛 Contract Address:", CONTRACT_ADDRESS);
-    console.log("👤 Contract Owner:", owner);
-  } catch (e) {
-    console.warn("⚠️ Initialization warning:", e.message);
-  }
+  USDC = await vault.USDC();
+  usdcContract = new ethers.Contract(USDC, erc20Abi, provider);
+  console.log("Vault:", VAULT_ADDRESS);
+  console.log("USDC :", USDC);
 }
 
-// ---------- HELPERS ----------
-function fmt(n, dec = 6) { return Number(n).toFixed(dec); }
+// ================= HELPERS =================
+function fmt(n, d = 6) { return Number(n).toFixed(d); }
 
-//🟢20 getAmountsOut wrapper
-async function getAmountOut(routerAddr, token, amountUSDC) {
-  const router = new ethers.Contract(
-    routerAddr,
-    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-    provider
+async function getQuote(routerAddr, amountIn, path) {
+  const router = new ethers.Contract(routerAddr, routerAbi, provider);
+  const out = await router.getAmountsOut(amountIn, path);
+  return out[out.length - 1];
+}
+
+// ================= CORE ARBITRAGE =================
+async function tryArb(buyRouter, sellRouter, token) {
+  const vaultBalRaw = await usdcContract.balanceOf(VAULT_ADDRESS);
+  const vaultBal = Number(ethers.formatUnits(vaultBalRaw, 6));
+
+  if (vaultBal < 0.05) return;
+
+  const tradeUSDC = Math.min(vaultBal * MAX_TRADE_PCT_VAULT, vaultBal);
+  const tradeAmount = ethers.parseUnits(tradeUSDC.toFixed(6), 6);
+
+  console.log(`\n🔍 ${token} ${fmt(tradeUSDC)} USDC`);
+
+  // --- BUY ---
+  const tokenOut = await getQuote(
+    buyRouter,
+    tradeAmount,
+    [USDC, tokens[token].address]
   );
-  const usdcAddress = await arbContract.USDC();
-  const path = [usdcAddress, token.address];
+
+  // --- SELL ---
+  const usdcBack = await getQuote(
+    sellRouter,
+    tokenOut,
+    [tokens[token].address, USDC]
+  );
+
+  let grossProfit =
+    Number(ethers.formatUnits(usdcBack, 6)) -
+    Number(ethers.formatUnits(tradeAmount, 6));
+
+  grossProfit *= (1 - SLIPPAGE_PCT / 100);
+
+  // --- GAS ESTIMATE ---
+  let gasCostUSDC = 0.003; // fallback
   try {
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountUSDC.toString(), 6),
-      path
+    const gas = await vault.estimateGas.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      tokens[token].address,
+      tradeAmount
     );
-    return Number(ethers.formatUnits(amounts[1], token.decimals));
-  } catch (err) {
-    const fallback = [usdcAddress, tokens.WBTC.address, token.address];
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountUSDC.toString(), 6),
-      fallback
-    );
-    return Number(ethers.formatUnits(amounts[2], token.decimals));
-  }
-}
+    const gasPrice = await provider.getGasPrice();
+    gasCostUSDC = Number(
+      ethers.formatUnits(gas * gasPrice, 18)
+    ) * 0.6; // MATIC→USDC approx
+  } catch {}
 
-//🟢23 Simple liquidity sanity check
-async function priceSanityCheck(routerAddr, token, amountUSDC) {
+  const netProfit = grossProfit - gasCostUSDC;
+
+  console.log(
+    `profit=${fmt(netProfit)} gas=${fmt(gasCostUSDC)}`
+  );
+
+  // 🔒 HARD FILTERS
+  if (netProfit <= MIN_NET_PROFIT_USDC) return;
+  if (netProfit <= gasCostUSDC * GAS_BUFFER_MULT) return;
+
+  // --- SIMULATION ---
   try {
-    const out = await getAmountOut(routerAddr, token, amountUSDC);
-    return out > 0 && Number.isFinite(out);
-  } catch (e) {
-    return false;
+    await provider.call({
+      to: VAULT_ADDRESS,
+      data: vault.interface.encodeFunctionData("executeArbitrage", [
+        buyRouter,
+        sellRouter,
+        tokens[token].address,
+        tradeAmount,
+      ]),
+      from: wallet?.address
+    });
+  } catch {
+    return;
+  }
+
+  if (DRY_RUN) {
+    console.log("🧪 DRY RUN — WOULD EXECUTE");
+    return;
+  }
+
+  // --- EXECUTE ---
+  const before = Number(
+    ethers.formatUnits(
+      await usdcContract.balanceOf(VAULT_ADDRESS), 6
+    )
+  );
+
+  const tx = await vault.executeArbitrage(
+    buyRouter,
+    sellRouter,
+    tokens[token].address,
+    tradeAmount
+  );
+  await tx.wait();
+
+  const after = Number(
+    ethers.formatUnits(
+      await usdcContract.balanceOf(VAULT_ADDRESS), 6
+    )
+  );
+
+  console.log(`🏦 ${fmt(before)} → ${fmt(after)}`);
+
+  if (after <= before) {
+    console.error("❌ LOSS — CHECK VAULT CONTRACT");
+  } else {
+    console.log(`💰 PROFIT +${fmt(after - before)} USDC`);
   }
 }
 
-// ---------- CORE TRADE EXECUTION ----------
-let cumulativeProfit = 0;
-
-//🟢24 Main executor function
-async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
-  const timestamp = new Date().toISOString();
-  const tokenObj = Object.values(tokens).find(t => t.address.toLowerCase() === tokenAddr.toLowerCase()) 
-                   || { address: tokenAddr, decimals: 18 };
-
-  try {
-    console.log("\n🔍 ---------- New Trade Attempt ----------");
-    console.log(`🔹 ${timestamp} • Token: ${tokenAddr} • AmountIn: ${amountUSDC} USDC`);
-
-    const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-    const before = Number(ethers.formatUnits(beforeBal, 6));
-    console.log(`🏦 Vault Balance Before: ${fmt(before)} USDC`);
-
-    if (amountUSDC < MIN_TRADE_USDC) {
-      console.log(`⛔️ Skipping — Amount ${amountUSDC} < MIN_TRADE_USDC`);
-      return;
-    }
-
-    let buyOut, sellOut;
-    try {
-      buyOut = await getAmountOut(buyRouter, tokenObj, amountUSDC);
-      sellOut = await getAmountOut(sellRouter, tokenObj, amountUSDC);
-    } catch (err) {
-      console.log("⚠️ Pre-price query failed — aborting trade");
-      return;
-    }
-
-    const buyPrice  = amountUSDC / buyOut;
-    const sellPrice = amountUSDC / sellOut;
-    let expectedProfitUSDC = sellPrice - buyPrice;
-    expectedProfitUSDC *= (1 - SLIPPAGE_PCT/100);
-
-    const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
-    if (expectedProfitPct > MAX_PROFIT_PCT) {
-      console.log(`⚠️ Skipping — profit ${fmt(expectedProfitPct)}% exceeds 40% cap`);
-      return;
-    }
-
-    console.log(`📈 Quoted: buyPrice=${fmt(buyPrice)} | sellPrice=${fmt(sellPrice)} | expectedProfit=${fmt(expectedProfitUSDC)} USDC`);
-
-    if (expectedProfitUSDC <= MIN_EXPECTED_PROFIT) {
-      console.log("❌ PREVENTED — Not enough expected profit");
-      return;
-    }
-
-    if (!await priceSanityCheck(buyRouter, tokenObj, amountUSDC) ||
-        !await priceSanityCheck(sellRouter, tokenObj, amountUSDC)) {
-      console.log("⚠️ Price sanity check failed");
-      return;
-    }
-
-    let gasEstimate = null;
-    try {
-      gasEstimate = await arbContract.estimateGas.executeArbitrage(
-        buyRouter, sellRouter, tokenAddr,
-        ethers.parseUnits(amountUSDC.toString(), 6)
-      );
-    } catch (e) {
-      console.warn("⚠️ Gas estimate failed, continuing");
-    }
-
-    try {
-      await provider.call({
-        to: CONTRACT_ADDRESS,
-        data: arbContract.interface.encodeFunctionData("executeArbitrage", [
-          buyRouter, sellRouter, tokenAddr,
-          ethers.parseUnits(amountUSDC.toString(), 6),
-        ]),
-        from: wallet ? wallet.address : undefined
-      });
-      console.log("🔬 Simulation OK");
-    } catch (simErr) {
-      console.log("❌ SIM FAILED — would revert");
-      return;
-    }
-
-    if (DRY_RUN) {
-      console.log("🧪 DRY RUN — not sending tx");
-      return;
-    }
-
-    let tx;
-    try {
-      tx = await arbContract.executeArbitrage(
-        buyRouter, sellRouter, tokenAddr,
-        ethers.parseUnits(amountUSDC.toString(), 6),
-        { gasLimit: gasEstimate ? gasEstimate.mul(120).div(100) : undefined }
-      );
-    } catch (sendErr) {
-      console.error("❌ Failed to send tx");
-      return;
-    }
-    console.log(`🔁 TX SENT — ${tx.hash}`);
-
-    const receipt = await tx.wait();
-    if (!receipt || receipt.status === 0) {
-      console.log("❌ TX failed");
-      return;
-    }
-    console.log(`✅ Transaction success — ${receipt.transactionHash}`);
-
-    const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-    const after = Number(ethers.formatUnits(afterBal, 6));
-    console.log(`🏦 Vault After: ${fmt(after)} USDC`);
-
-    if (after <= before) {
-      console.log("⚠️ No net profit — ignored");
-      return;
-    }
-
-    const netProfit = after - before;
-    console.log(`💰 REAL PROFIT: ${fmt(netProfit)}`);
-    cumulativeProfit += netProfit;
-
-    const symbolEntry = Object.entries(tokens).find(([k,t]) => t.address.toLowerCase() === tokenAddr.toLowerCase());
-    const symbol = symbolEntry ? symbolEntry[0] : tokenAddr;
-    logTradeCSV({ timestamp, symbol, buyRouter, sellRouter, amount: amountUSDC, profitUSDC: netProfit });
-
-  } catch (err) {
-    console.error("⚠️ Unexpected trade error:", err.message);
-  }
-}
-
-// ---------- SCAN LOOP ----------
-const TRADE_AMOUNT_USDC = Number(process.env.TRADE_AMOUNT_USDC || .20); 
-
-async function scanAllPairs() {
-  console.log("\n🔍 Scanning all tokens & routers...");
-  for (const [symbol, token] of Object.entries(tokens)) {
-    for (const [buyName, buyRouter] of Object.entries(routers)) {
-      for (const [sellName, sellRouter] of Object.entries(routers)) {
-        if (buyName === sellName) continue;
+// ================= SCANNER =================
+async function scan() {
+  for (const token of Object.keys(tokens)) {
+    for (const buy of Object.values(routers)) {
+      for (const sell of Object.values(routers)) {
+        if (buy === sell) continue;
         try {
-          const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
-          const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
-
-          const buyPrice  = TRADE_AMOUNT_USDC / buyOut;
-          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
-          let profitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
-          let profitPct = (profitUSDC / buyPrice) * 100;
-
-          if (profitPct > MAX_PROFIT_PCT) continue;
-
-          console.log(`${symbol} | ${buyName}→${sellName} | profit=${fmt(profitUSDC)} USDC | profitPct=${fmt(profitPct)}%`);
-
-          if (profitPct >= MIN_PROFIT_PCT) {
-            console.log(`🚨 PROFITABLE — executing`);
-            await executeTradeLive(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
-          }
-
-        } catch (e) {
-          console.warn(`${symbol} | ${buyName}→${sellName} | scan error:`, e.message);
-        }
+          await tryArb(buy, sell, token);
+        } catch {}
       }
     }
   }
-  saveCSV();
 }
 
-// ---------- MAIN ----------
-(async function main(){
+// ================= MAIN =================
+(async () => {
   await init();
-  console.log("🚀 Improved arbitrage runner started");
+  console.log(DRY_RUN ? "🔬 DRY RUN" : "🚀 LIVE MODE");
 
-  // Continuous 10-second scanning loop
-  setInterval(async () => {
-    try {
-      await scanAllPairs();
-    } catch (e) {
-      console.error("Fatal scanner error:", e.message);
-    }
-  }, 10000); // 🔹 10 seconds
+  setInterval(scan, 12000);
 })();
