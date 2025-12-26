@@ -1,6 +1,6 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – FULL VERSION
+//  ARBITRAGE BOT – FULL VERSION WITH USDC.e FIXES
 //  - Hardcoded vault address to avoid invalid contract errors
 //  - Logs vault balance, simulation pass, transaction success
 //  - Keeps all previous features intact
@@ -88,16 +88,19 @@ const arbContract = DRY_RUN ? new ethers.Contract(CONTRACT_ADDRESS, arbAbi, prov
 
 // ERC20 helper
 let usdcContract;
+let usdcDecimals = 6; // default, will override
 const erc20Abi = ["function balanceOf(address owner) view returns (uint256)", "function decimals() view returns (uint8)"];
 
 async function init() {
   try {
     const usdcAddr = await arbContract.USDC();
     usdcContract = new ethers.Contract(usdcAddr, erc20Abi, provider);
+    usdcDecimals = await usdcContract.decimals(); // <-- fetch actual USDC.e decimals
     const owner = await arbContract.owner();
     console.log("🏛 Vault Address:", CONTRACT_ADDRESS);
     console.log("💵 USDC Address :", usdcAddr);
     console.log("👤 Contract Owner:", owner);
+    console.log("🔢 USDC Decimals :", usdcDecimals);
   } catch (e) {
     console.warn("⚠️ Initialization warning:", e.message);
   }
@@ -115,11 +118,11 @@ async function getAmountOut(routerAddr, token, amountUSDC) {
   const usdcAddress = await arbContract.USDC();
   const path = [usdcAddress, token.address];
   try {
-    const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), path);
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), usdcDecimals), path);
     return Number(ethers.formatUnits(amounts[1], token.decimals));
   } catch (err) {
     const fallback = [usdcAddress, tokens.WBTC.address, token.address];
-    const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), 6), fallback);
+    const amounts = await router.getAmountsOut(ethers.parseUnits(amountUSDC.toString(), usdcDecimals), fallback);
     return Number(ethers.formatUnits(amounts[2], token.decimals));
   }
 }
@@ -145,7 +148,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 
   try {
     const beforeBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-    const before = Number(ethers.formatUnits(beforeBal, 6));
+    const before = Number(ethers.formatUnits(beforeBal, usdcDecimals));
 
     if (!initialVaultBalance) initialVaultBalance = before;
 
@@ -156,12 +159,14 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       return;
     }
 
+    // Skip trade if vault doesn't have enough USDC.e
+    if (before < amountUSDC) return;
+
     console.log("\n🔍 ---------- New Trade Attempt ----------");
     console.log(`🔹 ${timestamp} • Token: ${tokenAddr} • AmountIn: ${amountUSDC} USDC`);
     console.log(`🏦 Vault Balance Before: ${fmt(before)} USDC`);
 
     if (!vaultGuardActive) return;
-
     if (amountUSDC < MIN_TRADE_USDC) return;
 
     let buyOut = await getAmountOut(buyRouter, tokenObj, amountUSDC);
@@ -172,18 +177,24 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     let expectedProfitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT/100);
     const expectedProfitPct = (expectedProfitUSDC / buyPrice) * 100;
 
+    // Skip if profit out of bounds
     if (expectedProfitPct > MAX_PROFIT_PCT) return;
     if (expectedProfitPct < MIN_PROFIT_PCT) return;
 
+    // Ensure price sanity
     if (!await priceSanityCheck(buyRouter, tokenObj, amountUSDC) ||
         !await priceSanityCheck(sellRouter, tokenObj, amountUSDC)) return;
+
+    // Ensure profit meets vault minProfit
+    const vaultMinProfit = Number(ethers.formatUnits(await arbContract.minProfit(), usdcDecimals));
+    if (expectedProfitUSDC < vaultMinProfit) return;
 
     // Simulation
     try {
       await provider.call({
         to: CONTRACT_ADDRESS,
         data: arbContract.interface.encodeFunctionData("executeArbitrage", [
-          buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(), 6),
+          buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(), usdcDecimals),
         ]),
         from: wallet ? wallet.address : undefined
       });
@@ -200,7 +211,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 
     // Execute trade
     let tx = await arbContract.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(), 6)
+      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amountUSDC.toString(), usdcDecimals)
     );
     console.log(`🔁 TX SENT — ${tx.hash}`);
     const receipt = await tx.wait();
@@ -212,7 +223,7 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 
     console.log(`✅ Transaction success — ${receipt.transactionHash}`);
     const afterBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-    const after = Number(ethers.formatUnits(afterBal, 6));
+    const after = Number(ethers.formatUnits(afterBal, usdcDecimals));
     console.log(`🏦 Vault After: ${fmt(after)} USDC`);
 
     if (after <= before) {
