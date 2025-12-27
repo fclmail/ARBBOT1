@@ -37,8 +37,8 @@ const C = {
 // Reliable free Polygon RPCs
 const RPC_POOL = [
   "https://polygon-rpc.com",
-  "https://rpc.ankr.com/polygon/<YOUR_API_KEY>",
-  "https://polygon-mainnet.infura.io/v3/<YOUR_API_KEY>",
+ // "https://rpc.ankr.com/polygon/<YOUR_API_KEY>",
+ // "https://polygon-mainnet.infura.io/v3/<YOUR_API_KEY>",
   "https://1rpc.io/matic"
 ];
 
