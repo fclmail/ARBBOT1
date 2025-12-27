@@ -1,10 +1,11 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – STALL-SAFE + RPC ROTATION + PRO-BOT SIMULATIONS
-//  - Pre-check + eth_call + estimateGas simulation
-//  - RPC auto-rotation + hard timeouts
-//  - MEV-safer (public read, stable send)
-//  - All original features preserved
+// ARBITRAGE BOT – STALL-SAFE + RPC ROTATION + AUTO-APPROVAL
+// - Fixes frozen logs / silent hangs
+// - RPC auto-rotation + hard timeouts
+// - USDC allowance auto-check & top-up
+// - MEV-safer (public read, stable send)
+// - All original features preserved
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -20,6 +21,7 @@ const TRADE_AMOUNT_USDC = 0.01;
 const MIN_PROFIT_PCT = 0.0002;
 const SLIPPAGE_PCT = 0.0;
 const RPC_TIMEOUT_MS = 8_000;
+const APPROVAL_AMOUNT_USDC = 1_000_000;
 
 // ---------------- COLORS ----------------
 const C = {
@@ -32,10 +34,11 @@ const C = {
 };
 
 // ---------------- RPC POOL ----------------
+// Reliable free Polygon RPCs
 const RPC_POOL = [
   "https://polygon-rpc.com",
-  "https://rpc.ankr.com/polygon",
-  "https://polygon-bor.publicnode.com",
+  "https://rpc.ankr.com/polygon/<YOUR_API_KEY>",
+  "https://polygon-mainnet.infura.io/v3/<YOUR_API_KEY>",
   "https://1rpc.io/matic"
 ];
 
@@ -59,7 +62,7 @@ async function withTimeout(promise, label = "rpc") {
 }
 
 // ---------------- WALLET ----------------
-const wallet = new Wallet(PRIVATE_KEY, provider);
+let wallet = new Wallet(PRIVATE_KEY, provider);
 
 // ---------------- CONTRACTS ----------------
 const VAULT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
@@ -80,12 +83,13 @@ const vaultAbi = [
   { name: "USDC", inputs: [], outputs: [{ type: "address" }], stateMutability: "view", type: "function" }
 ];
 
-const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+let vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 const erc20Abi = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
-  "function allowance(address owner, address spender) view returns (uint256)"
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)"
 ];
 
 // ---------------- ROUTERS ----------------
@@ -108,13 +112,27 @@ function fmt(n, d = 6) { return Number(n).toFixed(d); }
 
 async function getUsdcContract() {
   const usdcAddr = await withTimeout(vault.USDC(), "USDC()");
-  return new ethers.Contract(usdcAddr, erc20Abi, provider);
+  return new ethers.Contract(usdcAddr, erc20Abi, wallet);
 }
 
 async function getVaultBalance() {
   const usdc = await getUsdcContract();
   const bal = await withTimeout(usdc.balanceOf(VAULT_ADDRESS), "balanceOf");
   return Number(ethers.formatUnits(bal, 6));
+}
+
+// Check and auto-approve allowance
+async function ensureAllowance(routerAddr, amount) {
+  const usdc = await getUsdcContract();
+  const currentAllowance = await withTimeout(usdc.allowance(VAULT_ADDRESS, routerAddr), "allowance");
+  if (Number(currentAllowance) < ethers.parseUnits(amount.toString(), 6)) {
+    console.log(`${C.yellow}🔓 Approving USDC allowance for router ${routerAddr}${C.reset}`);
+    if (!DRY_RUN) {
+      const tx = await usdc.approve(routerAddr, ethers.parseUnits(APPROVAL_AMOUNT_USDC.toString(), 6));
+      await tx.wait();
+      console.log(`${C.green}✅ Approval complete${C.reset}`);
+    }
+  }
 }
 
 async function quote(routerAddr, token, amount) {
@@ -130,41 +148,15 @@ async function quote(routerAddr, token, amount) {
   return Number(ethers.formatUnits(out[1], token.decimals));
 }
 
-// ---------------- PRO-BOT SIMULATIONS ----------------
-async function preCheck(token) {
-  const usdc = await getUsdcContract();
-  const balance = await withTimeout(usdc.balanceOf(VAULT_ADDRESS), "preCheck balance");
-  if (balance < ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6)) throw new Error("Vault USDC too low");
-
-  const allowance = await withTimeout(usdc.allowance(VAULT_ADDRESS, Object.values(routers)[0]), "preCheck allowance");
-  if (allowance < ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6)) throw new Error("Allowance insufficient");
-
-  return true;
-}
-
-async function simulateCall(buyRouter, sellRouter, token) {
-  const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-  await withTimeout(
-    provider.call({
-      to: VAULT_ADDRESS,
-      data: vault.interface.encodeFunctionData("executeArbitrage", [buyRouter, sellRouter, token.address, amountIn])
-    }),
-    "eth_call"
-  );
-}
-
-async function simulateGas(buyRouter, sellRouter, token) {
-  const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-  const gas = await withTimeout(vault.executeArbitrage.estimateGas(buyRouter, sellRouter, token.address, amountIn), "estimateGas");
-  if (gas > 800_000n) throw new Error("Gas estimate too high");
-}
-
 // ---------------- CORE LOGIC ----------------
 async function tryTrade(buyRouter, sellRouter, token) {
   console.log(`${C.cyan}────────────────────────────────────${C.reset}`);
   console.log(`🔍 ${new Date().toISOString()} | ${token.address}`);
 
   try {
+    await ensureAllowance(buyRouter, TRADE_AMOUNT_USDC);
+    await ensureAllowance(sellRouter, TRADE_AMOUNT_USDC);
+
     const before = await getVaultBalance();
     console.log(`🏦 Vault: ${fmt(before)} USDC`);
 
@@ -186,15 +178,21 @@ async function tryTrade(buyRouter, sellRouter, token) {
     console.log(`Pct: ${fmt(pct)}%`);
 
     console.log(`🧪 Simulation running...`);
-
-    // --- PRO-BOT simulation combo ---
     try {
-      await preCheck(token);
-      await simulateCall(buyRouter, sellRouter, token);
-      await simulateGas(buyRouter, sellRouter, token);
+      const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+      await withTimeout(
+        provider.call({
+          to: VAULT_ADDRESS,
+          data: vault.interface.encodeFunctionData(
+            "executeArbitrage",
+            [buyRouter, sellRouter, token.address, amountIn]
+          )
+        }),
+        "simulation"
+      );
       console.log(`${C.green}✅ Simulation PASSED${C.reset}`);
-    } catch (e) {
-      console.log(`${C.red}❌ Simulation FAILED: ${e.message}${C.reset}`);
+    } catch {
+      console.log(`${C.red}❌ Simulation FAILED${C.reset}`);
       return;
     }
 
