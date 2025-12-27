@@ -1,7 +1,7 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – STALL-SAFE + RPC ROTATION VERSION
-//  - Fixes frozen logs / silent hangs
+//  ARBITRAGE BOT – STALL-SAFE + RPC ROTATION + PRO-BOT SIMULATIONS
+//  - Pre-check + eth_call + estimateGas simulation
 //  - RPC auto-rotation + hard timeouts
 //  - MEV-safer (public read, stable send)
 //  - All original features preserved
@@ -32,7 +32,6 @@ const C = {
 };
 
 // ---------------- RPC POOL ----------------
-// Industry-standard FREE Polygon RPCs
 const RPC_POOL = [
   "https://polygon-rpc.com",
   "https://rpc.ankr.com/polygon",
@@ -49,7 +48,7 @@ function rotateRPC(reason) {
   console.log(`${C.yellow}🔁 RPC ROTATED → ${RPC_POOL[rpcIndex]} (${reason})${C.reset}`);
 }
 
-// Timeout wrapper (CRITICAL FIX)
+// Timeout wrapper
 async function withTimeout(promise, label = "rpc") {
   return Promise.race([
     promise,
@@ -85,7 +84,8 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 const erc20Abi = [
   "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)"
+  "function decimals() view returns (uint8)",
+  "function allowance(address owner, address spender) view returns (uint256)"
 ];
 
 // ---------------- ROUTERS ----------------
@@ -130,6 +130,35 @@ async function quote(routerAddr, token, amount) {
   return Number(ethers.formatUnits(out[1], token.decimals));
 }
 
+// ---------------- PRO-BOT SIMULATIONS ----------------
+async function preCheck(token) {
+  const usdc = await getUsdcContract();
+  const balance = await withTimeout(usdc.balanceOf(VAULT_ADDRESS), "preCheck balance");
+  if (balance < ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6)) throw new Error("Vault USDC too low");
+
+  const allowance = await withTimeout(usdc.allowance(VAULT_ADDRESS, Object.values(routers)[0]), "preCheck allowance");
+  if (allowance < ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6)) throw new Error("Allowance insufficient");
+
+  return true;
+}
+
+async function simulateCall(buyRouter, sellRouter, token) {
+  const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+  await withTimeout(
+    provider.call({
+      to: VAULT_ADDRESS,
+      data: vault.interface.encodeFunctionData("executeArbitrage", [buyRouter, sellRouter, token.address, amountIn])
+    }),
+    "eth_call"
+  );
+}
+
+async function simulateGas(buyRouter, sellRouter, token) {
+  const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+  const gas = await withTimeout(vault.executeArbitrage.estimateGas(buyRouter, sellRouter, token.address, amountIn), "estimateGas");
+  if (gas > 800_000n) throw new Error("Gas estimate too high");
+}
+
 // ---------------- CORE LOGIC ----------------
 async function tryTrade(buyRouter, sellRouter, token) {
   console.log(`${C.cyan}────────────────────────────────────${C.reset}`);
@@ -157,21 +186,15 @@ async function tryTrade(buyRouter, sellRouter, token) {
     console.log(`Pct: ${fmt(pct)}%`);
 
     console.log(`🧪 Simulation running...`);
+
+    // --- PRO-BOT simulation combo ---
     try {
-      const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-      await withTimeout(
-        provider.call({
-          to: VAULT_ADDRESS,
-          data: vault.interface.encodeFunctionData(
-            "executeArbitrage",
-            [buyRouter, sellRouter, token.address, amountIn]
-          )
-        }),
-        "simulation"
-      );
+      await preCheck(token);
+      await simulateCall(buyRouter, sellRouter, token);
+      await simulateGas(buyRouter, sellRouter, token);
       console.log(`${C.green}✅ Simulation PASSED${C.reset}`);
-    } catch {
-      console.log(`${C.red}❌ Simulation FAILED${C.reset}`);
+    } catch (e) {
+      console.log(`${C.red}❌ Simulation FAILED: ${e.message}${C.reset}`);
       return;
     }
 
