@@ -26,7 +26,7 @@ const C = {
 const RPC_PUBLIC  = process.env.RPC_URL || "https://polygon-rpc.com";
 const RPC_PRIVATE = process.env.RPC_PRIVATE || null;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const DRY_RUN = process.env.DRY_RUN === "true";
+const DRY_RUN = process.env.DRY_RUN === "false";
 
 if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
