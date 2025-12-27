@@ -17,8 +17,8 @@ if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 const DRY_RUN = false;
 const TRADE_AMOUNT_USDC = 0.01;
-const MIN_PROFIT_PCT = 0.2;
-const SLIPPAGE_PCT = 0.2;
+const MIN_PROFIT_PCT = 0.0002;
+const SLIPPAGE_PCT = 0.0;
 const RPC_TIMEOUT_MS = 8_000;
 
 // ---------------- COLORS ----------------
