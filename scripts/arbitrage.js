@@ -16,8 +16,8 @@ dotenv.config();
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
-const DRY_RUN = true;
-const TRADE_AMOUNT_USDC = 10000;
+const DRY_RUN = false;
+const TRADE_AMOUNT_USDC = 0.03;
 const MIN_PROFIT_PCT = 0.0002;
 const SLIPPAGE_PCT = 0.0;
 const RPC_TIMEOUT_MS = 8_000;
