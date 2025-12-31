@@ -24,7 +24,7 @@ const GAS_MULTIPLIER = 1.3;        // gas boost
 const RPC = "https://polygon-rpc.com";
 
 const USDCe = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WETH  = "0x172370d5cd63279efa6d502dab29171933a610af";
+const WETH  = ""0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
 const QUICKSWAP = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 const SUSHISWAP = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
