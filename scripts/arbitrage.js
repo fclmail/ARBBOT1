@@ -14,9 +14,9 @@ const cyan   = s => `\x1b[36m${s}\x1b[0m`;
 
 // ================= CONFIG =================
 const DRY_RUN = true;              // 🔁 true = simulate | false = send tx
-const SLIPPAGE = 0.05;             // 5%
+const SLIPPAGE = 0.00;             // 5%
 const TRADE_USDC = 10000.0;           // adjustable
-const MIN_PROFIT_PCT = 0.05;        // 0.5%
+const MIN_PROFIT_PCT = 0.00;        // 0.5%
 const CHECK_DELAY_MS = 3000;       // 3 seconds
 const GAS_MULTIPLIER = 1.3;        // gas boost
 
