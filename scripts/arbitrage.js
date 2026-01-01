@@ -34,7 +34,7 @@ const ERC20_ABI = ["function balanceOf(address) view returns (uint256)", "functi
 const usdc = new ethers.Contract(USDC, ERC20_ABI, wallet);
 
 // -------------------- SETTINGS --------------------
-const DESIRED_TRADE_USDC = ethers.parseUnits("0.01", 6); // 0.01 USDC
+const DESIRED_TRADE_USDC = ethers.parseUnits("1", 6); // 0.01 USDC
 const MIN_PROFIT_USDC = ethers.parseUnits("0.00001", 6); // 0.00001 USDC
 const SLIPPAGE_PCT = 1;
 
