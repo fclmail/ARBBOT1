@@ -38,9 +38,9 @@ const ERC20_ABI = [
 const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 // -------------------- SETTINGS --------------------
-const TRADE_AMOUNT = ethers.parseUnits("100", 6); // 100 USDC
-const MIN_PROFIT_USDC = 0.001;
-const SLIPPAGE_PCT = 15;
+const TRADE_AMOUNT = ethers.parseUnits("1000", 6); // 100 USDC
+const MIN_PROFIT_USDC = 0.0001;
+const SLIPPAGE_PCT = 1;
 
 // -------------------- CONTRACTS --------------------
 const quick = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, provider);
