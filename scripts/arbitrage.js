@@ -20,7 +20,7 @@ const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 // 🔒 HARDCODED POLYGON ADDRESSES (FIX)
 // ---------------------------------------------------------
 const USDC  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WETH  = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+const WETH  = "0x172370d5cd63279efa6d502dab29171933a610af";
 
 const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
