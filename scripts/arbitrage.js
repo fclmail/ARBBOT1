@@ -15,7 +15,7 @@ const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 const wallet   = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
 // ---------------------------------------------------------
-// TOKEN ADDRESSES (POLYGON)
+// TOKEN ADDRESSES
 // ---------------------------------------------------------
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 const WETH = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
@@ -27,7 +27,7 @@ const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
 // ---------------------------------------------------------
-// VAULT (HARDCODED – NO ENS)
+// VAULT (HARDCODED)
 // ---------------------------------------------------------
 const VAULT = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
@@ -43,8 +43,7 @@ const LOOP_DELAY_MS     = 2000;
 // ABIs
 // ---------------------------------------------------------
 const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline) external returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"
 ];
 
 const ERC20_ABI = [
@@ -64,33 +63,22 @@ const usdc        = new ethers.Contract(USDC, ERC20_ABI, provider);
 const vault       = new ethers.Contract(VAULT, VAULT_ABI, wallet);
 
 // ---------------------------------------------------------
-// PRICE-RATIO SCAN (INDEPENDENT ROUTER CALLS)
+// PRICE-RATIO SCAN (UNCHANGED LOGIC)
 // ---------------------------------------------------------
 async function scanOpportunity(buyRouter, sellRouter, buyName, sellName) {
-  const buyAmounts = await buyRouter.getAmountsOut(
-    TRADE_AMOUNT_USDC,
-    [USDC, WETH]
-  );
+  const buy = await buyRouter.getAmountsOut(TRADE_AMOUNT_USDC, [USDC, WETH]);
+  const wethOut = buy[1];
+  if (wethOut === 0n) return null;
 
-  const wethBought = buyAmounts[1];
-  if (wethBought === 0n) return null;
+  const sell = await sellRouter.getAmountsOut(wethOut, [WETH, USDC]);
+  const usdcBack = sell[1];
 
-  const sellAmounts = await sellRouter.getAmountsOut(
-    wethBought,
-    [WETH, USDC]
-  );
+  const buyPrice  = Number(TRADE_AMOUNT_USDC) / Number(wethOut);
+  const sellPrice = Number(usdcBack) / Number(wethOut);
 
-  const usdcReceived = sellAmounts[1];
-  if (usdcReceived <= TRADE_AMOUNT_USDC) return null;
-
-  const buyPrice  = Number(TRADE_AMOUNT_USDC) / Number(wethBought);
-  const sellPrice = Number(usdcReceived) / Number(wethBought);
-
-  const priceDiff    = sellPrice - buyPrice;
-  const ratioPercent = (priceDiff / buyPrice) * 100;
-
-  const grossProfit    = usdcReceived - TRADE_AMOUNT_USDC;
+  const grossProfit    = usdcBack - TRADE_AMOUNT_USDC;
   const adjustedProfit = (grossProfit * SAFETY_BPS) / 10_000n;
+  const ratioPct       = ((sellPrice - buyPrice) / buyPrice) * 100;
 
   return {
     buyRouter,
@@ -99,7 +87,7 @@ async function scanOpportunity(buyRouter, sellRouter, buyName, sellName) {
     sellName,
     buyPrice,
     sellPrice,
-    ratioPercent,
+    ratioPct,
     grossProfit,
     adjustedProfit
   };
@@ -112,69 +100,58 @@ async function run() {
   console.log("⏱", new Date().toISOString(), "Polygon Arb Bot Started");
 
   while (true) {
-    const opportunities = [];
+    console.log("\n⏱ Scan:", new Date().toISOString());
 
-    const qToS = await scanOpportunity(
-      quickRouter,
-      sushiRouter,
-      "QuickSwap",
-      "SushiSwap"
-    );
-    if (qToS) opportunities.push(qToS);
+    const scans = [];
 
-    const sToQ = await scanOpportunity(
-      sushiRouter,
-      quickRouter,
-      "SushiSwap",
-      "QuickSwap"
-    );
-    if (sToQ) opportunities.push(sToQ);
+    scans.push(await scanOpportunity(quickRouter, sushiRouter, "QuickSwap", "SushiSwap"));
+    scans.push(await scanOpportunity(sushiRouter, quickRouter, "SushiSwap", "QuickSwap"));
 
-    if (opportunities.length === 0) {
-      console.log("⚠️ No price-ratio opportunity\n");
-      await new Promise(r => setTimeout(r, LOOP_DELAY_MS));
-      continue;
+    let executed = false;
+
+    for (const opp of scans) {
+      if (!opp) continue;
+
+      console.log(`🔍 ${opp.buyName} ➜ ${opp.sellName}`);
+      console.log(`📈 ${opp.buyName} price: ${opp.buyPrice.toFixed(6)} USDC/WETH`);
+      console.log(`📉 ${opp.sellName} price: ${opp.sellPrice.toFixed(6)} USDC/WETH`);
+      console.log(`💵 Price-ratio diff: ${opp.ratioPct.toFixed(3)} %`);
+      console.log(`💵 Simulated gross profit: ${ethers.formatUnits(opp.grossProfit, 6)} USDC`);
+      console.log(`💵 Simulated adjusted profit: ${ethers.formatUnits(opp.adjustedProfit, 6)} USDC`);
+
+      if (opp.adjustedProfit < MIN_PROFIT_USDC) {
+        console.log("❌ Below minimum profit – not executing\n");
+        continue;
+      }
+
+      const before = await usdc.balanceOf(VAULT);
+
+      console.log("🚀 REAL PROFIT OPPORTUNITY");
+      console.log("📤 Sending tx to vault...");
+
+      const tx = await vault.executeArbitrage(
+        opp.buyRouter.target,
+        opp.sellRouter.target,
+        USDC,
+        WETH,
+        TRADE_AMOUNT_USDC
+      );
+
+      console.log("⏳ Tx hash:", tx.hash);
+      await tx.wait();
+
+      const after = await usdc.balanceOf(VAULT);
+
+      console.log("💰 Vault USDC before:", ethers.formatUnits(before, 6));
+      console.log("💰 Vault USDC after :", ethers.formatUnits(after, 6));
+
+      executed = true;
+      break;
     }
 
-    opportunities.sort(
-      (a, b) => Number(b.adjustedProfit - a.adjustedProfit)
-    );
-
-    const best = opportunities[0];
-
-    console.log(`🔍 ${best.buyName} ➜ ${best.sellName}`);
-    console.log(`📈 ${best.buyName} price: ${best.buyPrice.toFixed(6)} USDC/WETH`);
-    console.log(`📉 ${best.sellName} price: ${best.sellPrice.toFixed(6)} USDC/WETH`);
-    console.log(`💵 Price-ratio diff: ${best.ratioPercent.toFixed(3)} %`);
-    console.log(`💵 Gross profit: ${ethers.formatUnits(best.grossProfit, 6)} USDC`);
-    console.log(`💵 Adjusted profit: ${ethers.formatUnits(best.adjustedProfit, 6)} USDC`);
-
-    if (best.adjustedProfit < MIN_PROFIT_USDC) {
-      console.log("❌ Below minimum profit – skipping\n");
-      await new Promise(r => setTimeout(r, LOOP_DELAY_MS));
-      continue;
+    if (!executed) {
+      console.log("⚠️ No executable arbitrage this cycle");
     }
-
-    const vaultBefore = await usdc.balanceOf(VAULT);
-
-    console.log("🚀 REAL PROFIT OPPORTUNITY");
-    console.log("📤 Sending tx to vault...");
-
-    const tx = await vault.executeArbitrage(
-      best.buyRouter.target,
-      best.sellRouter.target,
-      USDC,
-      WETH,
-      TRADE_AMOUNT_USDC
-    );
-
-    console.log("⏳ Tx hash:", tx.hash);
-    await tx.wait();
-
-    const vaultAfter = await usdc.balanceOf(VAULT);
-
-    console.log("💰 Vault USDC before:", ethers.formatUnits(vaultBefore, 6));
-    console.log("💰 Vault USDC after:", ethers.formatUnits(vaultAfter, 6), "\n");
 
     await new Promise(r => setTimeout(r, LOOP_DELAY_MS));
   }
