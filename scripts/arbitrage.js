@@ -15,7 +15,7 @@ const cyan   = s => `\x1b[36m${s}\x1b[0m`;
 
 // ================= CONFIG =================
 const DRY_RUN = false;
-const TRADE_USDC = 0.010;
+const TRADE_USDC = 10.010;
 const MIN_PROFIT_PCT = 0.01;
 const CHECK_DELAY_MS = 3000;
 const GAS_MULTIPLIER = 1.3;
