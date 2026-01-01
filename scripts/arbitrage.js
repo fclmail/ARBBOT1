@@ -8,11 +8,12 @@ const RPC_URL = process.env.POLYGON_RPC || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
+// Routers
 const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
 const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)",
 ];
 
 // -------------------- TOKENS --------------------
@@ -23,21 +24,18 @@ const DAI    = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"; // 18
 
 // -------------------- VAULT --------------------
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-
 const VAULT_ABI = [
-  "function depositProfit(uint amount) external"
+  "function depositProfit(uint amount) external",
+  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountInUSDC,uint256 minReturnUSDC) external"
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
-
-const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)"
-];
-const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
+const ERC20_ABI = ["function balanceOf(address) view returns (uint256)", "function approve(address spender,uint256 amount) external returns (bool)"];
+const usdc = new ethers.Contract(USDC, ERC20_ABI, wallet);
 
 // -------------------- SETTINGS --------------------
-const TRADE_AMOUNT = ethers.parseUnits("0.01", 6); // default trade amount 100 USDC
-const MIN_PROFIT_USDC = 0.0001;
+const DESIRED_TRADE_USDC = ethers.parseUnits("0.01", 6); // 0.01 USDC
+const MIN_PROFIT_USDC = ethers.parseUnits("0.00001", 6); // 0.00001 USDC
 const SLIPPAGE_PCT = 1;
 
 // -------------------- CONTRACTS --------------------
@@ -63,8 +61,8 @@ function computeProfit(startUsdc, endUsdc) {
 }
 
 async function vaultBalance() {
-  const bal = await usdc.balanceOf(VAULT_ADDRESS); // returns BigInt
-  return bal;
+  const bal = await usdc.balanceOf(VAULT_ADDRESS);
+  return bal; // BigInt
 }
 
 async function walletMatic() {
@@ -86,18 +84,18 @@ const PATHS = [
 async function scan() {
   console.log(`\n⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
 
-  const vaultBalRaw = await vaultBalance(); // BigInt
-  const vaultBal = Number(ethers.formatUnits(vaultBalRaw, 6));
-  console.log(`🏦 Vault USDC: ${vaultBal.toFixed(6)}`);
-  console.log(`👛 Wallet MATIC: ${(await walletMatic()).toFixed(6)}`);
+  const vaultBalRaw = await vaultBalance(); // BigInt in 6 decimals
+  const walletMaticBal = await walletMatic();
+  console.log(`🏦 Vault USDC: ${Number(ethers.formatUnits(vaultBalRaw, 6)).toFixed(6)}`);
+  console.log(`👛 Wallet MATIC: ${walletMaticBal.toFixed(6)}`);
 
   if (vaultBalRaw <= 0n) {
     console.log("⚠️ Vault empty, skipping scan");
     return;
   }
 
-  // Limit trade amount to vault balance
-  let tradeAmount = TRADE_AMOUNT;
+  // Trade amount capped to vault balance
+  let tradeAmount = DESIRED_TRADE_USDC;
   if (vaultBalRaw < tradeAmount) tradeAmount = vaultBalRaw;
 
   const dexPairs = [
@@ -111,14 +109,13 @@ async function scan() {
     for (const path of PATHS) {
       const buy = await getAmountsOut(dex.buy, tradeAmount, path.slice(0, -1));
       if (!buy) continue;
-
       const midAmount = buy[buy.length - 1];
-      if (midAmount < 1n) continue; // skip dust amounts
+      if (midAmount <= 0n) continue;
 
       const sell = await getAmountsOut(dex.sell, midAmount, path.slice().reverse());
       if (!sell) continue;
-
       const usdcBack = sell[sell.length - 1];
+
       const { gross, adjusted, pct } = computeProfit(tradeAmount, usdcBack);
 
       console.log(`🔍 ${dex.name}`);
@@ -127,20 +124,22 @@ async function scan() {
       console.log(`💵 Gross profit: ${gross.toFixed(6)} USDC`);
       console.log(`💵 Adjusted profit: ${adjusted.toFixed(6)} USDC`);
 
-      if (adjusted >= MIN_PROFIT_USDC && pct > 0.8) {
+      if (adjusted >= Number(ethers.formatUnits(MIN_PROFIT_USDC, 6))) {
         found = true;
         console.log(`✅ MIN PROFIT satisfied — executing`);
 
-        const before = Number(ethers.formatUnits(await vaultBalance(), 6));
         try {
-          const tx = await vault.depositProfit(usdcBack);
+          const tx = await vault.executeArbitrage(
+            dex.buy.address,
+            dex.sell.address,
+            path[1], // token
+            tradeAmount,
+            MIN_PROFIT_USDC
+          );
           console.log(`📤 Tx: ${tx.hash}`);
           await tx.wait();
-          const after = Number(ethers.formatUnits(await vaultBalance(), 6));
-          console.log(`💰 Vault before: ${before.toFixed(6)}`);
-          console.log(`💰 Vault after : ${after.toFixed(6)}`);
         } catch (e) {
-          console.log(`⚠️ Execution failed:`, e.message);
+          console.log(`⚠️ Execution failed: ${e.message}`);
         }
       } else {
         console.log(`❌ Below minimum profit`);
@@ -154,11 +153,8 @@ async function scan() {
 // -------------------- LOOP --------------------
 async function start() {
   while (true) {
-    try {
-      await scan();
-    } catch (e) {
-      console.error("Scan error:", e.message);
-    }
+    try { await scan(); }
+    catch (e) { console.error("Scan error:", e.message); }
     await new Promise(r => setTimeout(r, 3000));
   }
 }
