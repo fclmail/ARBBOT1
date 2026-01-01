@@ -21,20 +21,27 @@ const ROUTER_ABI = [
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
 const WETH = "0x172370d5cd63279efa6d502dab29171933a610af"; // 18 decimals
 
+// Hardcoded vault address
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
-const TRADE_AMOUNT_USDC = ethers.parseUnits("100000", 6); // 100,000 USDC
+const TRADE_AMOUNT_USDC = ethers.parseUnits("1000", 6); // 1000 USDC
 const MIN_PROFIT_USDC = 0.01;
 
 // -------------------- CONTRACTS --------------------
 const quickRouter = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, provider);
 const sushiRouter = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
 
-const VAULT_ABI = ["function depositProfit(uint amount) external"];
+// Vault interface (minimal)
+const VAULT_ABI = [
+  "function depositProfit(uint amount) external"
+];
 const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 
-const ERC20_ABI = ["function balanceOf(address owner) view returns (uint256)"];
+// USDC contract to read ERC20 balances
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)"
+];
 const usdcContract = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 // -------------------- UTILS --------------------
@@ -48,12 +55,8 @@ async function getAmountsOut(router, amountIn, path) {
   }
 }
 
-function computeProfit(buyAmount, sellAmount) {
-  // ✅ FIXED: Convert BigNumber to decimals properly
-  const buyAmountNum = Number(ethers.formatUnits(buyAmount, 6));
-  const sellAmountNum = Number(ethers.formatUnits(sellAmount, 6));
-
-  const gross = sellAmountNum - buyAmountNum;
+function computeProfit(buyAmountNum, usdcBackNum) {
+  const gross = usdcBackNum - buyAmountNum;
   const adjusted = gross * 0.85; // Assume 15% slippage/fees
   return { gross, adjusted };
 }
@@ -61,30 +64,31 @@ function computeProfit(buyAmount, sellAmount) {
 async function getVaultUSDCBalance() {
   try {
     const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
-    return Number(ethers.formatUnits(balance, 6)).toFixed(6);
+    return Number(ethers.formatUnits(balance, 6));
   } catch {
-    return "0.000000";
+    return 0;
   }
 }
 
 async function getWalletMaticBalance() {
   try {
     const balance = await provider.getBalance(wallet.address);
-    return Number(ethers.formatUnits(balance, 18)).toFixed(6);
+    return Number(ethers.formatUnits(balance, 18));
   } catch {
-    return "0.000000";
+    return 0;
   }
 }
 
 // -------------------- ARBITRAGE --------------------
 async function scanArbitrage() {
   console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
-
+  
   const walletMatic = await getWalletMaticBalance();
   const vaultBalance = await getVaultUSDCBalance();
-  console.log(`🏦 Vault USDC: ${vaultBalance}`);
-  console.log(`👛 Wallet MATIC: ${walletMatic}`);
-
+  console.log(`🏦 Vault USDC: ${vaultBalance.toFixed(6)}`);
+  console.log(`👛 Wallet MATIC: ${walletMatic.toFixed(6)}`);
+  
+  // Define DEX pairs
   const pairs = [
     { buyRouter: quickRouter, buyDEX: "QuickSwap", sellRouter: sushiRouter, sellDEX: "SushiSwap" },
     { buyRouter: sushiRouter, buyDEX: "SushiSwap", sellRouter: quickRouter, sellDEX: "QuickSwap" }
@@ -96,25 +100,26 @@ async function scanArbitrage() {
     const path = [USDC, WETH];
     const reversePath = [WETH, USDC];
 
+    // Get buy amount (USDC -> WETH)
     const buyAmounts = await getAmountsOut(pair.buyRouter, TRADE_AMOUNT_USDC, path);
     if (!buyAmounts) continue;
     const wethOut = buyAmounts[1];
 
+    // Get sell amount (WETH -> USDC)
     const sellAmounts = await getAmountsOut(pair.sellRouter, wethOut, reversePath);
     if (!sellAmounts) continue;
     const usdcBack = sellAmounts[1];
 
-    // ✅ FIXED: Proper decimal conversion for prices
-    const buyAmountNum = Number(ethers.formatUnits(TRADE_AMOUNT_USDC, 6));
+    // --- DECIMAL FIXES ---
+    const tradeAmountNum = Number(ethers.formatUnits(TRADE_AMOUNT_USDC, 6));
     const wethOutNum = Number(ethers.formatUnits(wethOut, 18));
     const usdcBackNum = Number(ethers.formatUnits(usdcBack, 6));
 
-    const buyPrice = buyAmountNum / wethOutNum;
-    const sellPrice = usdcBackNum / wethOutNum;
+    const buyPrice = tradeAmountNum / wethOutNum;   // USDC/WETH
+    const sellPrice = usdcBackNum / wethOutNum;    // USDC/WETH
 
     const priceDiffPercent = ((sellPrice - buyPrice) / buyPrice) * 100;
-
-    const { gross, adjusted } = computeProfit(TRADE_AMOUNT_USDC, usdcBack);
+    const { gross, adjusted } = computeProfit(tradeAmountNum, usdcBackNum);
 
     // Logs
     console.log(`🔍 ${pair.buyDEX} ➜ ${pair.sellDEX}`);
@@ -130,14 +135,14 @@ async function scanArbitrage() {
       console.log(`🚀 Executing arbitrage...`);
 
       const vaultBalanceBefore = await getVaultUSDCBalance();
-      console.log(`💰 Vault USDC before: ${vaultBalanceBefore}`);
+      console.log(`💰 Vault USDC before: ${vaultBalanceBefore.toFixed(6)}`);
 
       try {
         const tx = await vaultContract.depositProfit(usdcBack);
         console.log(`📤 Tx hash: ${tx.hash}`);
         await tx.wait();
         const vaultBalanceAfter = await getVaultUSDCBalance();
-        console.log(`💰 Vault USDC after: ${vaultBalanceAfter}`);
+        console.log(`💰 Vault USDC after: ${vaultBalanceAfter.toFixed(6)}`);
       } catch (err) {
         console.error("⚠️ Arbitrage execution failed:", err);
       }
@@ -157,7 +162,7 @@ async function startLoop() {
     } catch (err) {
       console.error("Error in arbitrage scan:", err);
     }
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 3000)); // 3 seconds
   }
 }
 
