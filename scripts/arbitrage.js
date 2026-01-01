@@ -36,7 +36,7 @@ const ERC20_ABI = [
 const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 // -------------------- SETTINGS --------------------
-const TRADE_AMOUNT = ethers.parseUnits("100", 6); // default trade amount 100 USDC
+const TRADE_AMOUNT = ethers.parseUnits("0.01", 6); // default trade amount 100 USDC
 const MIN_PROFIT_USDC = 0.0001;
 const SLIPPAGE_PCT = 1;
 
