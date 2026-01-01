@@ -1,162 +1,103 @@
 // scripts/arbitrage.js
+// ---------------------------------------------------------
+// POLYGON ARBITRAGE BOT
+// Full Ethers v6 version with signer fixes & 0.01 USDC trade
+
 import { ethers } from "ethers";
+import fs from "fs";
 import dotenv from "dotenv";
 dotenv.config();
 
-// -------------------- CONFIG --------------------
-const RPC_URL = process.env.POLYGON_RPC || "https://polygon-rpc.com";
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+// ----------------------------
+// CONFIG / ENV
+// ----------------------------
+const POLYGON_RPC = process.env.POLYGON_RPC;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+
+// Vault contract
+const VAULT_ADDRESS = process.env.VAULT_ADDRESS;
+const VAULT_ABI = JSON.parse(fs.readFileSync("./abis/ArbVault.json"));
 
 // Routers
-const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // QuickSwap
+const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"; // SushiSwap
+const ROUTER_ABI = JSON.parse(fs.readFileSync("./abis/IUniswapV2Router.json"));
 
-const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)",
-];
+// Token addresses
+const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
+const TOKEN_ADDRESS = process.env.TOKEN_ADDRESS; // Token to arbitrage
 
-// -------------------- TOKENS --------------------
-const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
-const WETH   = "0x172370d5cd63279efa6d502dab29171933a610af"; // 18
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"; // 18
-const DAI    = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"; // 18
+// ----------------------------
+// INIT PROVIDER & SIGNER
+// ----------------------------
+const provider = new ethers.JsonRpcProvider(POLYGON_RPC);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// -------------------- VAULT --------------------
-const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const VAULT_ABI = [
-  "function depositProfit(uint amount) external",
-  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountInUSDC,uint256 minReturnUSDC) external"
-];
-
+// ----------------------------
+// CONNECT CONTRACTS WITH SIGNER
+// ----------------------------
 const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
-const ERC20_ABI = ["function balanceOf(address) view returns (uint256)", "function approve(address spender,uint256 amount) external returns (bool)"];
-const usdc = new ethers.Contract(USDC, ERC20_ABI, wallet);
+const quickRouter = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, wallet);
+const sushiRouter = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, wallet);
 
-// -------------------- SETTINGS --------------------
-const DESIRED_TRADE_USDC = ethers.parseUnits("1", 6); // 0.01 USDC
-const MIN_PROFIT_USDC = ethers.parseUnits("0.00001", 6); // 0.00001 USDC
-const SLIPPAGE_PCT = 1;
+// ----------------------------
+// TRADE PARAMETERS
+// ----------------------------
+const TRADE_AMOUNT_USDC = ethers.parseUnits("0.01", 6); // 0.01 USDC
+const MIN_PROFIT_USDC = ethers.parseUnits("0.0005", 6); // 0.0005 USDC for testing
 
-// -------------------- CONTRACTS --------------------
-const quick = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, provider);
-const sushi = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
-
-// -------------------- UTILS --------------------
-async function getAmountsOut(router, amount, path) {
-  try {
-    return await router.getAmountsOut(amount, path);
-  } catch {
-    return null;
-  }
-}
-
-function computeProfit(startUsdc, endUsdc) {
-  const start = Number(ethers.formatUnits(startUsdc, 6));
-  const end   = Number(ethers.formatUnits(endUsdc, 6));
-  const gross = end - start;
-  const adjusted = gross * (1 - SLIPPAGE_PCT / 100);
-  const pct = (gross / start) * 100;
-  return { gross, adjusted, pct };
-}
-
-async function vaultBalance() {
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);
-  return bal; // BigInt
-}
-
-async function walletMatic() {
-  const bal = await provider.getBalance(wallet.address);
-  return Number(ethers.formatEther(bal));
-}
-
-// -------------------- PATHS --------------------
-const PATHS = [
-  [USDC, WETH, USDC],
-  [USDC, WMATIC, USDC],
-  [USDC, DAI, USDC],
-  [USDC, WETH, DAI, USDC],
-  [USDC, WMATIC, DAI, USDC],
-  [USDC, DAI, WETH, USDC]
+// ----------------------------
+// DEX PATHS
+// ----------------------------
+const dexPairs = [
+  { buy: quickRouter, sell: sushiRouter, name: "Quick ➜ Sushi" },
+  { buy: sushiRouter, sell: quickRouter, name: "Sushi ➜ Quick" }
 ];
 
-// -------------------- SCAN --------------------
-async function scan() {
-  console.log(`\n⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
+// ----------------------------
+// UTILITY FUNCTIONS
+// ----------------------------
+async function getVaultBalance() {
+  return await vault.USDC().then(token => token.balanceOf(vault.target));
+}
 
-  const vaultBalRaw = await vaultBalance(); // BigInt in 6 decimals
-  const walletMaticBal = await walletMatic();
-  console.log(`🏦 Vault USDC: ${Number(ethers.formatUnits(vaultBalRaw, 6)).toFixed(6)}`);
-  console.log(`👛 Wallet MATIC: ${walletMaticBal.toFixed(6)}`);
+// ----------------------------
+// MAIN LOOP
+// ----------------------------
+async function runArb() {
+  console.log("⏱ Polygon Arb Bot Started");
 
-  if (vaultBalRaw <= 0n) {
-    console.log("⚠️ Vault empty, skipping scan");
-    return;
-  }
-
-  // Trade amount capped to vault balance
-  let tradeAmount = DESIRED_TRADE_USDC;
-  if (vaultBalRaw < tradeAmount) tradeAmount = vaultBalRaw;
-
-  const dexPairs = [
-    { buy: quick, sell: sushi, name: "Quick ➜ Sushi" },
-    { buy: sushi, sell: quick, name: "Sushi ➜ Quick" }
-  ];
-
-  let found = false;
+  const vaultBal = await getVaultBalance();
+  console.log("🏦 Vault USDC:", ethers.formatUnits(vaultBal, 6));
 
   for (const dex of dexPairs) {
-    for (const path of PATHS) {
-      const buy = await getAmountsOut(dex.buy, tradeAmount, path.slice(0, -1));
-      if (!buy) continue;
-      const midAmount = buy[buy.length - 1];
-      if (midAmount <= 0n) continue;
+    console.log(`🔍 ${dex.name}`);
 
-      const sell = await getAmountsOut(dex.sell, midAmount, path.slice().reverse());
-      if (!sell) continue;
-      const usdcBack = sell[sell.length - 1];
+    try {
+      // Execute arbitrage
+      const tx = await vault.executeArbitrage(
+        dex.buy.target,
+        dex.sell.target,
+        TOKEN_ADDRESS,
+        TRADE_AMOUNT_USDC,
+        MIN_PROFIT_USDC
+      );
 
-      const { gross, adjusted, pct } = computeProfit(tradeAmount, usdcBack);
-
-      console.log(`🔍 ${dex.name}`);
-      console.log(`🛣 Path: ${path.join(" → ")}`);
-      console.log(`💵 Price diff: ${pct.toFixed(3)} %`);
-      console.log(`💵 Gross profit: ${gross.toFixed(6)} USDC`);
-      console.log(`💵 Adjusted profit: ${adjusted.toFixed(6)} USDC`);
-
-      if (adjusted >= Number(ethers.formatUnits(MIN_PROFIT_USDC, 6))) {
-        found = true;
-        console.log(`✅ MIN PROFIT satisfied — executing`);
-
-        try {
-          const tx = await vault.executeArbitrage(
-            dex.buy.address,
-            dex.sell.address,
-            path[1], // token
-            tradeAmount,
-            MIN_PROFIT_USDC
-          );
-          console.log(`📤 Tx: ${tx.hash}`);
-          await tx.wait();
-        } catch (e) {
-          console.log(`⚠️ Execution failed: ${e.message}`);
-        }
-      } else {
-        console.log(`❌ Below minimum profit`);
-      }
+      const receipt = await tx.wait();
+      console.log(`✅ Executed: ${dex.name} | TxHash: ${receipt.transactionHash}`);
+    } catch (err) {
+      console.error(`⚠️ Execution failed: ${err.message}`);
     }
   }
-
-  if (!found) console.log(`⚠️ No executable arbitrage this cycle`);
 }
 
-// -------------------- LOOP --------------------
-async function start() {
-  while (true) {
-    try { await scan(); }
-    catch (e) { console.error("Scan error:", e.message); }
-    await new Promise(r => setTimeout(r, 3000));
+// ----------------------------
+// START BOT
+// ----------------------------
+(async () => {
+  try {
+    await runArb();
+  } catch (err) {
+    console.error("Fatal error:", err);
   }
-}
-
-start();
+})();
