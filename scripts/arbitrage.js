@@ -6,7 +6,6 @@ dotenv.config();
 // -------------------- CONFIG --------------------
 const RPC_URL = process.env.POLYGON_RPC || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
 const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
@@ -17,7 +16,7 @@ const ROUTER_ABI = [
 ];
 
 // -------------------- TOKENS --------------------
-const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6
+const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
 const WETH   = "0x172370d5cd63279efa6d502dab29171933a610af"; // 18
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"; // 18
 const DAI    = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"; // 18
@@ -34,11 +33,10 @@ const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)"
 ];
-
 const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 // -------------------- SETTINGS --------------------
-const TRADE_AMOUNT = ethers.parseUnits("1000", 6); // Default scan amount
+const TRADE_AMOUNT = ethers.parseUnits("100", 6); // default trade amount 100 USDC
 const MIN_PROFIT_USDC = 0.0001;
 const SLIPPAGE_PCT = 1;
 
@@ -50,12 +48,7 @@ const sushi = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
 async function getAmountsOut(router, amount, path) {
   try {
     return await router.getAmountsOut(amount, path);
-  } catch (err) {
-    if (err.message.includes("rate limit")) {
-      console.log("⚠️ Rate limit hit, retrying 200ms...");
-      await new Promise(r => setTimeout(r, 200));
-      return getAmountsOut(router, amount, path);
-    }
+  } catch {
     return null;
   }
 }
@@ -70,7 +63,7 @@ function computeProfit(startUsdc, endUsdc) {
 }
 
 async function vaultBalance() {
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);
+  const bal = await usdc.balanceOf(VAULT_ADDRESS); // returns BigInt
   return bal;
 }
 
@@ -93,19 +86,19 @@ const PATHS = [
 async function scan() {
   console.log(`\n⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
 
-  const vaultBalRaw = await vaultBalance();
+  const vaultBalRaw = await vaultBalance(); // BigInt
   const vaultBal = Number(ethers.formatUnits(vaultBalRaw, 6));
   console.log(`🏦 Vault USDC: ${vaultBal.toFixed(6)}`);
   console.log(`👛 Wallet MATIC: ${(await walletMatic()).toFixed(6)}`);
 
-  if (vaultBalRaw.lte(0)) {
+  if (vaultBalRaw <= 0n) {
     console.log("⚠️ Vault empty, skipping scan");
     return;
   }
 
-  // Use vault-limited trade amount
+  // Limit trade amount to vault balance
   let tradeAmount = TRADE_AMOUNT;
-  if (vaultBalRaw.lt(tradeAmount)) tradeAmount = vaultBalRaw;
+  if (vaultBalRaw < tradeAmount) tradeAmount = vaultBalRaw;
 
   const dexPairs = [
     { buy: quick, sell: sushi, name: "Quick ➜ Sushi" },
@@ -120,19 +113,13 @@ async function scan() {
       if (!buy) continue;
 
       const midAmount = buy[buy.length - 1];
-      if (midAmount.lte(0)) continue;
+      if (midAmount < 1n) continue; // skip dust amounts
 
       const sell = await getAmountsOut(dex.sell, midAmount, path.slice().reverse());
       if (!sell) continue;
 
       const usdcBack = sell[sell.length - 1];
       const { gross, adjusted, pct } = computeProfit(tradeAmount, usdcBack);
-
-      // Avoid unrealistic profits
-      if (adjusted.gt(vaultBalRaw)) {
-        console.log(`⚠️ Adjusted profit ${adjusted.toFixed(6)} exceeds vault, skipping`);
-        continue;
-      }
 
       console.log(`🔍 ${dex.name}`);
       console.log(`🛣 Path: ${path.join(" → ")}`);
@@ -153,7 +140,7 @@ async function scan() {
           console.log(`💰 Vault before: ${before.toFixed(6)}`);
           console.log(`💰 Vault after : ${after.toFixed(6)}`);
         } catch (e) {
-          console.log(`⚠️ Execution failed: ${e.message}`);
+          console.log(`⚠️ Execution failed:`, e.message);
         }
       } else {
         console.log(`❌ Below minimum profit`);
@@ -167,8 +154,11 @@ async function scan() {
 // -------------------- LOOP --------------------
 async function start() {
   while (true) {
-    try { await scan(); }
-    catch (e) { console.error("Scan error:", e.message); }
+    try {
+      await scan();
+    } catch (e) {
+      console.error("Scan error:", e.message);
+    }
     await new Promise(r => setTimeout(r, 3000));
   }
 }
