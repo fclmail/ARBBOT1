@@ -75,27 +75,28 @@ function formatETH(amount) {
   return Number(ethers.formatUnits(amount, 18)).toFixed(6);
 }
 
-// -------------------- SIMULATION LOGIC --------------------
+// -------------------- SIMULATION --------------------
 async function simulateArbitrage({
-  dexBuy,
-  dexSell,
   routerBuy,
   routerSell,
-  usdc,
-  weth,
   amountInUSDC,
   minProfitUSDC,
   safetyBps = 8500
 }) {
   try {
-    const amountsOutBuy = await routerBuy.getAmountsOut(amountInUSDC, [usdc, weth]);
-    const wethOut = amountsOutBuy[1];
+    // 1️⃣ USDC -> WETH
+    const buyAmounts = await getAmountsOut(routerBuy, amountInUSDC, [USDC, WETH]);
+    if (!buyAmounts) return { profitable: false };
+    const wethOut = buyAmounts[1];
     if (wethOut === 0n) return { profitable: false };
 
-    const amountsOutSell = await routerSell.getAmountsOut(wethOut, [weth, usdc]);
-    const usdcOut = amountsOutSell[1];
+    // 2️⃣ WETH -> USDC
+    const sellAmounts = await getAmountsOut(routerSell, wethOut, [WETH, USDC]);
+    if (!sellAmounts) return { profitable: false };
+    const usdcOut = sellAmounts[1];
     if (usdcOut <= amountInUSDC) return { profitable: false };
 
+    // 3️⃣ Profits
     const rawProfit = usdcOut - amountInUSDC;
     const adjustedProfit = (rawProfit * BigInt(safetyBps)) / 10000n;
 
@@ -103,8 +104,8 @@ async function simulateArbitrage({
       profitable: adjustedProfit >= minProfitUSDC,
       rawProfit,
       adjustedProfit,
-      usdcOut,
-      wethOut
+      wethOut,
+      usdcOut
     };
   } catch (err) {
     console.error("Simulation error:", err.message);
@@ -112,7 +113,7 @@ async function simulateArbitrage({
   }
 }
 
-// -------------------- ARBITRAGE --------------------
+// -------------------- ARBITRAGE SCAN --------------------
 async function scanArbitrage() {
   const walletMatic = await getWalletMaticBalance();
   const vaultBalanceRaw = await getVaultUSDCBalance();
@@ -131,12 +132,8 @@ async function scanArbitrage() {
 
   for (const pair of pairs) {
     const result = await simulateArbitrage({
-      dexBuy: pair.buyDEX,
-      dexSell: pair.sellDEX,
       routerBuy: pair.buyRouter,
       routerSell: pair.sellRouter,
-      usdc: USDC,
-      weth: WETH,
       amountInUSDC: TRADE_AMOUNT_USDC,
       minProfitUSDC: MIN_PROFIT_USDC
     });
@@ -186,7 +183,7 @@ async function startLoop() {
     } catch (err) {
       console.error("Error in arbitrage scan:", err);
     }
-    await new Promise(r => setTimeout(r, 3000)); // 3 seconds
+    await new Promise(r => setTimeout(r, 3000));
   }
 }
 
