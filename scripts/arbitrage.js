@@ -19,7 +19,7 @@ const ROUTER_ABI = [
 ];
 
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
-const WETH = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"; // 18 decimals
+const WETH = "0x172370d5cd63279efa6d502dab29171933a610af"; // 18 decimals
 
 // Hardcoded vault address
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
