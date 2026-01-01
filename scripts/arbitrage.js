@@ -21,170 +21,108 @@ const ROUTER_ABI = [
 ];
 
 // Tokens
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
-const WETH = "0x7ceb23f17e97b3e19200c606ac193b5632a1dcd"; // WETH on Polygon (18 decimals)
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WETH = "0x7ceb23f17e97b3e19200c606ac193b5632a1dcd";
 
-// Hardcoded vault address
+// Vault
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
-const TRADE_AMOUNT_USDC = ethers.parseUnits("100", 6); // 100 USDC
-const MIN_PROFIT_USDC = ethers.parseUnits("0.01", 6); // 0.01 USDC minimum profit (6 decimals)
-const SLIPPAGE_PCT = 15; // 15% slippage factor used in calculation
+const TRADE_AMOUNT_USDC = ethers.parseUnits("100", 6); // bigint
+const MIN_PROFIT_USDC = ethers.parseUnits("0.01", 6); // bigint
+const SLIPPAGE_PCT = 15n;
 
 // -------------------- CONTRACTS --------------------
 const quickRouter = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, provider);
 const sushiRouter = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
 
-const VAULT_ABI = [
-  "function depositProfit(uint amount) external"
-];
+const VAULT_ABI = ["function depositProfit(uint256 amount) external"];
 const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 
-const ERC20_ABI = [
-  "function balanceOf(address owner) view returns (uint256)"
-];
-const usdcContract = new ethers.Contract(USDC, ERC20_ABI, provider);
+// -------------------- FIXED-POINT CONSTANTS --------------------
+const SCALE_USDC_6_TO_18 = 1_000_000_000_000n; // 1e12
+const ONE_18 = 1_000_000_000_000_000_000n;     // 1e18
 
 // -------------------- UTILS --------------------
-// Decimals
-const DEC_USDC = 6;
-const DEC_WETH = 18;
-
-// Helpers to ensure BigNumber and correct types
-function ensureBigNumber(x) {
-  if (ethers.BigNumber.isBigNumber(x)) return x;
-  return ethers.BigNumber.from(x.toString());
+function toUSDC18(usdc6) {
+  return usdc6 * SCALE_USDC_6_TO_18;
 }
 
-// Fixed-point scales
-const SCALE_USDC_6_TO_18 = ethers.BigNumber.from("1000000000000"); // 1e12 to convert 6->18
-const ONE_18 = ethers.BigNumber.from("1000000000000000000"); // 1e18
-
-// Convert USDC (6d) to 18-decimal fixed-point
-function toUSDC18(usdc6_bn) {
-  return ensureBigNumber(usdc6_bn).mul(SCALE_USDC_6_TO_18);
+function fromUSDC18(usdc18) {
+  return usdc18 / SCALE_USDC_6_TO_18;
 }
 
-// Convert 18-decimal fixed-point to USDC (6d) for display or storage
-function fromUSDC18(usdc18_bn) {
-  return ensureBigNumber(usdc18_bn).div(SCALE_USDC_6_TO_18);
-}
-
-// Compute fixed-point profit using BigNumber arithmetic
+// -------------------- PROFIT CALC --------------------
 function computeProfitStable(tradeAmountUSDC18, wethOut18, usdcBack18, slippagePct) {
-  tradeAmountUSDC18 = ensureBigNumber(tradeAmountUSDC18);
-  wethOut18 = ensureBigNumber(wethOut18);
-  usdcBack18 = ensureBigNumber(usdcBack18);
-  slippagePct = ensureBigNumber(slippagePct);
+  const slippageFactor = (100n - slippagePct) * ONE_18 / 100n;
+  const buyOutEstimate18 = wethOut18 * slippageFactor / ONE_18;
 
-  const slippageFactor = ethers.BigNumber.from(100)
-    .sub(slippagePct)
-    .mul(ethers.BigNumber.from("1000000000000000000"))
-    .div(ethers.BigNumber.from(100));
+  const grossProfit18 = usdcBack18 - tradeAmountUSDC18;
+  const profitUSDC18 = grossProfit18 > 0n ? grossProfit18 : 0n;
 
-  const buyOutEstimate18 = wethOut18.mul(slippageFactor).div(ethers.BigNumber.from("1000000000000000000"));
-
-  const grossProfit18 = usdcBack18.sub(tradeAmountUSDC18);
-
-  let priceDiffPct18 = ethers.BigNumber.from(0);
-  if (!tradeAmountUSDC18.isZero()) {
-    priceDiffPct18 = grossProfit18.mul(ethers.BigNumber.from("1000000000000000000")).div(tradeAmountUSDC18);
-  }
-
-  const profitUSDC18 = grossProfit18.isNegative() ? ethers.BigNumber.from(0) : grossProfit18;
+  const priceDiffPct18 =
+    tradeAmountUSDC18 > 0n
+      ? (grossProfit18 * ONE_18) / tradeAmountUSDC18
+      : 0n;
 
   return {
     profitUSDC18,
+    profitUSDC6: fromUSDC18(profitUSDC18),
     priceDiffPct18,
-    profitUSDC6: profitUSDC18.div(SCALE_USDC_6_TO_18),
     buyOutEstimate18
   };
 }
 
-// -------------------- ARBITRAGE SCAN --------------------
+// -------------------- ARBITRAGE LOOP --------------------
 async function scanArbitrage() {
-  try {
-    console.log("Starting arbitrage scan...");
+  console.log("Scanning arbitrage...");
 
-    const pathBuy_USDC_WETH = [USDC, WETH];
-    const pathSell_WETH_USDC = [WETH, USDC];
+  const pathBuy = [USDC, WETH];
+  const pathSell = [WETH, USDC];
 
-    const tradeAmountUSDC18 = toUSDC18(TRADE_AMOUNT_USDC);
+  const tradeAmountUSDC18 = toUSDC18(TRADE_AMOUNT_USDC);
 
-    let amountsOutBuy;
-    try {
-      amountsOutBuy = await quickRouter.getAmountsOut(tradeAmountUSDC18, pathBuy_USDC_WETH);
-    } catch (e) {
-      console.error("Error in getAmountsOut for buy path (USDC->WETH):", e);
-      return;
-    }
-    if (!amountsOutBuy || amountsOutBuy.length < 2) {
-      console.warn("Invalid buy path amountsOut. Skipping this cycle.");
-      return;
-    }
-    const wethOut18 = amountsOutBuy[1];
+  const buyAmounts = await quickRouter.getAmountsOut(tradeAmountUSDC18, pathBuy);
+  const wethOut18 = buyAmounts[1];
 
-    let amountsOutSell;
-    try {
-      amountsOutSell = await sushiRouter.getAmountsOut(wethOut18, pathSell_WETH_USDC);
-    } catch (e) {
-      console.error("Error in getAmountsOut for sell path (WETH->USDC):", e);
-      return;
-    }
-    if (!amountsOutSell || amountsOutSell.length < 2) {
-      console.warn("Invalid sell path amountsOut. Skipping this cycle.");
-      return;
-    }
-    const usdcBack18 = amountsOutSell[1];
+  const sellAmounts = await sushiRouter.getAmountsOut(wethOut18, pathSell);
+  const usdcBack18 = sellAmounts[1];
 
-    const profitResult = computeProfitStable(tradeAmountUSDC18, wethOut18, usdcBack18, SLIPPAGE_PCT);
-    const profitUSDC18 = profitResult.profitUSDC18;
+  const result = computeProfitStable(
+    tradeAmountUSDC18,
+    wethOut18,
+    usdcBack18,
+    SLIPPAGE_PCT
+  );
 
-    console.log(`Trade amount USDC18: ${tradeAmountUSDC18.toString()}`);
-    console.log(`Profit USDC18: ${profitUSDC18.toString()}`);
+  console.log("Profit (USDC6):", result.profitUSDC6.toString());
 
-    const minProfit18 = MIN_PROFIT_USDC.mul(SCALE_USDC_6_TO_18);
-    const profitable = profitUSDC18.gte(minProfit18);
+  const minProfit18 = MIN_PROFIT_USDC * SCALE_USDC_6_TO_18;
 
-    if (profitable) {
-      console.log("Profitable arbitrage detected. Proceed to deposit profit to vault.");
-      const profitUSDC6ForDeposit = profitUSDC18.div(SCALE_USDC_6_TO_18);
-      try {
-        const tx = await vaultContract.depositProfit(profitUSDC6ForDeposit);
-        console.log("Deposit tx hash:", tx.hash);
-        await tx.wait();
-        console.log("Deposit confirmed.");
-      } catch (e) {
-        console.error("Error depositing profit to vault:", e);
-      }
-    } else {
-      console.log("No profitable arbitrage this cycle.");
-    }
-
-  } catch (err) {
-    console.error("Unhandled error in scanArbitrage:", err);
+  if (result.profitUSDC18 >= minProfit18) {
+    console.log("✅ Profitable — depositing to vault");
+    const tx = await vaultContract.depositProfit(result.profitUSDC6);
+    await tx.wait();
+    console.log("Vault deposit confirmed");
+  } else {
+    console.log("❌ Below minimum profit");
   }
 }
 
-// -------------------- HELPERS --------------------
+// -------------------- MAIN --------------------
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(r => setTimeout(r, ms));
 }
 
-// -------------------- MAIN LOOP --------------------
 async function main() {
-  console.log("ARBITRAGE.js started");
-  console.log(`USDC: ${USDC}, WETH: ${WETH}`);
-  const INTERVAL_MS = 3000; // 3 seconds between scans
-
+  console.log("ARB BOT STARTED");
   while (true) {
     await scanArbitrage();
-    await sleep(INTERVAL_MS);
+    await sleep(3000);
   }
 }
 
-main().catch((e) => {
-  console.error("Fatal error in ARB loop:", e);
+main().catch(err => {
+  console.error("Fatal error:", err);
   process.exit(1);
 });
