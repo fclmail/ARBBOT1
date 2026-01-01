@@ -1,69 +1,105 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-// ARBBOT1 – PROFIT-SAFE VERSION
+// ARBBOT1 – PROFIT-SAFE VERSION (FULL FILE)
 // ---------------------------------------------------------
 
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
 
-// ---- CONFIG ----
-const TRADE_AMOUNT_USDC = ethers.parseUnits("1000", 6);
+// ---------------------------------------------------------
+// CONFIG
+// ---------------------------------------------------------
+const TRADE_AMOUNT_USDC = ethers.parseUnits("1000", 6); // 1,000 USDC
 const MIN_PROFIT_BPS = 10n; // 0.10%
 const SAFETY_BPS = 8500n;   // 85%
+const LOOP_DELAY_MS = 2000;
 
-// ---- ADDRESSES ----
-const USDC = process.env.USDC;
-const WETH = process.env.WETH;
-const QUICK_ROUTER = process.env.QUICK_ROUTER;
-const SUSHI_ROUTER = process.env.SUSHI_ROUTER;
-const VAULT = process.env.VAULT;
+// ---------------------------------------------------------
+// ABIs
+// ---------------------------------------------------------
+const ROUTER_ABI = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)",
+  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory)"
+];
 
-// ---- PROVIDER ----
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+const VAULT_ABI = [
+  "function executeArbitrage(address buyRouter, address sellRouter, address tokenIn, address tokenOut, uint256 amountIn) external"
+];
 
-// ---- CONTRACTS ----
+// ---------------------------------------------------------
+// ADDRESSES (ENV)
+// ---------------------------------------------------------
+const {
+  RPC_URL,
+  PRIVATE_KEY,
+  USDC,
+  WETH,
+  QUICK_ROUTER,
+  SUSHI_ROUTER,
+  VAULT
+} = process.env;
+
+// ---------------------------------------------------------
+// PROVIDER / WALLET
+// ---------------------------------------------------------
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+// ---------------------------------------------------------
+// CONTRACTS
+// ---------------------------------------------------------
 const quickRouter = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, provider);
 const sushiRouter = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
 const vault = new ethers.Contract(VAULT, VAULT_ABI, wallet);
 
-// ---- MIN PROFIT (ABSOLUTE USDC) ----
+// ---------------------------------------------------------
+// MIN PROFIT (ABSOLUTE USDC)
+// ---------------------------------------------------------
 const minProfitUSDC =
   (TRADE_AMOUNT_USDC * MIN_PROFIT_BPS) / 10_000n;
 
 // ---------------------------------------------------------
-// 🔑 MISSING STEP IMPLEMENTED HERE
+// 🔑 MISSING STEP — FULL PATH SIMULATION
 // ---------------------------------------------------------
-async function simulateArbitrage(params) {
+async function simulateArbitrage({
+  routerBuy,
+  routerSell,
+  amountInUSDC
+}) {
   try {
-    const buyAmounts = await params.routerBuy.getAmountsOut(
-      params.amountInUSDC,
-      [params.usdc, params.weth]
+    // 1️⃣ USDC -> WETH (buy)
+    const buyAmounts = await routerBuy.getAmountsOut(
+      amountInUSDC,
+      [USDC, WETH]
     );
     const wethOut = buyAmounts[1];
 
-    if (wethOut === 0n) return { profitable: false };
+    if (wethOut === 0n) return null;
 
-    const sellAmounts = await params.routerSell.getAmountsOut(
+    // 2️⃣ WETH -> USDC (sell)
+    const sellAmounts = await routerSell.getAmountsOut(
       wethOut,
-      [params.weth, params.usdc]
+      [WETH, USDC]
     );
     const usdcOut = sellAmounts[1];
 
-    if (usdcOut <= params.amountInUSDC) return { profitable: false };
+    if (usdcOut <= amountInUSDC) return null;
 
-    const rawProfit = usdcOut - params.amountInUSDC;
+    // 3️⃣ Profit math
+    const rawProfit = usdcOut - amountInUSDC;
     const adjustedProfit =
-      (rawProfit * params.safetyBps) / 10_000n;
+      (rawProfit * SAFETY_BPS) / 10_000n;
 
     return {
-      profitable: adjustedProfit >= params.minProfitUSDC,
+      wethOut,
+      usdcOut,
       rawProfit,
       adjustedProfit
     };
-  } catch {
-    return { profitable: false };
+  } catch (err) {
+    console.error("Simulation error:", err.message);
+    return null;
   }
 }
 
@@ -74,34 +110,56 @@ async function run() {
   console.log("⏱", new Date().toISOString(), "Polygon Arb Bot Started");
 
   while (true) {
-    // 🔍 QuickSwap ➜ SushiSwap
-    const sim = await simulateArbitrage({
-      routerBuy: quickRouter,
-      routerSell: sushiRouter,
-      usdc: USDC,
-      weth: WETH,
-      amountInUSDC: TRADE_AMOUNT_USDC,
-      minProfitUSDC,
-      safetyBps: SAFETY_BPS
-    });
+    try {
+      // ---------------------------------------------------
+      // 🔍 QuickSwap ➜ SushiSwap
+      // ---------------------------------------------------
+      console.log("🔍 QuickSwap ➜ SushiSwap");
 
-    if (sim.profitable) {
-      console.log("🚀 REAL PROFIT OPPORTUNITY");
-      console.log("💰 Raw profit:", ethers.formatUnits(sim.rawProfit, 6), "USDC");
-      console.log("💰 Adjusted profit:", ethers.formatUnits(sim.adjustedProfit, 6), "USDC");
+      const sim = await simulateArbitrage({
+        routerBuy: quickRouter,
+        routerSell: sushiRouter,
+        amountInUSDC: TRADE_AMOUNT_USDC
+      });
 
-      await vault.executeArbitrage(
-        QUICK_ROUTER,
-        SUSHI_ROUTER,
-        USDC,
-        WETH,
-        TRADE_AMOUNT_USDC
-      );
-    } else {
-      console.log("⚠️ Skipped – real profit below min");
+      if (!sim) {
+        console.log("⚠️ No real profit after fees – skipping\n");
+      } else {
+        console.log(
+          "💰 Raw profit:",
+          ethers.formatUnits(sim.rawProfit, 6),
+          "USDC"
+        );
+        console.log(
+          "💰 Adjusted profit:",
+          ethers.formatUnits(sim.adjustedProfit, 6),
+          "USDC"
+        );
+
+        if (sim.adjustedProfit >= minProfitUSDC) {
+          console.log("🚀 REAL PROFIT OPPORTUNITY");
+          console.log("📤 Sending tx to vault...");
+
+          const tx = await vault.executeArbitrage(
+            QUICK_ROUTER,
+            SUSHI_ROUTER,
+            USDC,
+            WETH,
+            TRADE_AMOUNT_USDC
+          );
+
+          console.log("⏳ Tx hash:", tx.hash);
+          await tx.wait();
+          console.log("✅ Arbitrage completed\n");
+        } else {
+          console.log("⚠️ Below vault min profit – skipping\n");
+        }
+      }
+    } catch (err) {
+      console.error("Loop error:", err.message);
     }
 
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, LOOP_DELAY_MS));
   }
 }
 
