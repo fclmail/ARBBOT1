@@ -1,186 +1,170 @@
+Gmail is better on the app
+Secure, fast and organised email
+Open
+(no subject)
+S
+scimax scim
+to me
+0 minutes agoDetails
+LEAVE ALL OTHER FEATURES IN TACT ONLY NORMALIZE DECIMALS.
+WRITE FULL ARBJS.
+SHOW EXPECTED LOG OUTPUT
+
 // scripts/arbitrage.js
-// -------------------------
-// Polygon Arbitrage Bot (Full ES Module, Inline Config)
-// -------------------------
-
 import { ethers } from "ethers";
+import dotenv from "dotenv";
+dotenv.config();
 
-// -------------------------
-// CONFIG (inline, avoids missing module issues)
-// -------------------------
-export const tokens = {
-  USDC: { address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6 },
-  WETH: { address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimals: 18 }
-};
+// -------------------- CONFIG --------------------
+const RPC_URL = process.env.POLYGON_RPC || "https://polygon-rpc.com";
+const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-export const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
-};
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-// Vault contract
-export const contractAddress = "0xYourVaultAddressHere"; // replace with real
-export const provider = new ethers.JsonRpcProvider("https://polygon-rpc.com"); // example RPC
+const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-export const contract = new ethers.Contract(
-  contractAddress,
-  [
-    "function executeArbitrage(address,address,address,uint256) external",
-    "function withdrawProfit(address) external",
-    "function balanceOf(address) view returns (uint256)"
-  ],
-  provider.getSigner()
-);
+const ROUTER_ABI = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)",
+  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory)"
+];
 
-// -------------------------
-// STATE
-// -------------------------
-let isScanning = false;
-let accumulatedProfit = 0;
-let transactionHistory = [];
-let walletAddress = null; // set when connected
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
+const WETH = "0x172370d5cd63279efa6d502dab29171933a610af"; // 18 decimals
 
-// -------------------------
-// HELPERS
-// -------------------------
-function fmt(value, decimals = 6) {
-  return Number(value).toFixed(decimals);
+// Hardcoded vault address
+const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+
+// Trade settings
+const TRADE_AMOUNT_USDC = ethers.parseUnits("100", 6); // 100 USDC
+const MIN_PROFIT_USDC = 0.01; // minimum adjusted profit
+
+// -------------------- CONTRACTS --------------------
+const quickRouter = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, provider);
+const sushiRouter = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
+
+const VAULT_ABI = [
+  "function depositProfit(uint amount) external"
+];
+const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
+
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)"
+];
+const usdcContract = new ethers.Contract(USDC, ERC20_ABI, provider);
+
+// -------------------- UTILS --------------------
+async function getAmountsOut(router, amountIn, path) {
+  try {
+    const amounts = await router.getAmountsOut(amountIn, path);
+    return amounts;
+  } catch (err) {
+    console.error("getAmountsOut error:", err.message);
+    return null;
+  }
 }
 
-async function getContractUSDCBalance() {
-  const usdc = new ethers.Contract(
-    tokens.USDC.address,
-    ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"],
-    provider
-  );
-  const decimals = await usdc.decimals();
-  const balance = await usdc.balanceOf(contractAddress);
-  return Number(ethers.utils.formatUnits(balance, decimals));
+function computeProfit(tradeAmount, buyOut, sellOut, slippagePct = 15) {
+  const buyPrice = Number(ethers.formatUnits(tradeAmount, 6)) / Number(ethers.formatUnits(buyOut, 18));
+  const sellPrice = Number(ethers.formatUnits(tradeAmount, 6)) / Number(ethers.formatUnits(sellOut, 18));
+  const grossProfit = sellPrice - buyPrice;
+  const adjustedProfit = grossProfit * (1 - slippagePct / 100);
+  const priceDiffPercent = ((sellPrice - buyPrice) / buyPrice) * 100;
+  return { buyPrice, sellPrice, grossProfit, adjustedProfit, priceDiffPercent };
 }
 
-async function updateBalances() {
-  const vault = await getContractUSDCBalance();
-  const wallet = await provider.getBalance(walletAddress);
-  console.log(`🏦 Vault USDC: ${vault.toFixed(6)}\n👛 Wallet MATIC: ${ethers.utils.formatEther(wallet)}\n`);
+async function getVaultUSDCBalance() {
+  try {
+    const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
+    return Number(ethers.formatUnits(balance, 6));
+  } catch {
+    return 0;
+  }
 }
 
-// -------------------------
-// PRICE / AMOUNT CALCULATION
-// -------------------------
-async function getAmountOut(router, tokenAddress, amountIn) {
-  // mock function; replace with real on-chain call
-  // return value in token units (not USDC)
-  return amountIn / 1; // identity for example
+async function getWalletMaticBalance() {
+  try {
+    const balance = await provider.getBalance(wallet.address);
+    return Number(ethers.formatUnits(balance, 18));
+  } catch {
+    return 0;
+  }
 }
 
-// -------------------------
-// LOGGING
-// -------------------------
-function log(msg) {
-  console.log(msg);
-}
+// -------------------- ARBITRAGE SCAN --------------------
+async function scanArbitrage() {
+  console.log(`\n⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
+  const walletMatic = await getWalletMaticBalance();
+  const vaultBalance = await getVaultUSDCBalance();
+  console.log(`🏦 Vault USDC: ${vaultBalance.toFixed(6)}`);
+  console.log(`👛 Wallet MATIC: ${walletMatic.toFixed(6)}`);
 
-function logTransaction(txDetails) {
-  const time = new Date().toLocaleTimeString();
-  const profit = txDetails.actualProfit || '';
-  console.log(`${time} | ${txDetails.symbol} | BUY ${txDetails.buyDex} | SELL ${txDetails.sellDex} | NET PROFIT: ${profit}`);
-  transactionHistory.push(txDetails);
-}
+  const pairs = [
+    { buyRouter: quickRouter, buyDEX: "QuickSwap", sellRouter: sushiRouter, sellDEX: "SushiSwap" },
+    { buyRouter: sushiRouter, buyDEX: "SushiSwap", sellRouter: quickRouter, sellDEX: "QuickSwap" }
+  ];
 
-// -------------------------
-// ARBITRAGE SCAN + EXECUTION
-// -------------------------
-async function scanAndArbitrage() {
-  if (!walletAddress) { log("Please set walletAddress"); return; }
-  if (isScanning) return;
+  let anyOpportunity = false;
 
-  isScanning = true;
-  const tradeAmount = 1.0; // USDC for example
-  const minProfit = 0.01; // USDC
-  const amountIn = ethers.utils.parseUnits(tradeAmount.toString(), 6);
+  for (const pair of pairs) {
+    const path = [USDC, WETH];
+    const reversePath = [WETH, USDC];
 
-  log("🔍 Starting arbitrage scan...");
+    const buyAmounts = await getAmountsOut(pair.buyRouter, TRADE_AMOUNT_USDC, path);
+    if (!buyAmounts) continue;
+    const wethOut = buyAmounts[1];
 
-  for (const [symbol, meta] of Object.entries(tokens)) {
-    const token = meta.address;
-    for (const [buyName, buyRouter] of Object.entries(routers)) {
-      for (const [sellName, sellRouter] of Object.entries(routers)) {
-        if (buyName === sellName) continue;
+    const sellAmounts = await getAmountsOut(pair.sellRouter, wethOut, reversePath);
+    if (!sellAmounts) continue;
+    const usdcBack = sellAmounts[1];
 
-        try {
-          const buyOut = await getAmountOut(buyRouter, token, amountIn);
-          const sellOut = await getAmountOut(sellRouter, token, amountIn);
+    // --- Apply HTML-like profit scan method ---
+    const { buyPrice, sellPrice, grossProfit, adjustedProfit, priceDiffPercent } =
+      computeProfit(TRADE_AMOUNT_USDC, wethOut, usdcBack);
 
-          const buyPrice = tradeAmount / Number(ethers.utils.formatUnits(buyOut, meta.decimals));
-          const sellPrice = tradeAmount / Number(ethers.utils.formatUnits(sellOut, meta.decimals));
+    console.log(`🔍 ${pair.buyDEX} ➜ ${pair.sellDEX}`);
+    console.log(`📈 ${pair.buyDEX} price: ${buyPrice.toFixed(6)} USDC/WETH`);
+    console.log(`📉 ${pair.sellDEX} price: ${sellPrice.toFixed(6)} USDC/WETH`);
+    console.log(`💵 Price-ratio diff: ${priceDiffPercent.toFixed(3)} %`);
+    console.log(`💵 Gross profit: ${grossProfit.toFixed(6)} USDC`);
+    console.log(`💵 Adjusted profit: ${adjustedProfit.toFixed(6)} USDC`);
 
-          const profitUSDC = sellPrice - buyPrice;
-          const profitPct = (profitUSDC / buyPrice) * 100;
+    if (adjustedProfit >= MIN_PROFIT_USDC) {
+      anyOpportunity = true;
+      console.log(`✅ MIN PROFIT = ${MIN_PROFIT_USDC} USDC satisfied`);
+      console.log(`🚀 Executing arbitrage...`);
 
-          log(`📈 ${buyName} price: ${fmt(buyPrice)} USDC/${symbol}`);
-          log(`📉 ${sellName} price: ${fmt(sellPrice)} USDC/${symbol}`);
-          log(`💵 Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct, 2)}%)`);
-
-          if (profitUSDC >= minProfit) {
-            log("✅ MIN PROFIT satisfied — executing arbitrage...");
-            await executeTrade(buyRouter, sellRouter, token, amountIn, symbol, profitPct);
-          } else {
-            log("❌ Below minimum profit — skipping");
-          }
-        } catch (err) {
-          log(`⚠️ Error ${buyName} -> ${sellName}: ${err.message}`);
-        }
+      const vaultBefore = await getVaultUSDCBalance();
+      console.log(`💰 Vault USDC before: ${vaultBefore.toFixed(6)}`);
+      try {
+        const tx = await vaultContract.depositProfit(usdcBack);
+        console.log(`📤 Tx hash: ${tx.hash}`);
+        await tx.wait();
+        const vaultAfter = await getVaultUSDCBalance();
+        console.log(`💰 Vault USDC after: ${vaultAfter.toFixed(6)}`);
+      } catch (err) {
+        console.error("⚠️ Arbitrage execution failed:", err.message);
       }
+    } else {
+      console.log(`❌ Below minimum profit – not executing`);
     }
   }
 
-  isScanning = false;
-  await updateBalances();
+  if (!anyOpportunity) console.log(`⚠️ No executable arbitrage this cycle`);
 }
 
-// -------------------------
-// EXECUTE TRADE
-// -------------------------
-async function executeTrade(buyRouter, sellRouter, token, amountIn, symbol, profitPct) {
-  try {
-    const vaultBefore = await getContractUSDCBalance();
-    const tx = await contract.executeArbitrage(buyRouter, sellRouter, token, amountIn, { gasLimit: 1_000_000 });
-    const receipt = await tx.wait();
-    const vaultAfter = await getContractUSDCBalance();
-    const profit = vaultAfter - vaultBefore;
-    accumulatedProfit += profit > 0 ? profit : 0;
-
-    const txDetails = {
-      timestamp: Date.now(),
-      txHash: receipt.transactionHash,
-      symbol,
-      profitBeforeFees: fmt(profitPct, 2) + '%',
-      actualProfit: fmt(profit, 6) + ' USDC',
-      contractBalanceAfter: fmt(vaultAfter, 6) + ' USDC',
-      buyDex: Object.keys(routers).find(k => routers[k] === buyRouter) || buyRouter,
-      sellDex: Object.keys(routers).find(k => routers[k] === sellRouter) || sellRouter
-    };
-
-    logTransaction(txDetails);
-    log(`✅ Arbitrage done! Profit: ${fmt(profit, 6)} USDC`);
-  } catch (err) {
-    log(`⚠️ Arbitrage failed for ${symbol}: ${err.message}`);
+// -------------------- LOOP --------------------
+async function startLoop() {
+  while (true) {
+    try {
+      await scanArbitrage();
+    } catch (err) {
+      console.error("Error in arbitrage scan:", err.message);
+    }
+    await new Promise(r => setTimeout(r, 3000)); // 3-second loop
   }
-}
+}JS
 
-// -------------------------
-// EXPORTS
-// -------------------------
-export {
-  scanAndArbitrage,
-  executeTrade,
-  updateBalances
-};
-
-// -------------------------
-// Example usage
-// -------------------------
-(async () => {
-  walletAddress = "0xYourWalletAddressHere"; // set your wallet
-  await scanAndArbitrage();
-})();
+// -------------------- MAIN --------------------
+startLoop();
