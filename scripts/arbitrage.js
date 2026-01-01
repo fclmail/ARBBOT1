@@ -55,10 +55,33 @@ function computeProfit(buyAmount, sellAmount) {
   return { gross, adjusted };
 }
 
+async function getVaultBalance() {
+  try {
+    const balance = await provider.getBalance(VAULT_ADDRESS);
+    return ethers.formatUnits(balance, 6);
+  } catch {
+    return "0.000000";
+  }
+}
+
+async function getWalletMaticBalance() {
+  try {
+    const balance = await provider.getBalance(wallet.address);
+    return ethers.formatUnits(balance, 18);
+  } catch {
+    return "0.000000";
+  }
+}
+
 // -------------------- ARBITRAGE --------------------
 async function scanArbitrage() {
   console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
-
+  
+  const walletMatic = await getWalletMaticBalance();
+  const vaultBalance = await getVaultBalance();
+  console.log(`🏦 Vault USDC: ${vaultBalance}`);
+  console.log(`👛 Wallet MATIC: ${walletMatic}`);
+  
   // Define DEX pairs
   const pairs = [
     { buyRouter: quickRouter, buyDEX: "QuickSwap", sellRouter: sushiRouter, sellDEX: "SushiSwap" },
@@ -101,16 +124,20 @@ async function scanArbitrage() {
       console.log(`✅ MIN PROFIT = ${MIN_PROFIT_USDC} USDC satisfied`);
       console.log(`🚀 Executing arbitrage...`);
 
-      const vaultBalanceBefore = await provider.getBalance(VAULT_ADDRESS);
-      console.log(`💰 Vault USDC before: ${ethers.formatUnits(vaultBalanceBefore, 6)}`);
+      const vaultBalanceBefore = await getVaultBalance();
+      console.log(`💰 Vault USDC before: ${vaultBalanceBefore}`);
 
       // Execute arbitrage: For demonstration, we just simulate deposit
-      const tx = await vaultContract.depositProfit(usdcBack);
-      console.log(`📤 Tx hash: ${tx.hash}`);
-      await tx.wait();
+      try {
+        const tx = await vaultContract.depositProfit(usdcBack);
+        console.log(`📤 Tx hash: ${tx.hash}`);
+        await tx.wait();
+        const vaultBalanceAfter = await getVaultBalance();
+        console.log(`💰 Vault USDC after: ${vaultBalanceAfter}`);
+      } catch (err) {
+        console.error("⚠️ Arbitrage execution failed:", err);
+      }
 
-      const vaultBalanceAfter = await provider.getBalance(VAULT_ADDRESS);
-      console.log(`💰 Vault USDC after: ${ethers.formatUnits(vaultBalanceAfter, 6)}`);
     } else {
       console.log(`❌ Below minimum profit – not executing`);
     }
@@ -119,11 +146,17 @@ async function scanArbitrage() {
   if (!anyOpportunity) console.log(`⚠️ No executable arbitrage this cycle`);
 }
 
-// -------------------- MAIN --------------------
-(async () => {
-  try {
-    await scanArbitrage();
-  } catch (err) {
-    console.error("Error in arbitrage scan:", err);
+// -------------------- LOOP --------------------
+async function startLoop() {
+  while (true) {
+    try {
+      await scanArbitrage();
+    } catch (err) {
+      console.error("Error in arbitrage scan:", err);
+    }
+    await new Promise(r => setTimeout(r, 3000)); // 3 seconds
   }
-})();
+}
+
+// -------------------- MAIN --------------------
+startLoop();
