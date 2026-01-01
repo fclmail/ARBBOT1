@@ -1,103 +1,118 @@
 // scripts/arbitrage.js
-// ---------------------------------------------------------
-// POLYGON ARBITRAGE BOT
-// Full Ethers v6 version with signer fixes & 0.01 USDC trade
+// ============================================================
+// Polygon Arbitrage Bot
+// Uses ArbVault.sol contract to enforce minimum profit
+// Handles Sushi/Quick/Uniswap style routers
+// Fixes ENOENT, vault balance, and execution revert issues
+// ============================================================
 
 import { ethers } from "ethers";
-import fs from "fs";
-import dotenv from "dotenv";
-dotenv.config();
 
-// ----------------------------
-// CONFIG / ENV
-// ----------------------------
-const POLYGON_RPC = process.env.POLYGON_RPC;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
+// ---------------------- CONFIG -----------------------------
+const RPC_URL = "https://polygon-rpc.com"; // Polygon Mainnet RPC
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY; // bot wallet key
+const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; // deployed ArbVault
+const VAULT_MIN_PROFIT_USDC = 10000; // 0.01 USDC with 6 decimals
+const TRADE_AMOUNT_USDC = 10000; // 0.01 USDC (6 decimals)
+const DEADLINE_OFFSET = 60; // seconds
 
-// Vault contract
-const VAULT_ADDRESS = process.env.VAULT_ADDRESS;
-const VAULT_ABI = JSON.parse(fs.readFileSync("./abis/ArbVault.json"));
+// ---------------------- INLINE ABIs ------------------------
 
-// Routers
-const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // QuickSwap
-const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"; // SushiSwap
-const ROUTER_ABI = JSON.parse(fs.readFileSync("./abis/IUniswapV2Router.json"));
-
-// Token addresses
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
-const TOKEN_ADDRESS = process.env.TOKEN_ADDRESS; // Token to arbitrage
-
-// ----------------------------
-// INIT PROVIDER & SIGNER
-// ----------------------------
-const provider = new ethers.JsonRpcProvider(POLYGON_RPC);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-// ----------------------------
-// CONNECT CONTRACTS WITH SIGNER
-// ----------------------------
-const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
-const quickRouter = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, wallet);
-const sushiRouter = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, wallet);
-
-// ----------------------------
-// TRADE PARAMETERS
-// ----------------------------
-const TRADE_AMOUNT_USDC = ethers.parseUnits("0.01", 6); // 0.01 USDC
-const MIN_PROFIT_USDC = ethers.parseUnits("0.0005", 6); // 0.0005 USDC for testing
-
-// ----------------------------
-// DEX PATHS
-// ----------------------------
-const dexPairs = [
-  { buy: quickRouter, sell: sushiRouter, name: "Quick ➜ Sushi" },
-  { buy: sushiRouter, sell: quickRouter, name: "Sushi ➜ Quick" }
+// Minimal ArbVault ABI (core functions)
+const VAULT_ABI = [
+  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountInUSDC,uint256 minReturnUSDC) external",
+  "function USDC() view returns (address)"
 ];
 
-// ----------------------------
-// UTILITY FUNCTIONS
-// ----------------------------
-async function getVaultBalance() {
-  return await vault.USDC().then(token => token.balanceOf(vault.target));
+// Minimal UniswapV2 Router ABI
+const ROUTER_ABI = [
+  "function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] calldata path,address to,uint256 deadline) external returns (uint256[] memory amounts)",
+  "function getAmountsOut(uint256 amountIn,address[] calldata path) view returns (uint256[] memory amounts)"
+];
+
+// ERC20 ABI (minimal)
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function approve(address spender,uint256 value) returns (bool)"
+];
+
+// ---------------------- PROVIDER & WALLET -----------------
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
+// Vault contract instance
+const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
+
+// ---------------------- UTILITY FUNCTIONS -----------------
+async function getUSDCBalance() {
+  const usdcAddress = await vault.USDC();
+  const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
+  const bal = await usdc.balanceOf(VAULT_ADDRESS);
+  return bal;
 }
 
-// ----------------------------
-// MAIN LOOP
-// ----------------------------
-async function runArb() {
-  console.log("⏱ Polygon Arb Bot Started");
+function usdc(amount) {
+  // helper to convert decimals if needed
+  return ethers.parseUnits(amount.toString(), 6);
+}
 
-  const vaultBal = await getVaultBalance();
-  console.log("🏦 Vault USDC:", ethers.formatUnits(vaultBal, 6));
+// ---------------------- ARBITRAGE EXECUTION --------------
+async function executeArb(buyRouter, sellRouter, token, amountInUSDC, minReturnUSDC) {
+  try {
+    const vaultBalance = await getUSDCBalance();
 
-  for (const dex of dexPairs) {
-    console.log(`🔍 ${dex.name}`);
+    if (vaultBalance < amountInUSDC) {
+      console.log("❌ Vault balance insufficient for trade");
+      return;
+    }
 
+    const tx = await vault.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      token,
+      amountInUSDC,
+      minReturnUSDC,
+      {
+        gasLimit: 500_000
+      }
+    );
+    console.log(`✅ Arbitrage tx sent: ${tx.hash}`);
+    const receipt = await tx.wait();
+    console.log(`🎯 Arbitrage confirmed in block ${receipt.blockNumber}`);
+  } catch (err) {
+    console.log("⚠️ Execution failed:", err.message);
+  }
+}
+
+// ---------------------- EXAMPLE SCAN & TRADE ----------------
+async function scanAndTrade() {
+  const buyRouter = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"; // Sushi
+  const sellRouter = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // QuickSwap
+  const token = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"; // Example token
+
+  // Set trade amount to 0.01 USDC
+  const amountIn = usdc(0.01); // 0.01 USDC
+  const minReturn = usdc(0.0095); // slightly less to allow slippage
+
+  console.log("🏦 Vault USDC:", (await getUSDCBalance() / 1e6).toFixed(6));
+  console.log("🔍 Attempting arbitrage...");
+
+  await executeArb(buyRouter, sellRouter, token, amountIn, minReturn);
+}
+
+// ---------------------- MAIN LOOP -------------------------
+async function main() {
+  console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
+
+  while (true) {
     try {
-      // Execute arbitrage
-      const tx = await vault.executeArbitrage(
-        dex.buy.target,
-        dex.sell.target,
-        TOKEN_ADDRESS,
-        TRADE_AMOUNT_USDC,
-        MIN_PROFIT_USDC
-      );
-
-      const receipt = await tx.wait();
-      console.log(`✅ Executed: ${dex.name} | TxHash: ${receipt.transactionHash}`);
+      await scanAndTrade();
+      await new Promise(r => setTimeout(r, 10_000)); // 10s delay
     } catch (err) {
-      console.error(`⚠️ Execution failed: ${err.message}`);
+      console.error("Error in main loop:", err);
+      await new Promise(r => setTimeout(r, 15_000));
     }
   }
 }
 
-// ----------------------------
-// START BOT
-// ----------------------------
-(async () => {
-  try {
-    await runArb();
-  } catch (err) {
-    console.error("Fatal error:", err);
-  }
-})();
+main();
