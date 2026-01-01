@@ -21,25 +21,20 @@ const ROUTER_ABI = [
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
 const WETH = "0x172370d5cd63279efa6d502dab29171933a610af"; // 18 decimals
 
-// Hardcoded vault address
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
-const TRADE_AMOUNT_USDC = ethers.parseUnits("100", 6); // 100 USDC
-const MIN_PROFIT_USDC = 0.01; // minimum adjusted profit
+const TRADE_AMOUNT_USDC = ethers.parseUnits("100000", 6); // 100,000 USDC
+const MIN_PROFIT_USDC = 0.01;
 
 // -------------------- CONTRACTS --------------------
 const quickRouter = new ethers.Contract(QUICK_ROUTER, ROUTER_ABI, provider);
 const sushiRouter = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
 
-const VAULT_ABI = [
-  "function depositProfit(uint amount) external"
-];
+const VAULT_ABI = ["function depositProfit(uint amount) external"];
 const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 
-const ERC20_ABI = [
-  "function balanceOf(address owner) view returns (uint256)"
-];
+const ERC20_ABI = ["function balanceOf(address owner) view returns (uint256)"];
 const usdcContract = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 // -------------------- UTILS --------------------
@@ -48,45 +43,47 @@ async function getAmountsOut(router, amountIn, path) {
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts;
   } catch (err) {
-    console.error("getAmountsOut error:", err.message);
+    console.error("getAmountsOut error:", err);
     return null;
   }
 }
 
-function computeProfit(tradeAmount, buyOut, sellOut, slippagePct = 15) {
-  const buyPrice = Number(ethers.formatUnits(tradeAmount, 6)) / Number(ethers.formatUnits(buyOut, 18));
-  const sellPrice = Number(ethers.formatUnits(tradeAmount, 6)) / Number(ethers.formatUnits(sellOut, 18));
-  const grossProfit = sellPrice - buyPrice;
-  const adjustedProfit = grossProfit * (1 - slippagePct / 100);
-  const priceDiffPercent = ((sellPrice - buyPrice) / buyPrice) * 100;
-  return { buyPrice, sellPrice, grossProfit, adjustedProfit, priceDiffPercent };
+function computeProfit(buyAmount, sellAmount) {
+  // ✅ FIXED: Convert BigNumber to decimals properly
+  const buyAmountNum = Number(ethers.formatUnits(buyAmount, 6));
+  const sellAmountNum = Number(ethers.formatUnits(sellAmount, 6));
+
+  const gross = sellAmountNum - buyAmountNum;
+  const adjusted = gross * 0.85; // Assume 15% slippage/fees
+  return { gross, adjusted };
 }
 
 async function getVaultUSDCBalance() {
   try {
     const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
-    return Number(ethers.formatUnits(balance, 6));
+    return Number(ethers.formatUnits(balance, 6)).toFixed(6);
   } catch {
-    return 0;
+    return "0.000000";
   }
 }
 
 async function getWalletMaticBalance() {
   try {
     const balance = await provider.getBalance(wallet.address);
-    return Number(ethers.formatUnits(balance, 18));
+    return Number(ethers.formatUnits(balance, 18)).toFixed(6);
   } catch {
-    return 0;
+    return "0.000000";
   }
 }
 
-// -------------------- ARBITRAGE SCAN --------------------
+// -------------------- ARBITRAGE --------------------
 async function scanArbitrage() {
-  console.log(`\n⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
+  console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
+
   const walletMatic = await getWalletMaticBalance();
   const vaultBalance = await getVaultUSDCBalance();
-  console.log(`🏦 Vault USDC: ${vaultBalance.toFixed(6)}`);
-  console.log(`👛 Wallet MATIC: ${walletMatic.toFixed(6)}`);
+  console.log(`🏦 Vault USDC: ${vaultBalance}`);
+  console.log(`👛 Wallet MATIC: ${walletMatic}`);
 
   const pairs = [
     { buyRouter: quickRouter, buyDEX: "QuickSwap", sellRouter: sushiRouter, sellDEX: "SushiSwap" },
@@ -107,32 +104,42 @@ async function scanArbitrage() {
     if (!sellAmounts) continue;
     const usdcBack = sellAmounts[1];
 
-    // --- Apply HTML-like profit scan method ---
-    const { buyPrice, sellPrice, grossProfit, adjustedProfit, priceDiffPercent } =
-      computeProfit(TRADE_AMOUNT_USDC, wethOut, usdcBack);
+    // ✅ FIXED: Proper decimal conversion for prices
+    const buyAmountNum = Number(ethers.formatUnits(TRADE_AMOUNT_USDC, 6));
+    const wethOutNum = Number(ethers.formatUnits(wethOut, 18));
+    const usdcBackNum = Number(ethers.formatUnits(usdcBack, 6));
 
+    const buyPrice = buyAmountNum / wethOutNum;
+    const sellPrice = usdcBackNum / wethOutNum;
+
+    const priceDiffPercent = ((sellPrice - buyPrice) / buyPrice) * 100;
+
+    const { gross, adjusted } = computeProfit(TRADE_AMOUNT_USDC, usdcBack);
+
+    // Logs
     console.log(`🔍 ${pair.buyDEX} ➜ ${pair.sellDEX}`);
     console.log(`📈 ${pair.buyDEX} price: ${buyPrice.toFixed(6)} USDC/WETH`);
     console.log(`📉 ${pair.sellDEX} price: ${sellPrice.toFixed(6)} USDC/WETH`);
     console.log(`💵 Price-ratio diff: ${priceDiffPercent.toFixed(3)} %`);
-    console.log(`💵 Gross profit: ${grossProfit.toFixed(6)} USDC`);
-    console.log(`💵 Adjusted profit: ${adjustedProfit.toFixed(6)} USDC`);
+    console.log(`💵 Gross profit: ${gross.toFixed(6)} USDC`);
+    console.log(`💵 Adjusted profit: ${adjusted.toFixed(6)} USDC`);
 
-    if (adjustedProfit >= MIN_PROFIT_USDC) {
+    if (adjusted >= MIN_PROFIT_USDC) {
       anyOpportunity = true;
       console.log(`✅ MIN PROFIT = ${MIN_PROFIT_USDC} USDC satisfied`);
       console.log(`🚀 Executing arbitrage...`);
 
-      const vaultBefore = await getVaultUSDCBalance();
-      console.log(`💰 Vault USDC before: ${vaultBefore.toFixed(6)}`);
+      const vaultBalanceBefore = await getVaultUSDCBalance();
+      console.log(`💰 Vault USDC before: ${vaultBalanceBefore}`);
+
       try {
         const tx = await vaultContract.depositProfit(usdcBack);
         console.log(`📤 Tx hash: ${tx.hash}`);
         await tx.wait();
-        const vaultAfter = await getVaultUSDCBalance();
-        console.log(`💰 Vault USDC after: ${vaultAfter.toFixed(6)}`);
+        const vaultBalanceAfter = await getVaultUSDCBalance();
+        console.log(`💰 Vault USDC after: ${vaultBalanceAfter}`);
       } catch (err) {
-        console.error("⚠️ Arbitrage execution failed:", err.message);
+        console.error("⚠️ Arbitrage execution failed:", err);
       }
     } else {
       console.log(`❌ Below minimum profit – not executing`);
@@ -148,9 +155,9 @@ async function startLoop() {
     try {
       await scanArbitrage();
     } catch (err) {
-      console.error("Error in arbitrage scan:", err.message);
+      console.error("Error in arbitrage scan:", err);
     }
-    await new Promise(r => setTimeout(r, 3000)); // 3-second loop
+    await new Promise(r => setTimeout(r, 3000));
   }
 }
 
