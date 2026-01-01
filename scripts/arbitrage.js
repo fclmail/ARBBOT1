@@ -38,6 +38,12 @@ const VAULT_ABI = [
 ];
 const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 
+// USDC contract to read ERC20 balances
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)"
+];
+const usdcContract = new ethers.Contract(USDC, ERC20_ABI, provider);
+
 // -------------------- UTILS --------------------
 async function getAmountsOut(router, amountIn, path) {
   try {
@@ -55,10 +61,10 @@ function computeProfit(buyAmount, sellAmount) {
   return { gross, adjusted };
 }
 
-async function getVaultBalance() {
+async function getVaultUSDCBalance() {
   try {
-    const balance = await provider.getBalance(VAULT_ADDRESS);
-    return ethers.formatUnits(balance, 6);
+    const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
+    return Number(ethers.formatUnits(balance, 6)).toFixed(6);
   } catch {
     return "0.000000";
   }
@@ -67,7 +73,7 @@ async function getVaultBalance() {
 async function getWalletMaticBalance() {
   try {
     const balance = await provider.getBalance(wallet.address);
-    return ethers.formatUnits(balance, 18);
+    return Number(ethers.formatUnits(balance, 18)).toFixed(6);
   } catch {
     return "0.000000";
   }
@@ -78,7 +84,7 @@ async function scanArbitrage() {
   console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
   
   const walletMatic = await getWalletMaticBalance();
-  const vaultBalance = await getVaultBalance();
+  const vaultBalance = await getVaultUSDCBalance();
   console.log(`🏦 Vault USDC: ${vaultBalance}`);
   console.log(`👛 Wallet MATIC: ${walletMatic}`);
   
@@ -124,15 +130,14 @@ async function scanArbitrage() {
       console.log(`✅ MIN PROFIT = ${MIN_PROFIT_USDC} USDC satisfied`);
       console.log(`🚀 Executing arbitrage...`);
 
-      const vaultBalanceBefore = await getVaultBalance();
+      const vaultBalanceBefore = await getVaultUSDCBalance();
       console.log(`💰 Vault USDC before: ${vaultBalanceBefore}`);
 
-      // Execute arbitrage: For demonstration, we just simulate deposit
       try {
         const tx = await vaultContract.depositProfit(usdcBack);
         console.log(`📤 Tx hash: ${tx.hash}`);
         await tx.wait();
-        const vaultBalanceAfter = await getVaultBalance();
+        const vaultBalanceAfter = await getVaultUSDCBalance();
         console.log(`💰 Vault USDC after: ${vaultBalanceAfter}`);
       } catch (err) {
         console.error("⚠️ Arbitrage execution failed:", err);
