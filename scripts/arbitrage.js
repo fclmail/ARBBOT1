@@ -38,7 +38,7 @@ const ERC20_ABI = [
 const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 // -------------------- SETTINGS --------------------
-const TRADE_AMOUNT = ethers.parseUnits("1", 6); // 100 USDC
+const TRADE_AMOUNT = ethers.parseUnits("1000", 6); // Default scan amount
 const MIN_PROFIT_USDC = 0.0001;
 const SLIPPAGE_PCT = 1;
 
@@ -50,7 +50,12 @@ const sushi = new ethers.Contract(SUSHI_ROUTER, ROUTER_ABI, provider);
 async function getAmountsOut(router, amount, path) {
   try {
     return await router.getAmountsOut(amount, path);
-  } catch {
+  } catch (err) {
+    if (err.message.includes("rate limit")) {
+      console.log("⚠️ Rate limit hit, retrying 200ms...");
+      await new Promise(r => setTimeout(r, 200));
+      return getAmountsOut(router, amount, path);
+    }
     return null;
   }
 }
@@ -66,7 +71,7 @@ function computeProfit(startUsdc, endUsdc) {
 
 async function vaultBalance() {
   const bal = await usdc.balanceOf(VAULT_ADDRESS);
-  return Number(ethers.formatUnits(bal, 6));
+  return bal;
 }
 
 async function walletMatic() {
@@ -87,8 +92,20 @@ const PATHS = [
 // -------------------- SCAN --------------------
 async function scan() {
   console.log(`\n⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
-  console.log(`🏦 Vault USDC: ${(await vaultBalance()).toFixed(6)}`);
+
+  const vaultBalRaw = await vaultBalance();
+  const vaultBal = Number(ethers.formatUnits(vaultBalRaw, 6));
+  console.log(`🏦 Vault USDC: ${vaultBal.toFixed(6)}`);
   console.log(`👛 Wallet MATIC: ${(await walletMatic()).toFixed(6)}`);
+
+  if (vaultBalRaw.lte(0)) {
+    console.log("⚠️ Vault empty, skipping scan");
+    return;
+  }
+
+  // Use vault-limited trade amount
+  let tradeAmount = TRADE_AMOUNT;
+  if (vaultBalRaw.lt(tradeAmount)) tradeAmount = vaultBalRaw;
 
   const dexPairs = [
     { buy: quick, sell: sushi, name: "Quick ➜ Sushi" },
@@ -99,18 +116,23 @@ async function scan() {
 
   for (const dex of dexPairs) {
     for (const path of PATHS) {
-
-      const buy = await getAmountsOut(dex.buy, TRADE_AMOUNT, path.slice(0, -1));
+      const buy = await getAmountsOut(dex.buy, tradeAmount, path.slice(0, -1));
       if (!buy) continue;
 
       const midAmount = buy[buy.length - 1];
-      if (midAmount < ethers.parseEther("0.001")) continue;
+      if (midAmount.lte(0)) continue;
 
       const sell = await getAmountsOut(dex.sell, midAmount, path.slice().reverse());
       if (!sell) continue;
 
       const usdcBack = sell[sell.length - 1];
-      const { gross, adjusted, pct } = computeProfit(TRADE_AMOUNT, usdcBack);
+      const { gross, adjusted, pct } = computeProfit(tradeAmount, usdcBack);
+
+      // Avoid unrealistic profits
+      if (adjusted.gt(vaultBalRaw)) {
+        console.log(`⚠️ Adjusted profit ${adjusted.toFixed(6)} exceeds vault, skipping`);
+        continue;
+      }
 
       console.log(`🔍 ${dex.name}`);
       console.log(`🛣 Path: ${path.join(" → ")}`);
@@ -122,16 +144,16 @@ async function scan() {
         found = true;
         console.log(`✅ MIN PROFIT satisfied — executing`);
 
-        const before = await vaultBalance();
+        const before = Number(ethers.formatUnits(await vaultBalance(), 6));
         try {
           const tx = await vault.depositProfit(usdcBack);
           console.log(`📤 Tx: ${tx.hash}`);
           await tx.wait();
-          const after = await vaultBalance();
+          const after = Number(ethers.formatUnits(await vaultBalance(), 6));
           console.log(`💰 Vault before: ${before.toFixed(6)}`);
           console.log(`💰 Vault after : ${after.toFixed(6)}`);
         } catch (e) {
-          console.log(`⚠️ Execution failed`);
+          console.log(`⚠️ Execution failed: ${e.message}`);
         }
       } else {
         console.log(`❌ Below minimum profit`);
