@@ -5,8 +5,8 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const TRADE_AMOUNT_USDC = 0.01; // 0.01 USDC
-const MIN_RETURN_USDC = 0.0095; // allow slippage
+const TRADE_AMOUNT_USDC = 0.1; // 0.01 USDC
+const MIN_RETURN_USDC = 0.00015; // allow slippage
 const DEADLINE_OFFSET = 60; // seconds
 
 // ---------------------- INLINE ABIs ------------------------
