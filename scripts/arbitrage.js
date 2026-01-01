@@ -25,7 +25,7 @@ const WETH  = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 const QUICK_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-const VAULT = "0xYOUR_VAULT_ADDRESS_HERE"; // 👈 MUST be valid
+const VAULT = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; // 👈 MUST be valid
 
 // ---------------------------------------------------------
 // CONFIG
