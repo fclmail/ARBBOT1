@@ -25,7 +25,7 @@ const WETH = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"; // 18 decimals
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // Trade settings
-const TRADE_AMOUNT_USDC = ethers.parseUnits("1000", 6); // 1000 USDC
+const TRADE_AMOUNT_USDC = ethers.parseUnits("100000", 6); // 1000 USDC
 const MIN_PROFIT_USDC = 0.01;
 
 // -------------------- CONTRACTS --------------------
