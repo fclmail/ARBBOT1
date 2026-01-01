@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// arbitrage.js — Full ARB J's with decimal fixes applied
+// arbitrage.js — Full ARB J's with ES module syntax and decimal fixes
 
-const { ethers } = require("ethers");
-const { tokens, routers, contractAddress, provider } = require("./config"); // adjust paths
+import { ethers } from "ethers";
+import { tokens, routers, contractAddress, provider, contract } from "./config.js"; // ES module import
 
 let scanInterval = null;
 let isScanning = false;
@@ -73,21 +73,17 @@ async function scanAndArbitrage() {
                         const buyOutRaw = await getAmountOut(buyRouter, token, amountIn, false);
                         const sellOutRaw = await getAmountOut(sellRouter, token, amountIn, false);
 
-                        // Format amounts correctly according to token decimals
                         const tokenDecimals = meta.decimals || 18;
                         const buyOut = Number(ethers.formatUnits(buyOutRaw, tokenDecimals));
                         const sellOut = Number(ethers.formatUnits(sellOutRaw, tokenDecimals));
 
-                        // Prices (USDC per 1 token)
                         const buyPrice = tradeAmount / buyOut;
                         const sellPrice = tradeAmount / sellOut;
 
-                        // Profit calculations
                         const grossProfit = sellPrice - buyPrice;
                         const adjustedProfit = grossProfit * (1 - slippagePct / 100);
                         const profitPct = (adjustedProfit / buyPrice) * 100;
 
-                        // CallStatic verification if enabled
                         let staticProfitPct = NaN;
                         if (requireStatic) {
                             const buyOutStaticRaw = await getAmountOut(buyRouter, token, amountIn, true);
@@ -115,9 +111,6 @@ async function scanAndArbitrage() {
                         log(`💵 Adjusted profit: ${adjustedProfit.toFixed(6)} USDC`);
                         log(`${profitable ? '✅ MIN PROFIT satisfied' : '❌ Below minimum profit – not executing'}`);
 
-                        // -------------------------
-                        // EXECUTE TRADE IF PROFITABLE
-                        // -------------------------
                         if (canAutoTrade && process.env.AUTO_TRADE === "true") {
                             await executeTrade(buyRouter, sellRouter, token, amountIn, symbol, profitPct);
                         }
