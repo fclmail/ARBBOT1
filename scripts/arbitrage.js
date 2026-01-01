@@ -21,8 +21,10 @@ const ROUTER_ABI = [
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
 const WETH = "0x172370d5cd63279efa6d502dab29171933a610af"; // 18 decimals
 
+// Hardcoded vault address
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
+// Trade settings
 const TRADE_AMOUNT_USDC = ethers.parseUnits("1000", 6); // 1000 USDC
 const MIN_PROFIT_USDC = ethers.parseUnits("0.01", 6);   // 0.01 USDC
 
@@ -65,10 +67,15 @@ async function getWalletMaticBalance() {
   }
 }
 
+function formatUSDC(amount) {
+  return Number(ethers.formatUnits(amount, 6)).toFixed(6);
+}
+
+function formatETH(amount) {
+  return Number(ethers.formatUnits(amount, 18)).toFixed(6);
+}
+
 // -------------------- SIMULATION LOGIC --------------------
-/**
- * Simulate a full arbitrage path and return REAL profit
- */
 async function simulateArbitrage({
   dexBuy,
   dexSell,
@@ -78,23 +85,18 @@ async function simulateArbitrage({
   weth,
   amountInUSDC,
   minProfitUSDC,
-  safetyBps = 8500 // 85% safety margin
+  safetyBps = 8500
 }) {
   try {
-    // 1️⃣ USDC -> WETH on buy DEX
     const amountsOutBuy = await routerBuy.getAmountsOut(amountInUSDC, [usdc, weth]);
     const wethOut = amountsOutBuy[1];
     if (wethOut === 0n) return { profitable: false };
 
-    // 2️⃣ WETH -> USDC on sell DEX
     const amountsOutSell = await routerSell.getAmountsOut(wethOut, [weth, usdc]);
     const usdcOut = amountsOutSell[1];
     if (usdcOut <= amountInUSDC) return { profitable: false };
 
-    // 3️⃣ Raw profit
     const rawProfit = usdcOut - amountInUSDC;
-
-    // 4️⃣ Apply safety margin
     const adjustedProfit = (rawProfit * BigInt(safetyBps)) / 10000n;
 
     return {
@@ -114,11 +116,11 @@ async function simulateArbitrage({
 async function scanArbitrage() {
   const walletMatic = await getWalletMaticBalance();
   const vaultBalanceRaw = await getVaultUSDCBalance();
-  const vaultBalance = Number(ethers.formatUnits(vaultBalanceRaw, 6)).toFixed(6);
+  const vaultBalance = formatUSDC(vaultBalanceRaw);
 
   console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
   console.log(`🏦 Vault USDC: ${vaultBalance}`);
-  console.log(`👛 Wallet MATIC: ${Number(ethers.formatUnits(walletMatic, 18)).toFixed(6)}`);
+  console.log(`👛 Wallet MATIC: ${formatETH(walletMatic)}`);
 
   const pairs = [
     { buyRouter: quickRouter, buyDEX: "QuickSwap", sellRouter: sushiRouter, sellDEX: "SushiSwap" },
@@ -154,20 +156,20 @@ async function scanArbitrage() {
     console.log(`📈 ${pair.buyDEX} price: ${buyPrice.toFixed(6)} USDC/WETH`);
     console.log(`📉 ${pair.sellDEX} price: ${sellPrice.toFixed(6)} USDC/WETH`);
     console.log(`💵 Price-ratio diff: ${priceDiffPercent.toFixed(3)} %`);
-    console.log(`💵 Gross profit: ${Number(ethers.formatUnits(result.rawProfit, 6)).toFixed(6)} USDC`);
-    console.log(`💵 Adjusted profit: ${Number(ethers.formatUnits(result.adjustedProfit, 6)).toFixed(6)} USDC`);
-    console.log(`✅ MIN PROFIT = ${Number(ethers.formatUnits(MIN_PROFIT_USDC, 6))} USDC satisfied`);
+    console.log(`💵 Gross profit: ${formatUSDC(result.rawProfit)} USDC`);
+    console.log(`💵 Adjusted profit: ${formatUSDC(result.adjustedProfit)} USDC`);
+    console.log(`✅ MIN PROFIT = ${formatUSDC(MIN_PROFIT_USDC)} USDC satisfied`);
     console.log(`🚀 Executing arbitrage...`);
 
     const vaultBefore = await getVaultUSDCBalance();
-    console.log(`💰 Vault USDC before: ${Number(ethers.formatUnits(vaultBefore, 6)).toFixed(6)}`);
+    console.log(`💰 Vault USDC before: ${formatUSDC(vaultBefore)}`);
 
     try {
       const tx = await vaultContract.depositProfit(result.usdcOut);
       console.log(`📤 Tx hash: ${tx.hash}`);
       await tx.wait();
       const vaultAfter = await getVaultUSDCBalance();
-      console.log(`💰 Vault USDC after: ${Number(ethers.formatUnits(vaultAfter, 6)).toFixed(6)}`);
+      console.log(`💰 Vault USDC after: ${formatUSDC(vaultAfter)}`);
     } catch (err) {
       console.error("⚠️ Arbitrage execution failed:", err);
     }
@@ -184,7 +186,7 @@ async function startLoop() {
     } catch (err) {
       console.error("Error in arbitrage scan:", err);
     }
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 3000)); // 3 seconds
   }
 }
 
