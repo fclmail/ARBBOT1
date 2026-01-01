@@ -14,9 +14,9 @@ const yellow = s => `\x1b[33m${s}\x1b[0m`;
 const cyan   = s => `\x1b[36m${s}\x1b[0m`;
 
 // ================= CONFIG =================
-const DRY_RUN = true;
-const TRADE_USDC = 10000.0;
-const MIN_PROFIT_PCT = 0.0020;
+const DRY_RUN = false;
+const TRADE_USDC = 0.0050;
+const MIN_PROFIT_PCT = 0.70;
 const CHECK_DELAY_MS = 3000;
 const GAS_MULTIPLIER = 1.3;
 
