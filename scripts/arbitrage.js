@@ -12,7 +12,7 @@ const RPC_URL = "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // ✅ HARDCODED ARBITRAGE CONTRACT ADDRESS
-const CONTRACT_ADDRESS = "0xYourContractAddressHere"; // <-- PUT REAL ADDRESS
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; // <-- PUT REAL ADDRESS
 
 // BOT SETTINGS
 const DRY_RUN = true;          // true = no tx sent
