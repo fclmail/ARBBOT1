@@ -5,9 +5,16 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const TRADE_AMOUNT_USDC = 0.1; // 0.1 USDC
-const MIN_RETURN_USDC = 0.001; // 0.001 USDC minimum profit
+const TRADE_AMOUNT_USDC = 0.1; // USDC amount to trade
+const MIN_RETURN_USDC = 0.001; // minimum acceptable profit
 const DEADLINE_OFFSET = 60; // seconds
+
+// Base tokens for robust fallback paths
+const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+const WBTC_ADDRESS = "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6";
+const MATIC_ADDRESS = "0x0000000000000000000000000000000000001010"; // Polygon MATIC
+const baseTokens = [USDC_ADDRESS, WETH_ADDRESS, WBTC_ADDRESS, MATIC_ADDRESS];
 
 // ---------------------- INLINE ABIs ------------------------
 const VAULT_ABI = [
@@ -30,18 +37,15 @@ const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 
-// ---------------------- BASE TOKEN ADDRESSES ----------------
-const WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
-const WBTC_ADDRESS = "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6";
-const MATIC_ADDRESS = "0x0000000000000000000000000000000000001010"; // Native MATIC
-
-let baseTokens = []; // will populate with USDC + base tokens
-
 // ---------------------- UTILITIES ------------------------
 async function getUSDCBalance() {
   const usdcAddress = await vault.USDC();
   const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
   return await usdc.balanceOf(VAULT_ADDRESS);
+}
+
+async function getWalletMatic() {
+  return await provider.getBalance(wallet.address);
 }
 
 function usdc(amount) {
@@ -52,12 +56,11 @@ function formatUSDC(amountBigInt) {
   return (Number(amountBigInt) / 1e6).toFixed(6);
 }
 
-async function getWalletMaticBalance() {
-  const balance = await provider.getBalance(wallet.address);
-  return Number(ethers.formatEther(balance)).toFixed(6);
+function formatToken(amountBigInt, decimals = 18) {
+  return (Number(amountBigInt) / 10 ** decimals).toFixed(18);
 }
 
-// ---------------------- FALLBACK PATH LOGIC -----------------
+// ---------------------- PATH UTILITY ---------------------
 async function findBestPath(amountIn, token, routers) {
   for (let routerAddress of routers) {
     const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
@@ -67,7 +70,10 @@ async function findBestPath(amountIn, token, routers) {
 
       const paths = [
         [token, base],
-        [token, base, baseTokens[0]] // path -> USDC
+        [token, base, USDC_ADDRESS],
+        [token, WETH_ADDRESS, USDC_ADDRESS],
+        [token, WBTC_ADDRESS, USDC_ADDRESS],
+        [token, MATIC_ADDRESS, USDC_ADDRESS]
       ];
 
       for (let path of paths) {
@@ -89,44 +95,51 @@ async function findBestPath(amountIn, token, routers) {
 // ---------------------- ARBITRAGE EXECUTION --------------
 async function executeArb(buyRouter, sellRouter, token, amountInUSDC, minReturnUSDC) {
   try {
-    const vaultBefore = await getUSDCBalance();
-    if (vaultBefore < amountInUSDC) {
+    const vaultBalance = await getUSDCBalance();
+    const walletMatic = await getWalletMatic();
+
+    if (vaultBalance < amountInUSDC) {
       console.log("❌ Vault balance insufficient for trade");
       return;
     }
 
-    const routers = [buyRouter, sellRouter];
+    const buyRouterObj = new ethers.Contract(buyRouter, ROUTER_ABI, provider);
+    const sellRouterObj = new ethers.Contract(sellRouter, ROUTER_ABI, provider);
 
-    const bestBuy = await findBestPath(amountInUSDC, token, routers);
-    if (!bestBuy) {
+    // --- Estimate Buy ---
+    let buyAmounts;
+    try {
+      buyAmounts = await buyRouterObj.getAmountsOut(amountInUSDC, [USDC_ADDRESS, token]);
+    } catch {
       console.log("❌ No viable buy path found");
       return;
     }
+    const expectedToken = buyAmounts[buyAmounts.length - 1];
 
-    const bestSell = await findBestPath(bestBuy.expectedOut, token, routers);
-    if (!bestSell) {
+    // --- Estimate Sell ---
+    const sell = await findBestPath(expectedToken, token, [sellRouter]);
+    if (!sell) {
       console.log("❌ No viable sell path found");
       return;
     }
 
-    const profit = bestSell.expectedOut - amountInUSDC;
-    if (profit < minReturnUSDC) {
-      console.log(`❌ Expected profit ${formatUSDC(profit)} < minReturnUSDC ${formatUSDC(minReturnUSDC)}. Skipping.`);
+    const expectedProfit = Number(sell.expectedOut) / 1e6 - Number(amountInUSDC) / 1e6;
+
+    console.log(`🏦 Vault USDC: ${formatUSDC(vaultBalance)}`);
+    console.log("🔍 Attempting arbitrage...");
+    console.log(`💰 Expected buy: ${Number(amountInUSDC)/1e6} USDC -> ${formatToken(expectedToken)} token`);
+    console.log(`💵 Expected sell: ${formatToken(expectedToken)} token -> ${Number(sell.expectedOut)/1e6} USDC`);
+    console.log(`💸 Expected profit: ${expectedProfit.toFixed(6)} USDC`);
+    console.log(`🏦 Wallet MATIC balance: ${ethers.formatEther(walletMatic)}`);
+
+    if (expectedProfit < Number(minReturnUSDC)/1e6) {
+      console.log(`❌ Expected profit ${expectedProfit.toFixed(6)} < minReturnUSDC ${Number(minReturnUSDC)/1e6}. Skipping.`);
       return;
     }
 
-    // -------- LOG DETAILS ----------
-    console.log("🔍 Attempting arbitrage...");
-    console.log(`🏦 Vault USDC before: ${formatUSDC(vaultBefore)}`);
-    console.log(`💰 Expected buy: ${formatUSDC(amountInUSDC)} USDC -> ${bestBuy.expectedOut} token`);
-    console.log(`💵 Expected sell: ${bestBuy.expectedOut} token -> ${formatUSDC(bestSell.expectedOut)} USDC`);
-    console.log(`💸 Expected profit: ${formatUSDC(profit)} USDC`);
-    console.log(`🏦 Wallet MATIC balance: ${await getWalletMaticBalance()}`);
-
-    // -------- EXECUTE ARB ----------
     const tx = await vault.executeArbitrage(
-      bestBuy.router,
-      bestSell.router,
+      buyRouter,
+      sell.router,
       token,
       amountInUSDC,
       minReturnUSDC,
@@ -137,11 +150,9 @@ async function executeArb(buyRouter, sellRouter, token, amountInUSDC, minReturnU
     const receipt = await tx.wait();
     console.log(`🎯 Arbitrage confirmed in block ${receipt.blockNumber}`);
 
-    const vaultAfter = await getUSDCBalance();
-    console.log(`🏦 Vault USDC after: ${formatUSDC(vaultAfter)}`);
-    console.log(`💹 Profit deposited: ${formatUSDC(vaultAfter - vaultBefore)} USDC`);
-    console.log("------------------------------------------------------------");
-
+    // --- Post trade vault balance ---
+    const vaultBalanceAfter = await getUSDCBalance();
+    console.log(`🏦 Vault USDC after trade: ${formatUSDC(vaultBalanceAfter)}`);
   } catch (err) {
     console.log("⚠️ Execution failed:", err.message);
   }
@@ -153,10 +164,6 @@ async function scanAndTrade() {
   const sellRouter = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // QuickSwap
   const token = "0x172370d5cd63279efa6d502dab29171933a610af"; // Example token
 
-  // populate baseTokens dynamically
-  const usdcAddr = await vault.USDC();
-  baseTokens = [usdcAddr, WETH_ADDRESS, WBTC_ADDRESS, MATIC_ADDRESS];
-
   const amountIn = usdc(TRADE_AMOUNT_USDC);
   const minReturn = usdc(MIN_RETURN_USDC);
 
@@ -166,6 +173,7 @@ async function scanAndTrade() {
 // ---------------------- MAIN LOOP -------------------------
 async function main() {
   console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
+
   while (true) {
     try {
       await scanAndTrade();
