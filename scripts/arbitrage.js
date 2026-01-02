@@ -1,11 +1,13 @@
 // scripts/arbitrage.js
 import { ethers } from "ethers";
+import dotenv from "dotenv";
+dotenv.config();
 
 // ---------------------- CONFIG -----------------------------
 const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const TRADE_AMOUNT_USDC = 0.1; // 0.01 USDC
+const TRADE_AMOUNT_USDC = 0.1; // 0.1 USDC
 const MIN_RETURN_USDC = 0.001; // allow slippage
 const DEADLINE_OFFSET = 60; // seconds
 
@@ -22,7 +24,8 @@ const ROUTER_ABI = [
 
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
-  "function approve(address spender,uint256 value) returns (bool)"
+  "function approve(address spender,uint256 value) returns (bool)",
+  "function decimals() view returns (uint8)"
 ];
 
 // ---------------------- PROVIDER & WALLET -----------------
@@ -34,43 +37,73 @@ const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 async function getUSDCBalance() {
   const usdcAddress = await vault.USDC();
   const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
-  return await usdc.balanceOf(VAULT_ADDRESS); // returns bigint
+  return await usdc.balanceOf(VAULT_ADDRESS); // returns BigInt
 }
 
-// Convert number USDC to 6-decimal BigInt
+// Convert number USDC to 6-decimal BigNumber
 function usdc(amount) {
-  return BigInt(Math.floor(amount * 1e6));
+  return ethers.parseUnits(amount.toString(), 6);
 }
 
-// Format BigInt USDC to human-readable string
-function formatUSDC(amountBigInt) {
-  return (Number(amountBigInt) / 1e6).toFixed(6);
+// Format BigInt/BigNumber USDC to human-readable string
+function formatUSDC(amount) {
+  return (Number(ethers.formatUnits(amount, 6))).toFixed(6);
 }
 
 // ---------------------- ARBITRAGE EXECUTION --------------
 async function executeArb(buyRouter, sellRouter, token, amountInUSDC, minReturnUSDC) {
   try {
     const vaultBalance = await getUSDCBalance();
-
     if (vaultBalance < amountInUSDC) {
       console.log("❌ Vault balance insufficient for trade");
       return;
     }
 
+    // Get USDC contract
+    const usdcAddress = await vault.USDC();
+    const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
+
+    // Build buy path: USDC -> token
+    const pathBuy = [usdcAddress, token];
+    const buyRouterContract = new ethers.Contract(buyRouter, ROUTER_ABI, provider);
+    const sellRouterContract = new ethers.Contract(sellRouter, ROUTER_ABI, provider);
+
+    // Compute expected buy amount
+    const expectedBuy = await buyRouterContract.getAmountsOut(amountInUSDC, pathBuy);
+    const expectedTokenAmount = expectedBuy[1];
+    console.log(`💰 Expected buy: ${formatUSDC(amountInUSDC)} USDC -> ${ethers.formatUnits(expectedTokenAmount, 18)} token`);
+
+    // Build sell path: token -> USDC
+    const pathSell = [token, usdcAddress];
+    const expectedSell = await sellRouterContract.getAmountsOut(expectedTokenAmount, pathSell);
+    const expectedUSDCBack = expectedSell[1];
+    console.log(`💵 Expected sell: ${ethers.formatUnits(expectedTokenAmount, 18)} token -> ${formatUSDC(expectedUSDCBack)} USDC`);
+
+    // Execute arbitrage
     const tx = await vault.executeArbitrage(
       buyRouter,
       sellRouter,
       token,
       amountInUSDC,
       minReturnUSDC,
-      { gasLimit: 500_000 }
+      { gasLimit: 1_200_000 }
     );
 
     console.log(`✅ Arbitrage tx sent: ${tx.hash}`);
     const receipt = await tx.wait();
     console.log(`🎯 Arbitrage confirmed in block ${receipt.blockNumber}`);
+
+    // Fetch post-trade vault balance
+    const afterBalance = await usdc.balanceOf(VAULT_ADDRESS);
+    const profit = afterBalance - vaultBalance;
+    console.log(`📈 Vault USDC before: ${formatUSDC(vaultBalance)}, after: ${formatUSDC(afterBalance)}, profit: ${formatUSDC(profit)}`);
+
+    // Wallet MATIC balance
+    const walletBalance = await provider.getBalance(wallet.address);
+    console.log(`🟣 Wallet MATIC: ${ethers.formatEther(walletBalance)} MATIC`);
+
   } catch (err) {
-    console.log("⚠️ Execution failed:", err.message);
+    console.log("⚠️ Execution failed:", err.message || err);
   }
 }
 
