@@ -8,7 +8,7 @@ const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 const TRADE_AMOUNT_USDC = 0.1; // 0.1 USDC
-const MIN_RETURN_USDC = 0.001; // allow slippage
+const MIN_RETURN_USDC = 0.000; // allow slippage
 const DEADLINE_OFFSET = 60; // seconds
 
 // ---------------------- INLINE ABIs ------------------------
