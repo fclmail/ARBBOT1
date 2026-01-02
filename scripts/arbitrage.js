@@ -5,7 +5,7 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const TRADE_AMOUNT_USDC = 0.1; // USDC amount to trade
+const TRADE_AMOUNT_USDC = 10; // USDC amount to trade
 const MIN_RETURN_USDC = 0.001; // minimum acceptable profit
 const DEADLINE_OFFSET = 60; // seconds
 
