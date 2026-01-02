@@ -7,7 +7,7 @@ import { ethers } from "ethers";
 // ==========================
 const RPC_URL = process.env.POLYGON_RPC;            // Polygon RPC URL from secrets
 const PRIVATE_KEY = process.env.PRIVATE_KEY;        // Private key from secrets
-const CONTRACT_ADDRESS = "0xYourContractAddress";   // Hardcoded deployed contract address
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";   // Hardcoded deployed contract address
 const DRY_RUN = true;                               // Set to false to execute trades
 const SCAN_INTERVAL_MS = 5000;                      // 5 seconds between scans
 
