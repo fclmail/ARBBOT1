@@ -1,161 +1,155 @@
 // scripts/arbitrage.js
-
 import { ethers } from "ethers";
 
-// ==========================
-// CONFIGURATION
-// ==========================
-const RPC_URL = process.env.POLYGON_RPC;            // Polygon RPC URL from secrets
-const PRIVATE_KEY = process.env.PRIVATE_KEY;        // Private key from secrets
-const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";   // Hardcoded deployed contract address
-const DRY_RUN = true;                               // Set to false to execute trades
-const SCAN_INTERVAL_MS = 5000;                      // 5 seconds between scans
+/* =====================================================
+   CONFIGURATION (HARDCODED WHERE REQUESTED)
+===================================================== */
 
-// ABI for your contract (must include executeArbitrage)
+// ✅ HARDCODED POLYGON RPC (FIXES YOUR ERROR)
+const RPC_URL = "https://polygon-rpc.com";
+
+// ✅ PRIVATE KEY FROM GITHUB SECRETS
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+
+// ✅ HARDCODED ARBITRAGE CONTRACT ADDRESS
+const CONTRACT_ADDRESS = "0xYourContractAddressHere"; // <-- PUT REAL ADDRESS
+
+// BOT SETTINGS
+const DRY_RUN = true;          // true = no tx sent
+const SCAN_INTERVAL_MS = 5000; // 5 seconds
+
+/* =====================================================
+   CONTRACT ABI (MUST MATCH DEPLOYED CONTRACT)
+===================================================== */
 const CONTRACT_ABI = [
-  "function executeArbitrage(uint256 amount) public returns (bool)",
-  "function getVaultBalance(address token) public view returns (uint256)"
+  "function executeArbitrage(uint256 amount) external",
+  "function getVaultBalance(address token) external view returns (uint256)"
 ];
 
-// ==========================
-// VALIDATE ENV VARIABLES
-// ==========================
-if (!RPC_URL) {
-  console.error("❌ RPC URL not set in environment variables!");
-  process.exit(1);
-}
-
+/* =====================================================
+   VALIDATION
+===================================================== */
 if (!PRIVATE_KEY) {
-  console.error("❌ Private key not set in environment variables!");
+  console.error("❌ PRIVATE_KEY not set in secrets");
   process.exit(1);
 }
 
-// ==========================
-// INITIALIZE PROVIDER & WALLET
-// ==========================
+/* =====================================================
+   PROVIDER & WALLET
+===================================================== */
 const provider = new ethers.JsonRpcProvider(RPC_URL);
+
 let wallet;
 try {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-  console.log("✅ Wallet initialized:", wallet.address);
+  console.log("✅ Wallet loaded:", wallet.address);
 } catch (err) {
-  console.error("❌ Failed to initialize wallet:", err.message);
+  console.error("❌ Wallet init failed:", err.message);
   process.exit(1);
 }
 
-// ==========================
-// INITIALIZE CONTRACT
-// ==========================
+/* =====================================================
+   CONTRACT INIT (SAFE)
+===================================================== */
 let arbContract;
 try {
   arbContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-  if (!arbContract.executeArbitrage) {
-    throw new Error("executeArbitrage function not found in contract ABI");
+  if (typeof arbContract.executeArbitrage !== "function") {
+    throw new Error("executeArbitrage not found in ABI");
   }
 
-  console.log("✅ Arbitrage contract initialized successfully");
+  console.log("✅ Arbitrage contract initialized:", CONTRACT_ADDRESS);
 } catch (err) {
-  console.error("❌ Failed to initialize arbitrage contract:", err.message);
+  console.error("❌ Contract init failed:", err.message);
   process.exit(1);
 }
 
-// ==========================
-// HELPER FUNCTIONS
-// ==========================
+/* =====================================================
+   HELPERS
+===================================================== */
 
-// Get USDC balance from vault
+// Vault USDC balance
 async function getVaultBalance() {
   try {
-    const balance = await arbContract.getVaultBalance("USDC");
-    return parseFloat(ethers.formatUnits(balance, 6)); // USDC has 6 decimals
-  } catch (err) {
-    console.error("❌ Error fetching vault balance:", err.message);
+    const bal = await arbContract.getVaultBalance(
+      "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" // USDC Polygon
+    );
+    return Number(ethers.formatUnits(bal, 6));
+  } catch {
     return 0;
   }
 }
 
-// Get wallet MATIC balance
-async function getWalletBalance() {
-  try {
-    const balance = await provider.getBalance(wallet.address);
-    return parseFloat(ethers.formatEther(balance));
-  } catch (err) {
-    console.error("❌ Error fetching wallet balance:", err.message);
-    return 0;
-  }
+// Wallet MATIC balance
+async function getWalletMatic() {
+  const bal = await provider.getBalance(wallet.address);
+  return Number(ethers.formatEther(bal));
 }
 
-// Simulate arbitrage calculation (replace with real logic)
-function calculateArbitrage(amountUSDC) {
-  const buyTokens = 243028771375281820n; // example token amount
-  const sellUSDC = 92149n; // example return in USDC (0.092149)
-  const expectedProfit = -0.007851; // example profit
-
-  return { buyTokens, sellUSDC, expectedProfit };
+// 🔁 PLACEHOLDER ARB LOGIC (YOUR EXISTING LOGIC GOES HERE)
+function calculateArbitrage(amount) {
+  const expectedProfit = -0.007851; // matches your logs
+  return {
+    buyTokens: 243028771375281820n,
+    sellUSDC: 0.092149,
+    expectedProfit
+  };
 }
 
-// ==========================
-// ATTEMPT ARBITRAGE
-// ==========================
+/* =====================================================
+   ARBITRAGE EXECUTION
+===================================================== */
 async function attemptArbitrage() {
-  const vaultBalance = await getVaultBalance();
-  console.log(`🏦 Vault USDC: ${vaultBalance}`);
+  console.log(`🏦 Vault USDC: ${await getVaultBalance()}`);
+  console.log(`🏦 Wallet MATIC balance: ${await getWalletMatic()}`);
 
-  const walletMatic = await getWalletBalance();
-  console.log(`🏦 Wallet MATIC balance: ${walletMatic}`);
-
-  const tradeAmount = 0.1; // USDC to use
-
-  const { buyTokens, sellUSDC, expectedProfit } = calculateArbitrage(tradeAmount);
+  const amount = 0.1;
+  const { buyTokens, sellUSDC, expectedProfit } =
+    calculateArbitrage(amount);
 
   console.log("🔍 Attempting arbitrage...");
-  console.log(`💰 Expected buy: ${tradeAmount} USDC -> ${buyTokens} token`);
-  console.log(`💵 Expected sell: ${buyTokens} token -> ${sellUSDC} USDC`);
+  console.log(`💰 Expected buy: ${amount} USDC -> ${buyTokens}`);
+  console.log(`💵 Expected sell: ${buyTokens} -> ${sellUSDC} USDC`);
   console.log(`💸 Expected profit: ${expectedProfit} USDC`);
 
-  // Skip unprofitable trades
   if (expectedProfit <= 0) {
     console.log("❌ Skipping trade: not profitable");
     return;
   }
 
-  // Dry-run safety
   if (DRY_RUN) {
-    console.log("⚠️ Dry-run: transaction not executed");
+    console.log("⚠️ Dry-run: transaction not sent");
     return;
   }
 
-  // Execute trade safely
   try {
     const tx = await arbContract.executeArbitrage(
-      ethers.parseUnits(tradeAmount.toString(), 6)
+      ethers.parseUnits(amount.toString(), 6)
     );
-    console.log(`✅ Transaction submitted: ${tx.hash}`);
+    console.log("🚀 Tx sent:", tx.hash);
     await tx.wait();
-    console.log("✅ Arbitrage executed successfully");
+    console.log("✅ Arbitrage executed");
   } catch (err) {
-    console.error("❌ Transaction failed:", err.message);
+    console.error("❌ Tx failed:", err.message);
   }
 }
 
-// ==========================
-// MAIN LOOP
-// ==========================
-async function mainLoop() {
+/* =====================================================
+   MAIN LOOP
+===================================================== */
+async function main() {
   console.log("⏱ Polygon Arb Bot Started");
 
   while (true) {
     try {
       await attemptArbitrage();
     } catch (err) {
-      console.error("❌ Error in arbitrage loop:", err.message);
+      console.error("❌ Loop error:", err.message);
     }
-    await new Promise((resolve) => setTimeout(resolve, SCAN_INTERVAL_MS));
+
+    await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
   }
 }
 
-// ==========================
-// START BOT
-// ==========================
-mainLoop();
+main();
