@@ -1,18 +1,15 @@
 // scripts/arbitrage.js
 
 import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
 
 // ==========================
 // CONFIGURATION
 // ==========================
-const RPC_URL = process.env.POLYGON_RPC;        // Polygon RPC URL
-const PRIVATE_KEY = process.env.PRIVATE_KEY;    // Your wallet private key
-const CONTRACT_ADDRESS = process.env.ARB_CONTRACT_ADDRESS; // Deployed arbitrage contract
-const VAULT_ADDRESS = process.env.VAULT_ADDRESS; // Vault holding USDC
-const DRY_RUN = true;                            // Set to false to actually execute trades
-const SCAN_INTERVAL_MS = 5000;                   // 5 seconds between each scan
+const RPC_URL = "https://polygon-rpc.com";           // Polygon RPC URL
+const PRIVATE_KEY = "YOUR_PRIVATE_KEY_HERE";        // Replace with your private key
+const CONTRACT_ADDRESS = "0xYourContractAddress";   // Replace with your deployed contract address
+const DRY_RUN = true;                               // Set to false to execute trades
+const SCAN_INTERVAL_MS = 5000;                      // 5 seconds between scans
 
 // ABI for your contract (must include executeArbitrage)
 const CONTRACT_ABI = [
@@ -47,7 +44,7 @@ try {
 // Get USDC balance from vault
 async function getVaultBalance() {
   try {
-    const balance = await arbContract.getVaultBalance("USDC"); // Adjust if needed
+    const balance = await arbContract.getVaultBalance("USDC"); // Adjust token string if needed
     return parseFloat(ethers.formatUnits(balance, 6)); // USDC has 6 decimals
   } catch (err) {
     console.error("❌ Error fetching vault balance:", err.message);
@@ -66,17 +63,13 @@ async function getWalletBalance() {
   }
 }
 
-// Simulate arbitrage calculation (replace with your actual logic)
+// Simulate arbitrage calculation (replace with your real logic)
 function calculateArbitrage(amountUSDC) {
   const buyTokens = 243028771375281820n; // example
-  const sellUSDC = 92149n; // example (simulate 0.092149 USDC)
+  const sellUSDC = 92149n; // example (0.092149 USDC)
   const expectedProfit = -0.007851; // example
 
-  return {
-    buyTokens,
-    sellUSDC,
-    expectedProfit
-  };
+  return { buyTokens, sellUSDC, expectedProfit };
 }
 
 // ==========================
