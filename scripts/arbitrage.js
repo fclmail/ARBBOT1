@@ -8,9 +8,9 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-const CONTRACT_ADDRESS = "0xYourContractAddressHere";
-const VAULT_ADDRESS = "0xYourVaultAddressHere";
-const TOKEN_ADDRESS = "0xYourTokenAddressHere";
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const TOKEN_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // USDC.e
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -21,7 +21,7 @@ const SUSHISWAP_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
 const SCAN_INTERVAL_MS = 5000;
 const TRADE_AMOUNT_USDC = 0.1;
-const MIN_PROFIT_USDC = 0.001;
+const MIN_PROFIT_USDC = 0.00001;
 const DRY_RUN = true;
 
 /* =====================================================
