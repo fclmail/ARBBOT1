@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const TRADE_AMOUNT_USDC = 100; // in USDC
+const TRADE_AMOUNT_USDC = .15; // in USDC
 const MIN_RETURN_USDC = 0.001; // in USDC
 const DEADLINE_OFFSET = 60; // seconds
 const DRY_RUN = true; // Toggle dry-run mode (true = simulation, false = actual tx)
