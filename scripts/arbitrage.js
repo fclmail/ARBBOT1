@@ -9,9 +9,9 @@ const RPC_URL = "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // CONTRACTS / ADDRESSES
-const CONTRACT_ADDRESS = "0xYourContractAddressHere"; // REPLACE
-const VAULT_ADDRESS = "0xYourVaultAddressHere";       // REPLACE
-const TOKEN_ADDRESS = "0xYourTokenAddressHere";       // REPLACE
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; // REPLACE
+const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";       // REPLACE
+const TOKEN_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";       // REPLACE
 
 // USDC.e Polygon
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
