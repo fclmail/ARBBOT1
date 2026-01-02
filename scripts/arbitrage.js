@@ -1,14 +1,12 @@
 // scripts/arbitrage.js
 import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
 
 // ---------------------- CONFIG -----------------------------
 const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 const TRADE_AMOUNT_USDC = 0.1; // 0.1 USDC
-const MIN_RETURN_USDC = 0.000; // allow slippage
+const MIN_RETURN_USDC = 0.001; // allow slippage
 const DEADLINE_OFFSET = 60; // seconds
 
 // ---------------------- INLINE ABIs ------------------------
@@ -19,13 +17,12 @@ const VAULT_ABI = [
 
 const ROUTER_ABI = [
   "function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] calldata path,address to,uint256 deadline) external returns (uint256[] memory amounts)",
-  "function getAmountsOut(uint256 amountIn,address[] calldata path) view returns (uint256[] memory amounts)"
+  "function getAmountsOut(uint256 amountIn,address[] calldata path) view returns (uint[] memory amounts)"
 ];
 
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
-  "function approve(address spender,uint256 value) returns (bool)",
-  "function decimals() view returns (uint8)"
+  "function approve(address spender,uint256 value) returns (bool)"
 ];
 
 // ---------------------- PROVIDER & WALLET -----------------
@@ -37,73 +34,83 @@ const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 async function getUSDCBalance() {
   const usdcAddress = await vault.USDC();
   const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
-  return await usdc.balanceOf(VAULT_ADDRESS); // returns BigInt
+  return await usdc.balanceOf(VAULT_ADDRESS); // returns bigint
 }
 
-// Convert number USDC to 6-decimal BigNumber
+// Get wallet MATIC balance
+async function getWalletMaticBalance() {
+  const bal = await provider.getBalance(wallet.address);
+  return ethers.formatEther(bal); // human-readable
+}
+
+// Convert number USDC to 6-decimal BigInt
 function usdc(amount) {
-  return ethers.parseUnits(amount.toString(), 6);
+  return BigInt(Math.floor(amount * 1e6));
 }
 
-// Format BigInt/BigNumber USDC to human-readable string
-function formatUSDC(amount) {
-  return (Number(ethers.formatUnits(amount, 6))).toFixed(6);
+// Format BigInt USDC to human-readable string
+function formatUSDC(amountBigInt) {
+  return (Number(amountBigInt) / 1e6).toFixed(6);
+}
+
+// Get expected output from router
+async function getAmountsOut(routerAddress, amountIn, path) {
+  const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+  const amounts = await router.getAmountsOut(amountIn, path);
+  return amounts;
 }
 
 // ---------------------- ARBITRAGE EXECUTION --------------
 async function executeArb(buyRouter, sellRouter, token, amountInUSDC, minReturnUSDC) {
   try {
     const vaultBalance = await getUSDCBalance();
+
     if (vaultBalance < amountInUSDC) {
       console.log("❌ Vault balance insufficient for trade");
       return;
     }
 
-    // Get USDC contract
     const usdcAddress = await vault.USDC();
-    const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
 
-    // Build buy path: USDC -> token
+    // --- Calculate expected buy and sell ---
     const pathBuy = [usdcAddress, token];
-    const buyRouterContract = new ethers.Contract(buyRouter, ROUTER_ABI, provider);
-    const sellRouterContract = new ethers.Contract(sellRouter, ROUTER_ABI, provider);
-
-    // Compute expected buy amount
-    const expectedBuy = await buyRouterContract.getAmountsOut(amountInUSDC, pathBuy);
-    const expectedTokenAmount = expectedBuy[1];
-    console.log(`💰 Expected buy: ${formatUSDC(amountInUSDC)} USDC -> ${ethers.formatUnits(expectedTokenAmount, 18)} token`);
-
-    // Build sell path: token -> USDC
     const pathSell = [token, usdcAddress];
-    const expectedSell = await sellRouterContract.getAmountsOut(expectedTokenAmount, pathSell);
-    const expectedUSDCBack = expectedSell[1];
-    console.log(`💵 Expected sell: ${ethers.formatUnits(expectedTokenAmount, 18)} token -> ${formatUSDC(expectedUSDCBack)} USDC`);
 
-    // Execute arbitrage
+    const buyAmounts = await getAmountsOut(buyRouter, amountInUSDC, pathBuy);
+    const tokenExpected = buyAmounts[buyAmounts.length - 1];
+
+    const sellAmounts = await getAmountsOut(sellRouter, tokenExpected, pathSell);
+    const usdcBackExpected = sellAmounts[sellAmounts.length - 1];
+
+    const expectedProfit = usdcBackExpected - amountInUSDC;
+
+    console.log(`🔍 Attempting arbitrage...`);
+    console.log(`💰 Expected buy: ${formatUSDC(amountInUSDC)} USDC -> ${Number(tokenExpected).toFixed(18)} token`);
+    console.log(`💵 Expected sell: ${Number(tokenExpected).toFixed(18)} token -> ${formatUSDC(usdcBackExpected)} USDC`);
+    console.log(`💸 Expected profit: ${formatUSDC(expectedProfit)} USDC`);
+    console.log(`🏦 Wallet MATIC balance: ${await getWalletMaticBalance()}`);
+
+    // --- Skip trade if expected profit too low ---
+    if (expectedProfit < minReturnUSDC) {
+      console.log(`❌ Expected profit ${formatUSDC(expectedProfit)} < minReturnUSDC ${formatUSDC(minReturnUSDC)}. Skipping.`);
+      return;
+    }
+
+    // --- Execute arbitrage on-chain ---
     const tx = await vault.executeArbitrage(
       buyRouter,
       sellRouter,
       token,
       amountInUSDC,
       minReturnUSDC,
-      { gasLimit: 1_200_000 }
+      { gasLimit: 500_000 }
     );
 
     console.log(`✅ Arbitrage tx sent: ${tx.hash}`);
     const receipt = await tx.wait();
     console.log(`🎯 Arbitrage confirmed in block ${receipt.blockNumber}`);
-
-    // Fetch post-trade vault balance
-    const afterBalance = await usdc.balanceOf(VAULT_ADDRESS);
-    const profit = afterBalance - vaultBalance;
-    console.log(`📈 Vault USDC before: ${formatUSDC(vaultBalance)}, after: ${formatUSDC(afterBalance)}, profit: ${formatUSDC(profit)}`);
-
-    // Wallet MATIC balance
-    const walletBalance = await provider.getBalance(wallet.address);
-    console.log(`🟣 Wallet MATIC: ${ethers.formatEther(walletBalance)} MATIC`);
-
   } catch (err) {
-    console.log("⚠️ Execution failed:", err.message || err);
+    console.log("⚠️ Execution failed:", err.message);
   }
 }
 
@@ -118,7 +125,6 @@ async function scanAndTrade() {
 
   const vaultBal = await getUSDCBalance();
   console.log("🏦 Vault USDC:", formatUSDC(vaultBal));
-  console.log("🔍 Attempting arbitrage...");
 
   await executeArb(buyRouter, sellRouter, token, amountIn, minReturn);
 }
