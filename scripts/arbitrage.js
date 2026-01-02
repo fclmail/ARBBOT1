@@ -78,7 +78,7 @@ async function executeArb(buyRouter, sellRouter, token, amountInUSDC, minReturnU
 async function scanAndTrade() {
   const buyRouter = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"; // Sushi
   const sellRouter = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // QuickSwap
-  const token = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"; // Example token
+  const token = "0x172370d5cd63279efa6d502dab29171933a610af"; // Example token
 
   const amountIn = usdc(TRADE_AMOUNT_USDC);
   const minReturn = usdc(MIN_RETURN_USDC);
