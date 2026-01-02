@@ -1,3 +1,4 @@
+
 // scripts/arbitrage.js
 import { ethers } from "ethers";
 
@@ -5,16 +6,24 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-rpc.com";
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY;
 const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const TRADE_AMOUNT_USDC = 10; // USDC amount to trade
-const MIN_RETURN_USDC = 0.001; // minimum acceptable profit
+const TRADE_AMOUNT_USDC = 0.1; // in USDC
+const MIN_RETURN_USDC = 0.001; // in USDC
 const DEADLINE_OFFSET = 60; // seconds
+const DRY_RUN = true; // Toggle dry-run mode (true = simulation, false = actual tx)
 
-// Base tokens for robust fallback paths
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
-const WBTC_ADDRESS = "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6";
-const MATIC_ADDRESS = "0x0000000000000000000000000000000000001010"; // Polygon MATIC
-const baseTokens = [USDC_ADDRESS, WETH_ADDRESS, WBTC_ADDRESS, MATIC_ADDRESS];
+// ---------------------- TOKENS -----------------------------
+const TOKENS = [
+  { symbol: "USDT", address: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F" },
+  { symbol: "WETH", address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
+  { symbol: "WMATIC", address: "0x0000000000000000000000000000000000001010" },
+  { symbol: "DAI", address: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063" }
+];
+
+// Fallback DEX routers
+const ROUTERS = [
+  { name: "QuickSwap", address: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" },
+  { name: "SushiSwap", address: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506" }
+];
 
 // ---------------------- INLINE ABIs ------------------------
 const VAULT_ABI = [
@@ -41,139 +50,108 @@ const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 async function getUSDCBalance() {
   const usdcAddress = await vault.USDC();
   const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
-  return await usdc.balanceOf(VAULT_ADDRESS);
+  return await usdc.balanceOf(VAULT_ADDRESS); // returns bigint
 }
 
-async function getWalletMatic() {
+async function getWalletMATIC() {
   return await provider.getBalance(wallet.address);
 }
 
+// Convert number USDC to 6-decimal BigInt
 function usdc(amount) {
   return BigInt(Math.floor(amount * 1e6));
 }
 
+// Format BigInt USDC to human-readable string
 function formatUSDC(amountBigInt) {
   return (Number(amountBigInt) / 1e6).toFixed(6);
 }
 
-function formatToken(amountBigInt, decimals = 18) {
-  return (Number(amountBigInt) / 10 ** decimals).toFixed(18);
-}
-
-// ---------------------- PATH UTILITY ---------------------
-async function findBestPath(amountIn, token, routers) {
-  for (let routerAddress of routers) {
-    const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
-
-    for (let base of baseTokens) {
-      if (base === token) continue;
-
-      const paths = [
-        [token, base],
-        [token, base, USDC_ADDRESS],
-        [token, WETH_ADDRESS, USDC_ADDRESS],
-        [token, WBTC_ADDRESS, USDC_ADDRESS],
-        [token, MATIC_ADDRESS, USDC_ADDRESS]
-      ];
-
-      for (let path of paths) {
-        try {
-          const amounts = await router.getAmountsOut(amountIn, path);
-          const expectedOut = amounts[amounts.length - 1];
-          if (expectedOut > 0) {
-            return { router: routerAddress, path, expectedOut };
-          }
-        } catch {
-          continue;
-        }
-      }
-    }
+// ---------------------- ARB CALCULATIONS -----------------
+async function getSwapEstimate(routerAddress, path, amountIn) {
+  const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+  try {
+    const amounts = await router.getAmountsOut(amountIn, path);
+    return amounts[amounts.length - 1];
+  } catch {
+    return null;
   }
-  return null;
 }
 
 // ---------------------- ARBITRAGE EXECUTION --------------
 async function executeArb(buyRouter, sellRouter, token, amountInUSDC, minReturnUSDC) {
-  try {
-    const vaultBalance = await getUSDCBalance();
-    const walletMatic = await getWalletMatic();
+  const vaultBalance = await getUSDCBalance();
+  if (vaultBalance < amountInUSDC) {
+    console.log("❌ Vault balance insufficient for trade");
+    return;
+  }
 
-    if (vaultBalance < amountInUSDC) {
-      console.log("❌ Vault balance insufficient for trade");
-      return;
-    }
+  // Build paths
+  const usdcAddress = await vault.USDC();
+  const pathBuy = [usdcAddress, token];
+  const pathSell = [token, usdcAddress];
 
-    const buyRouterObj = new ethers.Contract(buyRouter, ROUTER_ABI, provider);
-    const sellRouterObj = new ethers.Contract(sellRouter, ROUTER_ABI, provider);
+  // Expected amounts
+  const expectedBuy = await getSwapEstimate(buyRouter, pathBuy, amountInUSDC);
+  const expectedSell = expectedBuy ? await getSwapEstimate(sellRouter, pathSell, expectedBuy) : null;
 
-    // --- Estimate Buy ---
-    let buyAmounts;
+  if (!expectedBuy || !expectedSell) {
+    console.log("❌ No viable buy/sell path found");
+    return;
+  }
+
+  const profit = Number(expectedSell - amountInUSDC) / 1e6;
+
+  // Logging
+  console.log(`💰 Expected buy: ${Number(amountInUSDC) / 1e6} USDC -> ${Number(expectedBuy) / 1e18} token`);
+  console.log(`💵 Expected sell: ${Number(expectedBuy) / 1e18} token -> ${Number(expectedSell) / 1e6} USDC`);
+  console.log(`💸 Expected profit: ${profit.toFixed(6)} USDC`);
+  const maticBalance = await getWalletMATIC();
+  console.log(`🏦 Wallet MATIC balance: ${ethers.formatEther(maticBalance)}`);
+
+  if (DRY_RUN) {
     try {
-      buyAmounts = await buyRouterObj.getAmountsOut(amountInUSDC, [USDC_ADDRESS, token]);
-    } catch {
-      console.log("❌ No viable buy path found");
-      return;
+      // Simulate transaction
+      await vault.callStatic.executeArbitrage(buyRouter, sellRouter, token, amountInUSDC, minReturnUSDC);
+      console.log("✅ Dry-run: transaction would PASS at contract level\n");
+    } catch (err) {
+      console.log("❌ Dry-run: transaction would REVERT at contract level\n");
     }
-    const expectedToken = buyAmounts[buyAmounts.length - 1];
+    return;
+  }
 
-    // --- Estimate Sell ---
-    const sell = await findBestPath(expectedToken, token, [sellRouter]);
-    if (!sell) {
-      console.log("❌ No viable sell path found");
-      return;
-    }
-
-    const expectedProfit = Number(sell.expectedOut) / 1e6 - Number(amountInUSDC) / 1e6;
-
-    console.log(`🏦 Vault USDC: ${formatUSDC(vaultBalance)}`);
-    console.log("🔍 Attempting arbitrage...");
-    console.log(`💰 Expected buy: ${Number(amountInUSDC)/1e6} USDC -> ${formatToken(expectedToken)} token`);
-    console.log(`💵 Expected sell: ${formatToken(expectedToken)} token -> ${Number(sell.expectedOut)/1e6} USDC`);
-    console.log(`💸 Expected profit: ${expectedProfit.toFixed(6)} USDC`);
-    console.log(`🏦 Wallet MATIC balance: ${ethers.formatEther(walletMatic)}`);
-
-    if (expectedProfit < Number(minReturnUSDC)/1e6) {
-      console.log(`❌ Expected profit ${expectedProfit.toFixed(6)} < minReturnUSDC ${Number(minReturnUSDC)/1e6}. Skipping.`);
-      return;
-    }
-
-    const tx = await vault.executeArbitrage(
-      buyRouter,
-      sell.router,
-      token,
-      amountInUSDC,
-      minReturnUSDC,
-      { gasLimit: 800_000 }
-    );
-
+  // Execute real transaction
+  try {
+    const tx = await vault.executeArbitrage(buyRouter, sellRouter, token, amountInUSDC, minReturnUSDC, { gasLimit: 500_000 });
     console.log(`✅ Arbitrage tx sent: ${tx.hash}`);
     const receipt = await tx.wait();
-    console.log(`🎯 Arbitrage confirmed in block ${receipt.blockNumber}`);
-
-    // --- Post trade vault balance ---
-    const vaultBalanceAfter = await getUSDCBalance();
-    console.log(`🏦 Vault USDC after trade: ${formatUSDC(vaultBalanceAfter)}`);
+    console.log(`🎯 Arbitrage confirmed in block ${receipt.blockNumber}\n`);
   } catch (err) {
-    console.log("⚠️ Execution failed:", err.message);
+    console.log("⚠️ Execution failed:", err.message, "\n");
   }
 }
 
 // ---------------------- SCAN & TRADE ----------------------
 async function scanAndTrade() {
-  const buyRouter = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"; // Sushi
-  const sellRouter = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // QuickSwap
-  const token = "0x172370d5cd63279efa6d502dab29171933a610af"; // Example token
-
   const amountIn = usdc(TRADE_AMOUNT_USDC);
   const minReturn = usdc(MIN_RETURN_USDC);
+  const vaultBal = await getUSDCBalance();
+  console.log("🏦 Vault USDC:", formatUSDC(vaultBal));
+  console.log("🔍 Attempting arbitrage...");
 
-  await executeArb(buyRouter, sellRouter, token, amountIn, minReturn);
+  for (const tokenObj of TOKENS) {
+    for (const buyRouter of ROUTERS) {
+      for (const sellRouter of ROUTERS) {
+        if (buyRouter.address === sellRouter.address) continue; // skip same router
+        await executeArb(buyRouter.address, sellRouter.address, tokenObj.address, amountIn, minReturn);
+      }
+    }
+  }
 }
 
 // ---------------------- MAIN LOOP -------------------------
 async function main() {
   console.log(`⏱ ${new Date().toISOString()} Polygon Arb Bot Started`);
-
   while (true) {
     try {
       await scanAndTrade();
