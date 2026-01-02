@@ -5,19 +5,16 @@ import { ethers } from "ethers";
    CONFIGURATION
 ===================================================== */
 
-// HARD-CODED POLYGON RPC
 const RPC_URL = "https://polygon-rpc.com";
-
-// PRIVATE KEY FROM SECRETS
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-// ARBITRAGE CONTRACT
-const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; // <-- REPLACE
+// CONTRACTS / ADDRESSES
+const CONTRACT_ADDRESS = "0xYourContractAddressHere"; // REPLACE
+const VAULT_ADDRESS = "0xYourVaultAddressHere";       // REPLACE
+const TOKEN_ADDRESS = "0xYourTokenAddressHere";       // REPLACE
 
-// VAULT & TOKENS
-const VAULT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19"; // <-- REPLACE
-const USDC_ADDRESS  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // USDC.e
-const TOKEN_ADDRESS = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"; // <-- TOKEN YOU ARB
+// USDC.e Polygon
+const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // DEX ROUTERS
 const QUICKSWAP_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
@@ -32,6 +29,7 @@ const MIN_PROFIT_USDC = 0.001;
 /* =====================================================
    ABIs
 ===================================================== */
+
 const ROUTER_ABI = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
@@ -47,6 +45,7 @@ const ARB_ABI = [
 /* =====================================================
    PROVIDER / WALLET
 ===================================================== */
+
 if (!PRIVATE_KEY) {
   console.error("❌ PRIVATE_KEY missing");
   process.exit(1);
@@ -60,6 +59,7 @@ console.log("✅ Wallet loaded:", wallet.address);
 /* =====================================================
    CONTRACTS
 ===================================================== */
+
 const arbContract = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
@@ -69,6 +69,7 @@ const sushiswap = new ethers.Contract(SUSHISWAP_ROUTER, ROUTER_ABI, provider);
 /* =====================================================
    VAULT BALANCE (FIXED)
 ===================================================== */
+
 async function getVaultBalance() {
   const bal = await usdc.balanceOf(VAULT_ADDRESS);
   return Number(ethers.formatUnits(bal, 6));
@@ -77,7 +78,8 @@ async function getVaultBalance() {
 /* =====================================================
    PRICE HELPERS
 ===================================================== */
-async function getDexQuote(router, amountIn, path) {
+
+async function getQuote(router, amountIn, path) {
   try {
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts[amounts.length - 1];
@@ -87,35 +89,37 @@ async function getDexQuote(router, amountIn, path) {
 }
 
 /* =====================================================
-   TWO-DEX ARBITRAGE LOGIC (BOTH DIRECTIONS)
+   TWO-DEX ARBITRAGE (FULL DISPLAY)
 ===================================================== */
+
 async function calculateArbitrage(amountUSDC) {
   const amountIn = ethers.parseUnits(amountUSDC.toString(), 6);
-
-  // Paths
-  const buyPath  = [USDC_ADDRESS, TOKEN_ADDRESS];
+  const buyPath = [USDC_ADDRESS, TOKEN_ADDRESS];
   const sellPath = [TOKEN_ADDRESS, USDC_ADDRESS];
 
-  // ---- BUY QUICK → SELL SUSHI ----
-  const tokenFromQuick = await getDexQuote(quickswap, amountIn, buyPath);
-  const usdcFromSushi  = tokenFromQuick
-    ? await getDexQuote(sushiswap, tokenFromQuick, sellPath)
+  // QUICK → SUSHI
+  const quickBuyTokens = await getQuote(quickswap, amountIn, buyPath);
+  const sushiSellUSDC = quickBuyTokens
+    ? await getQuote(sushiswap, quickBuyTokens, sellPath)
     : 0n;
 
-  const profitQS = Number(ethers.formatUnits(usdcFromSushi, 6)) - amountUSDC;
+  const profitQS =
+    Number(ethers.formatUnits(sushiSellUSDC, 6)) - amountUSDC;
 
-  // ---- BUY SUSHI → SELL QUICK ----
-  const tokenFromSushi = await getDexQuote(sushiswap, amountIn, buyPath);
-  const usdcFromQuick  = tokenFromSushi
-    ? await getDexQuote(quickswap, tokenFromSushi, sellPath)
+  // SUSHI → QUICK
+  const sushiBuyTokens = await getQuote(sushiswap, amountIn, buyPath);
+  const quickSellUSDC = sushiBuyTokens
+    ? await getQuote(quickswap, sushiBuyTokens, sellPath)
     : 0n;
 
-  const profitSQ = Number(ethers.formatUnits(usdcFromQuick, 6)) - amountUSDC;
+  const profitSQ =
+    Number(ethers.formatUnits(quickSellUSDC, 6)) - amountUSDC;
 
-  // Decide best direction
   if (profitQS > profitSQ && profitQS > MIN_PROFIT_USDC) {
     return {
       direction: "QUICK → SUSHI",
+      buyTokens: quickBuyTokens,
+      sellUSDC: sushiSellUSDC,
       expectedProfit: profitQS
     };
   }
@@ -123,6 +127,8 @@ async function calculateArbitrage(amountUSDC) {
   if (profitSQ > profitQS && profitSQ > MIN_PROFIT_USDC) {
     return {
       direction: "SUSHI → QUICK",
+      buyTokens: sushiBuyTokens,
+      sellUSDC: quickSellUSDC,
       expectedProfit: profitSQ
     };
   }
@@ -131,25 +137,34 @@ async function calculateArbitrage(amountUSDC) {
 }
 
 /* =====================================================
-   ARBITRAGE ATTEMPT
+   ARBITRAGE ATTEMPT (RESTORED LOGS)
 ===================================================== */
+
 async function attemptArbitrage() {
   console.log(`🏦 Vault USDC: ${await getVaultBalance()}`);
   console.log(`🏦 Wallet MATIC: ${ethers.formatEther(await provider.getBalance(wallet.address))}`);
 
-  console.log("🔍 Scanning arbitrage...");
+  console.log("🔍 Attempting arbitrage...");
+
   const arb = await calculateArbitrage(TRADE_AMOUNT_USDC);
 
   if (!arb) {
-    console.log("❌ No profitable arbitrage");
+    console.log("❌ No profitable opportunity");
     return;
   }
 
-  console.log(`✅ Opportunity found: ${arb.direction}`);
+  console.log(`📈 Direction: ${arb.direction}`);
+  console.log(`💰 Expected buy: ${TRADE_AMOUNT_USDC} USDC -> ${arb.buyTokens}`);
+  console.log(
+    `💵 Expected sell: ${arb.buyTokens} -> ${ethers.formatUnits(
+      arb.sellUSDC,
+      6
+    )} USDC`
+  );
   console.log(`💸 Expected profit: ${arb.expectedProfit} USDC`);
 
   if (DRY_RUN) {
-    console.log("⚠️ Dry-run: trade not executed");
+    console.log("⚠️ Dry-run: transaction not executed");
     return;
   }
 
@@ -168,6 +183,7 @@ async function attemptArbitrage() {
 /* =====================================================
    MAIN LOOP
 ===================================================== */
+
 async function main() {
   console.log("⏱ Polygon Arb Bot Started");
 
@@ -177,6 +193,7 @@ async function main() {
     } catch (err) {
       console.error("❌ Loop error:", err.message);
     }
+
     await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
   }
 }
