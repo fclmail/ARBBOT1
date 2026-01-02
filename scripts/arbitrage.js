@@ -5,9 +5,9 @@ import { ethers } from "ethers";
 // ==========================
 // CONFIGURATION
 // ==========================
-const RPC_URL = "https://polygon-rpc.com";           // Polygon RPC URL
-const PRIVATE_KEY = "YOUR_PRIVATE_KEY_HERE";        // Replace with your private key
-const CONTRACT_ADDRESS = "0xYourContractAddress";   // Replace with your deployed contract address
+const RPC_URL = process.env.POLYGON_RPC;            // Polygon RPC URL from secrets
+const PRIVATE_KEY = process.env.PRIVATE_KEY;        // Private key from secrets
+const CONTRACT_ADDRESS = "0xYourContractAddress";   // Hardcoded deployed contract address
 const DRY_RUN = true;                               // Set to false to execute trades
 const SCAN_INTERVAL_MS = 5000;                      // 5 seconds between scans
 
@@ -18,11 +18,34 @@ const CONTRACT_ABI = [
 ];
 
 // ==========================
-// INITIALIZE PROVIDER & CONTRACT
+// VALIDATE ENV VARIABLES
+// ==========================
+if (!RPC_URL) {
+  console.error("❌ RPC URL not set in environment variables!");
+  process.exit(1);
+}
+
+if (!PRIVATE_KEY) {
+  console.error("❌ Private key not set in environment variables!");
+  process.exit(1);
+}
+
+// ==========================
+// INITIALIZE PROVIDER & WALLET
 // ==========================
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+let wallet;
+try {
+  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+  console.log("✅ Wallet initialized:", wallet.address);
+} catch (err) {
+  console.error("❌ Failed to initialize wallet:", err.message);
+  process.exit(1);
+}
 
+// ==========================
+// INITIALIZE CONTRACT
+// ==========================
 let arbContract;
 try {
   arbContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
@@ -44,7 +67,7 @@ try {
 // Get USDC balance from vault
 async function getVaultBalance() {
   try {
-    const balance = await arbContract.getVaultBalance("USDC"); // Adjust token string if needed
+    const balance = await arbContract.getVaultBalance("USDC");
     return parseFloat(ethers.formatUnits(balance, 6)); // USDC has 6 decimals
   } catch (err) {
     console.error("❌ Error fetching vault balance:", err.message);
@@ -63,17 +86,17 @@ async function getWalletBalance() {
   }
 }
 
-// Simulate arbitrage calculation (replace with your real logic)
+// Simulate arbitrage calculation (replace with real logic)
 function calculateArbitrage(amountUSDC) {
-  const buyTokens = 243028771375281820n; // example
-  const sellUSDC = 92149n; // example (0.092149 USDC)
-  const expectedProfit = -0.007851; // example
+  const buyTokens = 243028771375281820n; // example token amount
+  const sellUSDC = 92149n; // example return in USDC (0.092149)
+  const expectedProfit = -0.007851; // example profit
 
   return { buyTokens, sellUSDC, expectedProfit };
 }
 
 // ==========================
-// ARBITRAGE ATTEMPT
+// ATTEMPT ARBITRAGE
 // ==========================
 async function attemptArbitrage() {
   const vaultBalance = await getVaultBalance();
