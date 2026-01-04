@@ -4,7 +4,7 @@ import { ethers } from "ethers";
    CONFIG
 ===================================================== */
 
-const RPC_URL = "https://polygon-rpc.com/"; // use RPC closer to pool state
+const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // CORE CONTRACT / VAULT (same address)
@@ -24,18 +24,17 @@ const APESWAP_ROUTER   = "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607";
 
 // TOKENS
 const ERC20_TOKENS = [
-  { symbol: "CRV",  address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
-  { symbol: "AAVE", address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b" },
-  { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
-  { symbol: "USDT", address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f" },
-  { symbol: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" },
-  { symbol: "WETH", address: "0x7ceB23fD6bC0adD59E62ac25578270cff1b9f619" }
+  { symbol: "AAVE", address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
+  { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
+  { symbol: "USDT", address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", decimals: 6 },
+  { symbol: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
+  { symbol: "WETH", address: "0x7ceB23fD6bC0adD59E62ac25578270cff1b9f619", decimals: 18 }
 ];
 
 // BOT SETTINGS
 const SCAN_INTERVAL_MS = 8000;
 const TRADE_AMOUNT_USDC = 0.10;
-const MIN_PROFIT_USDC = 0.000001; // matches contract minProfit
+const MIN_PROFIT_USDC = 0.000001;
 const MAX_SLIPPAGE_LOSS = 0.30;
 const DRY_RUN = false;
 
@@ -51,7 +50,7 @@ const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)"
 ];
 
-// ✅ Correct Arb Contract ABI
+// ✅ Fixed ABI — Matches deployed contract
 const ARB_ABI = [
   "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn, uint256 minOut) external"
 ];
@@ -103,12 +102,16 @@ function log(msg, green = false) {
   console.log(green ? `\x1b[32m${msg}\x1b[0m` : msg);
 }
 
+function getTokenDecimals(symbol) {
+  const token = ERC20_TOKENS.find(t => t.symbol === symbol);
+  return token ? token.decimals : 18;
+}
+
 /* =====================================================
-   PATH BUILDERS
+   PATHS
 ===================================================== */
 
 function buildBuyPaths(token) {
-  // shorter paths first
   return [
     [USDC_ADDRESS, token],
     [USDC_ADDRESS, WMATIC, token],
@@ -132,24 +135,16 @@ function buildSellPaths(token) {
    EXECUTION
 ===================================================== */
 
-async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit) {
+async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit, symbol) {
   if (DRY_RUN) {
     log("🧪 DRY RUN — skipped", true);
     return;
   }
 
+  log(`💰 EXECUTING ${symbol} PROFIT ${profit.toFixed(6)} USDC`, true);
+
   try {
-    // simulate call first (optional)
-    await arbContract.callStatic.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      token,
-      amountIn,
-      minOut
-    );
-
-    log(`💰 EXECUTING ${profit.toFixed(6)} USDC`, true);
-
+    // Execute on-chain arbitrage
     const tx = await arbContract.executeArbitrage(
       buyRouter,
       sellRouter,
@@ -163,9 +158,8 @@ async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit
 
     const vaultBal = await getVaultBalance();
     log(`🏦 VAULT ${vaultBal.toFixed(6)} USDC`, true);
-
   } catch (e) {
-    const msg = e?.reason || e?.message || "Unknown error";
+    const msg = e?.message ?? "Unknown error";
     console.error("❌ ARB EXECUTION FAILED", msg);
   }
 }
@@ -182,17 +176,20 @@ async function scanToken(token) {
       if (buyDex.name === sellDex.name) continue;
 
       for (const buyPath of buildBuyPaths(token.address)) {
-        const buyOut = await getQuote(buyDex.contract, amountIn, buyPath);
-        if (buyOut === 0n) continue;
+        const buyOutRaw = await getQuote(buyDex.contract, amountIn, buyPath);
+        if (buyOutRaw === 0n) continue;
 
         for (const sellPath of buildSellPaths(token.address)) {
-          const sellOut = await getQuote(sellDex.contract, buyOut, sellPath);
-          if (sellOut === 0n) continue;
+          const sellOutRaw = await getQuote(sellDex.contract, buyOutRaw, sellPath);
+          if (sellOutRaw === 0n) continue;
 
-          const buyPrice  = Number(ethers.formatUnits(buyOut, 6));
-          const sellPrice = Number(ethers.formatUnits(sellOut, 6));
+          const buyDecimals  = getTokenDecimals(token.symbol);
+          const sellDecimals = 6; // USDC
+          const buyPrice  = Number(ethers.formatUnits(buyOutRaw, buyDecimals));
+          const sellPrice = Number(ethers.formatUnits(sellOutRaw, sellDecimals));
           const profit    = sellPrice - TRADE_AMOUNT_USDC;
 
+          // Log with timestamp and green for profitable trades
           log(
             `[${new Date().toISOString()}]  [${token.symbol}]  BUY ${buyDex.name} @ ${buyPrice.toFixed(6)}  →  SELL ${sellDex.name} @ ${sellPrice.toFixed(6)}  |  P/L ${profit.toFixed(6)}`,
             profit > 0
@@ -204,10 +201,11 @@ async function scanToken(token) {
               sellDex.contract.address,
               token.address,
               amountIn,
-              sellOut,
-              profit
+              sellOutRaw,
+              profit,
+              token.symbol
             );
-            return; // execute first profitable opportunity
+            return; // execute one profitable trade per scan loop
           }
         }
       }
@@ -216,7 +214,7 @@ async function scanToken(token) {
 }
 
 /* =====================================================
-   MAIN LOOP (CONTINUOUS)
+   MAIN LOOP
 ===================================================== */
 
 async function main() {
