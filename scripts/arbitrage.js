@@ -35,7 +35,7 @@ const ERC20_TOKENS = [
 // BOT SETTINGS
 const SCAN_INTERVAL_MS = 8000;
 const TRADE_AMOUNT_USDC = 0.10;
-const MIN_PROFIT_USDC  = 0.001;   // MUST be >= contract minProfit
+const MIN_PROFIT_USDC  = 0.000001;   // MUST be >= contract minProfit
 const MAX_SLIPPAGE_LOSS = 0.3;
 const DRY_RUN = false;
 
