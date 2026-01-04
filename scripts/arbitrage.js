@@ -1,3 +1,4 @@
+
 import { ethers } from "ethers";
 
 /* =====================================================
@@ -8,8 +9,8 @@ const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // CORE CONTRACTS
-const CONTRACT_ADDRESS = "0xFBF3582c5fb8AE49726996105Cb1f2Aa6AbdC2E2";
-const VAULT_ADDRESS    = "0xFBF3582c5fb8AE49726996105Cb1f2Aa6AbdC2E2";
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const VAULT_ADDRESS    = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // BASE TOKENS
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -34,10 +35,10 @@ const ERC20_TOKENS = [
 
 // BOT SETTINGS (OPTIMIZED FOR GREEN LINES)
 const SCAN_INTERVAL_MS = 8000;
-const TRADE_AMOUNT_USDC = .10;        // 🔑 smaller size = more arb
-const MIN_PROFIT_USDC = 0.000001;         // realistic Polygon profit
+const TRADE_AMOUNT_USDC = .100;        // 🔑 smaller size = more arb
+const MIN_PROFIT_USDC = 0.00005;         // realistic Polygon profit
 const MAX_SLIPPAGE_LOSS = 0.3;         // skip >30% loss routes
-const DRY_RUN = falsee;
+const DRY_RUN = false;
 
 /* =====================================================
    ABIs
