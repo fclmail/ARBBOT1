@@ -33,11 +33,11 @@ const ERC20_TOKENS = [
 ];
 
 // BOT SETTINGS (OPTIMIZED FOR GREEN LINES)
-const SCAN_INTERVAL_MS = 4000;
-const TRADE_AMOUNT_USDC = 100;        // 🔑 smaller size = more arb
-const MIN_PROFIT_USDC = 0.05;         // realistic Polygon profit
+const SCAN_INTERVAL_MS = 8000;
+const TRADE_AMOUNT_USDC = .100;        // 🔑 smaller size = more arb
+const MIN_PROFIT_USDC = 0.00005;         // realistic Polygon profit
 const MAX_SLIPPAGE_LOSS = 0.3;         // skip >30% loss routes
-const DRY_RUN = true;
+const DRY_RUN = false;
 
 /* =====================================================
    ABIs
