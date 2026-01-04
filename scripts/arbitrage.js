@@ -34,7 +34,7 @@ const ERC20_TOKENS = [
 // BOT SETTINGS
 const SCAN_INTERVAL_MS = 8000;
 const TRADE_AMOUNT_USDC = 0.10;
-const MIN_PROFIT_USDC = 0.000001; // matches contract minProfit
+const MIN_PROFIT_USDC = 0.000001; // matches contract minProfit = 1
 const MAX_SLIPPAGE_LOSS = 0.30;
 const DRY_RUN = false;
 
@@ -50,7 +50,7 @@ const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)"
 ];
 
-// ✅ Contract ABI
+// ✅ Fixed ABI — Matches deployed contract
 const ARB_ABI = [
   "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn, uint256 minOut) external"
 ];
@@ -99,14 +99,16 @@ async function getQuote(router, amountIn, path) {
 }
 
 /* =====================================================
-   PATH BUILDERS
+   PATHS
 ===================================================== */
 
 function buildBuyPaths(token) {
   return [
     [USDC_ADDRESS, token],
     [USDC_ADDRESS, WMATIC, token],
-    [USDC_ADDRESS, WETH, token]
+    [USDC_ADDRESS, WETH, token],
+    [USDC_ADDRESS, WMATIC, WETH, token],
+    [USDC_ADDRESS, WETH, WMATIC, token]
   ];
 }
 
@@ -114,7 +116,9 @@ function buildSellPaths(token) {
   return [
     [token, USDC_ADDRESS],
     [token, WMATIC, USDC_ADDRESS],
-    [token, WETH, USDC_ADDRESS]
+    [token, WETH, USDC_ADDRESS],
+    [token, WMATIC, WETH, USDC_ADDRESS],
+    [token, WETH, WMATIC, USDC_ADDRESS]
   ];
 }
 
@@ -123,9 +127,7 @@ function buildSellPaths(token) {
 ===================================================== */
 
 function log(msg, green = false) {
-  console.log(
-    green ? `\x1b[32m${msg}\x1b[0m` : msg
-  );
+  console.log(green ? `\x1b[32m${msg}\x1b[0m` : msg);
 }
 
 /* =====================================================
@@ -153,8 +155,7 @@ async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit
     await tx.wait();
 
     const vaultBal = await getVaultBalance();
-    log(`🏦 VAULT ${vaultBal} USDC`, true);
-
+    log(`🏦 VAULT ${vaultBal.toFixed(6)} USDC`, true);
   } catch (e) {
     const msg = e?.message ?? "Unknown error";
     console.error("❌ ARB EXECUTION FAILED", msg);
@@ -180,17 +181,18 @@ async function scanToken(token) {
           const sellOut = await getQuote(sellDex.contract, buyOut, sellPath);
           if (sellOut === 0n) continue;
 
+          // Format to USDC decimals
           const buyPrice  = Number(ethers.formatUnits(buyOut, 6));
           const sellPrice = Number(ethers.formatUnits(sellOut, 6));
           const profit    = sellPrice - TRADE_AMOUNT_USDC;
 
-          const timestamp = new Date().toISOString();
-
+          // Log with timestamp and green for profit
           log(
-            `[${timestamp}]  [${token.symbol}]  BUY ${buyDex.name} @ ${buyPrice.toFixed(6)}  →  SELL ${sellDex.name} @ ${sellPrice.toFixed(6)}  |  P/L ${profit.toFixed(6)}`,
+            `[${new Date().toISOString()}]  [${token.symbol}]  BUY ${buyDex.name} @ ${buyPrice.toFixed(6)}  →  SELL ${sellDex.name} @ ${sellPrice.toFixed(6)}  |  P/L ${profit.toFixed(6)}`,
             profit > 0
           );
 
+          // Execute only if meets min profit
           if (profit >= MIN_PROFIT_USDC) {
             await executeArb(
               buyDex.contract.address,
@@ -200,7 +202,7 @@ async function scanToken(token) {
               sellOut,
               profit
             );
-            return; // execute first profitable arb, then continue scanning
+            return; // execute one profitable trade per scan loop
           }
         }
       }
@@ -213,20 +215,18 @@ async function scanToken(token) {
 ===================================================== */
 
 async function main() {
-  log("⏱ ARB BOT STARTED");
+  log("⏱ POLYGON ARB BOT STARTED");
 
   while (true) {
     try {
       const vaultBal = await getVaultBalance();
-      log(`🏦 Vault ${vaultBal} USDC`);
-
+      log(`🏦 VAULT ${vaultBal.toFixed(6)} USDC`);
       for (const token of ERC20_TOKENS) {
         await scanToken(token);
       }
     } catch (e) {
       console.error("❌ LOOP ERROR", e);
     }
-
     await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
   }
 }
