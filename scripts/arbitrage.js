@@ -4,7 +4,7 @@ import { ethers } from "ethers";
    CONFIG
 ===================================================== */
 
-const RPC_URL = "https://polygon-rpc.com/";
+const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // CORE CONTRACTS
