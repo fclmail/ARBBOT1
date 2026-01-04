@@ -34,7 +34,7 @@ const ERC20_TOKENS = [
 // BOT SETTINGS
 const SCAN_INTERVAL_MS = 8000;
 const TRADE_AMOUNT_USDC = 0.10;
-const MIN_PROFIT_USDC = 0.000001; // matches contract minProfit = 1
+const MIN_PROFIT_USDC = 0.000001; // matches contract minProfit
 const MAX_SLIPPAGE_LOSS = 0.30;
 const DRY_RUN = false;
 
@@ -50,7 +50,7 @@ const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)"
 ];
 
-// ✅ FIXED ABI — MATCHES DEPLOYED CONTRACT
+// ✅ Contract ABI
 const ARB_ABI = [
   "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn, uint256 minOut) external"
 ];
@@ -66,10 +66,10 @@ console.log("✅ Wallet:", wallet.address);
 
 const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-const quickswap  = new ethers.Contract(QUICKSWAP_ROUTER, ROUTER_ABI, provider);
-const sushiswap  = new ethers.Contract(SUSHISWAP_ROUTER, ROUTER_ABI, provider);
-const dfyn       = new ethers.Contract(DFYN_ROUTER, ROUTER_ABI, provider);
-const apeswap    = new ethers.Contract(APESWAP_ROUTER, ROUTER_ABI, provider);
+const quickswap   = new ethers.Contract(QUICKSWAP_ROUTER, ROUTER_ABI, provider);
+const sushiswap   = new ethers.Contract(SUSHISWAP_ROUTER, ROUTER_ABI, provider);
+const dfyn        = new ethers.Contract(DFYN_ROUTER, ROUTER_ABI, provider);
+const apeswap     = new ethers.Contract(APESWAP_ROUTER, ROUTER_ABI, provider);
 
 const arbContract = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 
@@ -99,7 +99,7 @@ async function getQuote(router, amountIn, path) {
 }
 
 /* =====================================================
-   PATHS
+   PATH BUILDERS
 ===================================================== */
 
 function buildBuyPaths(token) {
@@ -123,21 +123,22 @@ function buildSellPaths(token) {
 ===================================================== */
 
 function log(msg, green = false) {
-  const timestamp = new Date().toISOString();
-  console.log(green ? `\x1b[32m[${timestamp}] ${msg}\x1b[0m` : `[${timestamp}] ${msg}`);
+  console.log(
+    green ? `\x1b[32m${msg}\x1b[0m` : msg
+  );
 }
 
 /* =====================================================
    EXECUTION
 ===================================================== */
 
-async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit, buyPrice, sellPrice) {
+async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit) {
   if (DRY_RUN) {
-    log(`🧪 DRY RUN — skipped. BUY: ${buyPrice}, SELL: ${sellPrice}`, true);
+    log("🧪 DRY RUN — skipped", true);
     return;
   }
 
-  log(`💰 EXECUTING ${profit.toFixed(6)} USDC | BUY: ${buyPrice} → SELL: ${sellPrice}`, true);
+  log(`💰 EXECUTING ${profit.toFixed(6)} USDC`, true);
 
   try {
     const tx = await arbContract.executeArbitrage(
@@ -151,7 +152,9 @@ async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit
     log(`🚀 TX SENT ${tx.hash}`, true);
     await tx.wait();
 
-    log(`🏦 VAULT ${await getVaultBalance()} USDC`, true);
+    const vaultBal = await getVaultBalance();
+    log(`🏦 VAULT ${vaultBal} USDC`, true);
+
   } catch (e) {
     const msg = e?.message ?? "Unknown error";
     console.error("❌ ARB EXECUTION FAILED", msg);
@@ -172,16 +175,21 @@ async function scanToken(token) {
       for (const buyPath of buildBuyPaths(token.address)) {
         const buyOut = await getQuote(buyDex.contract, amountIn, buyPath);
         if (buyOut === 0n) continue;
-        const buyPrice = Number(ethers.formatUnits(buyOut, 6));
 
         for (const sellPath of buildSellPaths(token.address)) {
           const sellOut = await getQuote(sellDex.contract, buyOut, sellPath);
           if (sellOut === 0n) continue;
+
+          const buyPrice  = Number(ethers.formatUnits(buyOut, 6));
           const sellPrice = Number(ethers.formatUnits(sellOut, 6));
+          const profit    = sellPrice - TRADE_AMOUNT_USDC;
 
-          const profit = sellPrice - TRADE_AMOUNT_USDC;
+          const timestamp = new Date().toISOString();
 
-          log(`[${token.symbol}] BUY ${buyDex.name} → SELL ${sellDex.name} | P/L ${profit.toFixed(6)} | BUY: ${buyPrice} → SELL: ${sellPrice}`, profit >= MIN_PROFIT_USDC);
+          log(
+            `[${timestamp}]  [${token.symbol}]  BUY ${buyDex.name} @ ${buyPrice.toFixed(6)}  →  SELL ${sellDex.name} @ ${sellPrice.toFixed(6)}  |  P/L ${profit.toFixed(6)}`,
+            profit > 0
+          );
 
           if (profit >= MIN_PROFIT_USDC) {
             await executeArb(
@@ -190,11 +198,9 @@ async function scanToken(token) {
               token.address,
               amountIn,
               sellOut,
-              profit,
-              buyPrice,
-              sellPrice
+              profit
             );
-            return; // execute one profitable trade per scan
+            return; // execute first profitable arb, then continue scanning
           }
         }
       }
@@ -211,13 +217,16 @@ async function main() {
 
   while (true) {
     try {
-      log(`🏦 Vault ${await getVaultBalance()} USDC`);
+      const vaultBal = await getVaultBalance();
+      log(`🏦 Vault ${vaultBal} USDC`);
+
       for (const token of ERC20_TOKENS) {
         await scanToken(token);
       }
     } catch (e) {
       console.error("❌ LOOP ERROR", e);
     }
+
     await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
   }
 }
