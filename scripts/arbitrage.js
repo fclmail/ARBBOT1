@@ -4,12 +4,12 @@ import { ethers } from "ethers";
    CONFIG
 ===================================================== */
 
-const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
+const RPC_URL = "https://polygon-rpc.com/";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-// CORE CONTRACT / VAULT
-const CONTRACT_ADDRESS = "0xFBF3582c5fb8AE49726996105Cb1f2Aa6AbdC2E2";
-const VAULT_ADDRESS    = "0xFBF3582c5fb8AE49726996105Cb1f2Aa6AbdC2E2";
+// CORE CONTRACTS
+const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const VAULT_ADDRESS    = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 
 // BASE TOKENS
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -24,6 +24,7 @@ const APESWAP_ROUTER   = "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607";
 
 // TOKENS
 const ERC20_TOKENS = [
+  { symbol: "CRV",  address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
   { symbol: "AAVE", address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b" },
   { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
   { symbol: "USDT", address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f" },
@@ -33,8 +34,9 @@ const ERC20_TOKENS = [
 
 // BOT SETTINGS
 const SCAN_INTERVAL_MS = 8000;
-const TRADE_AMOUNT_USDC = 0.10;
-const MIN_PROFIT_USDC = 0.000001; // matches contract minProfit
+const TRADE_AMOUNT_USDC = 0.100;   // 🔑 small size for testing/profits
+const MIN_PROFIT_USDC = 0.00005;   // minimum profit in USDC (6 decimals)
+const MAX_SLIPPAGE_LOSS = 0.3;     // skip >30% loss routes
 const DRY_RUN = false;
 
 /* =====================================================
@@ -50,17 +52,22 @@ const ERC20_ABI = [
 ];
 
 const ARB_ABI = [
-  "function executeArbitrage(address buyRouter, address sellRouter, address token, uint256 amountIn, uint256 minOut) external"
+  "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountInUSDC,uint256 minReturnUSDC) external"
 ];
 
 /* =====================================================
    SETUP
 ===================================================== */
 
+if (!PRIVATE_KEY) {
+  console.error("❌ PRIVATE_KEY missing");
+  process.exit(1);
+}
+
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-console.log("✅ Wallet:", wallet.address);
+console.log("✅ Wallet loaded:", wallet.address);
 
 const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
@@ -74,8 +81,8 @@ const arbContract = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 const DEXES = [
   { name: "QuickSwap", contract: quickswap },
   { name: "SushiSwap", contract: sushiswap },
-  { name: "Dfyn", contract: dfyn },
-  { name: "ApeSwap", contract: apeswap }
+  { name: "Dfyn",      contract: dfyn },
+  { name: "ApeSwap",   contract: apeswap }
 ];
 
 /* =====================================================
@@ -94,10 +101,6 @@ async function getQuote(router, amountIn, path) {
   } catch {
     return 0n;
   }
-}
-
-function log(msg, green = false) {
-  console.log(green ? `\x1b[32m${msg}\x1b[0m` : msg);
 }
 
 /* =====================================================
@@ -125,100 +128,117 @@ function buildSellPaths(token) {
 }
 
 /* =====================================================
-   EXECUTION
+   LOGGING
 ===================================================== */
 
-async function executeArb(buyRouter, sellRouter, token, amountIn, minOut, profit) {
-  if (DRY_RUN) {
-    log("🧪 DRY RUN — skipped", true);
-    return;
-  }
-
-  log(`💰 EXECUTING ARBITRAGE ${profit.toFixed(5)} USDC`, true);
-
-  try {
-    const tx = await arbContract.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      token,
-      amountIn,
-      minOut
-    );
-
-    log(`🚀 TX SENT: ${tx.hash}`, true);
-    await tx.wait();
-
-    const vaultBal = await getVaultBalance();
-    log(`🏦 VAULT UPDATED: ${vaultBal.toFixed(5)} USDC`, true);
-
-  } catch (e) {
-    const msg = e?.reason || e?.message || "Unknown error";
-    console.error("❌ ARB EXECUTION FAILED", msg);
-  }
+function log(line, green = false) {
+  process.stdout.write(
+    green ? `\x1b[32m${line}\x1b[0m\n` : `${line}\n`
+  );
 }
 
 /* =====================================================
-   SCANNER
+   EXECUTION
+===================================================== */
+
+async function executeArb(token, profit, buyDex, sellDex) {
+  log(`💰 ARBITRAGE FOUND ${token.symbol}`, true);
+
+  if (DRY_RUN) {
+    log("🧪 DRY RUN – tx not sent", true);
+    return;
+  }
+
+  const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+  const minReturn = ethers.parseUnits((TRADE_AMOUNT_USDC + profit).toString(), 6);
+
+  const tx = await arbContract.executeArbitrage(
+    buyDex.contract.address,
+    sellDex.contract.address,
+    token.address,
+    amountIn,
+    minReturn
+  );
+
+  log(`🚀 TX SENT ${tx.hash}`, true);
+  await tx.wait();
+
+  const newBal = await getVaultBalance();
+
+  log(`✅ ARBITRAGE COMPLETED`, true);
+  log(`🏦 NEW VAULT BALANCE ${newBal.toFixed(6)}`, true);
+}
+
+/* =====================================================
+   PARALLEL SCANNER
 ===================================================== */
 
 async function scanToken(token) {
   const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+  const buyPaths = buildBuyPaths(token.address);
+  const sellPaths = buildSellPaths(token.address);
+
+  const tasks = [];
 
   for (const buyDex of DEXES) {
     for (const sellDex of DEXES) {
       if (buyDex.name === sellDex.name) continue;
 
-      for (const buyPath of buildBuyPaths(token.address)) {
-        const buyOut = await getQuote(buyDex.contract, amountIn, buyPath);
-        if (buyOut === 0n) continue;
+      for (const buyPath of buyPaths) {
+        tasks.push((async () => {
+          const buyOut = await getQuote(buyDex.contract, amountIn, buyPath);
+          if (buyOut === 0n) return;
 
-        for (const sellPath of buildSellPaths(token.address)) {
-          const sellOut = await getQuote(sellDex.contract, buyOut, sellPath);
-          if (sellOut === 0n) continue;
+          for (const sellPath of sellPaths) {
+            const sellOut = await getQuote(sellDex.contract, buyOut, sellPath);
+            if (sellOut === 0n) continue;
 
-          const buyPrice  = Number(ethers.formatUnits(buyOut, 6));
-          const sellPrice = Number(ethers.formatUnits(sellOut, 6));
-          const profit    = sellPrice - TRADE_AMOUNT_USDC;
+            const sellUSDC = Number(ethers.formatUnits(sellOut, 6));
+            if (sellUSDC < TRADE_AMOUNT_USDC * (1 - MAX_SLIPPAGE_LOSS)) return;
 
-          // Timestamped, friendly log with profit highlighting
-          log(
-            `[${new Date().toISOString()}]  [${token.symbol}]  BUY ${buyDex.name} @ ${buyPrice.toFixed(5)}  →  SELL ${sellDex.name} @ ${sellPrice.toFixed(5)}  |  P/L ${profit.toFixed(5)}`,
-            profit > 0
-          );
+            const profit = sellUSDC - TRADE_AMOUNT_USDC;
 
-          if (profit >= MIN_PROFIT_USDC) {
-            await executeArb(
-              buyDex.contract.address,
-              sellDex.contract.address,
-              token.address,
-              amountIn,
-              sellOut,
-              profit
-            );
-            return; // execute one profitable trade per scan
+            const line =
+              `[${new Date().toISOString()}] ${token.symbol} ` +
+              `BUY ${buyDex.name} ${TRADE_AMOUNT_USDC.toFixed(5)} → ` +
+              `SELL ${sellDex.name} ${sellUSDC.toFixed(5)} | ` +
+              `PROFIT ${profit.toFixed(5)} ${profit > 0 ? "✅" : "❌"}`;
+
+            log(line, profit > 0);
+
+            if (profit >= MIN_PROFIT_USDC) {
+              await executeArb(token, profit, buyDex, sellDex);
+            }
           }
-        }
+        })());
       }
     }
   }
+
+  await Promise.allSettled(tasks);
 }
 
 /* =====================================================
-   MAIN LOOP (CONTINUOUS)
+   MAIN LOOP
 ===================================================== */
 
+async function attemptArbitrage() {
+  const vaultBal = await getVaultBalance();
+  log(`🏦 Vault USDC ${vaultBal.toFixed(6)}`);
+
+  for (const token of ERC20_TOKENS) {
+    await scanToken(token);
+  }
+}
+
 async function main() {
-  log("⏱ POLYGON ARB BOT STARTED");
+  log("⏱ Polygon Arb Bot Started");
 
   while (true) {
     try {
-      const vaultBal = await getVaultBalance();
-      log(`🏦 VAULT: ${vaultBal.toFixed(5)} USDC`);
-      for (const token of ERC20_TOKENS) {
-        await scanToken(token);
-      }
+      await attemptArbitrage();
     } catch (e) {
-      console.error("❌ LOOP ERROR", e);
+      console.error("❌ Error", e);
     }
     await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
   }
