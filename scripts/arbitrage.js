@@ -33,7 +33,7 @@ const ERC20_TOKENS = [
 const SCAN_INTERVAL_MS = 8000;
 const TRADE_AMOUNT_USDC = 0.1;
 const MIN_PROFIT_USDC = 0.000001;
-const MAX_SLIPPAGE_LOSS = 0.3;
+const MAX_SLIPPAGE_LOSS = 3;
 const DRY_RUN = false;
 
 /* =====================================================
