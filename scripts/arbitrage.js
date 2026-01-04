@@ -4,7 +4,15 @@ import { ethers } from "ethers";
    CONFIG
 ===================================================== */
 
-const RPC_URL = "https://polygon-rpc.com";
+// 🔁 RPC ROTATION (NO API KEYS, INDUSTRY STANDARD)
+const RPC_PROVIDERS = [
+  "https://polygon-rpc.com/",
+  "https://rpc.ankr.com/polygon",
+  "https://polygon-bor-rpc.publicnode.com",
+  "https://1rpc.io/matic",
+  "https://poly.api.pocket.network"
+];
+
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // CORE CONTRACTS
@@ -32,11 +40,11 @@ const ERC20_TOKENS = [
   { symbol: "WETH", address: "0x7ceB23fD6bC0adD59E62ac25578270cff1b9f619" }
 ];
 
-// BOT SETTINGS (OPTIMIZED FOR GREEN LINES)
+// BOT SETTINGS
 const SCAN_INTERVAL_MS = 4000;
-const TRADE_AMOUNT_USDC = .100;        // 🔑 smaller size = more arb
-const MIN_PROFIT_USDC = 0.000005;         // realistic Polygon profit
-const MAX_SLIPPAGE_LOSS = 0.3;         // skip >30% loss routes
+const TRADE_AMOUNT_USDC = 0.100;
+const MIN_PROFIT_USDC = 0.000005;
+const MAX_SLIPPAGE_LOSS = 0.3;
 const DRY_RUN = false;
 
 /* =====================================================
@@ -64,7 +72,12 @@ if (!PRIVATE_KEY) {
   process.exit(1);
 }
 
-const provider = new ethers.JsonRpcProvider(RPC_URL);
+// 🔁 FallbackProvider (AUTO-ROTATES RPCs)
+const provider = new ethers.FallbackProvider(
+  RPC_PROVIDERS.map(url => new ethers.JsonRpcProvider(url)),
+  1 // quorum: only one RPC must succeed
+);
+
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 console.log("✅ Wallet loaded:", wallet.address);
@@ -104,7 +117,7 @@ async function getQuote(router, amountIn, path) {
 }
 
 /* =====================================================
-   PATH BUILDERS (5 FALLBACK ROUTES)
+   PATH BUILDERS
 ===================================================== */
 
 function buildBuyPaths(token) {
@@ -176,7 +189,7 @@ async function scanToken(token) {
   for (const buyDex of DEXES) {
     for (const sellDex of DEXES) {
 
-      if (buyDex.name === sellDex.name) continue; // 🔑 skip same DEX
+      if (buyDex.name === sellDex.name) continue;
 
       for (const buyPath of buyPaths) {
         tasks.push((async () => {
