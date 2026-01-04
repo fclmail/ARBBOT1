@@ -13,6 +13,12 @@ const RPC_PROVIDERS = [
   "https://poly.api.pocket.network"
 ];
 
+// 🔒 FORCE POLYGON NETWORK (FIXES chainId 1 → 137 ERROR)
+const POLYGON_NETWORK = {
+  name: "polygon",
+  chainId: 137
+};
+
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // CORE CONTRACTS
@@ -72,10 +78,12 @@ if (!PRIVATE_KEY) {
   process.exit(1);
 }
 
-// 🔁 FallbackProvider (AUTO-ROTATES RPCs)
+// 🔁 FALLBACK PROVIDER WITH LOCKED POLYGON NETWORK
 const provider = new ethers.FallbackProvider(
-  RPC_PROVIDERS.map(url => new ethers.JsonRpcProvider(url)),
-  1 // quorum: only one RPC must succeed
+  RPC_PROVIDERS.map(
+    url => new ethers.JsonRpcProvider(url, POLYGON_NETWORK)
+  ),
+  1 // quorum
 );
 
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
