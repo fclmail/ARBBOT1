@@ -34,10 +34,10 @@ const ERC20_TOKENS = [
 
 // BOT SETTINGS
 const SCAN_INTERVAL_MS = 8000;
-const TRADE_AMOUNT_USDC = 0.1;          // USDC to use per trade
+const TRADE_AMOUNT_USDC = 100;          // USDC to use per trade
 const MIN_PROFIT_USDC = 0.000003;       // safety buffer above contract min
 const MAX_SLIPPAGE_LOSS = 0.3;          // skip trades >30% slippage
-const DRY_RUN = false;
+const DRY_RUN = true;
 
 /* =====================================================
    ABIs
