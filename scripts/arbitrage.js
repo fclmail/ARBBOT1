@@ -9,12 +9,12 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // CORE CONTRACTS
 const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
-const VAULT_ADDRESS = CONTRACT_ADDRESS;
+const VAULT_ADDRESS    = CONTRACT_ADDRESS;
 
 // BASE TOKENS
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
-const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+const WMATIC       = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+const WETH         = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
 // DEX ROUTERS
 const DEXES = [
@@ -25,20 +25,21 @@ const DEXES = [
 ];
 
 // TOKENS
-const TOKENS = [
+const ERC20_TOKENS = [
+  { symbol: "CRV",  address: "0x172370d5cd63279efa6d502dab29171933a610af" },
   { symbol: "AAVE", address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b" },
-  { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" }
+  { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
+  { symbol: "USDT", address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f" },
+  { symbol: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" }
 ];
 
 // BOT SETTINGS
-const SCAN_INTERVAL_MS = 8000;
+const SCAN_INTERVAL_MS   = 8000;
 const TRADE_AMOUNT_USDC = 0.14;
-const MIN_PROFIT_USDC = 0.000005;
-const DRY_RUN = false;
-
-// GAS CONFIG
-const EST_GAS = 650_000;
-const MATIC_USDC_PRICE = 0.75;
+const MIN_PROFIT_USDC   = 0.000005;
+const EST_GAS           = 650_000;
+const MATIC_USDC_PRICE  = 0.75;
+const DRY_RUN           = false;
 
 /* =====================================================
    ABIs
@@ -61,11 +62,18 @@ const ARB_ABI = [
    SETUP
 ===================================================== */
 
+if (!PRIVATE_KEY) {
+  console.error("❌ PRIVATE_KEY missing");
+  process.exit(1);
+}
+
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
+
+console.log("✅ Wallet loaded:", wallet.address);
 
 const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-const arb = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
+const arb  = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
 
 for (const d of DEXES) {
   d.contract = new ethers.Contract(d.address, ROUTER_ABI, provider);
@@ -77,8 +85,10 @@ let EXECUTING = false;
    HELPERS
 ===================================================== */
 
-function log(msg, ok = false) {
-  console.log(ok ? `\x1b[32m${msg}\x1b[0m` : msg);
+function log(line, green = false) {
+  process.stdout.write(
+    green ? `\x1b[32m${line}\x1b[0m\n` : `${line}\n`
+  );
 }
 
 async function vaultBalance() {
@@ -87,13 +97,18 @@ async function vaultBalance() {
 
 async function quote(router, amountIn, path) {
   try {
-    return (await router.getAmountsOut(amountIn, path)).at(-1);
+    const amounts = await router.getAmountsOut(amountIn, path);
+    return amounts.at(-1);
   } catch {
     return 0n;
   }
 }
 
-function buyPaths(token) {
+/* =====================================================
+   PATH BUILDERS
+===================================================== */
+
+function buildBuyPaths(token) {
   return [
     [USDC_ADDRESS, token],
     [USDC_ADDRESS, WMATIC, token],
@@ -101,8 +116,16 @@ function buyPaths(token) {
   ];
 }
 
+function buildSellPaths(token) {
+  return [
+    [token, USDC_ADDRESS],
+    [token, WMATIC, USDC_ADDRESS],
+    [token, WETH, USDC_ADDRESS]
+  ];
+}
+
 /* =====================================================
-   EXECUTION
+   EXECUTION (SINGLE OPTIMAL ROUTE)
 ===================================================== */
 
 async function execute(best) {
@@ -110,9 +133,13 @@ async function execute(best) {
   EXECUTING = true;
 
   try {
-    const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-    const minReturn = ethers.parseUnits(best.profit.toString(), 6);
+    const amountIn  = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+    const minReturn = ethers.parseUnits(
+      (TRADE_AMOUNT_USDC + best.profit).toFixed(6),
+      6
+    );
 
+    // 🔒 simulate
     await arb.executeArbitrage.staticCall(
       best.buy.address,
       best.sell.address,
@@ -121,7 +148,10 @@ async function execute(best) {
       minReturn
     );
 
-    if (DRY_RUN) return;
+    if (DRY_RUN) {
+      log("🧪 DRY RUN – tx not sent", true);
+      return;
+    }
 
     const tx = await arb.executeArbitrage(
       best.buy.address,
@@ -135,56 +165,70 @@ async function execute(best) {
     log(`🚀 TX SENT ${tx.hash}`, true);
 
     const receipt = await tx.wait();
-
     const iface = new ethers.Interface(ARB_ABI);
-    for (const l of receipt.logs) {
+
+    for (const logItem of receipt.logs) {
       try {
-        const p = iface.parseLog(l);
-        if (p.name === "ArbitrageExecuted") {
-          log(`🎉 ARBITRAGE CONFIRMED | PROFIT ${(Number(p.args.profitUSDC)/1e6).toFixed(6)} USDC`, true);
+        const parsed = iface.parseLog(logItem);
+        if (parsed.name === "ArbitrageExecuted") {
+          const profit = Number(parsed.args.profitUSDC) / 1e6;
+          log(`🎉 ARBITRAGE CONFIRMED PROFIT ${profit.toFixed(6)} USDC`, true);
           log(`🏦 VAULT ${await vaultBalance()} USDC`, true);
         }
       } catch {}
     }
 
   } catch (e) {
-    log(`❌ EXECUTION FAILED: ${e.shortMessage || e.message}`);
+    log(`❌ EXECUTION FAILED ${e.shortMessage || e.message}`);
   } finally {
     EXECUTING = false;
   }
 }
 
 /* =====================================================
-   SCANNER
+   SCANNER (VERBOSE, USER FRIENDLY)
 ===================================================== */
 
-async function scan(token) {
+async function scanToken(token) {
   const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-  let best = null;
 
   const feeData = await provider.getFeeData();
   if (!feeData.gasPrice) return;
 
-  const gasPrice = Number(feeData.gasPrice) / 1e18;
-  const gasCost = gasPrice * EST_GAS * MATIC_USDC_PRICE;
+  const gasCost =
+    (Number(feeData.gasPrice) / 1e18) *
+    EST_GAS *
+    MATIC_USDC_PRICE;
+
+  let best = null;
 
   for (const buy of DEXES) {
     for (const sell of DEXES) {
       if (buy === sell) continue;
 
-      for (const path of buyPaths(token.address)) {
-        const buyOut = await quote(buy.contract, amountIn, path);
+      for (const buyPath of buildBuyPaths(token.address)) {
+        const buyOut = await quote(buy.contract, amountIn, buyPath);
         if (!buyOut) continue;
 
-        const sellOut = await quote(sell.contract, buyOut, [...path].reverse());
-        if (!sellOut) continue;
+        for (const sellPath of buildSellPaths(token.address)) {
+          const sellOut = await quote(sell.contract, buyOut, sellPath);
+          if (!sellOut) continue;
 
-        const sellUSDC = Number(ethers.formatUnits(sellOut, 6));
-        const profit = sellUSDC - TRADE_AMOUNT_USDC;
+          const sellUSDC = Number(ethers.formatUnits(sellOut, 6));
+          const profit   = sellUSDC - TRADE_AMOUNT_USDC;
 
-        if (profit > MIN_PROFIT_USDC + gasCost) {
-          if (!best || profit > best.profit) {
-            best = { token, buy, sell, profit };
+          const line =
+            `[${new Date().toISOString()}] ${token.symbol} ` +
+            `BUY ${buy.name} ${TRADE_AMOUNT_USDC.toFixed(5)} → ` +
+            `SELL ${sell.name} ${sellUSDC.toFixed(5)} | ` +
+            `PROFIT ${profit.toFixed(6)} ${profit > 0 ? "✅" : "❌"}`;
+
+          log(line, profit > 0);
+
+          if (profit > MIN_PROFIT_USDC + gasCost) {
+            if (!best || profit > best.profit) {
+              best = { token, buy, sell, profit };
+            }
           }
         }
       }
@@ -192,7 +236,12 @@ async function scan(token) {
   }
 
   if (best) {
-    log(`💰 ARBITRAGE FOUND ${token.symbol} PROFIT ${best.profit.toFixed(6)} USDC`, true);
+    log(
+      `💰 BEST ROUTE ${best.token.symbol} ` +
+      `${best.buy.name} → ${best.sell.name} ` +
+      `PROFIT ${best.profit.toFixed(6)} USDC`,
+      true
+    );
     await execute(best);
   }
 }
@@ -207,8 +256,8 @@ async function main() {
   while (true) {
     try {
       log(`🏦 Vault ${await vaultBalance()} USDC`);
-      for (const t of TOKENS) {
-        await scan(t);
+      for (const token of ERC20_TOKENS) {
+        await scanToken(token);
       }
     } catch (e) {
       log(`❌ ERROR ${e.message}`);
