@@ -54,7 +54,6 @@ const ERC20_ABI = [
 
 const ARB_ABI = [
   "function executeArbitrage(address,address,address,uint256,uint256) external",
-  "function minProfitUSDC() view returns (uint256)",
   "event ArbitrageExecuted(address,address,address,address,uint256,uint256,uint256,uint256)"
 ];
 
@@ -103,18 +102,17 @@ function buyPaths(token) {
 }
 
 /* =====================================================
-   EXECUTION (NO EVENTS, RECEIPT-BASED PROOF)
+   EXECUTION
 ===================================================== */
 
 async function execute(best) {
   if (EXECUTING) return;
   EXECUTING = true;
 
-  const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-  const minReturn = ethers.parseUnits(best.profit.toString(), 6);
-
   try {
-    // 🔍 Static-call preflight
+    const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+    const minReturn = ethers.parseUnits(best.profit.toString(), 6);
+
     await arb.executeArbitrage.staticCall(
       best.buy.address,
       best.sell.address,
@@ -123,10 +121,7 @@ async function execute(best) {
       minReturn
     );
 
-    if (DRY_RUN) {
-      log("🧪 DRY RUN – tx skipped", true);
-      return;
-    }
+    if (DRY_RUN) return;
 
     const tx = await arb.executeArbitrage(
       best.buy.address,
@@ -137,19 +132,16 @@ async function execute(best) {
       { gasLimit: EST_GAS }
     );
 
-    log(`🚀 TX SENT: ${tx.hash}`, true);
+    log(`🚀 TX SENT ${tx.hash}`, true);
 
     const receipt = await tx.wait();
 
-    // ✅ Receipt-based proof
     const iface = new ethers.Interface(ARB_ABI);
     for (const l of receipt.logs) {
       try {
         const p = iface.parseLog(l);
         if (p.name === "ArbitrageExecuted") {
-          const profit = Number(p.args.profitUSDC) / 1e6;
-          log(`🎉 ARBITRAGE CONFIRMED ONCHAIN`, true);
-          log(`💰 PROFIT ${profit.toFixed(6)} USDC`, true);
+          log(`🎉 ARBITRAGE CONFIRMED | PROFIT ${(Number(p.args.profitUSDC)/1e6).toFixed(6)} USDC`, true);
           log(`🏦 VAULT ${await vaultBalance()} USDC`, true);
         }
       } catch {}
@@ -163,12 +155,18 @@ async function execute(best) {
 }
 
 /* =====================================================
-   SINGLE-ROUTE OPTIMAL SCAN
+   SCANNER
 ===================================================== */
 
 async function scan(token) {
   const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
   let best = null;
+
+  const feeData = await provider.getFeeData();
+  if (!feeData.gasPrice) return;
+
+  const gasPrice = Number(feeData.gasPrice) / 1e18;
+  const gasCost = gasPrice * EST_GAS * MATIC_USDC_PRICE;
 
   for (const buy of DEXES) {
     for (const sell of DEXES) {
@@ -184,15 +182,10 @@ async function scan(token) {
         const sellUSDC = Number(ethers.formatUnits(sellOut, 6));
         const profit = sellUSDC - TRADE_AMOUNT_USDC;
 
-        if (profit <= 0) continue;
-
-        const gasPrice = Number(await provider.getGasPrice()) / 1e18;
-        const gasCost = gasPrice * EST_GAS * MATIC_USDC_PRICE;
-
-        if (profit < MIN_PROFIT_USDC + gasCost) continue;
-
-        if (!best || profit > best.profit) {
-          best = { token, buy, sell, profit };
+        if (profit > MIN_PROFIT_USDC + gasCost) {
+          if (!best || profit > best.profit) {
+            best = { token, buy, sell, profit };
+          }
         }
       }
     }
