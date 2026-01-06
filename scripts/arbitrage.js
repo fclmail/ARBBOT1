@@ -37,7 +37,7 @@ const ERC20_TOKENS = [
 const SCAN_INTERVAL_MS   = 8000;
 const TRADE_AMOUNT_USDC = 0.11;
 const MIN_PROFIT_USDC   = 0.00010;
-const EST_GAS           = 100_000;
+const SLIPPAGE_BUFFER   = 0.00005;
 const MATIC_USDC_PRICE  = 0.75;
 const DRY_RUN           = false;
 
@@ -62,15 +62,8 @@ const ARB_ABI = [
    SETUP
 ===================================================== */
 
-if (!PRIVATE_KEY) {
-  console.error("❌ PRIVATE_KEY missing");
-  process.exit(1);
-}
-
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
-
-console.log("✅ Wallet loaded:", wallet.address);
 
 const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 const arb  = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
@@ -123,7 +116,7 @@ function buildSellPaths(token) {
 }
 
 /* =====================================================
-   EXECUTION (SINGLE OPTIMAL ROUTE)
+   EXECUTION (SAFE)
 ===================================================== */
 
 async function execute(best) {
@@ -132,26 +125,29 @@ async function execute(best) {
 
   try {
     const amountIn  = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-    const minReturn = ethers.parseUnits((TRADE_AMOUNT_USDC + best.profit).toFixed(6), 6);
+    const minReturn = ethers.parseUnits(best.profit.toFixed(6), 6);
 
-    // Simulate first, but do not block execution
-    try {
-      await arb.executeArbitrage.staticCall(
-        best.buy.address,
-        best.sell.address,
-        best.token.address,
-        amountIn,
-        minReturn
-      );
-      log(`🟢 Simulation OK for ${best.token.symbol}`, true);
-    } catch (simErr) {
-      log(`⚠️ Simulation failed, forcing tx: ${simErr.reason || simErr.message}`);
-    }
+    // === SIMULATION (MANDATORY) ===
+    await arb.executeArbitrage.staticCall(
+      best.buy.address,
+      best.sell.address,
+      best.token.address,
+      amountIn,
+      minReturn
+    );
 
-    if (DRY_RUN) {
-      log("🧪 DRY RUN – tx not sent", true);
-      return;
-    }
+    log(`🟢 Simulation OK for ${best.token.symbol}`, true);
+
+    if (DRY_RUN) return;
+
+    // === GAS ESTIMATION ===
+    const gasEstimate = await arb.executeArbitrage.estimateGas(
+      best.buy.address,
+      best.sell.address,
+      best.token.address,
+      amountIn,
+      minReturn
+    );
 
     const tx = await arb.executeArbitrage(
       best.buy.address,
@@ -159,48 +155,39 @@ async function execute(best) {
       best.token.address,
       amountIn,
       minReturn,
-      { gasLimit: EST_GAS }
+      { gasLimit: gasEstimate * 120n / 100n }
     );
 
-    log(`🚀 TX SENT ${tx.hash} for ${best.token.symbol}`, true);
+    log(`🚀 TX SENT ${tx.hash}`, true);
 
     const receipt = await tx.wait();
-    const iface = new ethers.Interface(ARB_ABI);
 
-    for (const logItem of receipt.logs) {
+    const iface = new ethers.Interface(ARB_ABI);
+    for (const l of receipt.logs) {
       try {
-        const parsed = iface.parseLog(logItem);
-        if (parsed.name === "ArbitrageExecuted") {
-          const profit = Number(parsed.args.profitUSDC) / 1e6;
-          log(`🎉 ARBITRAGE CONFIRMED PROFIT ${profit.toFixed(6)} USDC`, true);
+        const p = iface.parseLog(l);
+        if (p.name === "ArbitrageExecuted") {
+          log(`🎉 PROFIT ${(Number(p.args.profitUSDC) / 1e6).toFixed(6)} USDC`, true);
         }
       } catch {}
     }
 
-    const vault = await vaultBalance();
-    log(`🏦 VAULT BALANCE: ${vault.toFixed(6)} USDC`, true);
+    await new Promise(r => setTimeout(r, 3000));
+    log(`🏦 VAULT BALANCE ${await vaultBalance()} USDC`, true);
 
   } catch (e) {
-    log(`❌ EXECUTION FAILED: ${e.reason || e.message}`);
+    log(`❌ EXECUTION SKIPPED: ${e.reason || e.message}`);
   } finally {
     EXECUTING = false;
   }
 }
 
 /* =====================================================
-   SCANNER (VERBOSE, USER FRIENDLY)
+   SCANNER
 ===================================================== */
 
 async function scanToken(token) {
   const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-
-  const feeData = await provider.getFeeData();
-  if (!feeData.gasPrice) return;
-
-  const gasCost =
-    (Number(feeData.gasPrice) / 1e18) *
-    EST_GAS *
-    MATIC_USDC_PRICE;
 
   let best = null;
 
@@ -208,31 +195,24 @@ async function scanToken(token) {
     for (const sell of DEXES) {
       if (buy === sell) continue;
 
-      for (const buyPath of buildBuyPaths(token.address)) {
-        const buyOut = await quote(buy.contract, amountIn, buyPath);
+      for (const bp of buildBuyPaths(token.address)) {
+        const buyOut = await quote(buy.contract, amountIn, bp);
         if (!buyOut) continue;
 
-        for (const sellPath of buildSellPaths(token.address)) {
-          const sellOut = await quote(sell.contract, buyOut, sellPath);
+        for (const sp of buildSellPaths(token.address)) {
+          const sellOut = await quote(sell.contract, buyOut, sp);
           if (!sellOut) continue;
 
           const sellUSDC = Number(ethers.formatUnits(sellOut, 6));
-          const profit   = sellUSDC - TRADE_AMOUNT_USDC;
+          if (sellUSDC < TRADE_AMOUNT_USDC * 0.5) continue;
 
-          const line =
-            `[${new Date().toISOString()}] ${token.symbol} ` +
-            `BUY ${buy.name} ${TRADE_AMOUNT_USDC.toFixed(5)} → ` +
-            `SELL ${sell.name} ${sellUSDC.toFixed(5)} | ` +
-            `PROFIT ${profit.toFixed(6)} ${profit > 0 ? "✅" : "❌"}`;
+          const profit = sellUSDC - TRADE_AMOUNT_USDC;
+          log(`${token.symbol} ${buy.name}→${sell.name} PROFIT ${profit.toFixed(6)}`, profit > 0);
 
-          log(line, profit > 0);
-
-          // FORCE execution for any profitable trade above MIN_PROFIT_USDC
-          if (profit > MIN_PROFIT_USDC) {
+          if (profit > MIN_PROFIT_USDC + SLIPPAGE_BUFFER) {
             if (!best || profit > best.profit) {
               best = { token, buy, sell, profit };
             }
-            log(`💡 FORCING EXECUTION: ${token.symbol} ${buy.name}→${sell.name} PROFIT ${profit.toFixed(6)}`, true);
           }
         }
       }
@@ -240,12 +220,7 @@ async function scanToken(token) {
   }
 
   if (best) {
-    log(
-      `💰 BEST ROUTE ${best.token.symbol} ` +
-      `${best.buy.name} → ${best.sell.name} ` +
-      `PROFIT ${best.profit.toFixed(6)} USDC`,
-      true
-    );
+    log(`💰 BEST ${best.token.symbol} PROFIT ${best.profit.toFixed(6)}`, true);
     await execute(best);
   }
 }
@@ -255,13 +230,12 @@ async function scanToken(token) {
 ===================================================== */
 
 async function main() {
-  log("⏱ Polygon Arbitrage Bot Started");
-
+  log("⏱ ARB BOT STARTED");
   while (true) {
     try {
       log(`🏦 Vault ${await vaultBalance()} USDC`);
-      for (const token of ERC20_TOKENS) {
-        await scanToken(token);
+      for (const t of ERC20_TOKENS) {
+        await scanToken(t);
       }
     } catch (e) {
       log(`❌ ERROR ${e.message}`);
