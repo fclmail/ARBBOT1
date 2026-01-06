@@ -37,8 +37,8 @@ const ERC20_TOKENS = [
 const SCAN_INTERVAL_MS   = 8000;
 const TRADE_AMOUNT_USDC = 0.14;
 const MIN_PROFIT_USDC   = 0.000005;
-const EST_GAS           = 450_000;
-const MATIC_USDC_PRICE  = 0.75;
+const EST_GAS           = 0.0;
+const MATIC_USDC_PRICE  = 0.0;
 const DRY_RUN           = false;
 
 /* =====================================================
