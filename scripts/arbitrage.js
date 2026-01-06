@@ -7,7 +7,7 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
+const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
 const VAULT_ADDRESS    = CONTRACT_ADDRESS;
 
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
