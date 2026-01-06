@@ -35,8 +35,8 @@ const ERC20_TOKENS = [
 
 // BOT SETTINGS
 const SCAN_INTERVAL_MS   = 8000;
-const TRADE_AMOUNT_USDC = 5;              // ⬅️ DUST FIX
-const MIN_PROFIT_USDC   = 0.02;            // ⬅️ REALISTIC
+const TRADE_AMOUNT_USDC = 5;
+const MIN_PROFIT_USDC   = 0.02;
 const EST_GAS           = 160_000;
 const MATIC_USDC_PRICE  = 0.30;
 const DRY_RUN           = false;
@@ -50,8 +50,7 @@ const ROUTER_ABI = [
 ];
 
 const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)",
-  "function allowance(address,address) view returns (uint256)"
+  "function balanceOf(address) view returns (uint256)"
 ];
 
 const ARB_ABI = [
@@ -88,19 +87,6 @@ async function vaultBalance() {
 }
 
 /* =====================================================
-   SAFETY CHECKS (NEW)
-===================================================== */
-
-async function ensureContractCanTrade(amountIn) {
-  const balance = await usdc.balanceOf(CONTRACT_ADDRESS);
-  if (balance < amountIn) {
-    log(`❌ CONTRACT USDC INSUFFICIENT (${ethers.formatUnits(balance,6)})`);
-    return false;
-  }
-  return true;
-}
-
-/* =====================================================
    EXECUTION
 ===================================================== */
 
@@ -115,12 +101,7 @@ async function execute(best, gasCost) {
       6
     );
 
-    if (!(await ensureContractCanTrade(amountIn))) return;
-
-    if (best.profit <= MIN_PROFIT_USDC + gasCost) {
-      log(`⛔ PROFIT < GAS (${best.profit.toFixed(6)})`);
-      return;
-    }
+    if (best.profit <= MIN_PROFIT_USDC + gasCost) return;
 
     await arb.executeArbitrage.staticCall(
       best.buy.address,
@@ -130,10 +111,7 @@ async function execute(best, gasCost) {
       minReturn
     );
 
-    if (DRY_RUN) {
-      log("🧪 DRY RUN – TX BLOCKED", true);
-      return;
-    }
+    if (DRY_RUN) return;
 
     const tx = await arb.executeArbitrage(
       best.buy.address,
@@ -157,7 +135,7 @@ async function execute(best, gasCost) {
 }
 
 /* =====================================================
-   SCANNER
+   SCANNER (FULL PRICE LOGS RESTORED)
 ===================================================== */
 
 async function scanToken(token) {
@@ -181,18 +159,23 @@ async function scanToken(token) {
           amountIn,
           [USDC_ADDRESS, token.address]
         );
+
         const sellOut = await sell.contract.getAmountsOut(
           buyOut[1],
           [token.address, USDC_ADDRESS]
         );
 
+        const buyUSDC  = TRADE_AMOUNT_USDC;
         const sellUSDC = Number(ethers.formatUnits(sellOut[1], 6));
-        const profit   = sellUSDC - TRADE_AMOUNT_USDC;
+        const profit   = sellUSDC - buyUSDC;
 
-        log(
-          `${token.symbol} ${buy.name}→${sell.name} PROFIT ${profit.toFixed(6)}`,
-          profit > 0
-        );
+        const line =
+          `[${new Date().toISOString()}] ${token.symbol} ` +
+          `BUY ${buy.name} ${buyUSDC.toFixed(5)} → ` +
+          `SELL ${sell.name} ${sellUSDC.toFixed(5)} | ` +
+          `PROFIT ${profit.toFixed(6)} ${profit > 0 ? "✅" : "❌"}`;
+
+        log(line, profit > 0);
 
         if (profit > MIN_PROFIT_USDC + gasCost) {
           if (!best || profit > best.profit) {
@@ -205,6 +188,11 @@ async function scanToken(token) {
   }
 
   if (best) {
+    log(
+      `💰 BEST ${best.token.symbol} ${best.buy.name}→${best.sell.name} ` +
+      `PROFIT ${best.profit.toFixed(6)} USDC`,
+      true
+    );
     await execute(best, gasCost);
   }
 }
@@ -214,9 +202,10 @@ async function scanToken(token) {
 ===================================================== */
 
 async function main() {
-  log("⏱ ARB BOT LIVE");
+  log("⏱ Polygon Arbitrage Bot Started");
 
   while (true) {
+    log(`🏦 Vault ${await vaultBalance()} USDC`);
     for (const token of ERC20_TOKENS) {
       await scanToken(token);
     }
