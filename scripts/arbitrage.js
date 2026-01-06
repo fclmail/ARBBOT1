@@ -35,11 +35,11 @@ const ERC20_TOKENS = [
 
 // BOT SETTINGS
 const SCAN_INTERVAL_MS   = 8000;
-const TRADE_AMOUNT_USDC = .16;
+const TRADE_AMOUNT_USDC = 2.16;
 const MIN_PROFIT_USDC   = 0.000005;
 const EST_GAS           = 0.0;
 const MATIC_USDC_PRICE  = 0.0;
-const DRY_RUN           = false;
+const DRY_RUN           = true;
 
 /* =====================================================
    ABIs
