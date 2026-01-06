@@ -86,9 +86,7 @@ let EXECUTING = false;
 ===================================================== */
 
 function log(line, green = false) {
-  process.stdout.write(
-    green ? `\x1b[32m${line}\x1b[0m\n` : `${line}\n`
-  );
+  process.stdout.write(green ? `\x1b[32m${line}\x1b[0m\n` : `${line}\n`);
 }
 
 async function vaultBalance() {
@@ -125,7 +123,7 @@ function buildSellPaths(token) {
 }
 
 /* =====================================================
-   EXECUTION (FORCED WITH FULL DEBUG)
+   EXECUTION (SINGLE OPTIMAL ROUTE)
 ===================================================== */
 
 async function execute(best) {
@@ -134,12 +132,9 @@ async function execute(best) {
 
   try {
     const amountIn  = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-    const minReturn = ethers.parseUnits(
-      (TRADE_AMOUNT_USDC + best.profit).toFixed(6),
-      6
-    );
+    const minReturn = ethers.parseUnits((TRADE_AMOUNT_USDC + best.profit).toFixed(6), 6);
 
-    // 🔒 Simulation first to catch revert reason
+    // Simulate first, but do not block execution
     try {
       await arb.executeArbitrage.staticCall(
         best.buy.address,
@@ -150,7 +145,7 @@ async function execute(best) {
       );
       log(`🟢 Simulation OK for ${best.token.symbol}`, true);
     } catch (simErr) {
-      log(`⚠️ Simulation failed: ${simErr.reason || simErr.message}`, false);
+      log(`⚠️ Simulation failed, forcing tx: ${simErr.reason || simErr.message}`);
     }
 
     if (DRY_RUN) {
@@ -172,36 +167,28 @@ async function execute(best) {
     const receipt = await tx.wait();
     const iface = new ethers.Interface(ARB_ABI);
 
-    let profitLogged = false;
-
     for (const logItem of receipt.logs) {
       try {
         const parsed = iface.parseLog(logItem);
         if (parsed.name === "ArbitrageExecuted") {
           const profit = Number(parsed.args.profitUSDC) / 1e6;
-          log(`🎉 ARBITRAGE CONFIRMED: PROFIT ${profit.toFixed(6)} USDC`, true);
-          profitLogged = true;
+          log(`🎉 ARBITRAGE CONFIRMED PROFIT ${profit.toFixed(6)} USDC`, true);
         }
       } catch {}
     }
 
-    if (!profitLogged) {
-      log("⚠️ No ArbitrageExecuted event found — trade may have reverted", false);
-    }
-
-    // Update vault balance after execution
     const vault = await vaultBalance();
     log(`🏦 VAULT BALANCE: ${vault.toFixed(6)} USDC`, true);
 
   } catch (e) {
-    log(`❌ EXECUTION FAILED: ${e.reason || e.shortMessage || e.message}`);
+    log(`❌ EXECUTION FAILED: ${e.reason || e.message}`);
   } finally {
     EXECUTING = false;
   }
 }
 
 /* =====================================================
-   SCANNER (VERBOSE)
+   SCANNER (VERBOSE, USER FRIENDLY)
 ===================================================== */
 
 async function scanToken(token) {
@@ -240,10 +227,12 @@ async function scanToken(token) {
 
           log(line, profit > 0);
 
-          if (profit > MIN_PROFIT_USDC + gasCost) {
+          // FORCE execution for any profitable trade above MIN_PROFIT_USDC
+          if (profit > MIN_PROFIT_USDC) {
             if (!best || profit > best.profit) {
               best = { token, buy, sell, profit };
             }
+            log(`💡 FORCING EXECUTION: ${token.symbol} ${buy.name}→${sell.name} PROFIT ${profit.toFixed(6)}`, true);
           }
         }
       }
@@ -252,7 +241,9 @@ async function scanToken(token) {
 
   if (best) {
     log(
-      `💰 BEST ROUTE ${best.token.symbol} ${best.buy.name} → ${best.sell.name} PROFIT ${best.profit.toFixed(6)} USDC`,
+      `💰 BEST ROUTE ${best.token.symbol} ` +
+      `${best.buy.name} → ${best.sell.name} ` +
+      `PROFIT ${best.profit.toFixed(6)} USDC`,
       true
     );
     await execute(best);
