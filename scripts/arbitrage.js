@@ -7,42 +7,36 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-// CORE CONTRACTS
 const CONTRACT_ADDRESS = "0x7DadE334120e659eDE4999c8813c183648b1bd19";
 const VAULT_ADDRESS    = CONTRACT_ADDRESS;
 
-// BASE TOKENS
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WMATIC       = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
-const WETH         = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
-// DEX ROUTERS
+const TRADE_AMOUNT_USDC = 0.11;
+const MIN_PROFIT_USDC  = 0.00010;
+const SLIPPAGE_BUFFER  = 0.00005;
+const SCAN_INTERVAL_MS = 8000;
+const DRY_RUN = false;
+
+/* =====================================================
+   DEXES
+===================================================== */
+
 const DEXES = [
   { name: "QuickSwap", address: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" },
   { name: "SushiSwap", address: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506" },
-  { name: "Dfyn",      address: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73" },
   { name: "ApeSwap",   address: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607" }
 ];
 
-// TOKENS
-const ERC20_TOKENS = [
-  { symbol: "CRV",  address: "0x172370d5cd63279efa6d502dab29171933a610af" },
-  { symbol: "AAVE", address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b" },
-  { symbol: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
-  { symbol: "USDT", address: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f" },
-  { symbol: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" }
+const TOKENS = [
+  { symbol: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
+  { symbol: "CRV",  address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 }
 ];
 
-// BOT SETTINGS
-const SCAN_INTERVAL_MS   = 8000;
-const TRADE_AMOUNT_USDC = 700.14;
-const MIN_PROFIT_USDC   = 0.020;
-const SLIPPAGE_BUFFER   = 0.00005;
-const MATIC_USDC_PRICE  = 0.75;
-const DRY_RUN           = false;
-
 /* =====================================================
-   ABIs
+   ABIS
 ===================================================== */
 
 const ROUTER_ABI = [
@@ -65,11 +59,11 @@ const ARB_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
 
-const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 const arb  = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
+const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 for (const d of DEXES) {
-  d.contract = new ethers.Contract(d.address, ROUTER_ABI, provider);
+  d.router = new ethers.Contract(d.address, ROUTER_ABI, provider);
 }
 
 let EXECUTING = false;
@@ -78,40 +72,31 @@ let EXECUTING = false;
    HELPERS
 ===================================================== */
 
-function log(line, green = false) {
-  process.stdout.write(green ? `\x1b[32m${line}\x1b[0m\n` : `${line}\n`);
+function log(msg, ok = false) {
+  console.log(ok ? `\x1b[32m${msg}\x1b[0m` : msg);
 }
 
-async function vaultBalance() {
+async function vaultUSDC() {
   return Number(ethers.formatUnits(await usdc.balanceOf(VAULT_ADDRESS), 6));
 }
 
-async function quote(router, amountIn, path) {
-  try {
-    const amounts = await router.getAmountsOut(amountIn, path);
-    return amounts.at(-1);
-  } catch {
-    return 0n;
-  }
+async function walletMATIC() {
+  return Number(ethers.formatEther(await provider.getBalance(wallet.address)));
 }
 
-/* =====================================================
-   PATH BUILDERS
-===================================================== */
-
-function buildBuyPaths(token) {
+function buyPaths(token) {
   return [
-    [USDC_ADDRESS, token],
-    [USDC_ADDRESS, WMATIC, token],
-    [USDC_ADDRESS, WETH, token]
+    [USDC, token],
+    [USDC, WMATIC, token],
+    [USDC, WETH, token]
   ];
 }
 
-function buildSellPaths(token) {
+function sellPaths(token) {
   return [
-    [token, USDC_ADDRESS],
-    [token, WMATIC, USDC_ADDRESS],
-    [token, WETH, USDC_ADDRESS]
+    [token, USDC],
+    [token, WMATIC, USDC],
+    [token, WETH, USDC]
   ];
 }
 
@@ -124,10 +109,9 @@ async function execute(best) {
   EXECUTING = true;
 
   try {
-    const amountIn  = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
+    const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
     const minReturn = ethers.parseUnits(best.profit.toFixed(6), 6);
 
-    // === SIMULATION (MANDATORY) ===
     await arb.executeArbitrage.staticCall(
       best.buy.address,
       best.sell.address,
@@ -136,12 +120,11 @@ async function execute(best) {
       minReturn
     );
 
-    log(`🟢 Simulation OK for ${best.token.symbol}`, true);
+    log(`🟢 Simulation OK`, true);
 
     if (DRY_RUN) return;
 
-    // === GAS ESTIMATION ===
-    const gasEstimate = await arb.executeArbitrage.estimateGas(
+    const gas = await arb.executeArbitrage.estimateGas(
       best.buy.address,
       best.sell.address,
       best.token.address,
@@ -155,28 +138,14 @@ async function execute(best) {
       best.token.address,
       amountIn,
       minReturn,
-      { gasLimit: gasEstimate * 120n / 100n }
+      { gasLimit: gas * 120n / 100n }
     );
 
     log(`🚀 TX SENT ${tx.hash}`, true);
-
-    const receipt = await tx.wait();
-
-    const iface = new ethers.Interface(ARB_ABI);
-    for (const l of receipt.logs) {
-      try {
-        const p = iface.parseLog(l);
-        if (p.name === "ArbitrageExecuted") {
-          log(`🎉 PROFIT ${(Number(p.args.profitUSDC) / 1e6).toFixed(6)} USDC`, true);
-        }
-      } catch {}
-    }
-
-    await new Promise(r => setTimeout(r, 3000));
-    log(`🏦 VAULT BALANCE ${await vaultBalance()} USDC`, true);
+    await tx.wait();
 
   } catch (e) {
-    log(`❌ EXECUTION SKIPPED: ${e.reason || e.message}`);
+    log(`❌ EXECUTION SKIPPED (panic / slippage / fees)`);
   } finally {
     EXECUTING = false;
   }
@@ -186,28 +155,36 @@ async function execute(best) {
    SCANNER
 ===================================================== */
 
-async function scanToken(token) {
+async function scan(token) {
   const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-
   let best = null;
 
   for (const buy of DEXES) {
     for (const sell of DEXES) {
       if (buy === sell) continue;
 
-      for (const bp of buildBuyPaths(token.address)) {
-        const buyOut = await quote(buy.contract, amountIn, bp);
-        if (!buyOut) continue;
+      for (const bp of buyPaths(token.address)) {
+        let bought;
+        try {
+          bought = (await buy.router.getAmountsOut(amountIn, bp)).at(-1);
+        } catch { continue; }
 
-        for (const sp of buildSellPaths(token.address)) {
-          const sellOut = await quote(sell.contract, buyOut, sp);
-          if (!sellOut) continue;
+        const buyPrice = TRADE_AMOUNT_USDC / Number(ethers.formatUnits(bought, token.decimals));
 
-          const sellUSDC = Number(ethers.formatUnits(sellOut, 6));
-          if (sellUSDC < TRADE_AMOUNT_USDC * 0.5) continue;
+        for (const sp of sellPaths(token.address)) {
+          let sold;
+          try {
+            sold = (await sell.router.getAmountsOut(bought, sp)).at(-1);
+          } catch { continue; }
 
+          const sellUSDC = Number(ethers.formatUnits(sold, 6));
+          const sellPrice = sellUSDC / Number(ethers.formatUnits(bought, token.decimals));
           const profit = sellUSDC - TRADE_AMOUNT_USDC;
-          log(`${token.symbol} ${buy.name}→${sell.name} PROFIT ${profit.toFixed(6)}`, profit > 0);
+
+          log(
+            `${token.symbol} ${buy.name}→${sell.name} | Buy ${buyPrice.toFixed(6)} | Sell ${sellPrice.toFixed(6)} | Profit ${profit.toFixed(6)}`,
+            profit > 0
+          );
 
           if (profit > MIN_PROFIT_USDC + SLIPPAGE_BUFFER) {
             if (!best || profit > best.profit) {
@@ -233,9 +210,10 @@ async function main() {
   log("⏱ ARB BOT STARTED");
   while (true) {
     try {
-      log(`🏦 Vault ${await vaultBalance()} USDC`);
-      for (const t of ERC20_TOKENS) {
-        await scanToken(t);
+      log(`🏦 Vault USDC: ${await vaultUSDC()}`);
+      log(`⛽ Wallet MATIC: ${await walletMATIC()}`);
+      for (const t of TOKENS) {
+        await scan(t);
       }
     } catch (e) {
       log(`❌ ERROR ${e.message}`);
