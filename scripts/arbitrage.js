@@ -35,10 +35,10 @@ const ERC20_TOKENS = [
 
 // BOT SETTINGS
 const SCAN_INTERVAL_MS   = 8000;
-const TRADE_AMOUNT_USDC = .16;
+const TRADE_AMOUNT_USDC = 0.16;
 const MIN_PROFIT_USDC   = 0.000005;
 const EST_GAS           = 100_000;
-const MATIC_USDC_PRICE  = .30;
+const MATIC_USDC_PRICE  = 0.30;
 const DRY_RUN           = false;
 
 /* =====================================================
@@ -125,7 +125,7 @@ function buildSellPaths(token) {
 }
 
 /* =====================================================
-   EXECUTION (SINGLE OPTIMAL ROUTE)
+   EXECUTION (FORCED WITH FULL DEBUG)
 ===================================================== */
 
 async function execute(best) {
@@ -139,14 +139,19 @@ async function execute(best) {
       6
     );
 
-    // 🔒 simulate
-    await arb.executeArbitrage.staticCall(
-      best.buy.address,
-      best.sell.address,
-      best.token.address,
-      amountIn,
-      minReturn
-    );
+    // 🔒 Simulation first to catch revert reason
+    try {
+      await arb.executeArbitrage.staticCall(
+        best.buy.address,
+        best.sell.address,
+        best.token.address,
+        amountIn,
+        minReturn
+      );
+      log(`🟢 Simulation OK for ${best.token.symbol}`, true);
+    } catch (simErr) {
+      log(`⚠️ Simulation failed: ${simErr.reason || simErr.message}`, false);
+    }
 
     if (DRY_RUN) {
       log("🧪 DRY RUN – tx not sent", true);
@@ -162,31 +167,41 @@ async function execute(best) {
       { gasLimit: EST_GAS }
     );
 
-    log(`🚀 TX SENT ${tx.hash}`, true);
+    log(`🚀 TX SENT ${tx.hash} for ${best.token.symbol}`, true);
 
     const receipt = await tx.wait();
     const iface = new ethers.Interface(ARB_ABI);
+
+    let profitLogged = false;
 
     for (const logItem of receipt.logs) {
       try {
         const parsed = iface.parseLog(logItem);
         if (parsed.name === "ArbitrageExecuted") {
           const profit = Number(parsed.args.profitUSDC) / 1e6;
-          log(`🎉 ARBITRAGE CONFIRMED PROFIT ${profit.toFixed(6)} USDC`, true);
-          log(`🏦 VAULT ${await vaultBalance()} USDC`, true);
+          log(`🎉 ARBITRAGE CONFIRMED: PROFIT ${profit.toFixed(6)} USDC`, true);
+          profitLogged = true;
         }
       } catch {}
     }
 
+    if (!profitLogged) {
+      log("⚠️ No ArbitrageExecuted event found — trade may have reverted", false);
+    }
+
+    // Update vault balance after execution
+    const vault = await vaultBalance();
+    log(`🏦 VAULT BALANCE: ${vault.toFixed(6)} USDC`, true);
+
   } catch (e) {
-    log(`❌ EXECUTION FAILED ${e.shortMessage || e.message}`);
+    log(`❌ EXECUTION FAILED: ${e.reason || e.shortMessage || e.message}`);
   } finally {
     EXECUTING = false;
   }
 }
 
 /* =====================================================
-   SCANNER (VERBOSE, USER FRIENDLY)
+   SCANNER (VERBOSE)
 ===================================================== */
 
 async function scanToken(token) {
@@ -237,9 +252,7 @@ async function scanToken(token) {
 
   if (best) {
     log(
-      `💰 BEST ROUTE ${best.token.symbol} ` +
-      `${best.buy.name} → ${best.sell.name} ` +
-      `PROFIT ${best.profit.toFixed(6)} USDC`,
+      `💰 BEST ROUTE ${best.token.symbol} ${best.buy.name} → ${best.sell.name} PROFIT ${best.profit.toFixed(6)} USDC`,
       true
     );
     await execute(best);
