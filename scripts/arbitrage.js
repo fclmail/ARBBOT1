@@ -16,7 +16,7 @@ const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
 const TRADE_AMOUNT_USDC = 0.11;
 const MIN_PROFIT_USDC  = 0.00010;
-const SLIPPAGE_BUFFER  = 0.00005;
+const SLIPPAGE_BUFFER  = 5;
 const SCAN_INTERVAL_MS = 8000;
 const DRY_RUN = false;
 
