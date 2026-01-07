@@ -1,124 +1,245 @@
-import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
+Skip to content
 
-/* =====================================================
-   🟢 CONFIG
-===================================================== */
+Navigation Menu
 
-const RPC_URL = "https://polygon-bor.publicnode.com";
-const provider = new ethers.JsonRpcProvider(RPC_URL);
+fclmailARBBOT1
 
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+Code
 
-// --- Contracts ---
-const ARB_CONTRACT = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+Issues
 
-const arbAbi = [
-  "function executeArbitrage(address token,uint256 amount,uint256 minProfit,uint256 deadline) external",
-  "function vaultBalance() view returns (uint256)"
-];
+Pull requests
 
-const arb = new ethers.Contract(ARB_CONTRACT, arbAbi, wallet);
+You have successfully requested the workflow to be canceled. 
 
-/* =====================================================
-   🟢 EXECUTION SAFETY SETTINGS
-===================================================== */
+ARB Bot
 
-const JS_MIN_PROFIT = 0.00002;          // $0.00002 JS guard
-const DEADLINE_BUFFER = 120;            // ⛔ REQUIRED (seconds)
+Update arbitrage.js #1443
 
-const GAS = {
-  gasLimit: 1_200_000,
-  maxFeePerGas: ethers.parseUnits("80", "gwei"),
-  maxPriorityFeePerGas: ethers.parseUnits("40", "gwei")
-};
+run-arb
 
-/* =====================================================
-   🟢 MOCK PRICE DISCOVERY (replace with real router calls)
-===================================================== */
+cancelled now in 35m 2s
 
-async function simulateArb() {
-  // Example: LINK SushiSwap → QuickSwap
-  return {
-    token: "LINK",
-    tokenAddress: "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39",
-    buyDex: "SushiSwap",
-    sellDex: "QuickSwap",
-    tradeAmount: 50, // USDC
-    profit: 0.000240
-  };
-}
+1s
 
-/* =====================================================
-   🟢 MAIN ARB LOOP
-===================================================== */
+1s
 
-async function run() {
-  console.log("🚀 Arb bot started\n");
+0s
 
-  const sim = await simulateArb();
+0s
 
-  console.log(
-    `[SIM] ${sim.token} ${sim.buyDex}→${sim.sellDex} profit:${sim.profit.toFixed(6)}`
-  );
+2s
 
-  if (sim.profit < JS_MIN_PROFIT) {
-    console.log("⛔ SKIPPED (below JS min profit)");
-    return;
-  }
+34m 55s
 
-  console.log(
-    `✔ SIM PASSED → ${sim.token} PROFIT ${sim.profit.toFixed(6)}`
-  );
+[SIM] CRV SushiSwap→QuickSwap | buy:0.070459 sell:0.030172 profit:0.000172 | vault:0.05 USDC | matic:0.108 
 
-  /* =====================================================
-     🟢 EXECUTION
-  ===================================================== */
+✔ SIM PASSED → CRV PROFIT 0.000172 USDC 
 
-  console.log(
-    `🟢 EXECUTING ${sim.token} PROFIT ${sim.profit.toFixed(6)}`
-  );
+🟢 EXECUTING CRV PROFIT 0.000172 
 
-  const vaultBefore = await arb.vaultBalance();
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
 
-  const deadline =
-    Math.floor(Date.now() / 1000) + DEADLINE_BUFFER;
+[SIM] CRV SushiSwap→ApeSwap | buy:0.070459 sell:0.029783 profit:-0.000217 | vault:0.05 USDC | matic:0.108 
 
-  const tx = await arb.executeArbitrage(
-    sim.tokenAddress,
-    ethers.parseUnits(sim.tradeAmount.toString(), 6),
-    ethers.parseUnits(sim.profit.toString(), 6),
-    deadline,
-    GAS
-  );
+[SIM] CRV ApeSwap→QuickSwap | buy:0.070366 sell:0.030132 profit:0.000132 | vault:0.05 USDC | matic:0.108 
 
-  console.log(`📤 TX SENT ${tx.hash.slice(0, 6)}...${tx.hash.slice(-4)}`);
-  console.log("⏳ CONFIRMING...");
+✔ SIM PASSED → CRV PROFIT 0.000132 USDC 
 
-  const receipt = await tx.wait();
+🟢 EXECUTING CRV PROFIT 0.000132 
 
-  if (receipt.status !== 1) {
-    console.log("❌ TX FAILED");
-    return;
-  }
+❌ EXEC FAIL: ApeRouter: EXPIRED 
 
-  const vaultAfter = await arb.vaultBalance();
-  const delta = vaultAfter - vaultBefore;
+[SIM] CRV ApeSwap→SushiSwap | buy:0.070366 sell:0.030068 profit:0.000068 | vault:0.05 USDC | matic:0.108 
 
-  console.log("✅ CONFIRMED");
-  console.log(
-    `🏦 VAULT BALANCE ${(Number(vaultAfter) / 1e6).toFixed(6)} USDC (+${(
-      Number(delta) / 1e6
-    ).toFixed(6)})`
-  );
-}
+✔ SIM PASSED → CRV PROFIT 0.000068 USDC 
 
-/* =====================================================
-   🟢 START
-===================================================== */
+🟢 EXECUTING CRV PROFIT 0.000068 
 
-run().catch((e) => {
-  console.error("❌ EXEC FAIL:", e.reason || e.message);
-});
+❌ EXEC FAIL: ApeRouter: EXPIRED 
+
+[SIM] LINK QuickSwap→SushiSwap | buy:0.002166 sell:0.030329 profit:0.000329 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000329 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000329 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+[SIM] LINK QuickSwap→ApeSwap | buy:0.002166 sell:0.030134 profit:0.000134 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000134 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000134 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+[SIM] LINK SushiSwap→QuickSwap | buy:0.002181 sell:0.030588 profit:0.000588 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000588 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000588 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+[SIM] LINK SushiSwap→ApeSwap | buy:0.002181 sell:0.030336 profit:0.000336 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000336 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000336 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+[SIM] LINK ApeSwap→QuickSwap | buy:0.002165 sell:0.030370 profit:0.000370 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000370 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000370 
+
+❌ EXEC FAIL: ApeRouter: EXPIRED 
+
+[SIM] LINK ApeSwap→SushiSwap | buy:0.002165 sell:0.030315 profit:0.000315 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000315 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000315 
+
+❌ EXEC FAIL: ApeRouter: EXPIRED 
+
+❌ EXEC FAIL: require(false) 
+
+❌ EXEC FAIL: require(false) 
+
+❌ EXEC FAIL: require(false) 
+
+[SIM] WBTC QuickSwap→SushiSwap | buy:0.000000 sell:0.029589 profit:-0.000411 | vault:0.05 USDC | matic:0.108 
+
+❌ EXEC FAIL: require(false) 
+
+❌ EXEC FAIL: require(false) 
+
+❌ EXEC FAIL: require(false) 
+
+[SIM] WBTC QuickSwap→ApeSwap | buy:0.000000 sell:0.029489 profit:-0.000511 | vault:0.05 USDC | matic:0.108 
+
+[SIM] WBTC SushiSwap→QuickSwap | buy:0.000000 sell:0.029572 profit:-0.000428 | vault:0.05 USDC | matic:0.108 
+
+[SIM] WBTC SushiSwap→ApeSwap | buy:0.000000 sell:0.029489 profit:-0.000511 | vault:0.05 USDC | matic:0.108 
+
+[SIM] WBTC ApeSwap→QuickSwap | buy:0.000000 sell:0.029572 profit:-0.000428 | vault:0.05 USDC | matic:0.108 
+
+[SIM] WBTC ApeSwap→SushiSwap | buy:0.000000 sell:0.029589 profit:-0.000411 | vault:0.05 USDC | matic:0.108 
+
+[SIM] AAVE QuickSwap→SushiSwap | buy:0.000173 sell:0.030200 profit:0.000200 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → AAVE PROFIT 0.000200 USDC 
+
+🟢 EXECUTING AAVE PROFIT 0.000200 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+❌ EXEC FAIL: require(false) 
+
+[SIM] AAVE SushiSwap→QuickSwap | buy:0.000172 sell:0.030127 profit:0.000127 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → AAVE PROFIT 0.000127 USDC 
+
+🟢 EXECUTING AAVE PROFIT 0.000127 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+❌ EXEC FAIL: require(false) 
+
+❌ EXEC FAIL: require(false) 
+
+❌ EXEC FAIL: require(false) 
+
+[SIM] CRV QuickSwap→SushiSwap | buy:0.070882 sell:0.030288 profit:0.000288 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → CRV PROFIT 0.000288 USDC 
+
+🟢 EXECUTING CRV PROFIT 0.000288 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+[SIM] CRV QuickSwap→ApeSwap | buy:0.070882 sell:0.029962 profit:-0.000038 | vault:0.05 USDC | matic:0.108 
+
+[SIM] CRV SushiSwap→QuickSwap | buy:0.070459 sell:0.030172 profit:0.000172 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → CRV PROFIT 0.000172 USDC 
+
+🟢 EXECUTING CRV PROFIT 0.000172 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+[SIM] CRV SushiSwap→ApeSwap | buy:0.070459 sell:0.029783 profit:-0.000217 | vault:0.05 USDC | matic:0.108 
+
+[SIM] CRV ApeSwap→QuickSwap | buy:0.070366 sell:0.030132 profit:0.000132 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → CRV PROFIT 0.000132 USDC 
+
+🟢 EXECUTING CRV PROFIT 0.000132 
+
+❌ EXEC FAIL: ApeRouter: EXPIRED 
+
+[SIM] CRV ApeSwap→SushiSwap | buy:0.070366 sell:0.030068 profit:0.000068 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → CRV PROFIT 0.000068 USDC 
+
+🟢 EXECUTING CRV PROFIT 0.000068 
+
+❌ EXEC FAIL: ApeRouter: EXPIRED 
+
+[SIM] LINK QuickSwap→SushiSwap | buy:0.002166 sell:0.030329 profit:0.000329 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000329 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000329 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+[SIM] LINK QuickSwap→ApeSwap | buy:0.002166 sell:0.030134 profit:0.000134 | vault:0.05 USDC | matic:0.108 
+
+✔ SIM PASSED → LINK PROFIT 0.000134 USDC 
+
+🟢 EXECUTING LINK PROFIT 0.000134 
+
+❌ EXEC FAIL: UniswapV2Router: EXPIRED 
+
+Error: The operation was canceled.
+
+0s
+
+0s
+
+Post job cleanup. 
+
+/usr/bin/git version 
+
+git version 2.52.0 
+
+Temporarily overriding HOME='/home/runner/work/_temp/80cc3bf2-c94b-4aa2-8897-083ecf86dae6' before making global git config changes 
+
+Adding repository directory to the temporary git global config as a safe directory 
+
+/usr/bin/git config --global --add safe.directory /home/runner/work/ARBBOT1/ARBBOT1 
+
+/usr/bin/git config --local --name-only --get-regexp core\.sshCommand 
+
+/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :" 
+
+/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader 
+
+http.https://github.com/.extraheader 
+
+/usr/bin/git config --local --unset-all http.https://github.com/.extraheader 
+
+/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :" 
+
+/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir: 
+
+/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+
+0s
+
+
