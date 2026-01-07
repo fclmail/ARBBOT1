@@ -15,22 +15,13 @@ const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
 const TRADE_USDC = 0.03;
 const MIN_PROFIT = 0.00001;
-const SLIPPAGE_BPS = 50; // 0.50%
+
+const SLIPPAGE_BPS = 50;
 const INTERVAL = 8000;
 const DRY_RUN = false;
 
 /* =====================================================
-   DEX ROUTERS
-===================================================== */
-
-const DEXES = [
-  { name: "QuickSwap", address: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" },
-  { name: "SushiSwap", address: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506" },
-  { name: "ApeSwap",   address: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607" }
-];
-
-/* =====================================================
-   TOKENS (FIXED FORMAT)
+   TOKENS
 ===================================================== */
 
 const TOKENS = [
@@ -42,110 +33,72 @@ const TOKENS = [
 ];
 
 /* =====================================================
-   ABIS
+   HELPERS (CRITICAL)
 ===================================================== */
 
-const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
-];
-
-const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)"
-];
-
-const VAULT_ABI = [
-  "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256)"
-];
-
-/* =====================================================
-   SETUP
-===================================================== */
-
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
-
-const vault = new ethers.Contract(VAULT, VAULT_ABI, wallet);
-const usdc  = new ethers.Contract(USDC, ERC20_ABI, provider);
-
-for (const d of DEXES) {
-  d.router = new ethers.Contract(d.address, ROUTER_ABI, provider);
-}
-
-/* =====================================================
-   HELPERS
-===================================================== */
-
-const to6 = v => Number(ethers.formatUnits(v, 6));
 const from6 = v => ethers.parseUnits(v.toFixed(6), 6);
+const to6   = v => Number(ethers.formatUnits(v, 6));
 
-function log(s, ok=false) {
-  console.log(ok ? `\x1b[32m${s}\x1b[0m` : s);
-}
+const fromToken = (v,d) => ethers.parseUnits(v.toFixed(d), d);
+const toToken   = (v,d) => Number(ethers.formatUnits(v, d));
 
-async function vaultBalance() {
-  return to6(await usdc.balanceOf(VAULT));
-}
-
-async function walletMatic() {
-  return Number(ethers.formatEther(await provider.getBalance(wallet.address)));
-}
-
-function pathsBuy(token) {
-  return [[USDC, token], [USDC, WMATIC, token], [USDC, WETH, token]];
-}
-function pathsSell(token) {
-  return [[token, USDC], [token, WMATIC, USDC], [token, WETH, USDC]];
-}
-
-function applySlippage(x) {
-  return x * (1 - SLIPPAGE_BPS / 10_000);
-}
+const applySlippageRaw = (v) =>
+  v * BigInt(10_000 - SLIPPAGE_BPS) / 10_000n;
 
 /* =====================================================
    CORE SCAN
 ===================================================== */
 
 async function scan() {
-  const vaultUSDC = await vaultBalance();
-  const maticBal  = await walletMatic();
-
   for (const token of TOKENS) {
     for (const buy of DEXES) {
       for (const sell of DEXES) {
         if (buy === sell) continue;
 
         try {
-          let bestBuy = 0;
-          let bestSell = 0;
+          let bestBuyRaw = 0n;
+          let bestBuyNorm = 0;
 
+          // 🔹 BUY SIDE
           for (const p of pathsBuy(token.address)) {
             const out = await buy.router.getAmountsOut(from6(TRADE_USDC), p);
-            bestBuy = Math.max(bestBuy, Number(out.at(-1)));
-          }
+            const raw = out.at(-1);
+            const norm = toToken(raw, token.decimals);
 
-          if (!bestBuy) continue;
+            if (norm > bestBuyNorm) {
+              bestBuyNorm = norm;
+              bestBuyRaw = raw;
+            }
+          }
+          if (!bestBuyRaw) continue;
+
+          // 🔹 SELL SIDE
+          let bestSellRaw = 0n;
 
           for (const p of pathsSell(token.address)) {
-            const out = await sell.router.getAmountsOut(bestBuy, p);
-            bestSell = Math.max(bestSell, to6(out.at(-1)));
+            const out = await sell.router.getAmountsOut(bestBuyRaw, p);
+            if (out.at(-1) > bestSellRaw) {
+              bestSellRaw = out.at(-1);
+            }
           }
 
-          const profit = bestSell - TRADE_USDC;
+          const profitRaw = bestSellRaw - from6(TRADE_USDC);
 
-          log(
-            `[SIM] ${token.symbol} ${buy.name}→${sell.name} | buy:${bestBuy.toFixed(6)} sell:${bestSell.toFixed(6)} profit:${profit.toFixed(6)} | vault:${vaultUSDC.toFixed(2)} USDC | matic:${maticBal.toFixed(3)}`
+          const profit = to6(profitRaw);
+          console.log(
+            `[SIM] ${token.symbol} ${buy.name}→${sell.name} profit:${profit.toFixed(6)}`
           );
 
-          if (profit < MIN_PROFIT) continue;
+          if (profitRaw < from6(MIN_PROFIT)) continue;
 
-          log(`✔ SIM PASSED → ${token.symbol} PROFIT ${profit.toFixed(6)} USDC`, true);
+          console.log(`🟢 EXECUTING ${token.symbol} PROFIT ${profit.toFixed(6)}`);
 
           if (DRY_RUN) return;
 
-          const minTokenOut = Math.floor(applySlippage(bestBuy));
-          const minUSDCOut  = from6(applySlippage(bestSell));
+          const minTokenOut = applySlippageRaw(bestBuyRaw);
+          const minUSDCOut  = applySlippageRaw(bestSellRaw);
 
-          await vault.executeArbitrage(
+          const tx = await vault.executeArbitrage(
             buy.address,
             sell.address,
             token.address,
@@ -155,19 +108,15 @@ async function scan() {
             from6(MIN_PROFIT)
           );
 
+          console.log(`📤 TX SENT ${tx.hash}`);
+          await tx.wait();
+          console.log(`✅ CONFIRMED`);
           return;
-        } catch {}
+
+        } catch (e) {
+          console.error("❌ EXEC FAIL:", e.reason || e.message);
+        }
       }
     }
   }
 }
-
-/* =====================================================
-   LOOP
-===================================================== */
-
-log("🚀 Arb bot started");
-
-setInterval(() => {
-  scan().catch(() => {});
-}, INTERVAL);
