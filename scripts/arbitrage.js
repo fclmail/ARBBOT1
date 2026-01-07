@@ -12,7 +12,7 @@ const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
 // --- Contracts ---
-const ARB_CONTRACT = "0xYOUR_ARB_CONTRACT";
+const ARB_CONTRACT = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 const arbAbi = [
