@@ -7,16 +7,15 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43";
-const VAULT_ADDRESS    = CONTRACT_ADDRESS;
+const VAULT_ADDRESS = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
 
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
 const TRADE_AMOUNT_USDC = 0.17;
-const MIN_PROFIT_USDC  = 0.00010;
-const SLIPPAGE_BUFFER  = 5;
+const MIN_PROFIT_USDC  = 0.00001;     // matches vault MIN_PROFIT
+const SLIPPAGE_BUFFER  = 5;            // %
 const SCAN_INTERVAL_MS = 8000;
 const DRY_RUN = false;
 
@@ -48,8 +47,8 @@ const ERC20_ABI = [
 ];
 
 const ARB_ABI = [
-  "function executeArbitrage(address,address,address,uint256,uint256) external",
-  "event ArbitrageExecuted(address,address,address,address,uint256,uint256,uint256,uint256)"
+  "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256) external",
+  "event ArbitrageExecuted(address,address,address,address,uint256,uint256)"
 ];
 
 /* =====================================================
@@ -59,7 +58,7 @@ const ARB_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
 
-const arb  = new ethers.Contract(CONTRACT_ADDRESS, ARB_ABI, wallet);
+const arb  = new ethers.Contract(VAULT_ADDRESS, ARB_ABI, wallet);
 const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
 
 for (const d of DEXES) {
@@ -101,7 +100,7 @@ function sellPaths(token) {
 }
 
 /* =====================================================
-   EXECUTION (SAFE)
+   EXECUTION
 ===================================================== */
 
 async function execute(best) {
@@ -110,18 +109,20 @@ async function execute(best) {
 
   try {
     const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC.toString(), 6);
-    const minReturn = ethers.parseUnits(best.profit.toFixed(6), 6);
+    const deadline = Math.floor(Date.now() / 1000) + 60;
 
+    // Static call safety check
     await arb.executeArbitrage.staticCall(
       best.buy.address,
       best.sell.address,
       best.token.address,
       amountIn,
-      minReturn
+      best.minTokenOut,
+      best.minUSDCOut,
+      deadline
     );
 
-    log(`🟢 Simulation OK`, true);
-
+    log("🟢 Simulation OK", true);
     if (DRY_RUN) return;
 
     const gas = await arb.executeArbitrage.estimateGas(
@@ -129,7 +130,9 @@ async function execute(best) {
       best.sell.address,
       best.token.address,
       amountIn,
-      minReturn
+      best.minTokenOut,
+      best.minUSDCOut,
+      deadline
     );
 
     const tx = await arb.executeArbitrage(
@@ -137,15 +140,17 @@ async function execute(best) {
       best.sell.address,
       best.token.address,
       amountIn,
-      minReturn,
+      best.minTokenOut,
+      best.minUSDCOut,
+      deadline,
       { gasLimit: gas * 120n / 100n }
     );
 
     log(`🚀 TX SENT ${tx.hash}`, true);
     await tx.wait();
 
-  } catch (e) {
-    log(`❌ EXECUTION SKIPPED (panic / slippage / fees)`);
+  } catch {
+    log("❌ EXECUTION SKIPPED (slippage / MEV / fees)");
   } finally {
     EXECUTING = false;
   }
@@ -169,7 +174,8 @@ async function scan(token) {
           bought = (await buy.router.getAmountsOut(amountIn, bp)).at(-1);
         } catch { continue; }
 
-        const buyPrice = TRADE_AMOUNT_USDC / Number(ethers.formatUnits(bought, token.decimals));
+        const minTokenOut =
+          bought * BigInt(100 - SLIPPAGE_BUFFER) / 100n;
 
         for (const sp of sellPaths(token.address)) {
           let sold;
@@ -177,18 +183,27 @@ async function scan(token) {
             sold = (await sell.router.getAmountsOut(bought, sp)).at(-1);
           } catch { continue; }
 
+          const minUSDCOut =
+            sold * BigInt(100 - SLIPPAGE_BUFFER) / 100n;
+
           const sellUSDC = Number(ethers.formatUnits(sold, 6));
-          const sellPrice = sellUSDC / Number(ethers.formatUnits(bought, token.decimals));
           const profit = sellUSDC - TRADE_AMOUNT_USDC;
 
           log(
-            `${token.symbol} ${buy.name}→${sell.name} | Buy ${buyPrice.toFixed(6)} | Sell ${sellPrice.toFixed(6)} | Profit ${profit.toFixed(6)}`,
+            `${token.symbol} ${buy.name}→${sell.name} | Profit ${profit.toFixed(6)}`,
             profit > 0
           );
 
-          if (profit > MIN_PROFIT_USDC + SLIPPAGE_BUFFER) {
+          if (profit > MIN_PROFIT_USDC) {
             if (!best || profit > best.profit) {
-              best = { token, buy, sell, profit };
+              best = {
+                token,
+                buy,
+                sell,
+                profit,
+                minTokenOut,
+                minUSDCOut
+              };
             }
           }
         }
