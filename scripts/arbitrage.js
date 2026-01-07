@@ -109,6 +109,8 @@ async function scan() {
   const vaultUSDC = await vaultBalance();
   const maticBal  = await walletMatic();
 
+  if (vaultUSDC < TRADE_USDC) return;
+
   for (const token of TOKENS) {
     for (const buy of DEXES) {
       for (const sell of DEXES) {
@@ -122,7 +124,6 @@ async function scan() {
             const out = await buy.router.getAmountsOut(from6(TRADE_USDC), p);
             const raw = out.at(-1);
             const norm = toToken(raw, token.decimals);
-
             if (norm > bestBuyNorm) {
               bestBuyNorm = norm;
               bestBuyRaw = raw;
@@ -137,7 +138,6 @@ async function scan() {
             const out = await sell.router.getAmountsOut(bestBuyRaw, p);
             const raw = out.at(-1);
             const norm = to6(raw);
-
             if (norm > bestSellNorm) {
               bestSellNorm = norm;
               bestSellRaw = raw;
@@ -147,7 +147,7 @@ async function scan() {
           const profit = bestSellNorm - TRADE_USDC;
 
           log(
-            `[SIM] ${token.symbol} ${buy.name}→${sell.name} | buy:${bestBuyNorm.toFixed(6)} sell:${bestSellNorm.toFixed(6)} profit:${profit.toFixed(6)} | vault:${vaultUSDC.toFixed(2)} USDC | matic:${maticBal.toFixed(3)}`
+            `[SIM] ${token.symbol} ${buy.name}→${sell.name} | buy:${bestBuyNorm.toPrecision(6)} sell:${bestSellNorm.toFixed(6)} profit:${profit.toFixed(6)} | vault:${vaultUSDC.toFixed(2)} USDC | matic:${maticBal.toFixed(3)}`
           );
 
           if (profit < MIN_PROFIT) continue;
@@ -155,6 +155,17 @@ async function scan() {
           log(`✔ SIM PASSED → ${token.symbol} PROFIT ${profit.toFixed(6)} USDC`, true);
 
           if (DRY_RUN) return;
+
+          // 🔒 Preflight simulation (prevents EXPIRED + require(false))
+          await vault.executeArbitrage.staticCall(
+            buy.address,
+            sell.address,
+            token.address,
+            from6(TRADE_USDC),
+            applySlippageRaw(bestBuyRaw),
+            applySlippageRaw(bestSellRaw),
+            from6(MIN_PROFIT)
+          );
 
           log(`🟢 EXECUTING ${token.symbol} PROFIT ${profit.toFixed(6)}`);
 
@@ -165,7 +176,8 @@ async function scan() {
             from6(TRADE_USDC),
             applySlippageRaw(bestBuyRaw),
             applySlippageRaw(bestSellRaw),
-            from6(MIN_PROFIT)
+            from6(MIN_PROFIT),
+            { gasLimit: 900_000 }
           );
 
           log(`📤 TX SENT ${tx.hash}`);
