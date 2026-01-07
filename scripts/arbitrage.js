@@ -14,8 +14,8 @@ const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
 const TRADE_USDC = 0.03;
-const MIN_PROFIT = 0.00001;
-const SLIPPAGE_BPS = 50;
+const MIN_PROFIT = 0.001;          // realistic min profit
+const SLIPPAGE_BPS = 150;           // 1.5%
 const INTERVAL = 8000;
 const DRY_RUN = false;
 
@@ -90,10 +90,6 @@ async function vaultBalance() {
   return to6(await usdc.balanceOf(VAULT));
 }
 
-async function walletMatic() {
-  return Number(ethers.formatEther(await provider.getBalance(wallet.address)));
-}
-
 function pathsBuy(t) {
   return [[USDC, t], [USDC, WMATIC, t], [USDC, WETH, t]];
 }
@@ -102,12 +98,19 @@ function pathsSell(t) {
 }
 
 /* =====================================================
+   EXECUTION LOCK
+===================================================== */
+
+let EXECUTING = false;
+
+/* =====================================================
    CORE SCAN
 ===================================================== */
 
 async function scan() {
+  if (EXECUTING) return;
+
   const vaultUSDC = await vaultBalance();
-  const maticBal  = await walletMatic();
 
   for (const token of TOKENS) {
     for (const buy of DEXES) {
@@ -122,13 +125,13 @@ async function scan() {
             const out = await buy.router.getAmountsOut(from6(TRADE_USDC), p);
             const raw = out.at(-1);
             const norm = toToken(raw, token.decimals);
-
             if (norm > bestBuyNorm) {
               bestBuyNorm = norm;
               bestBuyRaw = raw;
             }
           }
-          if (!bestBuyRaw) continue;
+
+          if (bestBuyRaw === 0n || bestBuyNorm < 1e-8) continue;
 
           let bestSellRaw = 0n;
           let bestSellNorm = 0;
@@ -137,26 +140,31 @@ async function scan() {
             const out = await sell.router.getAmountsOut(bestBuyRaw, p);
             const raw = out.at(-1);
             const norm = to6(raw);
-
             if (norm > bestSellNorm) {
               bestSellNorm = norm;
               bestSellRaw = raw;
             }
           }
 
+          if (bestSellRaw === 0n) continue;
+
           const profit = bestSellNorm - TRADE_USDC;
 
           log(
-            `[SIM] ${token.symbol} ${buy.name}→${sell.name} | buy:${bestBuyNorm.toFixed(6)} sell:${bestSellNorm.toFixed(6)} profit:${profit.toFixed(6)} | vault:${vaultUSDC.toFixed(2)} USDC | matic:${maticBal.toFixed(3)}`
+            `[SIM] ${token.symbol} ${buy.name}→${sell.name} | buy:${bestBuyNorm.toFixed(6)} sell:${bestSellNorm.toFixed(6)} profit:${profit.toFixed(6)} | vault:${vaultUSDC.toFixed(4)}`
           );
 
           if (profit < MIN_PROFIT) continue;
 
-          log(`✔ SIM PASSED → ${token.symbol} PROFIT ${profit.toFixed(6)} USDC`, true);
+          log(`✔ SIM PASSED → PROFIT ${profit.toFixed(6)} USDC`, true);
 
           if (DRY_RUN) return;
 
-          log(`🟢 EXECUTING ${token.symbol} PROFIT ${profit.toFixed(6)}`);
+          EXECUTING = true;
+
+          const before = await vaultBalance();
+
+          log(`🟢 EXECUTING ${token.symbol}`);
 
           const tx = await vault.executeArbitrage(
             buy.address,
@@ -169,11 +177,20 @@ async function scan() {
           );
 
           log(`📤 TX SENT ${tx.hash}`);
+
           await tx.wait();
-          log(`✅ CONFIRMED`, true);
+
+          const after = await vaultBalance();
+          const delta = after - before;
+
+          log(`✅ TX CONFIRMED`, true);
+          log(`💰 Vault +${delta.toFixed(6)} USDC`, true);
+
+          EXECUTING = false;
           return;
 
         } catch (e) {
+          EXECUTING = false;
           console.error("❌ EXEC FAIL:", e.reason || e.message);
         }
       }
