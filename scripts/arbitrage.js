@@ -8,12 +8,12 @@
 // 1) CONFIGURATION AND GLOBALS (edit these for your environment)  
 const INTERVAL = 15000; // 15 seconds  
 const SLIPPAGE_BPS = 20; // baseline slippage basis points  
-const JS_MIN_PROFIT = 0.01; // minimum profit in USDC to execute  
-const TRADE_USDC = 0.5; // amount of USDC to use per trade (example)  
+const JS_MIN_PROFIT = 0.0001; // minimum profit in USDC to execute  
+const TRADE_USDC = 0.3; // amount of USDC to use per trade (example)  
 
-const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // example: USDC on Ethereum; replace with Polygon USDC address if needed  
-const VAULT = "0xYourVaultContractAddress"; // replace with your vault contract address  
-const wallet = { address: "0xYourWalletAddress", privateKey: "0xYOUR_PRIVATE_KEY" }; // replace with your wallet  
+const USDC = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"; // example: USDC on Ethereum; replace with Polygon USDC address if needed  
+const VAULT = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e"; // replace with your vault contract address  
+const wallet = { address: "0x9e63CDc3D66714f0FCe5B3347139E117a04A75b3", privateKey: "0xYOUR_PRIVATE_KEY" }; // replace with your wallet  
 
 // Minimal scaffolding: DEX definitions (names, addresses, and mock router ABIs)  
 const TOKENS = [  
