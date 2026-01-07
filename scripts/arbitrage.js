@@ -1,8 +1,8 @@
 /* ============================================================
-   ArbJS – FULL, SYNTACTICALLY COMPLETE VERSION (CommonJS)
+   ArbJS – FULL, SYNTACTICALLY COMPLETE (ES MODULE VERSION)
    ============================================================ */
 
-const { ethers } = require("ethers");
+import { ethers } from "ethers";
 
 /* ===================== CONFIG ===================== */
 
@@ -45,7 +45,7 @@ const VAULT_ABI = [
 
 /* ===================== PROVIDER ===================== */
 
-const provider = new ethers.providers.JsonRpcProvider(RPC);
+const provider = new ethers.JsonRpcProvider(RPC);
 const signer = new ethers.Wallet(wallet.privateKey, provider);
 
 const USDC_CONTRACT = new ethers.Contract(USDC, ERC20_ABI, provider);
@@ -64,9 +64,9 @@ const DEXES = [
 
 /* ===================== HELPERS ===================== */
 
-const toUSDC = v => Number(ethers.utils.formatUnits(v, 6));
-const toToken = (v, d) => Number(ethers.utils.formatUnits(v, d));
-const usdc = v => ethers.utils.parseUnits(v.toFixed(6), 6);
+const toUSDC = v => Number(ethers.formatUnits(v, 6));
+const toToken = (v, d) => Number(ethers.formatUnits(v, d));
+const usdc = v => ethers.parseUnits(v.toFixed(6), 6);
 
 let EXECUTING = false;
 
@@ -131,8 +131,8 @@ async function scan() {
           if (profit < JS_MIN_PROFIT) continue;
 
           const deadline = Math.floor(Date.now() / 1000) + 120;
-          const minTokenOut = tokenRaw.mul(10000 - SLIPPAGE_BPS).div(10000);
-          const minUSDCOut = sellOut[1].mul(10000 - SLIPPAGE_BPS).div(10000);
+          const minTokenOut = tokenRaw * BigInt(10000 - SLIPPAGE_BPS) / 10000n;
+          const minUSDCOut = sellOut[1] * BigInt(10000 - SLIPPAGE_BPS) / 10000n;
 
           console.log("🟢 EXECUTING");
 
@@ -151,6 +151,7 @@ async function scan() {
             await tx.wait();
             console.log(`✅ TX CONFIRMED`);
             await showBalances();
+
             EXECUTING = false;
             return;
 
