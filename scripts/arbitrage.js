@@ -1,245 +1,192 @@
-Skip to content
-
-Navigation Menu
-
-fclmailARBBOT1
-
-Code
-
-Issues
-
-Pull requests
-
-You have successfully requested the workflow to be canceled. 
-
-ARB Bot
-
-Update arbitrage.js #1443
-
-run-arb
-
-cancelled now in 35m 2s
-
-1s
-
-1s
-
-0s
-
-0s
-
-2s
-
-34m 55s
-
-[SIM] CRV SushiSwap→QuickSwap | buy:0.070459 sell:0.030172 profit:0.000172 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → CRV PROFIT 0.000172 USDC 
-
-🟢 EXECUTING CRV PROFIT 0.000172 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] CRV SushiSwap→ApeSwap | buy:0.070459 sell:0.029783 profit:-0.000217 | vault:0.05 USDC | matic:0.108 
-
-[SIM] CRV ApeSwap→QuickSwap | buy:0.070366 sell:0.030132 profit:0.000132 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → CRV PROFIT 0.000132 USDC 
-
-🟢 EXECUTING CRV PROFIT 0.000132 
-
-❌ EXEC FAIL: ApeRouter: EXPIRED 
-
-[SIM] CRV ApeSwap→SushiSwap | buy:0.070366 sell:0.030068 profit:0.000068 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → CRV PROFIT 0.000068 USDC 
-
-🟢 EXECUTING CRV PROFIT 0.000068 
-
-❌ EXEC FAIL: ApeRouter: EXPIRED 
-
-[SIM] LINK QuickSwap→SushiSwap | buy:0.002166 sell:0.030329 profit:0.000329 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000329 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000329 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] LINK QuickSwap→ApeSwap | buy:0.002166 sell:0.030134 profit:0.000134 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000134 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000134 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] LINK SushiSwap→QuickSwap | buy:0.002181 sell:0.030588 profit:0.000588 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000588 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000588 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] LINK SushiSwap→ApeSwap | buy:0.002181 sell:0.030336 profit:0.000336 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000336 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000336 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] LINK ApeSwap→QuickSwap | buy:0.002165 sell:0.030370 profit:0.000370 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000370 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000370 
-
-❌ EXEC FAIL: ApeRouter: EXPIRED 
-
-[SIM] LINK ApeSwap→SushiSwap | buy:0.002165 sell:0.030315 profit:0.000315 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000315 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000315 
-
-❌ EXEC FAIL: ApeRouter: EXPIRED 
-
-❌ EXEC FAIL: require(false) 
-
-❌ EXEC FAIL: require(false) 
-
-❌ EXEC FAIL: require(false) 
-
-[SIM] WBTC QuickSwap→SushiSwap | buy:0.000000 sell:0.029589 profit:-0.000411 | vault:0.05 USDC | matic:0.108 
-
-❌ EXEC FAIL: require(false) 
-
-❌ EXEC FAIL: require(false) 
-
-❌ EXEC FAIL: require(false) 
-
-[SIM] WBTC QuickSwap→ApeSwap | buy:0.000000 sell:0.029489 profit:-0.000511 | vault:0.05 USDC | matic:0.108 
-
-[SIM] WBTC SushiSwap→QuickSwap | buy:0.000000 sell:0.029572 profit:-0.000428 | vault:0.05 USDC | matic:0.108 
-
-[SIM] WBTC SushiSwap→ApeSwap | buy:0.000000 sell:0.029489 profit:-0.000511 | vault:0.05 USDC | matic:0.108 
-
-[SIM] WBTC ApeSwap→QuickSwap | buy:0.000000 sell:0.029572 profit:-0.000428 | vault:0.05 USDC | matic:0.108 
-
-[SIM] WBTC ApeSwap→SushiSwap | buy:0.000000 sell:0.029589 profit:-0.000411 | vault:0.05 USDC | matic:0.108 
-
-[SIM] AAVE QuickSwap→SushiSwap | buy:0.000173 sell:0.030200 profit:0.000200 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → AAVE PROFIT 0.000200 USDC 
-
-🟢 EXECUTING AAVE PROFIT 0.000200 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-❌ EXEC FAIL: require(false) 
-
-[SIM] AAVE SushiSwap→QuickSwap | buy:0.000172 sell:0.030127 profit:0.000127 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → AAVE PROFIT 0.000127 USDC 
-
-🟢 EXECUTING AAVE PROFIT 0.000127 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-❌ EXEC FAIL: require(false) 
-
-❌ EXEC FAIL: require(false) 
-
-❌ EXEC FAIL: require(false) 
-
-[SIM] CRV QuickSwap→SushiSwap | buy:0.070882 sell:0.030288 profit:0.000288 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → CRV PROFIT 0.000288 USDC 
-
-🟢 EXECUTING CRV PROFIT 0.000288 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] CRV QuickSwap→ApeSwap | buy:0.070882 sell:0.029962 profit:-0.000038 | vault:0.05 USDC | matic:0.108 
-
-[SIM] CRV SushiSwap→QuickSwap | buy:0.070459 sell:0.030172 profit:0.000172 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → CRV PROFIT 0.000172 USDC 
-
-🟢 EXECUTING CRV PROFIT 0.000172 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] CRV SushiSwap→ApeSwap | buy:0.070459 sell:0.029783 profit:-0.000217 | vault:0.05 USDC | matic:0.108 
-
-[SIM] CRV ApeSwap→QuickSwap | buy:0.070366 sell:0.030132 profit:0.000132 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → CRV PROFIT 0.000132 USDC 
-
-🟢 EXECUTING CRV PROFIT 0.000132 
-
-❌ EXEC FAIL: ApeRouter: EXPIRED 
-
-[SIM] CRV ApeSwap→SushiSwap | buy:0.070366 sell:0.030068 profit:0.000068 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → CRV PROFIT 0.000068 USDC 
-
-🟢 EXECUTING CRV PROFIT 0.000068 
-
-❌ EXEC FAIL: ApeRouter: EXPIRED 
-
-[SIM] LINK QuickSwap→SushiSwap | buy:0.002166 sell:0.030329 profit:0.000329 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000329 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000329 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-[SIM] LINK QuickSwap→ApeSwap | buy:0.002166 sell:0.030134 profit:0.000134 | vault:0.05 USDC | matic:0.108 
-
-✔ SIM PASSED → LINK PROFIT 0.000134 USDC 
-
-🟢 EXECUTING LINK PROFIT 0.000134 
-
-❌ EXEC FAIL: UniswapV2Router: EXPIRED 
-
-Error: The operation was canceled.
-
-0s
-
-0s
-
-Post job cleanup. 
-
-/usr/bin/git version 
-
-git version 2.52.0 
-
-Temporarily overriding HOME='/home/runner/work/_temp/80cc3bf2-c94b-4aa2-8897-083ecf86dae6' before making global git config changes 
-
-Adding repository directory to the temporary git global config as a safe directory 
-
-/usr/bin/git config --global --add safe.directory /home/runner/work/ARBBOT1/ARBBOT1 
-
-/usr/bin/git config --local --name-only --get-regexp core\.sshCommand 
-
-/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :" 
-
-/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader 
-
-http.https://github.com/.extraheader 
-
-/usr/bin/git config --local --unset-all http.https://github.com/.extraheader 
-
-/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :" 
-
-/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir: 
-
-/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
-
-0s
-
-
+import { ethers } from "ethers";
+
+/* =====================================================
+   CONFIG
+===================================================== */
+
+const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+
+const VAULT = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
+
+const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+
+const TRADE_USDC = 0.03;
+const MIN_PROFIT = 0.00001;
+const SLIPPAGE_BPS = 50;
+const INTERVAL = 8000;
+const DRY_RUN = false;
+
+/* =====================================================
+   DEX ROUTERS
+===================================================== */
+
+const DEXES = [
+  { name: "QuickSwap", address: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" },
+  { name: "SushiSwap", address: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506" },
+  { name: "ApeSwap",   address: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607" }
+];
+
+/* =====================================================
+   TOKENS
+===================================================== */
+
+const TOKENS = [
+  { symbol:"WBTC", address:"0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals:8 },
+  { symbol:"AAVE", address:"0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals:18 },
+  { symbol:"CRV",  address:"0x172370d5cd63279efa6d502dab29171933a610af", decimals:18 },
+  { symbol:"LINK", address:"0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals:18 },
+  { symbol:"UNI",  address:"0x1f9840a85d5af5bf1d1762f925bdaddc4201f984", decimals:18 }
+];
+
+/* =====================================================
+   ABIS
+===================================================== */
+
+const ROUTER_ABI = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+];
+
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)"
+];
+
+const VAULT_ABI = [
+  "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256)"
+];
+
+/* =====================================================
+   SETUP
+===================================================== */
+
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
+
+const vault = new ethers.Contract(VAULT, VAULT_ABI, wallet);
+const usdc  = new ethers.Contract(USDC, ERC20_ABI, provider);
+
+for (const d of DEXES) {
+  d.router = new ethers.Contract(d.address, ROUTER_ABI, provider);
+}
+
+/* =====================================================
+   HELPERS
+===================================================== */
+
+const from6 = v => ethers.parseUnits(v.toFixed(6), 6);
+const to6   = v => Number(ethers.formatUnits(v, 6));
+const toToken = (v,d) => Number(ethers.formatUnits(v, d));
+
+const applySlippageRaw = v =>
+  v * BigInt(10_000 - SLIPPAGE_BPS) / 10_000n;
+
+function log(s, ok=false) {
+  console.log(ok ? `\x1b[32m${s}\x1b[0m` : s);
+}
+
+async function vaultBalance() {
+  return to6(await usdc.balanceOf(VAULT));
+}
+
+async function walletMatic() {
+  return Number(ethers.formatEther(await provider.getBalance(wallet.address)));
+}
+
+function pathsBuy(t) {
+  return [[USDC, t], [USDC, WMATIC, t], [USDC, WETH, t]];
+}
+function pathsSell(t) {
+  return [[t, USDC], [t, WMATIC, USDC], [t, WETH, USDC]];
+}
+
+/* =====================================================
+   CORE SCAN
+===================================================== */
+
+async function scan() {
+  const vaultUSDC = await vaultBalance();
+  const maticBal  = await walletMatic();
+
+  for (const token of TOKENS) {
+    for (const buy of DEXES) {
+      for (const sell of DEXES) {
+        if (buy === sell) continue;
+
+        try {
+          let bestBuyRaw = 0n;
+          let bestBuyNorm = 0;
+
+          for (const p of pathsBuy(token.address)) {
+            const out = await buy.router.getAmountsOut(from6(TRADE_USDC), p);
+            const raw = out.at(-1);
+            const norm = toToken(raw, token.decimals);
+
+            if (norm > bestBuyNorm) {
+              bestBuyNorm = norm;
+              bestBuyRaw = raw;
+            }
+          }
+          if (!bestBuyRaw) continue;
+
+          let bestSellRaw = 0n;
+          let bestSellNorm = 0;
+
+          for (const p of pathsSell(token.address)) {
+            const out = await sell.router.getAmountsOut(bestBuyRaw, p);
+            const raw = out.at(-1);
+            const norm = to6(raw);
+
+            if (norm > bestSellNorm) {
+              bestSellNorm = norm;
+              bestSellRaw = raw;
+            }
+          }
+
+          const profit = bestSellNorm - TRADE_USDC;
+
+          log(
+            `[SIM] ${token.symbol} ${buy.name}→${sell.name} | buy:${bestBuyNorm.toFixed(6)} sell:${bestSellNorm.toFixed(6)} profit:${profit.toFixed(6)} | vault:${vaultUSDC.toFixed(2)} USDC | matic:${maticBal.toFixed(3)}`
+          );
+
+          if (profit < MIN_PROFIT) continue;
+
+          log(`✔ SIM PASSED → ${token.symbol} PROFIT ${profit.toFixed(6)} USDC`, true);
+
+          if (DRY_RUN) return;
+
+          log(`🟢 EXECUTING ${token.symbol} PROFIT ${profit.toFixed(6)}`);
+
+          const tx = await vault.executeArbitrage(
+            buy.address,
+            sell.address,
+            token.address,
+            from6(TRADE_USDC),
+            applySlippageRaw(bestBuyRaw),
+            applySlippageRaw(bestSellRaw),
+            from6(MIN_PROFIT)
+          );
+
+          log(`📤 TX SENT ${tx.hash}`);
+          await tx.wait();
+          log(`✅ CONFIRMED`, true);
+          return;
+
+        } catch (e) {
+          console.error("❌ EXEC FAIL:", e.reason || e.message);
+        }
+      }
+    }
+  }
+}
+
+/* =====================================================
+   LOOP
+===================================================== */
+
+log("🚀 Arb bot started");
+
+setInterval(() => {
+  scan().catch(e => console.error("SCAN ERROR", e));
+}, INTERVAL);
