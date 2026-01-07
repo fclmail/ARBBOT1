@@ -1,16 +1,24 @@
+// ArbJS: full arb script for LowRevertArbVault
+// Prereqs: ethers, dotenv (for PRIVATE_KEY), Node.js environment
+
 import { ethers } from "ethers";
+import 'dotenv/config';
 
 /* ================= CONFIG ================= */
 
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 const provider = new ethers.JsonRpcProvider(RPC);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+if (!PRIVATE_KEY) throw new Error("Please set PRIVATE_KEY in env.");
+
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 const VAULT = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
 const USDC  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const TRADE_USDC = 0.03;
-const JS_MIN_PROFIT = 0.00002; // >= 0.00001 vault invariant
+const TRADE_USDC = 0.03; // USDC amount to trade per arbitrage
+const JS_MIN_PROFIT = 0.00002; // minimum USDC profit to trigger (in USDC with 6 decimals)
 const SLIPPAGE_BPS = 200;
 const INTERVAL = 8000;
 
@@ -37,7 +45,8 @@ const ROUTER_ABI = [
 ];
 
 const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)"
+  "function balanceOf(address) view returns (uint256)",
+  "function approve(address spender, uint256 amount) external returns (bool)"
 ];
 
 const VAULT_ABI = [
@@ -47,7 +56,7 @@ const VAULT_ABI = [
 /* ================= SETUP ================= */
 
 const vault = new ethers.Contract(VAULT, VAULT_ABI, wallet);
-const usdc  = new ethers.Contract(USDC, ERC20_ABI, provider);
+const usdc  = new ethers.Contract(USDC, ERC20_ABI, wallet); // connect with wallet for approvals
 
 for (const d of DEXES)
   d.router = new ethers.Contract(d.addr, ROUTER_ABI, provider);
@@ -106,13 +115,22 @@ async function scan() {
 
           console.log(`✔ SIM PASSED`, "\x1b[32m");
 
+          // Ensure USDC allowance for vault (optional safety)
+          // Some vaults pull USDC themselves; if not, uncomment approve pattern:
+          // const allowance = await usdc.allowance(wallet.address, VAULT);
+          // if (allowance.lt(u6(TRADE_USDC))) {
+          //   const approveTx = await usdc.approve(VAULT, ethers.constants.MaxUint256);
+          //   await approveTx.wait();
+          // }
+
           EXECUTING = true;
 
           const before = f6(await usdc.balanceOf(VAULT));
           const deadline = Math.floor(Date.now()/1000) + 120;
 
-          console.log(`🟢 EXECUTING ${t.sym}`);
+          console.log(`🟢 EXECUTING ${t.sym} | buy: ${buy.name} sell: ${sell.name}`);
 
+          // Execute arbitrage on the vault
           const tx = await vault.executeArbitrage(
             buy.addr,
             sell.addr,
@@ -136,7 +154,8 @@ async function scan() {
 
         } catch (e) {
           EXECUTING = false;
-          console.error("❌ EXEC FAIL:", e.reason || e.message);
+          const msg = e?.reason ?? e?.message ?? String(e);
+          console.error("❌ EXEC FAIL:", msg);
         }
       }
     }
