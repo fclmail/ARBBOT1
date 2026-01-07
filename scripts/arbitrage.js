@@ -1,204 +1,124 @@
 import { ethers } from "ethers";
+import dotenv from "dotenv";
+dotenv.config();
 
 /* =====================================================
-   CONFIG
+   🟢 CONFIG
 ===================================================== */
 
-const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-
-const VAULT = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
-
-const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
-const WETH   = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
-
-const TRADE_USDC = 0.03;
-const MIN_PROFIT = 0.00001;
-const SLIPPAGE_BPS = 50;
-const INTERVAL = 8000;
-const DRY_RUN = false;
-
-/* =====================================================
-   DEX ROUTERS
-===================================================== */
-
-const DEXES = [
-  { name: "QuickSwap", address: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" },
-  { name: "SushiSwap", address: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506" },
-  { name: "ApeSwap",   address: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607" }
-];
-
-/* =====================================================
-   TOKENS
-===================================================== */
-
-const TOKENS = [
-  { symbol:"WBTC", address:"0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals:8 },
-  { symbol:"AAVE", address:"0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals:18 },
-  { symbol:"CRV",  address:"0x172370d5cd63279efa6d502dab29171933a610af", decimals:18 },
-  { symbol:"LINK", address:"0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals:18 },
-  { symbol:"UNI",  address:"0x1f9840a85d5af5bf1d1762f925bdaddc4201f984", decimals:18 }
-];
-
-/* =====================================================
-   ABIS
-===================================================== */
-
-const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
-];
-
-const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)"
-];
-
-const VAULT_ABI = [
-  "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256)"
-];
-
-/* =====================================================
-   SETUP
-===================================================== */
-
+const RPC_URL = "https://polygon-bor.publicnode.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
 
-const vault = new ethers.Contract(VAULT, VAULT_ABI, wallet);
-const usdc  = new ethers.Contract(USDC, ERC20_ABI, provider);
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
-for (const d of DEXES) {
-  d.router = new ethers.Contract(d.address, ROUTER_ABI, provider);
+// --- Contracts ---
+const ARB_CONTRACT = "0xYOUR_ARB_CONTRACT";
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+
+const arbAbi = [
+  "function executeArbitrage(address token,uint256 amount,uint256 minProfit,uint256 deadline) external",
+  "function vaultBalance() view returns (uint256)"
+];
+
+const arb = new ethers.Contract(ARB_CONTRACT, arbAbi, wallet);
+
+/* =====================================================
+   🟢 EXECUTION SAFETY SETTINGS
+===================================================== */
+
+const JS_MIN_PROFIT = 0.00002;          // $0.00002 JS guard
+const DEADLINE_BUFFER = 120;            // ⛔ REQUIRED (seconds)
+
+const GAS = {
+  gasLimit: 1_200_000,
+  maxFeePerGas: ethers.parseUnits("80", "gwei"),
+  maxPriorityFeePerGas: ethers.parseUnits("40", "gwei")
+};
+
+/* =====================================================
+   🟢 MOCK PRICE DISCOVERY (replace with real router calls)
+===================================================== */
+
+async function simulateArb() {
+  // Example: LINK SushiSwap → QuickSwap
+  return {
+    token: "LINK",
+    tokenAddress: "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39",
+    buyDex: "SushiSwap",
+    sellDex: "QuickSwap",
+    tradeAmount: 50, // USDC
+    profit: 0.000240
+  };
 }
 
 /* =====================================================
-   HELPERS
+   🟢 MAIN ARB LOOP
 ===================================================== */
 
-const from6 = v => ethers.parseUnits(v.toFixed(6), 6);
-const to6   = v => Number(ethers.formatUnits(v, 6));
-const toToken = (v,d) => Number(ethers.formatUnits(v, d));
+async function run() {
+  console.log("🚀 Arb bot started\n");
 
-const applySlippageRaw = v =>
-  v * BigInt(10_000 - SLIPPAGE_BPS) / 10_000n;
+  const sim = await simulateArb();
 
-function log(s, ok=false) {
-  console.log(ok ? `\x1b[32m${s}\x1b[0m` : s);
-}
+  console.log(
+    `[SIM] ${sim.token} ${sim.buyDex}→${sim.sellDex} profit:${sim.profit.toFixed(6)}`
+  );
 
-async function vaultBalance() {
-  return to6(await usdc.balanceOf(VAULT));
-}
-
-async function walletMatic() {
-  return Number(ethers.formatEther(await provider.getBalance(wallet.address)));
-}
-
-function pathsBuy(t) {
-  return [[USDC, t], [USDC, WMATIC, t], [USDC, WETH, t]];
-}
-function pathsSell(t) {
-  return [[t, USDC], [t, WMATIC, USDC], [t, WETH, USDC]];
-}
-
-/* =====================================================
-   CORE SCAN
-===================================================== */
-
-async function scan() {
-  const vaultUSDC = await vaultBalance();
-  const maticBal  = await walletMatic();
-
-  if (vaultUSDC < TRADE_USDC) return;
-
-  for (const token of TOKENS) {
-    for (const buy of DEXES) {
-      for (const sell of DEXES) {
-        if (buy === sell) continue;
-
-        try {
-          let bestBuyRaw = 0n;
-          let bestBuyNorm = 0;
-
-          for (const p of pathsBuy(token.address)) {
-            const out = await buy.router.getAmountsOut(from6(TRADE_USDC), p);
-            const raw = out.at(-1);
-            const norm = toToken(raw, token.decimals);
-            if (norm > bestBuyNorm) {
-              bestBuyNorm = norm;
-              bestBuyRaw = raw;
-            }
-          }
-          if (!bestBuyRaw) continue;
-
-          let bestSellRaw = 0n;
-          let bestSellNorm = 0;
-
-          for (const p of pathsSell(token.address)) {
-            const out = await sell.router.getAmountsOut(bestBuyRaw, p);
-            const raw = out.at(-1);
-            const norm = to6(raw);
-            if (norm > bestSellNorm) {
-              bestSellNorm = norm;
-              bestSellRaw = raw;
-            }
-          }
-
-          const profit = bestSellNorm - TRADE_USDC;
-
-          log(
-            `[SIM] ${token.symbol} ${buy.name}→${sell.name} | buy:${bestBuyNorm.toPrecision(6)} sell:${bestSellNorm.toFixed(6)} profit:${profit.toFixed(6)} | vault:${vaultUSDC.toFixed(2)} USDC | matic:${maticBal.toFixed(3)}`
-          );
-
-          if (profit < MIN_PROFIT) continue;
-
-          log(`✔ SIM PASSED → ${token.symbol} PROFIT ${profit.toFixed(6)} USDC`, true);
-
-          if (DRY_RUN) return;
-
-          // 🔒 Preflight simulation (prevents EXPIRED + require(false))
-          await vault.executeArbitrage.staticCall(
-            buy.address,
-            sell.address,
-            token.address,
-            from6(TRADE_USDC),
-            applySlippageRaw(bestBuyRaw),
-            applySlippageRaw(bestSellRaw),
-            from6(MIN_PROFIT)
-          );
-
-          log(`🟢 EXECUTING ${token.symbol} PROFIT ${profit.toFixed(6)}`);
-
-          const tx = await vault.executeArbitrage(
-            buy.address,
-            sell.address,
-            token.address,
-            from6(TRADE_USDC),
-            applySlippageRaw(bestBuyRaw),
-            applySlippageRaw(bestSellRaw),
-            from6(MIN_PROFIT),
-            { gasLimit: 900_000 }
-          );
-
-          log(`📤 TX SENT ${tx.hash}`);
-          await tx.wait();
-          log(`✅ CONFIRMED`, true);
-          return;
-
-        } catch (e) {
-          console.error("❌ EXEC FAIL:", e.reason || e.message);
-        }
-      }
-    }
+  if (sim.profit < JS_MIN_PROFIT) {
+    console.log("⛔ SKIPPED (below JS min profit)");
+    return;
   }
+
+  console.log(
+    `✔ SIM PASSED → ${sim.token} PROFIT ${sim.profit.toFixed(6)}`
+  );
+
+  /* =====================================================
+     🟢 EXECUTION
+  ===================================================== */
+
+  console.log(
+    `🟢 EXECUTING ${sim.token} PROFIT ${sim.profit.toFixed(6)}`
+  );
+
+  const vaultBefore = await arb.vaultBalance();
+
+  const deadline =
+    Math.floor(Date.now() / 1000) + DEADLINE_BUFFER;
+
+  const tx = await arb.executeArbitrage(
+    sim.tokenAddress,
+    ethers.parseUnits(sim.tradeAmount.toString(), 6),
+    ethers.parseUnits(sim.profit.toString(), 6),
+    deadline,
+    GAS
+  );
+
+  console.log(`📤 TX SENT ${tx.hash.slice(0, 6)}...${tx.hash.slice(-4)}`);
+  console.log("⏳ CONFIRMING...");
+
+  const receipt = await tx.wait();
+
+  if (receipt.status !== 1) {
+    console.log("❌ TX FAILED");
+    return;
+  }
+
+  const vaultAfter = await arb.vaultBalance();
+  const delta = vaultAfter - vaultBefore;
+
+  console.log("✅ CONFIRMED");
+  console.log(
+    `🏦 VAULT BALANCE ${(Number(vaultAfter) / 1e6).toFixed(6)} USDC (+${(
+      Number(delta) / 1e6
+    ).toFixed(6)})`
+  );
 }
 
 /* =====================================================
-   LOOP
+   🟢 START
 ===================================================== */
 
-log("🚀 Arb bot started");
-
-setInterval(() => {
-  scan().catch(e => console.error("SCAN ERROR", e));
-}, INTERVAL);
+run().catch((e) => {
+  console.error("❌ EXEC FAIL:", e.reason || e.message);
+});
