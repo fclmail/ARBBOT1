@@ -1,6 +1,9 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – FULL RESTORED VERSION (NEW VAULT)
+//  ARBITRAGE BOT – FULLY RESTORED + NEW VAULT
+//  - Live scan logs (buy/sell/profit)
+//  - Executes LowRevertArbVault.executeArbitrage
+//  - Enforces MIN PROFIT = 10 (0.00001 USDC)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -10,9 +13,9 @@ dotenv.config();
 // ----------------- CONFIG -----------------
 const RPC = process.env.RPC_POLYGON || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found.");
+if (!PRIVATE_KEY) throw new Error("PRIVATE KEY missing");
 
-const DRY_RUN = true;
+const DRY_RUN = false;
 const MIN_TRADE_USDC = 200000;
 const MIN_EXPECTED_PROFIT = 0.00001; // 10 units (6 decimals)
 const MIN_PROFIT_PCT = 1.0;
@@ -28,36 +31,22 @@ const colors = {
   cyan: "\x1b[36m",
   magenta: "\x1b[35m"
 };
-const fmtNum = (n, dec = 6) => Number(n).toFixed(dec);
+const fmt = (n, d = 6) => Number(n).toFixed(d);
 
-// ----------------- PROVIDER / WALLET -----------------
+// ----------------- PROVIDER -----------------
 const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new Wallet(PRIVATE_KEY, provider);
 
-// ----------------- VAULT -----------------
+// ----------------- NEW VAULT -----------------
 const VAULT_ADDRESS = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
 
 const vaultAbi = [
-  {
-    "name": "executeArbitrage",
-    "type": "function",
-    "stateMutability": "nonpayable",
-    "inputs": [
-      { "name": "buyRouter", "type": "address" },
-      { "name": "sellRouter", "type": "address" },
-      { "name": "token", "type": "address" },
-      { "name": "amountInUSDC", "type": "uint256" },
-      { "name": "minTokenOut", "type": "uint256" },
-      { "name": "minUSDCOut", "type": "uint256" },
-      { "name": "deadline", "type": "uint256" }
-    ],
-    "outputs": []
-  },
-  { "name": "USDC", "type": "function", "stateMutability": "view", "inputs": [], "outputs": [{ "type": "address" }] },
-  { "name": "owner", "type": "function", "stateMutability": "view", "inputs": [], "outputs": [{ "type": "address" }] }
+  "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256)",
+  "function USDC() view returns (address)",
+  "function owner() view returns (address)"
 ];
 
-const vaultContract = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 // ----------------- ERC20 -----------------
 const erc20Abi = [
@@ -73,7 +62,7 @@ const tokens = {
   WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 }
 };
 
-// ----------------- ROUTERS -----------------
+// ----------------- DEX ROUTERS -----------------
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -81,117 +70,145 @@ const routers = {
 };
 
 // ----------------- BASE FALLBACKS -----------------
-const BASE_FALLBACKS = [
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+const BASES = [
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"  // WMATIC
 ];
 
 // ----------------- HELPERS -----------------
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function saneProfitPct(pct) {
-  if (!Number.isFinite(pct)) return false;
-  if (pct < -1000 || pct > MAX_PROFIT_PCT) return false;
-  return true;
+function sanePct(p) {
+  return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT;
 }
 
-async function safeGetAmountOut(routerAddr, tokenObj, amountUSDC) {
-  try {
-    const router = new ethers.Contract(
-      routerAddr,
-      ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-      provider
-    );
+async function getVaultUSDC() {
+  const addr = await vault.USDC();
+  return new ethers.Contract(addr, erc20Abi, provider);
+}
 
-    const amountInRaw = ethers.parseUnits(amountUSDC.toString(), 6);
-    const bases = BASE_FALLBACKS;
+async function vaultBalance() {
+  const usdc = await getVaultUSDC();
+  return Number(ethers.formatUnits(await usdc.balanceOf(VAULT_ADDRESS), 6));
+}
 
-    for (const base of bases) {
-      try {
-        const amounts = await router.getAmountsOut(amountInRaw, [base, tokenObj.address]);
-        return Number(ethers.formatUnits(amounts[1], tokenObj.decimals));
-      } catch {}
-    }
-    return null;
-  } catch {
-    return null;
+async function quote(routerAddr, token, usdcAmt) {
+  const router = new ethers.Contract(
+    routerAddr,
+    ["function getAmountsOut(uint,address[]) view returns (uint[])"],
+    provider
+  );
+
+  const amtIn = ethers.parseUnits(usdcAmt.toString(), 6);
+
+  for (const base of BASES) {
+    try {
+      const a = await router.getAmountsOut(amtIn, [base, token.address]);
+      return Number(ethers.formatUnits(a[1], token.decimals));
+    } catch {}
   }
+  return null;
 }
 
-async function getVaultUsdcContract() {
-  const usdcAddr = await vaultContract.USDC();
-  return new ethers.Contract(usdcAddr, erc20Abi, provider);
-}
+// ----------------- EXECUTE -----------------
+async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
+  const before = await vaultBalance();
+  console.log(`${colors.cyan}🏦 Vault Before: ${fmt(before)} USDC${colors.reset}`);
 
-// ----------------- EXECUTE TRADE -----------------
-async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
-  const tokenObj = Object.values(tokens).find(t => t.address === tokenAddr);
-  const usdc = await getVaultUsdcContract();
-
-  const before = Number(ethers.formatUnits(await usdc.balanceOf(VAULT_ADDRESS), 6));
-  console.log(`${colors.cyan}🏦 Vault Balance Before: ${fmtNum(before)} USDC${colors.reset}`);
-
-  const buyOut = await safeGetAmountOut(buyRouter, tokenObj, amountUSDC);
-  const sellOut = await safeGetAmountOut(sellRouter, tokenObj, amountUSDC);
+  const buyOut = await quote(buyRouter, token, amountUSDC);
+  const sellOut = await quote(sellRouter, token, amountUSDC);
   if (!buyOut || !sellOut) return;
 
   const buyPrice = amountUSDC / buyOut;
   const sellPrice = amountUSDC / sellOut;
-  const profitUSDC = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
-  const profitPct = (profitUSDC / buyPrice) * 100;
+  const expectedProfit = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
+  const profitPct = (expectedProfit / buyPrice) * 100;
 
-  if (profitUSDC <= MIN_EXPECTED_PROFIT || profitPct < MIN_PROFIT_PCT) return;
-  if (!saneProfitPct(profitPct)) return;
-
-  console.log(`${colors.green}${tokenAddr} | Expected Profit: ${fmtNum(profitUSDC)} USDC${colors.reset}`);
-
-  if (DRY_RUN) {
-    console.log(`${colors.magenta}🔎 DRY RUN — not sending tx${colors.reset}`);
+  if (
+    expectedProfit < MIN_EXPECTED_PROFIT ||
+    profitPct < MIN_PROFIT_PCT ||
+    !sanePct(profitPct)
+  ) {
+    console.log(`${colors.yellow}⚠️ Profit too low, skipping${colors.reset}`);
     return;
   }
 
-  const amountInRaw = ethers.parseUnits(amountUSDC.toString(), 6);
-  const minUSDCOut = amountInRaw + 10n;
-  const minTokenOut = 1n;
+  console.log(
+    `${colors.green}💡 EXECUTING | Expected Profit: ${fmt(expectedProfit)} USDC | ${fmt(profitPct)}%${colors.reset}`
+  );
+
+  if (DRY_RUN) {
+    console.log(`${colors.magenta}🔎 DRY RUN${colors.reset}`);
+    return;
+  }
+
+  const amountIn = ethers.parseUnits(amountUSDC.toString(), 6);
+  const minTokenOut = ethers.parseUnits(
+    (buyOut * (1 - SLIPPAGE_PCT / 100)).toString(),
+    token.decimals
+  );
+  const minUSDCOut = ethers.parseUnits(
+    (amountUSDC + MIN_EXPECTED_PROFIT).toString(),
+    6
+  );
   const deadline = Math.floor(Date.now() / 1000) + 120;
 
-  const tx = await vaultContract.executeArbitrage(
+  const tx = await vault.executeArbitrage(
     buyRouter,
     sellRouter,
-    tokenAddr,
-    amountInRaw,
+    token.address,
+    amountIn,
     minTokenOut,
     minUSDCOut,
     deadline
   );
 
-  console.log(`${colors.green}🔁 TX SENT — ${tx.hash}${colors.reset}`);
+  console.log(`${colors.green}🔁 TX SENT: ${tx.hash}${colors.reset}`);
   await tx.wait();
 
-  const after = Number(ethers.formatUnits(await usdc.balanceOf(VAULT_ADDRESS), 6));
-  console.log(`${colors.green}💰 REAL PROFIT: ${fmtNum(after - before)} USDC${colors.reset}`);
+  const after = await vaultBalance();
+  console.log(`${colors.green}💰 REAL PROFIT: ${fmt(after - before)} USDC${colors.reset}`);
 }
 
 // ----------------- SCANNER -----------------
-async function scanAllPairs() {
-  for (const token of Object.values(tokens)) {
-    for (const buyRouter of Object.values(routers)) {
-      for (const sellRouter of Object.values(routers)) {
-        if (buyRouter === sellRouter) continue;
-        await executeTradeLive(buyRouter, sellRouter, token.address, MIN_TRADE_USDC);
-        await sleep(1200);
+async function scan() {
+  for (const [sym, token] of Object.entries(tokens)) {
+    for (const [bName, bRouter] of Object.entries(routers)) {
+      for (const [sName, sRouter] of Object.entries(routers)) {
+        if (bName === sName) continue;
+
+        const buyOut = await quote(bRouter, token, MIN_TRADE_USDC);
+        const sellOut = await quote(sRouter, token, MIN_TRADE_USDC);
+        if (!buyOut || !sellOut) continue;
+
+        const buyP = MIN_TRADE_USDC / buyOut;
+        const sellP = MIN_TRADE_USDC / sellOut;
+        const profit = (sellP - buyP) * (1 - SLIPPAGE_PCT / 100);
+        const pct = (profit / buyP) * 100;
+        if (!sanePct(pct)) continue;
+
+        console.log(
+          `${profit > 0 ? colors.green : colors.red}${sym} | ${bName}→${sName} | profit=${fmt(profit)} | pct=${fmt(pct)}%${colors.reset}`
+        );
+
+        if (profit >= MIN_EXPECTED_PROFIT && pct >= MIN_PROFIT_PCT) {
+          await executeTrade(bRouter, sRouter, token, MIN_TRADE_USDC);
+          await sleep(1200);
+        }
       }
     }
   }
 }
 
-// ----------------- MAIN LOOP -----------------
-(async function main() {
-  console.log(`${colors.cyan}🚀 Live arbitrage runner started${colors.reset}`);
+// ----------------- MAIN -----------------
+(async () => {
+  console.log(`${colors.cyan}🚀 Arbitrage bot started${colors.reset}`);
+  console.log(`${colors.cyan}Vault: ${VAULT_ADDRESS}${colors.reset}`);
+
   while (true) {
-    await scanAllPairs();
+    await scan();
     await sleep(8000);
   }
 })();
