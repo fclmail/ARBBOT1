@@ -16,7 +16,7 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PRIVATE KEY missing");
 
 const DRY_RUN = false;
-const MIN_TRADE_USDC = 200000;
+const MIN_TRADE_USDC = 0.010;
 const MIN_EXPECTED_PROFIT = 0.00001; // 10 units (6 decimals)
 const MIN_PROFIT_PCT = 1.0;
 const SLIPPAGE_PCT = 0.05;
