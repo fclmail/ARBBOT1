@@ -22,11 +22,11 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-const MIN_TRADE_USDC = 0.030;
+const MIN_TRADE_USDC = 2000;
 const MIN_PROFIT_USDC = 0.00001;
 const MIN_PROFIT_PCT = 0.3;
 const SLIPPAGE_PCT = 0.5;
-const DRY_RUN = false;
+const DRY_RUN = true;
 
 /* ===================== COLORS ===================== */
 const C = {
