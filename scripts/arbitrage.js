@@ -28,7 +28,7 @@ const MIN_TRADE_USDC = 0.080;          // trade size
 const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
 const MIN_PROFIT_PCT = 1.0;
 const SLIPPAGE_PCT = 0.05;            // slippage tolerance %
-const MAX_PROFIT_PCT = 5550;
+const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
 const colors = {
