@@ -17,7 +17,7 @@ process.on("uncaughtException", (err) => {
 /* ============================================================= */
 
 // ----------------- CONFIG -----------------
-const RPC = process.env.RPC_POLYGON || "https://polygon-rpc.com";
+const RPC = process.env.RPC_POLYGON || "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
