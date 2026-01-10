@@ -1,9 +1,9 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – VAULT VERSION (APPROVAL-READY)
+//  ARBITRAGE BOT – VAULT VERSION (BIGINT SAFE)
 //  - Continuous scan
 //  - Correct quotes
-//  - Correct profit math
+//  - BigInt-only math (ethers v6 safe)
 //  - Slippage protected
 //  - Vault custody enforced
 //  - Router approvals supported
@@ -75,7 +75,6 @@ const vaultAbi = [
   "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256)",
   "function approveRouter(address,address)",
   "function USDC() view returns (address)",
-  "function owner() view returns (address)",
 ];
 
 const erc20Abi = [
@@ -94,19 +93,13 @@ const usdc = new ethers.Contract(USDC, erc20Abi, provider);
 // ----------------- HELPERS -----------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function applySlippage(amountBN, pct) {
+  return (amountBN * BigInt(10000 - Math.floor(pct * 100))) / 10000n;
+}
+
 async function vaultBalance() {
   const bal = await usdc.balanceOf(VAULT_ADDRESS);
   return Number(ethers.formatUnits(bal, 6));
-}
-
-async function quote(routerAddr, path, amountIn, decimalsOut) {
-  const router = new ethers.Contract(routerAddr, routerAbi, provider);
-  try {
-    const a = await router.getAmountsOut(amountIn, path);
-    return Number(ethers.formatUnits(a[a.length - 1], decimalsOut));
-  } catch {
-    return null;
-  }
 }
 
 // ----------------- ONE-TIME APPROVAL SETUP -----------------
@@ -118,9 +111,8 @@ async function setupApprovals() {
 
   for (const r of routerList) {
     for (const t of tokenList) {
-      const allowance = await new ethers.Contract(t, erc20Abi, provider)
-        .allowance(VAULT_ADDRESS, r);
-
+      const token = new ethers.Contract(t, erc20Abi, provider);
+      const allowance = await token.allowance(VAULT_ADDRESS, r);
       if (allowance > 0n) continue;
 
       const tx = await vault.approveRouter(r, t);
@@ -137,35 +129,33 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
   try {
     const before = await vaultBalance();
     console.log(`${colors.cyan}🏦 Vault: ${fmt(before)} USDC${colors.reset}`);
-
     if (before < amountUSDC) return;
 
     const usdcIn = ethers.parseUnits(amountUSDC.toString(), 6);
+    const buy = new ethers.Contract(buyRouter, routerAbi, provider);
+    const sell = new ethers.Contract(sellRouter, routerAbi, provider);
 
-    const tokenOut = await quote(
-      buyRouter,
-      [USDC, token.address],
+    const tokenOutBN = (await buy.getAmountsOut(
       usdcIn,
-      token.decimals
-    );
-    if (!tokenOut) return;
+      [USDC, token.address]
+    ))[1];
 
-    const usdcOut = await quote(
-      sellRouter,
-      [token.address, USDC],
-      ethers.parseUnits(tokenOut.toString(), token.decimals),
-      6
-    );
-    if (!usdcOut) return;
+    const usdcOutBN = (await sell.getAmountsOut(
+      tokenOutBN,
+      [token.address, USDC]
+    ))[1];
 
-    const profit = usdcOut - amountUSDC;
+    const profitBN = usdcOutBN - usdcIn;
+    if (profitBN <= 0n) return;
+
+    const profit = Number(ethers.formatUnits(profitBN, 6));
     const pct = (profit / amountUSDC) * 100;
 
     console.log(
-      `${colors.magenta}🛒 Buy ${tokenOut.toFixed(6)} @ ${buyRouter.slice(0, 6)}${colors.reset}`
+      `${colors.magenta}🛒 Buy ${fmt(ethers.formatUnits(tokenOutBN, token.decimals))} @ ${buyRouter.slice(0,6)}${colors.reset}`
     );
     console.log(
-      `${colors.magenta}💱 Sell ${fmt(usdcOut)} USDC @ ${sellRouter.slice(0, 6)}${colors.reset}`
+      `${colors.magenta}💱 Sell ${fmt(ethers.formatUnits(usdcOutBN, 6))} USDC @ ${sellRouter.slice(0,6)}${colors.reset}`
     );
 
     if (
@@ -183,15 +173,8 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
 
     if (DRY_RUN) return;
 
-    const minTokenOut = ethers.parseUnits(
-      (tokenOut * (1 - SLIPPAGE_PCT / 100)).toString(),
-      token.decimals
-    );
-
-    const minUSDCOut = ethers.parseUnits(
-      (usdcOut * (1 - SLIPPAGE_PCT / 100)).toString(),
-      6
-    );
+    const minTokenOut = applySlippage(tokenOutBN, SLIPPAGE_PCT);
+    const minUSDCOut  = applySlippage(usdcOutBN, SLIPPAGE_PCT);
 
     const tx = await vault.executeArbitrage(
       buyRouter,
