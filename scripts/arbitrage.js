@@ -1,6 +1,6 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – VAULT VERSION (CRASH-SAFE + AUTO APPROVE)
+//  ARBITRAGE BOT – VAULT VERSION (FAST AUTO-APPROVE)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -23,11 +23,11 @@ if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
 }
 
-const DRY_RUN = false;                 // set true to simulate
+const DRY_RUN = false;                 // true = simulate only
 const MIN_TRADE_USDC = 0.01;          // trade size
 const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
 const MIN_PROFIT_PCT = 1.0;
-const SLIPPAGE_PCT = 0.05;            // acceptable slippage %
+const SLIPPAGE_PCT = 0.05;            // slippage tolerance %
 const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
@@ -61,6 +61,7 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 const erc20Abi = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
+  "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) external returns (bool)"
 ];
 
@@ -125,17 +126,27 @@ async function quote(routerAddr, token, amountUSDC) {
   return null;
 }
 
-// Automatically approve all routers for tokens
+// ----------------- SMART AUTO-APPROVE -----------------
 async function ensureApprovals() {
-  console.log(`${colors.cyan}🔑 Ensuring router approvals...${colors.reset}`);
+  const usdcAddr = await vaultUSDC();
+  console.log(`${colors.cyan}🔑 Checking router approvals...${colors.reset}`);
+
   for (const token of Object.values(tokens)) {
+    const tokenContract = new ethers.Contract(token.address, erc20Abi, wallet);
+
     for (const router of Object.values(routers)) {
       try {
+        const allowance = await tokenContract.allowance(VAULT_ADDRESS, router);
+        if (allowance.gt(ethers.parseUnits("1000000", token.decimals))) {
+          // Already approved sufficiently
+          continue;
+        }
+
         const tx = await vault.approveRouter(router, token.address);
-        await tx.wait();
-        console.log(`${colors.green}✅ Approved ${token.address} for ${router}${colors.reset}`);
+        console.log(`${colors.green}✅ Approval sent for ${token.address} -> ${router}${colors.reset}`);
+        if (!DRY_RUN) await tx.wait(); // wait for confirmation only if not DRY_RUN
       } catch (e) {
-        console.log(`${colors.red}⚠️ Approval failed: ${e.message}${colors.reset}`);
+        console.log(`${colors.red}⚠️ Approval error: ${e.message}${colors.reset}`);
       }
       await sleep(200);
     }
@@ -174,7 +185,6 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
       return;
     }
 
-    // Compute minTokenOut and minUSDCOut for safety
     const minTokenOut = Math.floor(buyOut * (1 - SLIPPAGE_PCT / 100));
     const minUSDCOut = Math.floor(sellOut * (1 - SLIPPAGE_PCT / 100));
 
@@ -223,8 +233,7 @@ async function scan() {
 (async () => {
   console.log(`${colors.cyan}🚀 Arb bot running${colors.reset}`);
 
-  // Step 0: ensure routers are approved for vault tokens
-  await ensureApprovals();
+  await ensureApprovals(); // auto-approve only if needed
 
   while (true) {
     try {
