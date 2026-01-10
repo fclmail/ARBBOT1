@@ -24,7 +24,7 @@ if (!PRIVATE_KEY) {
 }
 
 const DRY_RUN = true;                 // true = simulate only
-const MIN_TRADE_USDC = 100000;          // trade size
+const MIN_TRADE_USDC = 0.050;          // trade size
 const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
 const MIN_PROFIT_PCT = 1.0;
 const SLIPPAGE_PCT = 0.05;            // slippage tolerance %
