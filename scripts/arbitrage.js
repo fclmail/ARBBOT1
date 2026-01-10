@@ -1,6 +1,6 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – VAULT VERSION (FAST AUTO-APPROVE)
+//  ARBITRAGE BOT – VAULT VERSION (FAST AUTO-APPROVE + FULL LOGS)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -137,14 +137,14 @@ async function ensureApprovals() {
     for (const router of Object.values(routers)) {
       try {
         const allowance = await tokenContract.allowance(VAULT_ADDRESS, router);
-        if (allowance.gt(ethers.parseUnits("1000000", token.decimals))) {
-          // Already approved sufficiently
-          continue;
+        // ethers v6 returns bigint
+        if (allowance > ethers.parseUnits("1000000", token.decimals)) {
+          continue; // already approved
         }
 
         const tx = await vault.approveRouter(router, token.address);
         console.log(`${colors.green}✅ Approval sent for ${token.address} -> ${router}${colors.reset}`);
-        if (!DRY_RUN) await tx.wait(); // wait for confirmation only if not DRY_RUN
+        if (!DRY_RUN) await tx.wait();
       } catch (e) {
         console.log(`${colors.red}⚠️ Approval error: ${e.message}${colors.reset}`);
       }
@@ -179,6 +179,7 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
     }
 
     console.log(`${colors.green}💰 Expected Profit: ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`);
+    console.log(`${colors.cyan}📈 Buy: ${fmt(buyPrice)}, Sell: ${fmt(sellPrice)}${colors.reset}`);
 
     if (DRY_RUN) {
       console.log(`${colors.magenta}🔎 DRY RUN${colors.reset}`);
@@ -208,7 +209,7 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
     if (!receipt || receipt.status !== 1) return;
 
     const after = await vaultBalance();
-    console.log(`${colors.green}✅ REAL PROFIT: ${fmt(after - before)} USDC${colors.reset}`);
+    console.log(`${colors.green}✅ Vault After: ${fmt(after)} USDC, REAL PROFIT: ${fmt(after - before)} USDC${colors.reset}`);
 
   } catch (err) {
     console.log(`${colors.red}⚠️ Trade error: ${err.message}${colors.reset}`);
