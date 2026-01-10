@@ -24,7 +24,7 @@ if (!PRIVATE_KEY) {
 }
 
 const DRY_RUN = false;                 // true = simulate only
-const MIN_TRADE_USDC = 0.100;          // trade size
+const MIN_TRADE_USDC = 0.030;          // trade size
 const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
 const MIN_PROFIT_PCT = 1.0;
 const SLIPPAGE_PCT = 0.05;            // slippage tolerance %
@@ -46,7 +46,7 @@ const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new Wallet(PRIVATE_KEY, provider);
 
 // ----------------- VAULT -----------------
-const VAULT_ADDRESS = "0x04b0d378cfDD6F2F3895E19ACDc411a4558F875A";
+const VAULT_ADDRESS = "0x2dD5820519aBbC74DB5658744e9EbAf9ED88320e";
 
 const vaultAbi = [
   "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256)",
