@@ -23,7 +23,7 @@ if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
 }
 
-const DRY_RUN = true;                 // true = simulate only
+const DRY_RUN = false;                 // true = simulate only
 const MIN_TRADE_USDC = 0.050;          // trade size
 const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
 const MIN_PROFIT_PCT = 1.0;
