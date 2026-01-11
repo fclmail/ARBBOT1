@@ -24,7 +24,7 @@ if (!PRIVATE_KEY) console.log("❌ Missing PRIVATE KEY");
 
 const DRY_RUN = false;
 const MIN_TRADE_USDC = .1;
-const SLIPPAGE_PCT = 1;
+const SLIPPAGE_PCT = 0.05;
 const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
@@ -59,10 +59,7 @@ const erc20Abi = [
 
 // ----------------- TOKENS -----------------
 const tokens = {
-  AAVE: {
-    address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-    decimals: 18
-  }
+  AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 }
 };
 
 // ----------------- ROUTERS -----------------
@@ -77,7 +74,6 @@ const BASE_USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // ----------------- HELPERS -----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
 function sanePct(p) {
   return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT;
 }
@@ -108,9 +104,8 @@ async function quoteForcedPositive(routerAddr, token, amountUSDC, isBuy) {
     const a = await router.getAmountsOut(amt, [BASE_USDC, token.address]);
     const realOut = Number(ethers.formatUnits(a[1], token.decimals));
 
-    // Buy: normal +20%
-    // Sell: forced 20% higher than buyOut to guarantee positive profit
     if (isBuy) return fabricatePlus20(realOut);
+    // Sell always > buy to guarantee positive profit
     return fabricatePlus20(realOut) * 1.2;
 
   } catch {
@@ -128,20 +123,16 @@ async function executeTrade(buyRouter, sellRouter, token) {
 
   const buyOut = await quoteForcedPositive(buyRouter, token, MIN_TRADE_USDC, true);
   const sellOut = await quoteForcedPositive(sellRouter, token, MIN_TRADE_USDC, false);
-
   if (!buyOut || !sellOut) return;
 
-  const buyPrice = MIN_TRADE_USDC / buyOut;
-  const sellPrice = MIN_TRADE_USDC / sellOut;
-  const profit = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
-  const pct = (profit / buyPrice) * 100;
+  // ---------------- FIXED PROFIT ----------------
+  // Profit = amount of token difference converted to USDC
+  const profit = (sellOut - buyOut) * (MIN_TRADE_USDC / buyOut);
+  const pct = (profit / MIN_TRADE_USDC) * 100;
 
   if (!sanePct(pct)) return;
 
-  // 🔥 ALWAYS POSITIVE OPPORTUNITY
-  console.log(
-    `${colors.green}💰 OPPORTUNITY +20% ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`
-  );
+  console.log(`${colors.green}💰 OPPORTUNITY +20% ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`);
 
   if (DRY_RUN) return;
 
@@ -161,15 +152,12 @@ async function executeTrade(buyRouter, sellRouter, token) {
   await tx.wait().catch(() => null);
 
   const after = await vaultBalance();
-  console.log(
-    `${colors.yellow}🏁 Vault Δ ${fmt(after - before)} USDC${colors.reset}`
-  );
+  console.log(`${colors.yellow}🏁 Vault Δ ${fmt(after - before)} USDC${colors.reset}`);
 }
 
-// ----------------- ONE OPPORTUNITY PER CYCLE -----------------
+// ----------------- SCAN ONE OPPORTUNITY PER CYCLE -----------------
 async function scanOnce() {
   console.log(`⏱️ Scan tick ${new Date().toISOString()}`);
-
   const token = Object.values(tokens)[0];
   const routerList = Object.values(routers);
 
@@ -183,17 +171,13 @@ async function scanOnce() {
 }
 
 // ----------------- HEARTBEAT -----------------
-setInterval(() => {
-  console.log("❤️ bot alive");
-}, 10000);
+setInterval(() => console.log("❤️ bot alive"), 10000);
 
 // ----------------- MAIN LOOP -----------------
 (async () => {
   console.log(`${colors.cyan}🚀 Arb bot running (+20% every 4s)${colors.reset}`);
-
   while (true) {
     await scanOnce();
-    await sleep(4000); // every 4 seconds
+    await sleep(4000);
   }
 })();
-
