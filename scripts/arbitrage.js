@@ -23,11 +23,11 @@ if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
 }
 
-const DRY_RUN = false;                 
-const MIN_TRADE_USDC = 0.050;          
-const MIN_EXPECTED_PROFIT = 0.00001;  
+const DRY_RUN = true;                 // true = simulate only
+const MIN_TRADE_USDC = 0.050;          // trade size
+const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
 const MIN_PROFIT_PCT = 1.0;
-const SLIPPAGE_PCT = 0.05;            
+const SLIPPAGE_PCT = 0.05;            // slippage tolerance %
 const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
@@ -41,9 +41,9 @@ const colors = {
 };
 const fmt = (n, d = 6) => Number(n).toFixed(d);
 
-// =================================================================
+// ----------------- PROVIDER / WALLET -----------------
+
 // ----------------- RPC ROTATION (SMART) -----------------
-// =================================================================
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
   "https://polygon-heimdall-rpc.publicnode.com",
@@ -51,30 +51,17 @@ const RPCS = [
   "https://rpc.ankr.com/polygon"
 ];
 
-// Create weighted providers (more weight = more traffic)
 const providers = RPCS.map(url => ({
   provider: new ethers.JsonRpcProvider(url),
-  weight: 1,
-  url
+  weight: 1
 }));
 
-let rpcIndex = 0;
-
-// Round-robin + auto-failover
-function getProvider() {
-  rpcIndex = (rpcIndex + 1) % providers.length;
-  return providers[rpcIndex].provider;
-}
-
-// Wrap into FallbackProvider
 const provider = new ethers.FallbackProvider(
   providers.map(p => ({ provider: p.provider, weight: p.weight })),
-  1 // quorum: only 1 RPC must succeed
+  1 // quorum
 );
 
 const wallet = new Wallet(PRIVATE_KEY, provider);
-// =================================================================
-
 
 // ----------------- VAULT -----------------
 const VAULT_ADDRESS = "0x04b0d378cfDD6F2F3895E19ACDc411a4558F875A";
@@ -113,11 +100,11 @@ const routers = {
 
 // ----------------- BASE FALLBACKS -----------------
 const BASES = [
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", 
-  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", 
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", 
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"  
-};
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+];
 
 // ----------------- HELPERS -----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
