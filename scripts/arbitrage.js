@@ -17,7 +17,6 @@ process.on("uncaughtException", (err) => {
 /* ============================================================= */
 
 // ----------------- CONFIG -----------------
-const RPC = process.env.RPC_POLYGON || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
@@ -41,14 +40,13 @@ const colors = {
 };
 const fmt = (n, d = 6) => Number(n).toFixed(d);
 
-// ----------------- PROVIDER / WALLET -----------------
-
-// ----------------- RPC ROTATION (SMART) -----------------
+// ----------------- RPC ROTATION (SAFE POLYGON) -----------------
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
-  "https://polygon-heimdall-rpc.publicnode.com",
-  "https://polygon-rpc.com",
-  "https://rpc.ankr.com/polygon"
+  "https://rpc.ankr.com/polygon",
+  "https://polygon.llamarpc.com",
+  "https://polygon-public.nodies.app",
+  "https://polygon.drpc.org"
 ];
 
 const providers = RPCS.map(url => ({
@@ -56,11 +54,7 @@ const providers = RPCS.map(url => ({
   weight: 1
 }));
 
-const provider = new ethers.FallbackProvider(
-  providers.map(p => ({ provider: p.provider, weight: p.weight })),
-  1 // quorum
-);
-
+const provider = new ethers.FallbackProvider(providers, 1);
 const wallet = new Wallet(PRIVATE_KEY, provider);
 
 // ----------------- VAULT -----------------
@@ -100,10 +94,10 @@ const routers = {
 
 // ----------------- BASE FALLBACKS -----------------
 const BASES = [
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"  // WMATIC
 ];
 
 // ----------------- HELPERS -----------------
@@ -155,9 +149,7 @@ async function ensureApprovals() {
     for (const router of Object.values(routers)) {
       try {
         const allowance = await tokenContract.allowance(VAULT_ADDRESS, router);
-        if (allowance > ethers.parseUnits("1000000", token.decimals)) {
-          continue;
-        }
+        if (allowance > ethers.parseUnits("1000000", token.decimals)) continue;
 
         const tx = await vault.approveRouter(router, token.address);
         console.log(`${colors.green}✅ Approval sent for ${token.address} -> ${router}${colors.reset}`);
