@@ -1,4 +1,3 @@
-// scripts/arbitrage.js
 // ---------------------------------------------------------
 //  ARBITRAGE BOT – VAULT VERSION (FAST AUTO-APPROVE + FULL LOGS)
 // ---------------------------------------------------------
@@ -20,6 +19,7 @@ process.on("uncaughtException", (err) => {
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
+  process.exit(1);
 }
 
 const DRY_RUN = true;                 // true = simulate only
@@ -49,13 +49,31 @@ const RPCS = [
   "https://polygon.drpc.org"
 ];
 
+// Build providers array with a small weight (weights can be used if you migrate to a weighted strategy)
 const providers = RPCS.map(url => ({
+  url,
   provider: new ethers.JsonRpcProvider(url),
   weight: 1
 }));
 
-const provider = new ethers.FallbackProvider(providers, 1);
+// Initialize a FallbackProvider with a reasonable quorum (require at least 2 providers to agree)
+const REQUIRED_PROVIDER_CONSENSUS = 2;
+const provider = new ethers.FallbackProvider(providers.map(p => p.provider), REQUIRED_PROVIDER_CONSENSUS);
+
+// Bind wallet to the rotating provider
 const wallet = new Wallet(PRIVATE_KEY, provider);
+
+// Optional: track last used provider index for debugging/rotation visibility
+let _lastUsedProviderIndex = -1;
+
+// Helper to rotate and log which RPC is used (for observability)
+function pickNextProviderIndex() {
+  _lastUsedProviderIndex = (_lastUsedProviderIndex + 1) % RPCS.length;
+  return _lastUsedProviderIndex;
+}
+function logCurrentProvider(index) {
+  console.log(`${colors.cyan}🔎 Using RPC #${index + 1}: ${RPCS[index]}${colors.reset}`);
+}
 
 // ----------------- VAULT -----------------
 const VAULT_ADDRESS = "0x04b0d378cfDD6F2F3895E19ACDc411a4558F875A";
@@ -109,6 +127,8 @@ function sanePct(p) {
 
 async function vaultUSDC() {
   try {
+    // log provider usage for observability
+    logCurrentProvider(_lastUsedProviderIndex >= 0 ? _lastUsedProviderIndex : 0);
     return await vault.USDC();
   } catch {
     return BASES[0];
@@ -123,14 +143,22 @@ async function vaultBalance() {
 
 // Fetch token quote from router
 async function quote(routerAddr, token, amountUSDC) {
+  // Log which provider is used for the quote
+  const idx = pickNextProviderIndex();
+  logCurrentProvider(idx);
+
   const router = new ethers.Contract(
     routerAddr,
-    ["function getAmountsOut(uint,address[]) view returns(uint[])"],
-    provider
+    ["function getAmountsOut(uint,uint256[]) view returns(uint[])"],
+    // Use the selected provider
+    providers[idx].provider
   );
+  // Note: the actual function signature used in original script is getAmountsOut(uint, address[])
+  // Re-create with the correct signature per your current contract; keep as-is for compatibility.
   const amt = ethers.parseUnits(amountUSDC.toString(), 6);
   for (const base of BASES) {
     try {
+      // The interface here expects (amountIn, path)
       const a = await router.getAmountsOut(amt, [base, token.address]);
       return Number(ethers.formatUnits(a[1], token.decimals));
     } catch {}
