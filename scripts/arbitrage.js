@@ -17,16 +17,17 @@ process.on("uncaughtException", (err) => {
 /* ============================================================= */
 
 // ----------------- CONFIG -----------------
+const RPC = process.env.RPC_POLYGON || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
 }
 
-const DRY_RUN = true;                 // true = simulate only
-const MIN_TRADE_USDC = 0.050;          // trade size
-const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
+const DRY_RUN = false;                // MUST be false to execute trades
+const MIN_TRADE_USDC = 0.050;
+const MIN_EXPECTED_PROFIT = 0.00001;
 const MIN_PROFIT_PCT = 1.0;
-const SLIPPAGE_PCT = 0.05;            // slippage tolerance %
+const SLIPPAGE_PCT = 0.05;
 const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
@@ -40,7 +41,9 @@ const colors = {
 };
 const fmt = (n, d = 6) => Number(n).toFixed(d);
 
-// ----------------- RPC ROTATION (SAFE POLYGON) -----------------
+// ----------------- PROVIDER / WALLET -----------------
+// 🔒 Polygon-safe RPC rotation with chainId lock (137)
+
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
   "https://rpc.ankr.com/polygon",
@@ -50,7 +53,7 @@ const RPCS = [
 ];
 
 const providers = RPCS.map(url => ({
-  provider: new ethers.JsonRpcProvider(url),
+  provider: new ethers.JsonRpcProvider(url, 137),
   weight: 1
 }));
 
@@ -94,10 +97,10 @@ const routers = {
 
 // ----------------- BASE FALLBACKS -----------------
 const BASES = [
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
-  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"  // WMATIC
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
 ];
 
 // ----------------- HELPERS -----------------
@@ -140,7 +143,6 @@ async function quote(routerAddr, token, amountUSDC) {
 
 // ----------------- SMART AUTO-APPROVE -----------------
 async function ensureApprovals() {
-  const usdcAddr = await vaultUSDC();
   console.log(`${colors.cyan}🔑 Checking router approvals...${colors.reset}`);
 
   for (const token of Object.values(tokens)) {
@@ -153,7 +155,7 @@ async function ensureApprovals() {
 
         const tx = await vault.approveRouter(router, token.address);
         console.log(`${colors.green}✅ Approval sent for ${token.address} -> ${router}${colors.reset}`);
-        if (!DRY_RUN) await tx.wait();
+        await tx.wait();
       } catch (e) {
         console.log(`${colors.red}⚠️ Approval error: ${e.message}${colors.reset}`);
       }
@@ -168,11 +170,6 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
     const before = await vaultBalance();
     console.log(`${colors.cyan}🏦 Vault Before: ${fmt(before)} USDC${colors.reset}`);
 
-    if (before < amountUSDC) {
-      console.log(`${colors.red}❌ Vault insufficient USDC${colors.reset}`);
-      return;
-    }
-
     const buyOut = await quote(buyRouter, token, amountUSDC);
     const sellOut = await quote(sellRouter, token, amountUSDC);
     if (!buyOut || !sellOut) return;
@@ -182,43 +179,30 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
     const profit = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
     const pct = (profit / buyPrice) * 100;
 
-    if (!sanePct(pct) || profit < MIN_EXPECTED_PROFIT || pct < MIN_PROFIT_PCT) {
-      console.log(`${colors.yellow}⚠️ Profit too low${colors.reset}`);
-      return;
-    }
+    if (!sanePct(pct) || profit < MIN_EXPECTED_PROFIT || pct < MIN_PROFIT_PCT) return;
 
     console.log(`${colors.green}💰 Expected Profit: ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`);
     console.log(`${colors.cyan}📈 Buy: ${fmt(buyPrice)}, Sell: ${fmt(sellPrice)}${colors.reset}`);
-
-    if (DRY_RUN) {
-      console.log(`${colors.magenta}🔎 DRY RUN${colors.reset}`);
-      return;
-    }
-
-    const minTokenOut = Math.floor(buyOut * (1 - SLIPPAGE_PCT / 100));
-    const minUSDCOut = Math.floor(sellOut * (1 - SLIPPAGE_PCT / 100));
 
     const tx = await vault.executeArbitrage(
       buyRouter,
       sellRouter,
       token.address,
       ethers.parseUnits(amountUSDC.toString(), 6),
-      minTokenOut,
-      minUSDCOut,
+      Math.floor(buyOut * 0.9995),
+      Math.floor(sellOut * 0.9995),
       Math.floor(Date.now() / 1000) + 120
-    ).catch(e => {
-      console.log(`${colors.red}⚠️ Tx rejected: ${e.reason || e.message}${colors.reset}`);
-      return null;
-    });
-
-    if (!tx) return;
+    );
 
     console.log(`${colors.green}🔁 TX SENT: ${tx.hash}${colors.reset}`);
-    const receipt = await tx.wait().catch(() => null);
+    console.log("⏳ Waiting for confirmation...");
+
+    const receipt = await tx.wait();
     if (!receipt || receipt.status !== 1) return;
 
     const after = await vaultBalance();
-    console.log(`${colors.green}✅ Vault After: ${fmt(after)} USDC, REAL PROFIT: ${fmt(after - before)} USDC${colors.reset}`);
+    console.log(`${colors.green}✅ Vault After: ${fmt(after)} USDC`);
+    console.log(`REAL PROFIT: ${fmt(after - before)} USDC${colors.reset}`);
 
   } catch (err) {
     console.log(`${colors.red}⚠️ Trade error: ${err.message}${colors.reset}`);
@@ -231,9 +215,10 @@ async function scan() {
   for (const token of Object.values(tokens)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
-        if (buy === sell) continue;
-        await executeTrade(buy, sell, token, MIN_TRADE_USDC);
-        await sleep(800);
+        if (buy !== sell) {
+          await executeTrade(buy, sell, token, MIN_TRADE_USDC);
+          await sleep(800);
+        }
       }
     }
   }
@@ -242,15 +227,10 @@ async function scan() {
 // ----------------- MAIN -----------------
 (async () => {
   console.log(`${colors.cyan}🚀 Arb bot running${colors.reset}`);
-
   await ensureApprovals();
 
   while (true) {
-    try {
-      await scan();
-    } catch (e) {
-      console.log(`${colors.red}⚠️ Scanner error: ${e.message}${colors.reset}`);
-    }
+    await scan();
     await sleep(8000);
   }
 })();
