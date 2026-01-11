@@ -23,18 +23,18 @@ if (!PRIVATE_KEY) {
   console.log("❌ Missing PRIVATE KEY");
 }
 
-const DRY_RUN = false;                 // true = simulate only
+const DRY_RUN = true;                 // true = simulate only
 const MIN_TRADE_USDC = 0.050;          // trade size
 const MIN_EXPECTED_PROFIT = 0.00001;  // minimum USDC profit
 const MIN_PROFIT_PCT = 1.0;
 const SLIPPAGE_PCT = 0.05;            // slippage tolerance %
-const MAX_PROFIT_PCT = 5570;
+const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
 const colors = {
   reset: "\x1b[0m",
   red: "\x1b[31m",
-  green: "\x1b[32m",5
+  green: "\x1b[32m",
   yellow: "\x1b[33m",
   cyan: "\x1b[36m",
   magenta: "\x1b[35m"
