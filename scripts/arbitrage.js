@@ -34,7 +34,7 @@ const MAX_PROFIT_PCT = 550;
 const colors = {
   reset: "\x1b[0m",
   red: "\x1b[31m",
-  green: "\x1b[32m",
+  green: "\x1b[32m",5
   yellow: "\x1b[33m",
   cyan: "\x1b[36m",
   magenta: "\x1b[35m"
