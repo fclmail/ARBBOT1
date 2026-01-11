@@ -1,6 +1,7 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – VAULT VERSION (FORCED 4s OPPORTUNITY)
+//  ARBITRAGE BOT – VAULT VERSION
+//  (FORCED POSITIVE OPPORTUNITY, 1 TX EVERY 4 SECONDS)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -23,8 +24,6 @@ if (!PRIVATE_KEY) console.log("❌ Missing PRIVATE KEY");
 
 const DRY_RUN = false;
 const MIN_TRADE_USDC = 13.3;
-const MIN_EXPECTED_PROFIT = 0.00001;
-const MIN_PROFIT_PCT = 1.0;
 const SLIPPAGE_PCT = 0.05;
 const MAX_PROFIT_PCT = 550;
 
@@ -60,7 +59,10 @@ const erc20Abi = [
 
 // ----------------- TOKENS -----------------
 const tokens = {
-  AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 }
+  AAVE: {
+    address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+    decimals: 18
+  }
 };
 
 // ----------------- ROUTERS -----------------
@@ -70,10 +72,8 @@ const routers = {
   ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-// ----------------- BASES -----------------
-const BASES = [
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" // USDC
-];
+// ----------------- BASE TOKEN -----------------
+const BASE_USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // ----------------- HELPERS -----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -82,20 +82,21 @@ function sanePct(p) {
   return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT;
 }
 
-// ----------------- FABRICATED PRICING -----------------
-function fabricate(amount) {
-  const delta = (Math.random() * 0.4) - 0.2; // ±20%
+// ----------------- FORCED POSITIVE FABRICATION -----------------
+function fabricatePositive(amount) {
+  // Always +5% to +20%
+  const delta = 0.05 + Math.random() * 0.15;
   return amount * (1 + delta);
 }
 
 // ----------------- VAULT BALANCE -----------------
 async function vaultBalance() {
-  const usdc = new ethers.Contract(BASES[0], erc20Abi, provider);
+  const usdc = new ethers.Contract(BASE_USDC, erc20Abi, provider);
   const raw = await usdc.balanceOf(VAULT_ADDRESS);
   return Number(ethers.formatUnits(raw, 6));
 }
 
-// ----------------- QUOTE -----------------
+// ----------------- QUOTE (FABRICATED POSITIVE) -----------------
 async function quote(routerAddr, token, amountUSDC) {
   const router = new ethers.Contract(
     routerAddr,
@@ -106,12 +107,9 @@ async function quote(routerAddr, token, amountUSDC) {
   const amt = ethers.parseUnits(amountUSDC.toString(), 6);
 
   try {
-    const a = await router.getAmountsOut(amt, [BASES[0], token.address]);
-    let out = Number(ethers.formatUnits(a[1], token.decimals));
-
-    // 🔀 ALWAYS fabricate price
-    return fabricate(out);
-
+    const a = await router.getAmountsOut(amt, [BASE_USDC, token.address]);
+    const realOut = Number(ethers.formatUnits(a[1], token.decimals));
+    return fabricatePositive(realOut);
   } catch {
     return null;
   }
@@ -120,25 +118,28 @@ async function quote(routerAddr, token, amountUSDC) {
 // ----------------- EXECUTION -----------------
 async function executeTrade(buyRouter, sellRouter, token) {
   const before = await vaultBalance();
-  if (before < MIN_TRADE_USDC) return false;
+  if (before < MIN_TRADE_USDC) {
+    console.log(`${colors.red}❌ Vault balance too low${colors.reset}`);
+    return;
+  }
 
   const buyOut = await quote(buyRouter, token, MIN_TRADE_USDC);
   const sellOut = await quote(sellRouter, token, MIN_TRADE_USDC);
-  if (!buyOut || !sellOut) return false;
+  if (!buyOut || !sellOut) return;
 
   const buyPrice = MIN_TRADE_USDC / buyOut;
   const sellPrice = MIN_TRADE_USDC / sellOut;
   const profit = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
   const pct = (profit / buyPrice) * 100;
 
-  if (!sanePct(pct)) return false;
-  if (profit < MIN_EXPECTED_PROFIT || pct < MIN_PROFIT_PCT) return false;
+  if (!sanePct(pct)) return;
 
+  // 🔥 ALWAYS PRINT OPPORTUNITY
   console.log(
-    `${colors.green}💰 OPPORTUNITY FOUND ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`
+    `${colors.green}💰 OPPORTUNITY ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`
   );
 
-  if (DRY_RUN) return true;
+  if (DRY_RUN) return;
 
   const tx = await vault.executeArbitrage(
     buyRouter,
@@ -153,40 +154,44 @@ async function executeTrade(buyRouter, sellRouter, token) {
     return null;
   });
 
-  if (!tx) return true;
+  if (!tx) return;
 
   console.log(`${colors.cyan}📤 TX SENT ${tx.hash}${colors.reset}`);
   await tx.wait().catch(() => null);
 
   const after = await vaultBalance();
   console.log(
-    `${colors.green}🏁 VAULT Δ ${fmt(after - before)} USDC${colors.reset}`
+    `${colors.yellow}🏁 Vault Δ ${fmt(after - before)} USDC${colors.reset}`
   );
-
-  return true;
 }
 
-// ----------------- SCAN (ONE TX PER 4s) -----------------
+// ----------------- ONE OPPORTUNITY PER CYCLE -----------------
 async function scanOnce() {
-  for (const token of Object.values(tokens)) {
-    const routerList = Object.values(routers);
-    const buy = routerList[Math.floor(Math.random() * routerList.length)];
-    let sell;
-    do {
-      sell = routerList[Math.floor(Math.random() * routerList.length)];
-    } while (sell === buy);
+  console.log(`⏱️ Scan tick ${new Date().toISOString()}`);
 
-    const sent = await executeTrade(buy, sell, token);
-    if (sent) return; // 🔒 stop after one tx
-  }
+  const token = Object.values(tokens)[0];
+  const routerList = Object.values(routers);
+
+  const buy = routerList[Math.floor(Math.random() * routerList.length)];
+  let sell;
+  do {
+    sell = routerList[Math.floor(Math.random() * routerList.length)];
+  } while (sell === buy);
+
+  await executeTrade(buy, sell, token);
 }
+
+// ----------------- HEARTBEAT -----------------
+setInterval(() => {
+  console.log("❤️ bot alive");
+}, 10000);
 
 // ----------------- MAIN LOOP -----------------
 (async () => {
-  console.log(`${colors.cyan}🚀 Arb bot running (1 tx every 4 seconds)${colors.reset}`);
+  console.log(`${colors.cyan}🚀 Arb bot running (forced positive, every 4s)${colors.reset}`);
 
   while (true) {
     await scanOnce();
-    await sleep(4000); // ⏱️ EXACTLY every 4 seconds
+    await sleep(4000);
   }
 })();
