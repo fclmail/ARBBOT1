@@ -23,8 +23,8 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) console.log("❌ Missing PRIVATE KEY");
 
 const DRY_RUN = false;
-const MIN_TRADE_USDC = 13.3;
-const SLIPPAGE_PCT = 0.05;
+const MIN_TRADE_USDC = .1;
+const SLIPPAGE_PCT = 1;
 const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
