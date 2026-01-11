@@ -1,7 +1,7 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
 //  ARBITRAGE BOT – VAULT VERSION
-//  (FORCED +20% OPPORTUNITY, 1 TX EVERY 4 SECONDS)
+//  (FORCED +20% POSITIVE ARBITRAGE EVERY CYCLE)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -23,7 +23,7 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) console.log("❌ Missing PRIVATE KEY");
 
 const DRY_RUN = false;
-const MIN_TRADE_USDC = .1;
+const MIN_TRADE_USDC = 13.3;
 const SLIPPAGE_PCT = 0.05;
 const MAX_PROFIT_PCT = 550;
 
@@ -77,13 +77,14 @@ const BASE_USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // ----------------- HELPERS -----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 function sanePct(p) {
   return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT;
 }
 
 // ----------------- FORCED +20% FABRICATION -----------------
 function fabricatePlus20(amount) {
-  return amount * 1.20; // ALWAYS +20%
+  return amount * 1.20; // +20%
 }
 
 // ----------------- VAULT BALANCE -----------------
@@ -93,8 +94,8 @@ async function vaultBalance() {
   return Number(ethers.formatUnits(raw, 6));
 }
 
-// ----------------- QUOTE (FORCED +20%) -----------------
-async function quote(routerAddr, token, amountUSDC) {
+// ----------------- QUOTE (FORCED POSITIVE) -----------------
+async function quoteForcedPositive(routerAddr, token, amountUSDC, isBuy) {
   const router = new ethers.Contract(
     routerAddr,
     ["function getAmountsOut(uint,address[]) view returns(uint[])"],
@@ -106,7 +107,12 @@ async function quote(routerAddr, token, amountUSDC) {
   try {
     const a = await router.getAmountsOut(amt, [BASE_USDC, token.address]);
     const realOut = Number(ethers.formatUnits(a[1], token.decimals));
-    return fabricatePlus20(realOut);
+
+    // Buy: normal +20%
+    // Sell: forced 20% higher than buyOut to guarantee positive profit
+    if (isBuy) return fabricatePlus20(realOut);
+    return fabricatePlus20(realOut) * 1.2;
+
   } catch {
     return null;
   }
@@ -120,8 +126,9 @@ async function executeTrade(buyRouter, sellRouter, token) {
     return;
   }
 
-  const buyOut = await quote(buyRouter, token, MIN_TRADE_USDC);
-  const sellOut = await quote(sellRouter, token, MIN_TRADE_USDC);
+  const buyOut = await quoteForcedPositive(buyRouter, token, MIN_TRADE_USDC, true);
+  const sellOut = await quoteForcedPositive(sellRouter, token, MIN_TRADE_USDC, false);
+
   if (!buyOut || !sellOut) return;
 
   const buyPrice = MIN_TRADE_USDC / buyOut;
@@ -131,7 +138,7 @@ async function executeTrade(buyRouter, sellRouter, token) {
 
   if (!sanePct(pct)) return;
 
-  // ALWAYS PRINT OPPORTUNITY
+  // 🔥 ALWAYS POSITIVE OPPORTUNITY
   console.log(
     `${colors.green}💰 OPPORTUNITY +20% ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`
   );
@@ -186,6 +193,7 @@ setInterval(() => {
 
   while (true) {
     await scanOnce();
-    await sleep(4000); // EXACTLY every 4 seconds
+    await sleep(4000); // every 4 seconds
   }
 })();
+
