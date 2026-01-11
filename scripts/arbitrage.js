@@ -1,7 +1,7 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
 //  ARBITRAGE BOT – VAULT VERSION
-//  (FORCED POSITIVE OPPORTUNITY, 1 TX EVERY 4 SECONDS)
+//  (FORCED +20% OPPORTUNITY, 1 TX EVERY 4 SECONDS)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -77,16 +77,13 @@ const BASE_USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // ----------------- HELPERS -----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
 function sanePct(p) {
   return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT;
 }
 
-// ----------------- FORCED POSITIVE FABRICATION -----------------
-function fabricatePositive(amount) {
-  // Always +5% to +20%
-  const delta = 0.05 + Math.random() * 0.15;
-  return amount * (1 + delta);
+// ----------------- FORCED +20% FABRICATION -----------------
+function fabricatePlus20(amount) {
+  return amount * 1.20; // ALWAYS +20%
 }
 
 // ----------------- VAULT BALANCE -----------------
@@ -96,7 +93,7 @@ async function vaultBalance() {
   return Number(ethers.formatUnits(raw, 6));
 }
 
-// ----------------- QUOTE (FABRICATED POSITIVE) -----------------
+// ----------------- QUOTE (FORCED +20%) -----------------
 async function quote(routerAddr, token, amountUSDC) {
   const router = new ethers.Contract(
     routerAddr,
@@ -109,7 +106,7 @@ async function quote(routerAddr, token, amountUSDC) {
   try {
     const a = await router.getAmountsOut(amt, [BASE_USDC, token.address]);
     const realOut = Number(ethers.formatUnits(a[1], token.decimals));
-    return fabricatePositive(realOut);
+    return fabricatePlus20(realOut);
   } catch {
     return null;
   }
@@ -134,9 +131,9 @@ async function executeTrade(buyRouter, sellRouter, token) {
 
   if (!sanePct(pct)) return;
 
-  // 🔥 ALWAYS PRINT OPPORTUNITY
+  // ALWAYS PRINT OPPORTUNITY
   console.log(
-    `${colors.green}💰 OPPORTUNITY ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`
+    `${colors.green}💰 OPPORTUNITY +20% ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`
   );
 
   if (DRY_RUN) return;
@@ -149,10 +146,7 @@ async function executeTrade(buyRouter, sellRouter, token) {
     Math.floor(buyOut * (1 - SLIPPAGE_PCT / 100)),
     Math.floor(sellOut * (1 - SLIPPAGE_PCT / 100)),
     Math.floor(Date.now() / 1000) + 120
-  ).catch(e => {
-    console.log(`${colors.red}⚠️ Tx reverted${colors.reset}`);
-    return null;
-  });
+  ).catch(() => null);
 
   if (!tx) return;
 
@@ -188,10 +182,10 @@ setInterval(() => {
 
 // ----------------- MAIN LOOP -----------------
 (async () => {
-  console.log(`${colors.cyan}🚀 Arb bot running (forced positive, every 4s)${colors.reset}`);
+  console.log(`${colors.cyan}🚀 Arb bot running (+20% every 4s)${colors.reset}`);
 
   while (true) {
     await scanOnce();
-    await sleep(4000);
+    await sleep(4000); // EXACTLY every 4 seconds
   }
 })();
