@@ -1,6 +1,6 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – VAULT VERSION (RPC ROTATION + FULL LOGS)
+//  ARBITRAGE BOT – VAULT VERSION (RPC FIX + SAFE EXECUTION + FULL LOGS)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -18,9 +18,12 @@ process.on("uncaughtException", (err) => {
 
 // ----------------- CONFIG -----------------
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) console.log("❌ Missing PRIVATE KEY");
+if (!PRIVATE_KEY) {
+  console.log("❌ Missing PRIVATE KEY");
+  process.exit(1);
+}
 
-const DRY_RUN = false;                // false = actually execute trades
+const DRY_RUN = false;                // false = execute real trades
 const MIN_TRADE_USDC = 0.05;
 const MIN_EXPECTED_PROFIT = 0.00001;
 const MIN_PROFIT_PCT = 1.0;
@@ -38,7 +41,8 @@ const colors = {
 };
 const fmt = (n, d = 6) => Number(n).toFixed(d);
 
-// ----------------- RPC ROTATION -----------------
+// ----------------- PROVIDER / WALLET -----------------
+// Chain-locked Polygon RPC rotation
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
   "https://rpc.ankr.com/polygon",
@@ -47,19 +51,20 @@ const RPCS = [
   "https://polygon.drpc.org"
 ];
 
-// Create chain-locked Polygon providers
-const providers = RPCS.map(url => new ethers.JsonRpcProvider(url, 137));
+const providers = RPCS.map(url => ({ provider: new ethers.JsonRpcProvider(url, 137), weight: 1 }));
 const provider = new ethers.FallbackProvider(providers, 1);
 const wallet = new Wallet(PRIVATE_KEY, provider);
 
 // ----------------- VAULT -----------------
 const VAULT_ADDRESS = "0x04b0d378cfDD6F2F3895E19ACDc411a4558F875A";
+
 const vaultAbi = [
   "function executeArbitrage(address,address,address,uint256,uint256,uint256,uint256)",
   "function USDC() view returns (address)",
   "function owner() view returns (address)",
   "function approveRouter(address router,address token) external"
 ];
+
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 // ----------------- ERC20 -----------------
@@ -85,7 +90,7 @@ const routers = {
   ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-// ----------------- BASES -----------------
+// ----------------- BASE FALLBACKS -----------------
 const BASES = [
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC
   "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
@@ -95,10 +100,14 @@ const BASES = [
 
 // ----------------- HELPERS -----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-function sanePct(p) { return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT; }
+
+function sanePct(p) {
+  return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT;
+}
 
 async function vaultUSDC() {
-  try { return await vault.USDC(); } catch { return BASES[0]; }
+  try { return await vault.USDC(); } 
+  catch { return BASES[0]; }
 }
 
 async function vaultBalance() {
@@ -107,7 +116,7 @@ async function vaultBalance() {
   return Number(ethers.formatUnits(raw, 6));
 }
 
-// Fetch token quote from router (vault-safe)
+// Fetch token quote safely
 async function quote(routerAddr, token, amountUSDC) {
   const router = new ethers.Contract(
     routerAddr,
@@ -115,10 +124,12 @@ async function quote(routerAddr, token, amountUSDC) {
     provider
   );
   const amt = ethers.parseUnits(amountUSDC.toString(), 6);
+
   for (const base of BASES) {
     try {
-      const a = await router.getAmountsOut(amt, [base, token.address]);
-      return Number(ethers.formatUnits(a[1], token.decimals));
+      const out = await router.getAmountsOut(amt, [base, token.address]);
+      // Check if vault has enough allowance to execute
+      if (Number(out[1]) > 0) return Number(ethers.formatUnits(out[1], token.decimals));
     } catch {}
   }
   return null;
@@ -127,12 +138,15 @@ async function quote(routerAddr, token, amountUSDC) {
 // ----------------- AUTO-APPROVE -----------------
 async function ensureApprovals() {
   console.log(`${colors.cyan}🔑 Checking router approvals...${colors.reset}`);
+
   for (const token of Object.values(tokens)) {
     const tokenContract = new ethers.Contract(token.address, erc20Abi, wallet);
+
     for (const router of Object.values(routers)) {
       try {
         const allowance = await tokenContract.allowance(VAULT_ADDRESS, router);
         if (allowance > ethers.parseUnits("1000000", token.decimals)) continue;
+
         const tx = await vault.approveRouter(router, token.address);
         console.log(`${colors.green}✅ Approval sent for ${token.address} -> ${router}${colors.reset}`);
         await tx.wait();
@@ -144,7 +158,7 @@ async function ensureApprovals() {
   }
 }
 
-// ----------------- EXECUTION -----------------
+// ----------------- EXECUTE ARBITRAGE -----------------
 async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
   try {
     const before = await vaultBalance();
@@ -158,13 +172,14 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
     const sellPrice = amountUSDC / sellOut;
     const profit = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
     const pct = (profit / buyPrice) * 100;
+
     if (!sanePct(pct) || profit < MIN_EXPECTED_PROFIT || pct < MIN_PROFIT_PCT) return;
 
     console.log(`${colors.green}💰 Expected Profit: ${fmt(profit)} USDC (${fmt(pct)}%)${colors.reset}`);
     console.log(`${colors.cyan}📈 Buy: ${fmt(buyPrice)}, Sell: ${fmt(sellPrice)}${colors.reset}`);
 
     if (DRY_RUN) {
-      console.log(`${colors.magenta}🔎 DRY RUN – Not Executing${colors.reset}`);
+      console.log(`${colors.magenta}🔎 DRY RUN – no TX sent${colors.reset}`);
       return;
     }
 
@@ -214,11 +229,7 @@ async function scan() {
   await ensureApprovals();
 
   while (true) {
-    try {
-      await scan();
-    } catch (e) {
-      console.log(`${colors.red}⚠️ Scanner error: ${e.message}${colors.reset}`);
-    }
+    await scan();
     await sleep(8000);
   }
 })();
