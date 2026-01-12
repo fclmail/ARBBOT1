@@ -1,6 +1,6 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – VAULT VERSION (FAST AUTO-APPROVE + FULL LOGS)
+//  ARBITRAGE BOT – VAULT VERSION (SAFE + AUTO-APPROVE USDC + FULL LOGS)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -18,12 +18,10 @@ process.on("uncaughtException", (err) => {
 
 // ----------------- CONFIG -----------------
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY) {
-  console.log("❌ Missing PRIVATE KEY");
-}
+if (!PRIVATE_KEY) console.log("❌ Missing PRIVATE KEY");
 
 const DRY_RUN = false;
-const MIN_TRADE_USDC = 0.050;
+const MIN_TRADE_USDC = 0.05;  // minimum trade size in USDC
 const MIN_EXPECTED_PROFIT = 0.00001;
 const MIN_PROFIT_PCT = 1.0;
 const SLIPPAGE_PCT = 0.05;
@@ -50,17 +48,11 @@ const RPCS = [
 ];
 
 let rpcIndex = 0;
-
 function newProvider() {
   const url = RPCS[rpcIndex];
   rpcIndex = (rpcIndex + 1) % RPCS.length;
-
-  return new ethers.JsonRpcProvider(url, {
-    name: "matic",
-    chainId: 137
-  });
+  return new ethers.JsonRpcProvider(url, { name: "matic", chainId: 137 });
 }
-
 let provider = newProvider();
 let wallet = new Wallet(PRIVATE_KEY, provider);
 
@@ -96,7 +88,8 @@ const erc20Abi = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
   "function allowance(address owner, address spender) view returns (uint256)",
-  "function approve(address spender, uint256 amount) external returns (bool)"
+  "function approve(address spender, uint256 amount) external returns (bool)",
+  "function transfer(address to, uint256 amount) external returns (bool)"
 ];
 
 // ----------------- TOKENS -----------------
@@ -129,14 +122,13 @@ function sanePct(p) {
   return Number.isFinite(p) && p > -1000 && p < MAX_PROFIT_PCT;
 }
 
+// Get vault USDC address
 async function vaultUSDC() {
-  try {
-    return await rpc(() => vault.USDC());
-  } catch {
-    return BASES[0];
-  }
+  try { return await rpc(() => vault.USDC()); }
+  catch { return BASES[0]; }
 }
 
+// Get vault USDC balance
 async function vaultBalance() {
   const usdc = new ethers.Contract(await vaultUSDC(), erc20Abi, provider);
   const raw = await rpc(() => usdc.balanceOf(VAULT_ADDRESS));
@@ -151,7 +143,6 @@ async function quote(routerAddr, token, amountUSDC) {
     provider
   );
   const amt = ethers.parseUnits(amountUSDC.toString(), 6);
-
   for (const base of BASES) {
     try {
       const a = await rpc(() => router.getAmountsOut(amt, [base, token.address]));
@@ -165,9 +156,9 @@ async function quote(routerAddr, token, amountUSDC) {
 async function ensureApprovals() {
   console.log(`${colors.cyan}🔑 Checking router approvals...${colors.reset}`);
 
+  // Approve all tokens for all routers
   for (const token of Object.values(tokens)) {
     const tokenContract = new ethers.Contract(token.address, erc20Abi, wallet);
-
     for (const router of Object.values(routers)) {
       try {
         const allowance = await rpc(() => tokenContract.allowance(VAULT_ADDRESS, router));
@@ -182,20 +173,40 @@ async function ensureApprovals() {
       await sleep(200);
     }
   }
+
+  // Approve USDC for all routers (buy leg)
+  const usdcAddress = await vaultUSDC();
+  const usdcContract = new ethers.Contract(usdcAddress, erc20Abi, wallet);
+  for (const router of Object.values(routers)) {
+    try {
+      const allowance = await rpc(() => usdcContract.allowance(VAULT_ADDRESS, router));
+      if (allowance > ethers.parseUnits("1000000", 6)) continue;
+
+      const tx = await rpc(() => vault.approveRouter(router, usdcAddress));
+      console.log(`${colors.green}✅ Approval sent for USDC -> ${router}${colors.reset}`);
+      await tx.wait();
+    } catch (e) {
+      console.log(`${colors.red}⚠️ USDC approval error: ${e.message}${colors.reset}`);
+    }
+    await sleep(200);
+  }
 }
 
 // ----------------- EXECUTION -----------------
-async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
+async function executeTrade(buyRouter, sellRouter, token, minTradeUSDC) {
   try {
     const before = await vaultBalance();
+    if (before < minTradeUSDC) return;  // skip if vault has insufficient funds
+    const tradeAmount = Math.min(before, minTradeUSDC);
+
     console.log(`${colors.cyan}🏦 Vault Before: ${fmt(before)} USDC${colors.reset}`);
 
-    const buyOut = await quote(buyRouter, token, amountUSDC);
-    const sellOut = await quote(sellRouter, token, amountUSDC);
+    const buyOut = await quote(buyRouter, token, tradeAmount);
+    const sellOut = await quote(sellRouter, token, tradeAmount);
     if (!buyOut || !sellOut) return;
 
-    const buyPrice = amountUSDC / buyOut;
-    const sellPrice = amountUSDC / sellOut;
+    const buyPrice = tradeAmount / buyOut;
+    const sellPrice = tradeAmount / sellOut;
     const profit = (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
     const pct = (profit / buyPrice) * 100;
 
@@ -209,7 +220,7 @@ async function executeTrade(buyRouter, sellRouter, token, amountUSDC) {
         buyRouter,
         sellRouter,
         token.address,
-        ethers.parseUnits(amountUSDC.toString(), 6),
+        ethers.parseUnits(tradeAmount.toString(), 6),
         Math.floor(buyOut * 0.9995),
         Math.floor(sellOut * 0.9995),
         Math.floor(Date.now() / 1000) + 120
