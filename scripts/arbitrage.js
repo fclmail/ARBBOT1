@@ -36,8 +36,8 @@ const routers = {
 };
 
 /* ----------------- TOKEN ----------------- */
-const TOKEN = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"; // LINK
-const TRADE = ethers.parseUnits("100.12", 6);
+const TOKEN = "0x172370d5cd63279efa6d502dab29171933a610af"; // LINK
+const TRADE = ethers.parseUnits(".12", 6);
 
 /* ----------------- HELPERS ----------------- */
 const fmt = (n, d = 6) => Number(n).toFixed(d);
