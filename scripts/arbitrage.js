@@ -40,7 +40,6 @@ const fmt = (n, d = 6) => Number(n).toFixed(d);
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
   "https://rpc.ankr.com/polygon",
-  "https://polygon.llamarpc.com",
 ];
 
 let rpcIndex = 0;
