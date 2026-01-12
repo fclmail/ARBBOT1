@@ -21,10 +21,10 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) console.log("❌ Missing PRIVATE KEY");
 
 const DRY_RUN = false;
-const MIN_TRADE_USDC = 0.05;  // minimum trade size in USDC
+const MIN_TRADE_USDC = 0.12;  // minimum trade size in USDC
 const MIN_EXPECTED_PROFIT = 0.00001;
-const MIN_PROFIT_PCT = 1.0;
-const SLIPPAGE_PCT = 0.05;
+const MIN_PROFIT_PCT = .002;
+const SLIPPAGE_PCT = 3;
 const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
