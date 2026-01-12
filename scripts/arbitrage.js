@@ -34,8 +34,8 @@ const routers = {
   Sushi: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-const TOKEN = "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"; // LINK
-const TRADE = ethers.parseUnits("0.05", 6);
+const TOKEN = "0x172370d5cd63279efa6d502dab29171933a610af"; // LINK
+const TRADE = ethers.parseUnits("0.12", 6);
 
 /* ----------------- HELPERS ----------------- */
 const fmt = n => Number(n).toFixed(6);
