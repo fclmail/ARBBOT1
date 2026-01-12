@@ -1,150 +1,163 @@
+// arbitrage.js
 import { ethers } from "ethers";
-import fs from "fs";
+import dotenv from "dotenv";
+dotenv.config();
 
-// ----------------------------
-// CONFIGURATION
-// ----------------------------
+const {
+  RPC_URL,
+  PRIVATE_KEY,
+  VAULT_ADDRESS,
+  USDC_ADDRESS
+} = process.env;
 
-// Load from environment variables (GitHub Secrets)
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const RPC_URL = process.env.RPC_URL;
+// Router addresses
+const ROUTERS = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+};
 
-// Vault contract address and USDC token
-const VAULT_ADDRESS = "0x04b0d378cfDD6F2F3895E19ACDc411a4558F875A";
-
-// Routers to scan (example: QuickSwap, SushiSwap, ApeSwap)
-const ROUTERS = [
-  "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff", // QuickSwap
-  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506", // SushiSwap
-  "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607", // ApeSwap
-];
-
-// Tokens to scan
-const TOKENS = [
-  "0xd6df932a45c0f255f85145f286ea0b292b21c90b", // AAVE
-  "0x172370d5cd63279efa6d502dab29171933a610af", // CRV
-  "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", // LINK
-  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", // WBTC
-];
-
-// Arbitrage thresholds
-const MIN_PROFIT_USDC = 10; // smallest profit to execute
-
-// Vault ABI (simplified)
+// Minimal ABIs
 const VAULT_ABI = [
-  "function USDC() view returns (address)",
-  "function owner() view returns (address)",
+  "function USDC() view returns(address)",
   "function executeArbitrage(address buyRouter,address sellRouter,address token,uint256 amountInUSDC,uint256 minTokenOut,uint256 minUSDCOut,uint256 deadline) external",
-  "function approveRouter(address router,address token) external",
-  "function balanceOf(address) view returns(uint256)"
+  "function approveRouter(address router,address token) external"
 ];
 
-// ERC20 ABI (simplified)
 const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)",
-  "function approve(address spender,uint256 amount) returns (bool)"
+  "function balanceOf(address) view returns(uint256)",
+  "function approve(address spender,uint256 amount) returns(bool)"
 ];
 
-// ----------------------------
-// SETUP PROVIDER & WALLET
-// ----------------------------
-if (!PRIVATE_KEY || !RPC_URL) {
-  throw new Error("Missing PRIVATE_KEY or RPC_URL environment variable");
-}
+const ROUTER_ABI = [
+  "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns(uint256[] memory)",
+  "function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] calldata path,address to,uint256 deadline) returns(uint256[] memory)"
+];
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Vault contract
 const vault = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, wallet);
 
-// ----------------------------
-// HELPER FUNCTIONS
-// ----------------------------
-
-// Approve a token for a router via vault (once per router/token)
-async function approveRouter(router, token) {
-  try {
-    console.log(`Approving router ${router} for token ${token} via vault...`);
-    const tx = await vault.approveRouter(router, token);
+async function approveRouterIfNeeded(routerAddress, tokenAddress) {
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
+  const allowance = await token.allowance(VAULT_ADDRESS, routerAddress);
+  if (allowance < ethers.parseUnits("1000000", 6)) { // arbitrary high amount
+    console.log(`Approving router ${routerAddress} for token ${tokenAddress} via vault`);
+    const tx = await vault.approveRouter(routerAddress, tokenAddress);
     await tx.wait();
-    console.log(`✅ Approved ${token} for router ${router}`);
-  } catch (err) {
-    console.log(`⚠️ Approval failed for ${token} on router ${router}:`, err.reason || err.message);
+    console.log("Approval done");
   }
 }
 
-// Mock profit calculation function (replace with real logic)
-async function getExpectedProfit(token, buyRouter, sellRouter) {
-  // For demo: return a small random profit
-  return Math.floor(Math.random() * 1000) / 10000; // 0.0000-0.0999 USDC
-}
-
-// Execute arbitrage via vault
-async function executeArb(token, buyRouter, sellRouter, amountInUSDC) {
-  const deadline = Math.floor(Date.now() / 1000) + 60; // 1 min
-  const minTokenOut = 1; // off-chain calculated
-  const minUSDCOut = 1;  // off-chain calculated
-
-  const beforeBal = await vault.USDC().then(addr => {
-    const usdc = new ethers.Contract(addr, ERC20_ABI, provider);
-    return usdc.balanceOf(VAULT_ADDRESS);
-  });
-
+async function getExpectedTokenOut(routerAddress, amountInUSDC, tokenAddress) {
+  const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+  const path = [USDC_ADDRESS, tokenAddress];
   try {
-    console.log(`Executing arbitrage ${token} | ${buyRouter}→${sellRouter} | amount=${amountInUSDC}`);
-    const tx = await vault.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      token,
-      amountInUSDC,
-      minTokenOut,
-      minUSDCOut,
-      deadline
-    );
-    await tx.wait();
-
-    const afterBal = await vault.USDC().then(addr => {
-      const usdc = new ethers.Contract(addr, ERC20_ABI, provider);
-      return usdc.balanceOf(VAULT_ADDRESS);
-    });
-
-    const profit = afterBal - beforeBal;
-    console.log(`✅ Arbitrage executed, profit: ${ethers.formatUnits(profit, 6)} USDC`);
+    const amounts = await router.getAmountsOut(amountInUSDC, path);
+    return amounts[amounts.length - 1];
   } catch (err) {
-    console.log(`⚠️ Arbitrage failed for ${token}:`, err.reason || err.message);
+    console.warn(`Failed getAmountsOut for ${routerAddress} -> ${tokenAddress}: ${err}`);
+    return ethers.BigInt(0);
   }
 }
 
-// ----------------------------
-// MAIN LOOP
-// ----------------------------
-async function main() {
-  console.log("🚀 Live arbitrage runner started");
-  const vaultOwner = await vault.owner();
-  console.log("Vault owner:", vaultOwner);
+async function getExpectedUSDCOut(routerAddress, tokenAmount, tokenAddress) {
+  const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+  const path = [tokenAddress, USDC_ADDRESS];
+  try {
+    const amounts = await router.getAmountsOut(tokenAmount, path);
+    return amounts[amounts.length - 1];
+  } catch (err) {
+    console.warn(`Failed getAmountsOut for ${routerAddress} -> USDC: ${err}`);
+    return ethers.BigInt(0);
+  }
+}
 
-  for (const token of TOKENS) {
-    for (const buyRouter of ROUTERS) {
-      for (const sellRouter of ROUTERS) {
-        if (buyRouter === sellRouter) continue;
+async function findProfitableArb(tokenAddress, amountInUSDC) {
+  let bestProfit = ethers.BigInt(0);
+  let bestRoute = null;
 
-        const expectedProfit = await getExpectedProfit(token, buyRouter, sellRouter);
+  for (const [buyName, buyRouter] of Object.entries(ROUTERS)) {
+    const tokenOut = await getExpectedTokenOut(buyRouter, amountInUSDC, tokenAddress);
+    if (tokenOut <= 0) continue;
 
-        console.log(`${token} | ${buyRouter}→${sellRouter} | expected profit=${expectedProfit} USDC`);
+    for (const [sellName, sellRouter] of Object.entries(ROUTERS)) {
+      if (sellRouter === buyRouter) continue; // skip same router
+      const usdcOut = await getExpectedUSDCOut(sellRouter, tokenOut, tokenAddress);
+      if (usdcOut <= amountInUSDC) continue; // skip non-profitable
 
-        if (expectedProfit * 1e6 >= MIN_PROFIT_USDC) {
-          // Approve router first
-          await approveRouter(buyRouter, token);
-          await approveRouter(sellRouter, token);
-
-          // Execute arbitrage
-          await executeArb(token, buyRouter, sellRouter, expectedProfit * 1e6);
-        }
+      const profit = usdcOut - amountInUSDC;
+      if (profit > bestProfit) {
+        bestProfit = profit;
+        bestRoute = { buyRouter, sellRouter, buyName, sellName, tokenOut, usdcOut };
       }
+    }
+  }
+
+  return bestRoute;
+}
+
+async function runArbitrage() {
+  const vaultUSDCBalance = await (new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider)).balanceOf(VAULT_ADDRESS);
+  if (vaultUSDCBalance <= 0) {
+    console.log("Vault has no USDC");
+    return;
+  }
+
+  const tradeAmount = vaultUSDCBalance / 10n; // use 10% per trade
+
+  const TOKENS_TO_SCAN = [
+    "0x172370d5cd63279efa6d502dab29171933a610af", // CRV
+    "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", // WBTC
+    "0xd6df932a45c0f255f85145f286ea0b292b21c90b"  // AAVE
+  ];
+
+  for (const token of TOKENS_TO_SCAN) {
+    // Approve routers automatically
+    for (const router of Object.values(ROUTERS)) {
+      await approveRouterIfNeeded(router, token);
+    }
+
+    const arb = await findProfitableArb(token, tradeAmount);
+    if (!arb) {
+      console.log(`No profitable arbitrage for token ${token}`);
+      continue;
+    }
+
+    console.log(`Profitable arbitrage found for token ${token}:`);
+    console.log(`${arb.buyName} -> ${arb.sellName} | Expected profit: ${ethers.formatUnits(arb.usdcOut - tradeAmount, 6)} USDC`);
+
+    try {
+      const tx = await vault.executeArbitrage(
+        arb.buyRouter,
+        arb.sellRouter,
+        token,
+        tradeAmount,
+        arb.tokenOut,
+        arb.usdcOut,
+        Math.floor(Date.now() / 1000) + 60 // 1 min deadline
+      );
+      await tx.wait();
+      console.log("Arbitrage executed successfully!");
+    } catch (err) {
+      console.error("Arbitrage execution failed:", err);
     }
   }
 }
 
-// Run
-main().catch(err => console.error(err));
+// Continuous loop
+async function main() {
+  console.log("🚀 Live arbitrage runner started");
+  while (true) {
+    try {
+      await runArbitrage();
+      await new Promise(r => setTimeout(r, 5000)); // 5s delay
+    } catch (err) {
+      console.error("Error in main loop:", err);
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+}
+
+main();
