@@ -30,11 +30,11 @@ const usdc     = new ethers.Contract(USDC, erc20Abi, provider);
 
 /* ----------------- ROUTERS ----------------- */
 const routers = {
-  Quick: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  Quick: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Sushi: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-const TOKEN = "0x172370d5cd63279efa6d502dab29171933a610af"; // LINK
+const TOKEN = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"; // LINK
 const TRADE = ethers.parseUnits("0.12", 6);
 
 /* ----------------- HELPERS ----------------- */
