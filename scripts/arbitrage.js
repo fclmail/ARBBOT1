@@ -38,7 +38,7 @@ const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new Wallet(PRIVATE_KEY, provider);
 
 // Vault contract (ABI trimmed to needed functions)
-const VAULT_ADDRESS = "0x1F00dA4d76d98D019A396F8B8c100BfE652A7b88";
+const VAULT_ADDRESS = "0xe9068882B5E499Ca3c4ed1EDfd87aA6f7b57C159";
 const vaultAbi = [
   {
     "inputs": [
