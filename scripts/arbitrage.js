@@ -76,182 +76,66 @@ const approvalCache = new Map();
 // Simple reentrancy guard for the current process  
 let arbInProgress = false;  
 
-// ----------------------------  
-// HELPER FUNCTIONS  
-// ----------------------------  
 
-// Resolve USDC address  
-async function getUSDCAddress() {  
-  const usdcAddr = await vault.USDC();  
-  return usdcAddr;  
-}  
+// ----------------------------
+// CONTINUOUS SCAN SETUP (cycle control)
+// ----------------------------
 
-// ERC20 contract helper  
-function erc20(tokenAddress) {  
-  return new ethers.Contract(tokenAddress, ERC20_ABI, wallet);  
-}  
+// Cycle interval (ms). Adjust as needed. If you want a one-shot run, set to 0 or remove the interval logic.
+const CYCLE_INTERVAL_MS = process.env.CYCLE_INTERVAL_MS ? parseInt(process.env.CYCLE_INTERVAL_MS) : 60_000;
 
-// Approve a token for a router via vault (idempotent)  
-async function approveRouter(router, token) {  
-  const key = `${router}_${token}`;  
-  if (approvalCache.get(key)) {  
-    console.log(`Already approved for router ${router} and token ${token} (cached).`);  
-    return;  
-  }  
+// Optional: track last cycle start for logging
+let lastCycleStart = 0;
 
-  try {  
-    console.log(`Approving router ${router} for token ${token} via vault...`);  
-    const tx = await vault.approveRouter(router, token);  
-    await tx.wait();  
-    approvalCache.set(key, true);  
-    console.log(`✅ Approved ${token} for router ${router}`);  
-  } catch (err) {  
-    console.error(`⚠️ Approval failed for ${token} on router ${router}:`, err?.reason || err?.message);  
-    // Do not cache on failure  
-  }  
-}  
-
-// Optional: Revoke approval (admin control)  
-async function revokeRouterApproval(router, token) {  
-  try {  
-    const tx = await vault.approveRouter(router, token); // If contract supported revocation via 0, else implement separate function  
-    // If your contract supports setting 0, call with 0. Here we assume router(token) expects 0 to revoke.  
-    // This line is kept for compatibility if vault supports 0 approval; adjust as needed.  
-    await tx.wait();  
-    const key = `${router}_${token}`;  
-    approvalCache.delete(key);  
-    console.log(`🔒 Revoked approval for ${token} on router ${router}`);  
-  } catch (err) {  
-    console.warn(`Could not revoke approval for ${token} on ${router}:`, err?.reason || err?.message);  
-  }  
-}  
-
-// Get USDC balance of vault (for sanity)  
-async function vaultUSDCBalance(usdcAddr) {  
-  const usdc = new ethers.Contract(usdcAddr, ERC20_ABI, provider);  
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);  
-  return bal;  
-}  
-
-// Mock real profit estimation placeholder (replace with real Oracle/logic)  
-async function estimateProfitableOpportunity(token, buyRouter, sellRouter) {  
-  // In a real scenario, you'd query reserves, TWAPs, or an off-chain signal.  
-  // Here, we return a small positive value to enable testing.  
-  const maxProfit = 5e6; // 5 USDC  
-  const amount = Math.floor(Math.random() * maxProfit);  
-  return amount; // in USDC smallest units (6 decimals)  
-}  
-
-// Execute arbitrage via vault  
-async function executeArb(token, buyRouter, sellRouter, amountInUSDC) {  
-  // Basic guard  
-  if (arbInProgress) {  
-    console.log("Arbitrage already in progress, skipping this cycle.");  
-    return;  
-  }  
-  arbInProgress = true;  
-
-  try {  
-    // Ensure we have a usable MinOut values. In production, these should be computed off-chain.  
-    const minTokenOut = 1; // placeholder; replace with your off-chain calc  
-    const minUSDCOut = 1;  // placeholder; replace with your off-chain calc  
-
-    // Deadline: 60 seconds from now  
-    const deadline = Math.floor(Date.now() / 1000) + 60;  
-
-    // Optional: Check vault USDC balance before starting  
-    const usdcAddr = await getUSDCAddress();  
-    const beforeBal = await erc20(usdcAddr).balanceOf(VAULT_ADDRESS);  
-
-    console.log(`Starting arb: token ${token}, ${buyRouter} -> ${sellRouter}, amountInUSDC=${amountInUSDC}`);  
-
-    // Ensure USDC funding balance is sufficient  
-    if (Number(beforeBal) < Number(amountInUSDC)) {
-      console.warn("Vault USDC balance insufficient for this arbitrage run. Aborting this cycle.");
-      return;
-    }
-
-    // 1) Ensure we have allowances/approvals for both routers on this token
-    // We rely on the vault to manage approvals; the contract will revert if not approved.
-    await approveRouter(buyRouter, token);
-    await approveRouter(sellRouter, token);
-
-    // 2) Execute arbitrage
-    // Note: minTokenOut and minUSDCOut should be computed off-chain with real data.
-    await vault.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      token,
-      amountInUSDC,
-      minTokenOut,
-      minUSDCOut,
-      deadline
-    );
-
-    // 3) After successful tx, you may want to fetch and log final balance
-    const afterBal = await erc20(usdcAddr).balanceOf(VAULT_ADDRESS);
-    const profit = Number(afterBal) - Number(beforeBal);
-
-    console.log(
-      `✅ Arbitrage tx submitted. Profit estimate: ${profit / 1e6} USDC (on-chain delta)`
-    );
-  } catch (err) {
-    console.error(`⚠️ Arbitrage execution failed for token ${token} between ${buyRouter} and ${sellRouter}:`, err?.reason || err?.message);
-  } finally {
-    arbInProgress = false;
+// ----------------------------
+// CONTINUOUS SCAN MAIN LOOP
+// ----------------------------
+async function runCycle() {
+  if (arbInProgress) {
+    console.log("⚠️ Arb in progress from previous cycle; skipping this cycle.");
+    return;
   }
-}
 
-// ----------------------------
-// MAIN LOOP
-// ----------------------------
-async function main() {
-  console.log("🚀 Live arbitrage runner started");
-  const vaultOwner = await vault.owner();
-  console.log("Vault owner:", vaultOwner);
+  const cycleStart = Date.now();
+  lastCycleStart = cycleStart;
+  console.log(`🔄 Starting new scan cycle at ${new Date(cycleStart).toISOString()}`);
 
-  // Optional: fetch USDC address once
-  const usdcAddr = await getUSDCAddress();
+  // If you want to fetch dynamic on-chain data here, do it per cycle
+  try {
+    for (const token of TOKENS) {
+      for (const buyRouter of ROUTERS) {
+        for (const sellRouter of ROUTERS) {
+          if (buyRouter === sellRouter) continue;
 
-  for (const token of TOKENS) {
-    for (const buyRouter of ROUTERS) {
-      for (const sellRouter of ROUTERS) {
-        if (buyRouter === sellRouter) continue;
+          const expectedProfit = await estimateProfitableOpportunity(token, buyRouter, sellRouter);
 
-        const expectedProfit = await estimateProfitableOpportunity(token, buyRouter, sellRouter);
+          console.log(`${token} | ${buyRouter}→${sellRouter} | estimated profit (off-chain): ${Number(expectedProfit) / 1e6} USDC`);
 
-        console.log(`${token} | ${buyRouter}→${sellRouter} | estimated profit (off-chain): ${expectedProfit / 1e6} USDC`);
-
-        if (BigInt(expectedProfit) >= BigInt(MIN_PROFIT_USDC)) {
-          // Before approvals, ensure token is valid and router is reachable
-          try {
+          if (BigInt(expectedProfit) >= BigInt(MIN_PROFIT_USDC)) {
+            // Ensure approvals exist
             await approveRouter(buyRouter, token);
             await approveRouter(sellRouter, token);
-          } catch (e) {
-            console.error("Approval step failed, skipping this route pair.", e);
-            continue;
-          }
 
-          // Execute arb with on-chain funding amount
-          await executeArb(token, buyRouter, sellRouter, expectedProfit);
+            // Execute arb with on-chain funding amount
+            await executeArb(token, buyRouter, sellRouter, expectedProfit);
+          }
         }
       }
     }
+  } catch (err) {
+    console.error("⚠️ Error during cycle execution:", err?.reason || err?.message || err);
+  } finally {
+    // Allow next cycle
+    arbInProgress = false;
   }
+
+  // Schedule next cycle
+  // If you want a manual trigger instead of setInterval, replace with a loop in main.
+  // setTimeout(runCycle, CYCLE_INTERVAL_MS);
 }
 
-// Run
-main().catch(err => console.error(err));
+// Seed the first cycle
+runCycle().catch(err => console.error("Fatal error starting cycles:", err));
 
-
-
-
-
-
-
-
-
-
-
-
-
+// If you prefer a persistent timer-based loop, uncomment below and remove the one-shot above:
+// setInterval(runCycle, CYCLE_INTERVAL_MS);
