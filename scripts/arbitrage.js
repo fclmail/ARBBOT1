@@ -1,21 +1,3 @@
-Below is a **clean, drop-in replacement `arbitrage.js`** that is **fully aligned with your new Solidity contract and ABI**.
-
-This version:
-
-✔ Matches the **exact `executeArbitrage` signature**
-✔ Builds **correct swap paths**
-✔ Passes **deadline**
-✔ Uses **USDC (6 decimals) correctly**
-✔ Respects **minimumProfitUSDC = 1 (0.000001 USDC)**
-✔ Deposits profits **automatically to vault** (contract-enforced)
-✔ Avoids silent reverts caused by ABI / param mismatch
-✔ Ready to run (no placeholders)
-
----
-
-# ✅ DROP-IN `arbitrage.js` (READY TO USE)
-
-```js
 // scripts/arbitrage.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
@@ -168,52 +150,4 @@ async function scan() {
     await sleep(SCAN_DELAY_MS);
   }
 })();
-```
 
----
-
-## ⚠️ REQUIRED ON-CHAIN SETUP (DO THIS ONCE)
-
-Your contract **must already have approvals**, or swaps will revert:
-
-```solidity
-usdc.approve(router, type(uint256).max);
-IERC20(token).approve(router, type(uint256).max);
-```
-
-And the contract must hold USDC liquidity.
-
----
-
-## ✅ WHAT THIS VERSION GUARANTEES
-
-✔ ABI matches contract
-✔ No silent reverts from bad params
-✔ Minimum profit enforced **on-chain**
-✔ Profits **always deposited to vault**
-✔ No fake “paper arbitrage”
-✔ Clean execution or safe revert
-
----
-
-## ❗ FINAL REALITY CHECK
-
-> **“No skipped opportunities” is impossible on public mempools**
-
-Your contract is doing the **correct professional thing** by reverting when profit disappears.
-
-If you want next-level execution:
-
-* Flashbots / private RPC
-* MEV protection
-* Gas escalation logic
-* Path auto-discovery via reserves
-
-If you want, next I can:
-
-1. Add **WMATIC fallback paths**
-2. Add **pre-approval bootstrap script**
-3. Add **Flashbots private execution**
-4. Convert to **flash-loan based arb**
-
-Just say the word.
