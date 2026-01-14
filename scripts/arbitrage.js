@@ -1,16 +1,42 @@
 // scripts/arbitrage.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-dotenv.config();
+
+/**
+ * IMPORTANT:
+ * - GitHub Actions already injects env vars
+ * - Do NOT override them with dotenv
+ */
+dotenv.config({ override: false });
 
 /* ================= CONFIG ================= */
 
-const RPC = process.env.RPC_POLYGON;
-const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
+// Support multiple env names (safe fallback)
+const RPC_RAW =
+  process.env.RPC_POLYGON ||
+  process.env.POLYGON_RPC ||
+  process.env.RPC_URL ||
+  "";
 
-if (!RPC || !PRIVATE_KEY) {
-  throw new Error("Missing RPC_POLYGON or WALLET_PRIVATE_KEY");
+const PRIVATE_KEY_RAW =
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY ||
+  "";
+
+// Normalize values (fix whitespace / newline issues)
+const RPC_POLYGON = RPC_RAW.trim();
+const WALLET_PRIVATE_KEY = PRIVATE_KEY_RAW.trim();
+
+// Strict validation (no secret output)
+if (!RPC_POLYGON) {
+  throw new Error("RPC_POLYGON is missing or empty");
 }
+
+if (!WALLET_PRIVATE_KEY) {
+  throw new Error("WALLET_PRIVATE_KEY is missing or empty");
+}
+
+/* ================= CONSTANTS ================= */
 
 const MIN_TRADE_USDC = 0.03;
 const MIN_EXPECTED_PROFIT = 0.000001;
@@ -20,8 +46,8 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
 
-const provider = new ethers.JsonRpcProvider(RPC);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
@@ -29,20 +55,26 @@ const VAULT_ADDRESS = "0xe9068882B5E499Ca3c4ed1EDfd87aA6f7b57C159";
 
 const vaultAbi = [
   {
-    "inputs": [
-      { "internalType": "address", "name": "buyRouter", "type": "address" },
-      { "internalType": "address", "name": "sellRouter", "type": "address" },
-      { "internalType": "uint256", "name": "amountInUSDC", "type": "uint256" },
-      { "internalType": "address[]", "name": "pathToToken", "type": "address[]" },
-      { "internalType": "address[]", "name": "pathToUSDC", "type": "address[]" },
-      { "internalType": "uint256", "name": "deadline", "type": "uint256" }
+    inputs: [
+      { internalType: "address", name: "buyRouter", type: "address" },
+      { internalType: "address", name: "sellRouter", type: "address" },
+      { internalType: "uint256", name: "amountInUSDC", type: "uint256" },
+      { internalType: "address[]", name: "pathToToken", type: "address[]" },
+      { internalType: "address[]", name: "pathToUSDC", type: "address[]" },
+      { internalType: "uint256", name: "deadline", type: "uint256" }
     ],
-    "name": "executeArbitrage",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    name: "executeArbitrage",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function"
   },
-  { "inputs": [], "name": "usdc", "outputs": [{ "type": "address" }], "stateMutability": "view", "type": "function" }
+  {
+    inputs: [],
+    name: "usdc",
+    outputs: [{ type: "address" }],
+    stateMutability: "view",
+    type: "function"
+  }
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
@@ -72,7 +104,7 @@ const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
 /* ================= HELPERS ================= */
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
   try {
@@ -94,9 +126,10 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const directPathSell = [tokenAddr, usdc];
 
   const buyOut = await quote(buyRouter, amountIn, directPathBuy);
-  const sellOut = await quote(sellRouter, buyOut, directPathSell);
+  if (!buyOut) return;
 
-  if (!buyOut || !sellOut) return;
+  const sellOut = await quote(sellRouter, buyOut, directPathSell);
+  if (!sellOut) return;
 
   const receivedUSDC = Number(ethers.formatUnits(sellOut, 6));
   const profit = receivedUSDC - MIN_TRADE_USDC;
@@ -105,9 +138,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  console.log(
-    `🔥 ARB FOUND | Profit ≈ ${profit.toFixed(6)} USDC`
-  );
+  console.log(`🔥 ARB FOUND | Profit ≈ ${profit.toFixed(6)} USDC`);
 
   const tx = await vault.executeArbitrage(
     buyRouter,
@@ -120,7 +151,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   console.log(`⛓ TX SENT: ${tx.hash}`);
   await tx.wait();
-  console.log(`✅ PROFIT DEPOSITED TO VAULT`);
+  console.log("✅ PROFIT DEPOSITED TO VAULT");
 }
 
 /* ================= SCANNER ================= */
