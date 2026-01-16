@@ -101,13 +101,31 @@ const swapRouterAbi = [
 /* ================= TOKENS ================= */
 
 const TOKENS = {
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
+  USDT:  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC:  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  LINK:  "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+  AAVE:  "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+
+  // Added from List 2
+  USDC:  "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+  DAI:   "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+  WETH:  "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  UNI:   "0xb33eaad8d922b1083446dc23f610c2567fb5180f",
+  FRAX:  "0x45c32fa6df82ead1e2ef74d17b76547eddfaff89",
+  BUSD:  "0x9c9e5fd8bbc25984b178fdce6117defa39d2db39",
+  APE:   "0xb7b31a6bc18e48888545ce79e83e06003be70930",
+  CRV:   "0x172370d5cd63279efa6d502dab29171933a610af",
+  SRM:   "0x6bf2eb299e51fc5df30dec81d9445dde70e3f185",
+  SAND:  "0xbbba073c31bf03b8acf7c28ef0738decf3695683",
+  TUSD:  "0x2e1ad108ff1d8c782fcbbb89aad783ac49586756",
+  WOO:   "0x1b815d120b3ef02039ee11dc2d33de7aa4a8c603",
+  XSGD:  "0xdc3326e71d45186f113a2f448984ca0e8d201995",
+  MV:    "0xA3c322Ad15218fBFAEd26bA7f616249f7705D945",
+  VCNT:  "0x8a16d4bf8a0a716017e8d2262c4ac32927797a2f"
 };
 
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+
 
 /* ================= HELPERS ================= */
 
