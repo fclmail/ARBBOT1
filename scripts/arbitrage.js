@@ -1,6 +1,7 @@
 // scripts/arbitrage.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
+import chalk from "chalk";
 
 /**
  * IMPORTANT:
@@ -11,27 +12,19 @@ dotenv.config({ override: false });
 
 /* ================= CONFIG ================= */
 
-const RPC_RAW =
+const RPC_POLYGON =
   process.env.RPC_POLYGON ||
   process.env.POLYGON_RPC ||
   process.env.RPC_URL ||
   "";
 
-const PRIVATE_KEY_RAW =
+const WALLET_PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY ||
   process.env.PRIVATE_KEY ||
   "";
 
-const RPC_POLYGON = RPC_RAW.trim();
-const WALLET_PRIVATE_KEY = PRIVATE_KEY_RAW.trim();
-
-if (!RPC_POLYGON) {
-  throw new Error("RPC_POLYGON is missing or empty");
-}
-
-if (!WALLET_PRIVATE_KEY) {
-  throw new Error("WALLET_PRIVATE_KEY is missing or empty");
-}
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
+if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
 
 /* ================= CONSTANTS ================= */
 
@@ -41,11 +34,9 @@ const SLIPPAGE_PCT = 0.05;
 const SCAN_DELAY_MS = 8000;
 const DEADLINE_SECONDS = 60;
 
-/* ====== SWEEP CONFIG ====== */
-
 let MIN_SWEEP_AMOUNT = 0.000001;
 
-/* ============================================ */
+/* ================= PROVIDER & WALLET ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
@@ -132,14 +123,8 @@ async function quote(routerAddr, amountIn, path) {
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts[amounts.length - 1];
   } catch {
-    return null;
+    return ethers.Zero;
   }
-}
-
-// Determine decimals based on token (stablecoins = 6, others = 18)
-function getTokenDecimals(tokenAddr) {
-  const stablecoins = [TOKENS.USDC, TOKENS.USDT, TOKENS.DAI, TOKENS.BUSD, TOKENS.TUSD];
-  return stablecoins.includes(tokenAddr) ? 6 : 18;
 }
 
 /* ============= METHOD 1 WRAPPER PATH ENGINE ============= */
@@ -153,7 +138,7 @@ const FALLBACK_HOPS = [
 
 function generatePaths(base, token) {
   let paths = [];
-  paths.push([base, token]); // direct path
+  paths.push([base, token]);
   for (let hop of FALLBACK_HOPS) {
     if (hop === token) continue;
     paths.push([base, hop, token]);
@@ -161,24 +146,34 @@ function generatePaths(base, token) {
   return paths;
 }
 
-/* ======================================================== */
+/* ================= SWEEP PROFITS ================= */
 
 async function sweepProfitsToMatic() {
   try {
     const usdcAddress = await vault.usdc();
     const usdcContract = new ethers.Contract(
       usdcAddress,
-      ["function balanceOf(address) view returns(uint256)", "function approve(address,uint256)"],
+      ["function balanceOf(address) view returns(uint256)",
+       "function approve(address,uint256)"],
       wallet
     );
     const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
     const readable = Number(ethers.formatUnits(balance, 6));
     if (readable < MIN_SWEEP_AMOUNT) return;
-    console.log(`💰 SWEEP INITIATED | USDC balance: ${readable}`);
+
+    console.log(`💰 SWEEP INITIATED | USDC balance: ${readable.toFixed(6)}`);
     await usdcContract.approve(routers.QuickSwap, balance);
+
     const router = new ethers.Contract(routers.QuickSwap, swapRouterAbi, wallet);
     const path = [usdcAddress, WMATIC];
-    const tx = await router.swapExactTokensForETH(balance, 0, path, wallet.address, Math.floor(Date.now() / 1000) + 60);
+
+    const tx = await router.swapExactTokensForETH(
+      balance,
+      0,
+      path,
+      wallet.address,
+      Math.floor(Date.now() / 1000) + 60
+    );
     console.log(`🔁 Converting profits to MATIC: ${tx.hash}`);
     await tx.wait();
     console.log("✅ PROFITS CONVERTED TO MATIC AND SENT TO OWNER WALLET");
@@ -187,71 +182,79 @@ async function sweepProfitsToMatic() {
   }
 }
 
-/* ================= CORE LOGIC (UNCHANGED) ================= */
+/* ================= CORE ARB LOGIC ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath = null) {
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
   const directPathBuy = buyPath || [usdc, tokenAddr];
   const directPathSell = sellPath || [tokenAddr, usdc];
-  const buyOut = await quote(buyRouter, amountIn, directPathBuy);
-  if (!buyOut) return;
-  const sellOut = await quote(sellRouter, buyOut, directPathSell);
-  if (!sellOut) return;
 
-  const decimalsBuy = getTokenDecimals(tokenAddr);
-  const decimalsSell = getTokenDecimals(tokenAddr);
+  const buyOut = await quote(buyRouter, amountIn, directPathBuy);
+  const sellOut = await quote(sellRouter, buyOut, directPathSell);
 
   const receivedUSDC = Number(ethers.formatUnits(sellOut, 6));
   const profit = receivedUSDC - MIN_TRADE_USDC;
 
-  const profitColor = profit >= MIN_EXPECTED_PROFIT ? "\x1b[32m" : "\x1b[0m"; // green if profitable
-  const resetColor = "\x1b[0m";
+  // Display buy/sell and profit
+  const buyReadable = Number(ethers.formatUnits(buyOut, 6));
+  const sellReadable = receivedUSDC;
+  const profitStr = profit.toFixed(6);
+  const profitColor = profit >= 0 ? chalk.green : chalk.red;
 
-  console.log(`${profitColor}🔹 ARB SCAN | Token: ${tokenAddr}`);
-  console.log(`  Buy on: ${buyRouter} | Buy amount out: ${Number(ethers.formatUnits(buyOut, decimalsBuy)).toFixed(6)}`);
-  console.log(`  Sell on: ${sellRouter} | Sell amount out: ${Number(ethers.formatUnits(sellOut, decimalsSell)).toFixed(6)}`);
-  console.log(`  Expected Profit: ${profit.toFixed(6)} USDC${resetColor}`);
+  console.log(chalk.blue(`🔹 ARB SCAN | Token: ${tokenAddr}`));
+  console.log(`  Buy on: ${buyRouter} | Buy amount out: ${buyReadable.toFixed(6)}`);
+  console.log(`  Sell on: ${sellRouter} | Sell amount out: ${sellReadable.toFixed(6)}`);
+  console.log(`  Expected Profit: ${profitColor(profitStr)} USDC`);
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  console.log(`🔥 EXECUTING ARBITRAGE`);
 
-  console.log(`🔥 ARB FOUND | Profit ≈ ${profit.toFixed(6)} USDC`);
+  const tx = await vault.executeArbitrage(
+    buyRouter,
+    sellRouter,
+    amountIn,
+    directPathBuy,
+    directPathSell,
+    deadline
+  );
 
-  const tx = await vault.executeArbitrage(buyRouter, sellRouter, amountIn, directPathBuy, directPathSell, deadline);
   console.log(`⛓ TX SENT: ${tx.hash}`);
   await tx.wait();
-  console.log("✅ PROFIT DEPOSITED TO VAULT");
+  console.log(`✅ PROFIT DEPOSITED TO VAULT`);
 
   await sweepProfitsToMatic();
 }
 
-/* ================= SCANNER (ENHANCED WITH WRAPPER) ================= */
+/* ================= SCANNER ================= */
 
 async function scan() {
-  const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
-  const vaultUSDC = Number(ethers.formatUnits(await (await vault.usdc()).then(addr => new ethers.Contract(addr, ["function balanceOf(address) view returns(uint256)"], provider).balanceOf(VAULT_ADDRESS)), 6));
+  const walletMATIC = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
+  const usdcAddress = await vault.usdc();
+  const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
+  const vaultUSDC = Number(ethers.formatUnits(await usdcContract.balanceOf(VAULT_ADDRESS), 6));
 
-  console.log(`💎 Wallet MATIC balance: ${walletMatic.toFixed(6)}`);
-  console.log(`💰 Vault USDC balance: ${vaultUSDC.toFixed(6)}`);
-
-  const usdc = await vault.usdc();
+  console.log(chalk.yellow(`💎 Wallet MATIC balance: ${walletMATIC.toFixed(6)}`));
+  console.log(chalk.yellow(`💰 Vault USDC balance: ${vaultUSDC.toFixed(6)}`));
 
   for (const token of Object.values(TOKENS)) {
-    const buyPaths = generatePaths(usdc, token);
-    const sellPaths = generatePaths(token, usdc);
+    const buyPaths = generatePaths(usdcAddress, token);
+    const sellPaths = generatePaths(token, usdcAddress);
 
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
+
         for (let bPath of buyPaths) {
           for (let sPath of sellPaths) {
             try {
               await tryArb(buy, sell, token, bPath, sPath);
               await sleep(1200);
             } catch (e) {
-              console.log(`⚠️ ${e.message}`);
+              console.log(chalk.red(`⚠️ ${e.message}`));
             }
           }
         }
