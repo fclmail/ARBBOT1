@@ -12,9 +12,9 @@ if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = 0.12;
+const MIN_TRADE_USDC = 0.10;
 const MIN_EXPECTED_PROFIT = 0.000001;
-const SCAN_DELAY_MS = 8000;
+const SCAN_DELAY_MS = 4000;
 const DEADLINE_SECONDS = 60;
 let MIN_SWEEP_AMOUNT = 0.000001;
 
