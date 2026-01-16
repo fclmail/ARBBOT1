@@ -1,4 +1,3 @@
-
 // scripts/arbitrage.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
@@ -12,7 +11,6 @@ dotenv.config({ override: false });
 
 /* ================= CONFIG ================= */
 
-// Support multiple env names (safe fallback)
 const RPC_RAW =
   process.env.RPC_POLYGON ||
   process.env.POLYGON_RPC ||
@@ -24,11 +22,9 @@ const PRIVATE_KEY_RAW =
   process.env.PRIVATE_KEY ||
   "";
 
-// Normalize values (fix whitespace / newline issues)
 const RPC_POLYGON = RPC_RAW.trim();
 const WALLET_PRIVATE_KEY = PRIVATE_KEY_RAW.trim();
 
-// Strict validation (no secret output)
 if (!RPC_POLYGON) {
   throw new Error("RPC_POLYGON is missing or empty");
 }
@@ -45,7 +41,11 @@ const SLIPPAGE_PCT = 0.05;
 const SCAN_DELAY_MS = 8000;
 const DEADLINE_SECONDS = 60;
 
-/* ================= PROVIDER ================= */
+/* ====== NEW: SWEEP CONFIG (ADJUSTABLE) ====== */
+
+let MIN_SWEEP_AMOUNT = 0.000001;   // adjustable minimum to trigger auto sweep
+
+/* ============================================ */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
@@ -92,6 +92,12 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
+/* ===== NEW ABI FOR SWAP TO MATIC ===== */
+
+const swapRouterAbi = [
+  "function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline)"
+];
+
 /* ================= TOKENS ================= */
 
 const TOKENS = {
@@ -116,6 +122,61 @@ async function quote(routerAddr, amountIn, path) {
     return null;
   }
 }
+
+/* ========== NEW FUNCTION: AUTO SWEEP PROFITS ========== */
+
+async function sweepProfitsToMatic() {
+  try {
+    const usdcAddress = await vault.usdc();
+
+    const usdcContract = new ethers.Contract(
+      usdcAddress,
+      [
+        "function balanceOf(address) view returns(uint256)",
+        "function approve(address,uint256)"
+      ],
+      wallet
+    );
+
+    const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
+
+    const readable = Number(ethers.formatUnits(balance, 6));
+
+    if (readable < MIN_SWEEP_AMOUNT) {
+      return;
+    }
+
+    console.log(`💰 SWEEP INITIATED | USDC balance: ${readable}`);
+
+    await usdcContract.approve(routers.QuickSwap, balance);
+
+    const router = new ethers.Contract(
+      routers.QuickSwap,
+      swapRouterAbi,
+      wallet
+    );
+
+    const path = [usdcAddress, WMATIC];
+
+    const tx = await router.swapExactTokensForETH(
+      balance,
+      0,
+      path,
+      wallet.address,
+      Math.floor(Date.now() / 1000) + 60
+    );
+
+    console.log(`🔁 Converting profits to MATIC: ${tx.hash}`);
+    await tx.wait();
+
+    console.log("✅ PROFITS CONVERTED TO MATIC AND SENT TO OWNER WALLET");
+
+  } catch (err) {
+    console.log("⚠️ Sweep error:", err.message);
+  }
+}
+
+/* ======================================================= */
 
 /* ================= CORE LOGIC ================= */
 
@@ -153,6 +214,9 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   console.log(`⛓ TX SENT: ${tx.hash}`);
   await tx.wait();
   console.log("✅ PROFIT DEPOSITED TO VAULT");
+
+  /* ===== NEW: AUTO SWEEP AFTER EVERY SUCCESS ===== */
+  await sweepProfitsToMatic();
 }
 
 /* ================= SCANNER ================= */
