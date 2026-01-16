@@ -136,6 +136,12 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
+// Determine decimals based on token (stablecoins = 6, others = 18)
+function getTokenDecimals(tokenAddr) {
+  const stablecoins = [TOKENS.USDC, TOKENS.USDT, TOKENS.DAI, TOKENS.BUSD, TOKENS.TUSD];
+  return stablecoins.includes(tokenAddr) ? 6 : 18;
+}
+
 /* ============= METHOD 1 WRAPPER PATH ENGINE ============= */
 
 const FALLBACK_HOPS = [
@@ -147,16 +153,11 @@ const FALLBACK_HOPS = [
 
 function generatePaths(base, token) {
   let paths = [];
-
-  // Direct path (original behavior)
-  paths.push([base, token]);
-
-  // Multi-hop fallbacks
+  paths.push([base, token]); // direct path
   for (let hop of FALLBACK_HOPS) {
     if (hop === token) continue;
     paths.push([base, hop, token]);
   }
-
   return paths;
 }
 
@@ -165,46 +166,22 @@ function generatePaths(base, token) {
 async function sweepProfitsToMatic() {
   try {
     const usdcAddress = await vault.usdc();
-
     const usdcContract = new ethers.Contract(
       usdcAddress,
-      [
-        "function balanceOf(address) view returns(uint256)",
-        "function approve(address,uint256)"
-      ],
+      ["function balanceOf(address) view returns(uint256)", "function approve(address,uint256)"],
       wallet
     );
-
     const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
     const readable = Number(ethers.formatUnits(balance, 6));
-
     if (readable < MIN_SWEEP_AMOUNT) return;
-
     console.log(`💰 SWEEP INITIATED | USDC balance: ${readable}`);
-
     await usdcContract.approve(routers.QuickSwap, balance);
-
-    const router = new ethers.Contract(
-      routers.QuickSwap,
-      swapRouterAbi,
-      wallet
-    );
-
+    const router = new ethers.Contract(routers.QuickSwap, swapRouterAbi, wallet);
     const path = [usdcAddress, WMATIC];
-
-    const tx = await router.swapExactTokensForETH(
-      balance,
-      0,
-      path,
-      wallet.address,
-      Math.floor(Date.now() / 1000) + 60
-    );
-
+    const tx = await router.swapExactTokensForETH(balance, 0, path, wallet.address, Math.floor(Date.now() / 1000) + 60);
     console.log(`🔁 Converting profits to MATIC: ${tx.hash}`);
     await tx.wait();
-
     console.log("✅ PROFITS CONVERTED TO MATIC AND SENT TO OWNER WALLET");
-
   } catch (err) {
     console.log("⚠️ Sweep error:", err.message);
   }
@@ -215,29 +192,25 @@ async function sweepProfitsToMatic() {
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath = null) {
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-
   const directPathBuy = buyPath || [usdc, tokenAddr];
   const directPathSell = sellPath || [tokenAddr, usdc];
-
   const buyOut = await quote(buyRouter, amountIn, directPathBuy);
   if (!buyOut) return;
-
   const sellOut = await quote(sellRouter, buyOut, directPathSell);
   if (!sellOut) return;
+
+  const decimalsBuy = getTokenDecimals(tokenAddr);
+  const decimalsSell = getTokenDecimals(tokenAddr);
 
   const receivedUSDC = Number(ethers.formatUnits(sellOut, 6));
   const profit = receivedUSDC - MIN_TRADE_USDC;
 
-  // ===== COLORIZED CONSOLE OUTPUT =====
   const profitColor = profit >= MIN_EXPECTED_PROFIT ? "\x1b[32m" : "\x1b[0m"; // green if profitable
   const resetColor = "\x1b[0m";
 
-  const buyTokenAmount = Number(ethers.formatUnits(buyOut, 18));
-  const sellTokenAmount = Number(ethers.formatUnits(sellOut, 18));
-
   console.log(`${profitColor}🔹 ARB SCAN | Token: ${tokenAddr}`);
-  console.log(`  Buy on: ${buyRouter} | Buy amount out: ${buyTokenAmount.toFixed(6)}`);
-  console.log(`  Sell on: ${sellRouter} | Sell amount out: ${sellTokenAmount.toFixed(6)}`);
+  console.log(`  Buy on: ${buyRouter} | Buy amount out: ${Number(ethers.formatUnits(buyOut, decimalsBuy)).toFixed(6)}`);
+  console.log(`  Sell on: ${sellRouter} | Sell amount out: ${Number(ethers.formatUnits(sellOut, decimalsSell)).toFixed(6)}`);
   console.log(`  Expected Profit: ${profit.toFixed(6)} USDC${resetColor}`);
 
   if (profit < MIN_EXPECTED_PROFIT) return;
@@ -246,15 +219,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath
 
   console.log(`🔥 ARB FOUND | Profit ≈ ${profit.toFixed(6)} USDC`);
 
-  const tx = await vault.executeArbitrage(
-    buyRouter,
-    sellRouter,
-    amountIn,
-    directPathBuy,
-    directPathSell,
-    deadline
-  );
-
+  const tx = await vault.executeArbitrage(buyRouter, sellRouter, amountIn, directPathBuy, directPathSell, deadline);
   console.log(`⛓ TX SENT: ${tx.hash}`);
   await tx.wait();
   console.log("✅ PROFIT DEPOSITED TO VAULT");
@@ -265,6 +230,12 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath
 /* ================= SCANNER (ENHANCED WITH WRAPPER) ================= */
 
 async function scan() {
+  const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
+  const vaultUSDC = Number(ethers.formatUnits(await (await vault.usdc()).then(addr => new ethers.Contract(addr, ["function balanceOf(address) view returns(uint256)"], provider).balanceOf(VAULT_ADDRESS)), 6));
+
+  console.log(`💎 Wallet MATIC balance: ${walletMatic.toFixed(6)}`);
+  console.log(`💰 Vault USDC balance: ${vaultUSDC.toFixed(6)}`);
+
   const usdc = await vault.usdc();
 
   for (const token of Object.values(TOKENS)) {
@@ -274,7 +245,6 @@ async function scan() {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
-
         for (let bPath of buyPaths) {
           for (let sPath of sellPaths) {
             try {
