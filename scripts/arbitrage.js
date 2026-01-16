@@ -41,9 +41,9 @@ const SLIPPAGE_PCT = 0.05;
 const SCAN_DELAY_MS = 8000;
 const DEADLINE_SECONDS = 60;
 
-/* ====== NEW: SWEEP CONFIG (ADJUSTABLE) ====== */
+/* ====== SWEEP CONFIG ====== */
 
-let MIN_SWEEP_AMOUNT = 0.000001;   // adjustable minimum to trigger auto sweep
+let MIN_SWEEP_AMOUNT = 0.000001;
 
 /* ============================================ */
 
@@ -92,8 +92,6 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-/* ===== NEW ABI FOR SWAP TO MATIC ===== */
-
 const swapRouterAbi = [
   "function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline)"
 ];
@@ -105,8 +103,6 @@ const TOKENS = {
   WBTC:  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   LINK:  "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   AAVE:  "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-
-  // Added from List 2
   USDC:  "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
   DAI:   "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
   WETH:  "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
@@ -126,7 +122,6 @@ const TOKENS = {
 
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
-
 /* ================= HELPERS ================= */
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -141,7 +136,31 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ========== NEW FUNCTION: AUTO SWEEP PROFITS ========== */
+/* ============= METHOD 1 WRAPPER PATH ENGINE ============= */
+
+const FALLBACK_HOPS = [
+  WMATIC,
+  TOKENS.WETH,
+  TOKENS.DAI,
+  TOKENS.USDT
+];
+
+function generatePaths(base, token) {
+  let paths = [];
+
+  // Direct path (original behavior)
+  paths.push([base, token]);
+
+  // Multi-hop fallbacks
+  for (let hop of FALLBACK_HOPS) {
+    if (hop === token) continue;
+    paths.push([base, hop, token]);
+  }
+
+  return paths;
+}
+
+/* ======================================================== */
 
 async function sweepProfitsToMatic() {
   try {
@@ -157,12 +176,9 @@ async function sweepProfitsToMatic() {
     );
 
     const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
-
     const readable = Number(ethers.formatUnits(balance, 6));
 
-    if (readable < MIN_SWEEP_AMOUNT) {
-      return;
-    }
+    if (readable < MIN_SWEEP_AMOUNT) return;
 
     console.log(`💰 SWEEP INITIATED | USDC balance: ${readable}`);
 
@@ -194,16 +210,14 @@ async function sweepProfitsToMatic() {
   }
 }
 
-/* ======================================================= */
+/* ================= CORE LOGIC (UNCHANGED) ================= */
 
-/* ================= CORE LOGIC ================= */
-
-async function tryArb(buyRouter, sellRouter, tokenAddr) {
+async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath = null) {
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const directPathBuy = [usdc, tokenAddr];
-  const directPathSell = [tokenAddr, usdc];
+  const directPathBuy = buyPath || [usdc, tokenAddr];
+  const directPathSell = sellPath || [tokenAddr, usdc];
 
   const buyOut = await quote(buyRouter, amountIn, directPathBuy);
   if (!buyOut) return;
@@ -233,22 +247,31 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   await tx.wait();
   console.log("✅ PROFIT DEPOSITED TO VAULT");
 
-  /* ===== NEW: AUTO SWEEP AFTER EVERY SUCCESS ===== */
   await sweepProfitsToMatic();
 }
 
-/* ================= SCANNER ================= */
+/* ================= SCANNER (ENHANCED WITH WRAPPER) ================= */
 
 async function scan() {
+  const usdc = await vault.usdc();
+
   for (const token of Object.values(TOKENS)) {
+    const buyPaths = generatePaths(usdc, token);
+    const sellPaths = generatePaths(token, usdc);
+
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
-        try {
-          await tryArb(buy, sell, token);
-          await sleep(1200);
-        } catch (e) {
-          console.log(`⚠️ ${e.message}`);
+
+        for (let bPath of buyPaths) {
+          for (let sPath of sellPaths) {
+            try {
+              await tryArb(buy, sell, token, bPath, sPath);
+              await sleep(1200);
+            } catch (e) {
+              console.log(`⚠️ ${e.message}`);
+            }
+          }
         }
       }
     }
