@@ -1,10 +1,17 @@
 import { ethers } from "ethers";
-import VaultABI from "./VaultArbitrageEnforcer.json";
-import ERC20ABI from "./ERC20.json";
+import fs from "fs";
+import path from "path";
+
+// ---------------- LOAD CONTRACT ABIs ----------------
+const vaultABIPath = path.resolve("./scripts/VaultArbitrageEnforcer.json");
+const erc20ABIPath = path.resolve("./scripts/ERC20.json");
+
+const VaultABI = JSON.parse(fs.readFileSync(vaultABIPath, "utf-8"));
+const ERC20ABI = JSON.parse(fs.readFileSync(erc20ABIPath, "utf-8"));
 
 // ---------------- CONFIG ----------------
 const provider = new ethers.JsonRpcProvider("https://polygon-rpc.com/");
-const wallet = new ethers.Wallet("YOUR_PRIVATE_KEY", provider);
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
 const vaultAddress = "0xYourVaultContract";
 const vault = new ethers.Contract(vaultAddress, VaultABI, wallet);
@@ -24,7 +31,7 @@ const tokens = [
   { symbol: "LINK", addr: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
   { symbol: "WBTC", addr: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" },
   { symbol: "USDT", addr: "0x3813e82e6f7098b9583FC0F33a962D02018B6803" },
-  { symbol: "MATIC", addr: "0x0000000000000000000000000000000000001010" }, // placeholder WMATIC
+  { symbol: "MATIC", addr: "0x0000000000000000000000000000000000001010" }, // WMATIC placeholder
   { symbol: "USDC", addr: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174" },
 ];
 
@@ -90,9 +97,7 @@ async function scanArbitrage() {
           const multiSell = await getAmountsOut(sellRouter, multiPathBack, multiBuy);
 
           const multiProfit = calculateProfit(multiBuy, multiSell);
-          if (multiProfit > profit) {
-            profit = multiProfit;
-          }
+          if (multiProfit > profit) profit = multiProfit;
         }
 
         console.log(`🔹 ARB SCAN | Token: ${token.addr} (${token.symbol})`);
@@ -100,7 +105,6 @@ async function scanArbitrage() {
         console.log(`  Sell on: ${sellRouter.addr} | Sell amount out: ${ethers.formatUnits(sellAmount, 18)}`);
         console.log(`  Expected Profit: ${ethers.formatUnits(profit, 6)} USDC ${profit > 0 ? "✅" : ""}\n`);
 
-        // -------- EXECUTE ARBITRAGE --------
         if (profit > 0) {
           console.log("🔥 EXECUTING ARBITRAGE");
           const tx = await vault.executeArbitrage(
@@ -150,4 +154,4 @@ async function scanArbitrage() {
 }
 
 // ---------------- RUN ----------------
-setInterval(scanArbitrage, 5000); // repeat every 5 seconds
+setInterval(scanArbitrage, 5000);
