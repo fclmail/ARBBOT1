@@ -1,50 +1,29 @@
 // scripts/arbitrage.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-import chalk from "chalk";
-
-/**
- * IMPORTANT:
- * - GitHub Actions already injects env vars
- * - Do NOT override them with dotenv
- */
-dotenv.config({ override: false });
 
 /* ================= CONFIG ================= */
+dotenv.config({ override: false });
 
-const RPC_POLYGON =
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL ||
-  "";
-
-const WALLET_PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  "";
+const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || "").trim();
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
 
 /* ================= CONSTANTS ================= */
-
 const MIN_TRADE_USDC = 0.12;
 const MIN_EXPECTED_PROFIT = 0.000001;
-const SLIPPAGE_PCT = 0.05;
 const SCAN_DELAY_MS = 8000;
 const DEADLINE_SECONDS = 60;
-
 let MIN_SWEEP_AMOUNT = 0.000001;
 
 /* ================= PROVIDER & WALLET ================= */
-
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
-
 const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
-
 const vaultAbi = [
   {
     inputs: [
@@ -68,27 +47,18 @@ const vaultAbi = [
     type: "function"
   }
 ];
-
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
-
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
-
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
-];
-
-const swapRouterAbi = [
-  "function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline)"
-];
+const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"];
+const swapRouterAbi = ["function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline)"];
 
 /* ================= TOKENS ================= */
-
 const TOKENS = {
   USDT:  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC:  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
@@ -110,12 +80,16 @@ const TOKENS = {
   MV:    "0xA3c322Ad15218fBFAEd26bA7f616249f7705D945",
   VCNT:  "0x8a16d4bf8a0a716017e8d2262c4ac32927797a2f"
 };
-
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
-/* ================= HELPERS ================= */
+/* ================= ANSI COLORS ================= */
+const GREEN  = "\x1b[32m";
+const RED    = "\x1b[31m";
+const YELLOW = "\x1b[33m";
+const RESET  = "\x1b[0m";
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* ================= HELPERS ================= */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
   try {
@@ -123,22 +97,16 @@ async function quote(routerAddr, amountIn, path) {
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts[amounts.length - 1];
   } catch {
-    return ethers.Zero;
+    return null;
   }
 }
 
-/* ============= METHOD 1 WRAPPER PATH ENGINE ============= */
-
-const FALLBACK_HOPS = [
-  WMATIC,
-  TOKENS.WETH,
-  TOKENS.DAI,
-  TOKENS.USDT
-];
+/* ===== METHOD 1: WRAPPER PATH ENGINE ===== */
+const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
 
 function generatePaths(base, token) {
   let paths = [];
-  paths.push([base, token]);
+  paths.push([base, token]); // direct
   for (let hop of FALLBACK_HOPS) {
     if (hop === token) continue;
     paths.push([base, hop, token]);
@@ -146,99 +114,82 @@ function generatePaths(base, token) {
   return paths;
 }
 
-/* ================= SWEEP PROFITS ================= */
-
+/* ===== SWEEP PROFITS TO MATIC ===== */
 async function sweepProfitsToMatic() {
   try {
     const usdcAddress = await vault.usdc();
-    const usdcContract = new ethers.Contract(
-      usdcAddress,
-      ["function balanceOf(address) view returns(uint256)",
-       "function approve(address,uint256)"],
-      wallet
-    );
+    const usdcContract = new ethers.Contract(usdcAddress, [
+      "function balanceOf(address) view returns(uint256)",
+      "function approve(address,uint256)"
+    ], wallet);
+
     const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
     const readable = Number(ethers.formatUnits(balance, 6));
+
     if (readable < MIN_SWEEP_AMOUNT) return;
 
-    console.log(`💰 SWEEP INITIATED | USDC balance: ${readable.toFixed(6)}`);
+    console.log(`💰 SWEEP INITIATED | USDC balance: ${readable}`);
+
     await usdcContract.approve(routers.QuickSwap, balance);
 
     const router = new ethers.Contract(routers.QuickSwap, swapRouterAbi, wallet);
     const path = [usdcAddress, WMATIC];
 
-    const tx = await router.swapExactTokensForETH(
-      balance,
-      0,
-      path,
-      wallet.address,
-      Math.floor(Date.now() / 1000) + 60
-    );
+    const tx = await router.swapExactTokensForETH(balance, 0, path, wallet.address, Math.floor(Date.now()/1000)+60);
     console.log(`🔁 Converting profits to MATIC: ${tx.hash}`);
     await tx.wait();
+
     console.log("✅ PROFITS CONVERTED TO MATIC AND SENT TO OWNER WALLET");
   } catch (err) {
     console.log("⚠️ Sweep error:", err.message);
   }
 }
 
-/* ================= CORE ARB LOGIC ================= */
-
+/* ===== CORE ARBITRAGE LOGIC ===== */
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath = null) {
-  const usdc = await vault.usdc();
+  const usdcAddress = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const directPathBuy = buyPath || [usdc, tokenAddr];
-  const directPathSell = sellPath || [tokenAddr, usdc];
+  const directPathBuy = buyPath || [usdcAddress, tokenAddr];
+  const directPathSell = sellPath || [tokenAddr, usdcAddress];
 
   const buyOut = await quote(buyRouter, amountIn, directPathBuy);
   const sellOut = await quote(sellRouter, buyOut, directPathSell);
 
-  const receivedUSDC = Number(ethers.formatUnits(sellOut, 6));
+  const receivedUSDC = sellOut ? Number(ethers.formatUnits(sellOut, 6)) : 0;
   const profit = receivedUSDC - MIN_TRADE_USDC;
 
-  // Display buy/sell and profit
-  const buyReadable = Number(ethers.formatUnits(buyOut, 6));
-  const sellReadable = receivedUSDC;
-  const profitStr = profit.toFixed(6);
-  const profitColor = profit >= 0 ? chalk.green : chalk.red;
-
-  console.log(chalk.blue(`🔹 ARB SCAN | Token: ${tokenAddr}`));
-  console.log(`  Buy on: ${buyRouter} | Buy amount out: ${buyReadable.toFixed(6)}`);
-  console.log(`  Sell on: ${sellRouter} | Sell amount out: ${sellReadable.toFixed(6)}`);
-  console.log(`  Expected Profit: ${profitColor(profitStr)} USDC`);
+  // Show ARB SCAN output
+  const color = profit >= 0 ? GREEN : RED;
+  console.log(`${YELLOW}🔹 ARB SCAN | Token: ${tokenAddr}${RESET}`);
+  console.log(`  Buy on: ${buyRouter} | Buy amount out: ${buyOut ? Number(ethers.formatUnits(buyOut, 18)) : 0}`);
+  console.log(`  Sell on: ${sellRouter} | Sell amount out: ${sellOut ? Number(ethers.formatUnits(sellOut, 18)) : 0}`);
+  console.log(`  Expected Profit: ${color}${profit.toFixed(6)} USDC${RESET}`);
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-  console.log(`🔥 EXECUTING ARBITRAGE`);
+  console.log("🔥 EXECUTING ARBITRAGE");
+  const deadline = Math.floor(Date.now()/1000)+DEADLINE_SECONDS;
 
-  const tx = await vault.executeArbitrage(
-    buyRouter,
-    sellRouter,
-    amountIn,
-    directPathBuy,
-    directPathSell,
-    deadline
-  );
-
+  const tx = await vault.executeArbitrage(buyRouter, sellRouter, amountIn, directPathBuy, directPathSell, deadline);
   console.log(`⛓ TX SENT: ${tx.hash}`);
   await tx.wait();
-  console.log(`✅ PROFIT DEPOSITED TO VAULT`);
+  console.log("✅ PROFIT DEPOSITED TO VAULT");
 
   await sweepProfitsToMatic();
 }
 
-/* ================= SCANNER ================= */
-
+/* ===== ENHANCED SCANNER ===== */
 async function scan() {
-  const walletMATIC = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
   const usdcAddress = await vault.usdc();
-  const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
-  const vaultUSDC = Number(ethers.formatUnits(await usdcContract.balanceOf(VAULT_ADDRESS), 6));
 
-  console.log(chalk.yellow(`💎 Wallet MATIC balance: ${walletMATIC.toFixed(6)}`));
-  console.log(chalk.yellow(`💰 Vault USDC balance: ${vaultUSDC.toFixed(6)}`));
+  // Display Wallet and Vault balances
+  const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
+  const vaultUSDC = Number(ethers.formatUnits(
+    await new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider)
+      .balanceOf(VAULT_ADDRESS), 6));
+  console.log(`💎 Wallet MATIC balance: ${walletMatic}`);
+  console.log(`💰 Vault USDC balance: ${vaultUSDC}`);
 
   for (const token of Object.values(TOKENS)) {
     const buyPaths = generatePaths(usdcAddress, token);
@@ -254,7 +205,7 @@ async function scan() {
               await tryArb(buy, sell, token, bPath, sPath);
               await sleep(1200);
             } catch (e) {
-              console.log(chalk.red(`⚠️ ${e.message}`));
+              console.log(`⚠️ ${e.message}`);
             }
           }
         }
@@ -263,11 +214,10 @@ async function scan() {
   }
 }
 
-/* ================= MAIN LOOP ================= */
-
+/* ===== MAIN LOOP ===== */
 (async () => {
   console.log("🚀 Arbitrage bot started");
-  while (true) {
+  while(true) {
     await scan();
     await sleep(SCAN_DELAY_MS);
   }
