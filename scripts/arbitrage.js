@@ -35,7 +35,7 @@ if (!WALLET_PRIVATE_KEY) {
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.03;
+const MIN_TRADE_USDC = 0.12;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SLIPPAGE_PCT = 0.05;
 const SCAN_DELAY_MS = 8000;
