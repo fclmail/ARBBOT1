@@ -228,6 +228,18 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath
   const receivedUSDC = Number(ethers.formatUnits(sellOut, 6));
   const profit = receivedUSDC - MIN_TRADE_USDC;
 
+  // ===== COLORIZED CONSOLE OUTPUT =====
+  const profitColor = profit >= MIN_EXPECTED_PROFIT ? "\x1b[32m" : "\x1b[0m"; // green if profitable
+  const resetColor = "\x1b[0m";
+
+  const buyTokenAmount = Number(ethers.formatUnits(buyOut, 18));
+  const sellTokenAmount = Number(ethers.formatUnits(sellOut, 18));
+
+  console.log(`${profitColor}🔹 ARB SCAN | Token: ${tokenAddr}`);
+  console.log(`  Buy on: ${buyRouter} | Buy amount out: ${buyTokenAmount.toFixed(6)}`);
+  console.log(`  Sell on: ${sellRouter} | Sell amount out: ${sellTokenAmount.toFixed(6)}`);
+  console.log(`  Expected Profit: ${profit.toFixed(6)} USDC${resetColor}`);
+
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
