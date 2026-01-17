@@ -6,26 +6,25 @@ dotenv.config({ override: false });
 
 /* ============== ENV CONFIG ============== */
 
-// FIXED COMPATIBLE RPC LOADING
-const RPC_POLYGON =
-  (process.env.RPC_POLYGON ||
-   process.env.POLYGON_RPC ||
-   process.env.RPC_URL ||
-   "").trim();
+// HARDCODED POLYGON RPC (as requested)
+const RPC_POLYGON = "https://polygon-rpc.com";
 
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+// FLEXIBLE PRIVATE KEY SUPPORT
+const WALLET_PRIVATE_KEY = (
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY ||
+  process.env.PK ||
+  ""
+).trim();
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
 
 /* ============== CONSTANTS ============== */
 
-// MUCH LARGER TRADE SIZE FOR REAL PROFITS
-const MIN_TRADE_USDC = 25.0;            // increased for meaningful arb
-const MIN_EXPECTED_PROFIT = 0.08;       // realistic minimum
+const MIN_TRADE_USDC = 25.0;
+const MIN_EXPECTED_PROFIT = 0.08;
 const DEADLINE_SECONDS = 60;
 
-// Ultra fast scanning
 const PARALLEL_BATCH_SIZE = 12;
 
 /* ============== PROVIDER ============== */
@@ -56,7 +55,7 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-/* ============== HIGH LIQUIDITY TOKENS ONLY ============== */
+/* ============== TOKENS ============== */
 
 const TOKENS = {
   USDT:  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
@@ -84,7 +83,7 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-/* ============== SMART PATH ENGINE ============== */
+/* ============== PATH ENGINE ============== */
 
 function generatePaths(usdc, token) {
   return [
@@ -94,7 +93,7 @@ function generatePaths(usdc, token) {
   ];
 }
 
-/* ============== PARALLEL ARB CHECK ============== */
+/* ============== ARB CHECK ============== */
 
 async function evaluatePair(buyRouter, sellRouter, token, usdc) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
@@ -136,7 +135,7 @@ async function evaluatePair(buyRouter, sellRouter, token, usdc) {
   return null;
 }
 
-/* ============== EXECUTE ARB ============== */
+/* ============== EXECUTE ============== */
 
 async function execute(arb) {
   try {
@@ -163,7 +162,7 @@ async function execute(arb) {
   }
 }
 
-/* ============== ULTRA FAST SCANNER ============== */
+/* ============== SCANNER ============== */
 
 async function scanOnce() {
   const usdc = await vault.usdc();
@@ -199,7 +198,7 @@ async function scanOnce() {
 /* ============== MAIN LOOP ============== */
 
 (async () => {
-  console.log("\x1b[32m🚀 ULTRA FAST ARBITRAGE BOT STARTED\x1b[0m");
+  console.log("\x1b[32m🚀 ARBITRAGE BOT STARTED\x1b[0m");
 
   while (true) {
     try {
