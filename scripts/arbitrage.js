@@ -1,7 +1,8 @@
-// scripts/arbitrage.js
+// scripts/arbi.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – VAULT ARBITRAGE CONTRACT VERSION
+//  ARBITRAGE BOT – VAULT ARBITRAGE ENFORCER (MIN PROFIT 0.000001 USDC)
 // ---------------------------------------------------------
+
 import dotenv from "dotenv";
 import { ethers, Wallet } from "ethers";
 dotenv.config();
@@ -29,7 +30,7 @@ const fmt = (n, d = 6) => Number(n).toFixed(d);
 
 // ------------------- RPC ROTATION -------------------
 const RPCS = [
-  process.env.RPC_POLYGON || "",
+  process.env.RPC_POLYGON?.trim() || "",
   "https://polygon-bor-rpc.publicnode.com",
   "https://rpc.ankr.com/polygon",
   "https://polygon.llamarpc.com",
@@ -50,7 +51,7 @@ async function rpc(fn) {
   try {
     return await fn(provider);
   } catch (e) {
-    console.log(`${colors.red}⚠️ RPC error: ${e.message}, rotating...${colors.reset}`);
+    console.log(`${colors.red}⚠️ RPC error: ${e.message}, rotating RPC...${colors.reset}`);
     provider = newProvider();
     wallet = new Wallet(PRIVATE_KEY, provider);
     return fn(provider);
@@ -61,8 +62,6 @@ async function rpc(fn) {
 const vaultAbi = [
   "function executeArbitrage(address buyRouter,address sellRouter,uint256 amountInUSDC,address[] pathToToken,address[] pathToUSDC,uint256 deadline)",
   "function setMinimumProfitUSDC(uint256 _min)",
-  "function setVault(address _vault)",
-  "function withdrawERC20(address tokenAddr,uint256 amount)",
   "function minimumProfitUSDC() view returns (uint256)",
 ];
 
@@ -76,7 +75,6 @@ const erc20Abi = [
   "function approve(address spender,uint256 amount) external returns (bool)",
   "function transfer(address to,uint256 amount) external returns (bool)",
 ];
-
 const usdc = new ethers.Contract(USDC_ADDRESS, erc20Abi, wallet);
 
 // ------------------- ROUTERS & TOKENS -------------------
@@ -102,11 +100,28 @@ async function vaultBalance() {
 }
 
 async function minimumProfit() {
-  return Number(await rpc(() => vault.minimumProfitUSDC()));
+  const min = await rpc(() => vault.minimumProfitUSDC());
+  return Number(min);
+}
+
+// ------------------- ENSURE MIN PROFIT -------------------
+async function ensureMinProfit() {
+  try {
+    const current = await minimumProfit();
+    if (current !== 1) { // 1 = 0.000001 USDC
+      const tx = await rpc(() => vault.setMinimumProfitUSDC(1));
+      console.log(`${colors.green}✅ Setting minimum profit to 0.000001 USDC... TX: ${tx.hash}${colors.reset}`);
+      await tx.wait();
+    } else {
+      console.log(`${colors.cyan}✅ Minimum profit already set to 0.000001 USDC${colors.reset}`);
+    }
+  } catch (err) {
+    console.log(`${colors.red}⚠️ Error setting min profit: ${err.message}${colors.reset}`);
+  }
 }
 
 async function quote(routerAddr, token, amountUSDC) {
-  const router = new ethers.Contract(routerAddr, ["function getAmountsOut(uint amountIn,address[] path) view returns(uint[] memory)"], provider);
+  const router = new ethers.Contract(routerAddr, ["function getAmountsOut(uint,address[] path) view returns(uint[] memory)"], provider);
   const amt = ethers.parseUnits(amountUSDC.toString(), 6);
   try {
     const a = await rpc(() => router.getAmountsOut(amt, [USDC_ADDRESS, token.address]));
@@ -135,13 +150,17 @@ async function executeTrade(buyRouter, sellRouter, token, tradeUSDC) {
       now + 120
     ));
     console.log(`${colors.green}🔁 TX SENT: ${tx.hash}${colors.reset}`);
+
     const receipt = await tx.wait();
     if (!receipt || receipt.status !== 1) return;
+
     const after = await vaultBalance();
     console.log(`${colors.green}✅ Vault After: ${fmt(after)} USDC`);
     console.log(`💰 Real Profit: ${fmt(after - before)} USDC`);
   } catch (err) {
-    console.log(`${colors.red}⚠️ Trade error: ${err.message}${colors.reset}`);
+    // decode revert reason
+    let reason = err?.reason || "Unknown error";
+    console.log(`${colors.red}⚠️ Trade error: ${reason}${colors.reset}`);
   }
 }
 
@@ -162,6 +181,10 @@ async function scan() {
 // ------------------- MAIN LOOP -------------------
 (async () => {
   console.log(`${colors.cyan}🚀 Arb bot running${colors.reset}`);
+
+  // ensure min profit is set to 0.000001 USDC
+  await ensureMinProfit();
+
   while (true) {
     await scan();
     await sleep(8000);
