@@ -15,7 +15,7 @@ const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 const USDC_ADDRESS = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
 const DRY_RUN = false;
-const MIN_TRADE_USDC = 0.05; // Minimum USDC per trade
+const MIN_TRADE_USDC = 0.13; // Minimum USDC per trade
 const SLIPPAGE_PCT = 0.05;
 
 // ------------------- COLORS -------------------
