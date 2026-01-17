@@ -6,7 +6,13 @@ dotenv.config({ override: false });
 
 /* ============== ENV CONFIG ============== */
 
-const RPC_POLYGON = (process.env.RPC_POLYGON || "").trim();
+// FIXED COMPATIBLE RPC LOADING
+const RPC_POLYGON =
+  (process.env.RPC_POLYGON ||
+   process.env.POLYGON_RPC ||
+   process.env.RPC_URL ||
+   "").trim();
+
 const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
@@ -15,11 +21,11 @@ if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
 /* ============== CONSTANTS ============== */
 
 // MUCH LARGER TRADE SIZE FOR REAL PROFITS
-const MIN_TRADE_USDC = 25.0;            // <<<<< INCREASED
-const MIN_EXPECTED_PROFIT = 0.08;       // <<<<< REALISTIC TARGET
+const MIN_TRADE_USDC = 25.0;            // increased for meaningful arb
+const MIN_EXPECTED_PROFIT = 0.08;       // realistic minimum
 const DEADLINE_SECONDS = 60;
 
-// Ultra fast
+// Ultra fast scanning
 const PARALLEL_BATCH_SIZE = 12;
 
 /* ============== PROVIDER ============== */
@@ -174,7 +180,6 @@ async function scanOnce() {
     }
   }
 
-  // PARALLEL BATCHING
   for (let i = 0; i < tasks.length; i += PARALLEL_BATCH_SIZE) {
     const batch = tasks.slice(i, i + PARALLEL_BATCH_SIZE);
 
@@ -186,7 +191,7 @@ async function scanOnce() {
 
     if (arb) {
       await execute(arb);
-      return; // after success restart scanning
+      return;
     }
   }
 }
@@ -203,7 +208,6 @@ async function scanOnce() {
       console.log("Scan error:", e.message);
     }
 
-    // NO LARGE DELAYS – PURE SPEED
     await sleep(250);
   }
 })();
