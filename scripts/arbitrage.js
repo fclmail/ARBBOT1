@@ -56,10 +56,15 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
 const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+   CafeSwap:   "0x9055682E58C74fc8DdBFC55Ad2428aB1F96098Fc",
+       DFYN:       "0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429",
+    ApeSwap:    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  SushiSwap:  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  QuickSwap:  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  KyberSwap:  "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5",
+  UniswapV3:  "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
 };
+
 
 const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"];
 const swapRouterAbi = ["function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline)"];
