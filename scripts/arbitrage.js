@@ -27,16 +27,19 @@ const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 2000);
 const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 8);
 const DRY_RUN = (process.env.DRY_RUN || "false") === "true";
 
-/* ================= PROVIDER (RPC METHOD) ================= */
+/* ================= TIMESTAMP & LOG HELPERS ================= */
+const ts = () => new Date().toISOString();
+
+/* ================= PROVIDER (RPC FAILOVER) ================= */
 async function getWorkingProvider() {
   for (const rpc of RPC_LIST) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc);
       await provider.getBlockNumber();
-      console.log(`✅ Connected RPC: ${rpc}`);
+      console.log(`[${ts()}] ✅ Connected RPC: ${rpc}`);
       return provider;
     } catch {
-      console.log(`⚠️ RPC failed: ${rpc}`);
+      console.log(`[${ts()}] ⚠️ RPC failed: ${rpc}`);
     }
   }
   throw new Error("All RPC endpoints failed");
@@ -71,7 +74,7 @@ const vaultAbi = [
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= ROUTERS (V2 ONLY) ================= */
+/* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -84,12 +87,17 @@ const routerAbi = [
 
 /* ================= TOKENS ================= */
 const TOKENS = {
+  USDC: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
+
+/* ================= SYMBOL MAPPING ================= */
+const TOKEN_SYMBOLS = Object.fromEntries(
+  Object.entries(TOKENS).map(([sym, addr]) => [addr.toLowerCase(), sym])
+);
 
 /* ================= HELPERS ================= */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -104,11 +112,23 @@ async function quote(router, amountIn, path) {
   }
 }
 
-/* ================= ARB CHECK (NO TX) ================= */
-async function checkArb(buyRouter, sellRouter, token, usdc) {
+function symbol(addr) {
+  return TOKEN_SYMBOLS[addr.toLowerCase()] || addr.slice(0,6) + "…" + addr.slice(-4);
+}
+
+async function vaultUSDCBalance() {
+  const usdcAddress = await vault.usdc();
+  const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
+  return Number(ethers.formatUnits(await usdcContract.balanceOf(VAULT_ADDRESS), 6));
+}
+
+/* ================= ARB CHECK ================= */
+async function checkArb(buyRouter, sellRouter, tokenAddr, usdc) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-  const buyPath = [usdc, token];
-  const sellPath = [token, usdc];
+  const buyPath = [usdc, tokenAddr];
+  const sellPath = [tokenAddr, usdc];
+
+  console.log(`[${ts()}] 🔎 SCAN | Token ${symbol(tokenAddr)} | Buy ${symbol(buyRouter)} → Sell ${symbol(sellRouter)}`);
 
   const buyOut = await quote(buyRouter, amountIn, buyPath);
   if (!buyOut) return null;
@@ -124,7 +144,7 @@ async function checkArb(buyRouter, sellRouter, token, usdc) {
   return {
     buyRouter,
     sellRouter,
-    token,
+    tokenAddr,
     buyPath,
     sellPath,
     profit
@@ -141,10 +161,10 @@ async function processQueue() {
 
   while (executionQueue.length) {
     const arb = executionQueue.shift();
-    console.log(`🔥 EXECUTING | Profit: ${arb.profit.toFixed(6)} USDC`);
+    console.log(`[${ts()}] 🔥 EXECUTING | Token ${symbol(arb.tokenAddr)} | Profit: +${arb.profit.toFixed(6)} USDC`);
 
     if (DRY_RUN) {
-      console.log("🧪 DRY RUN — skipped tx");
+      console.log(`[${ts()}] 🧪 DRY RUN — skipped tx`);
       continue;
     }
 
@@ -161,11 +181,16 @@ async function processQueue() {
         deadline
       );
 
-      console.log(`⛓ TX SENT: ${tx.hash}`);
+      console.log(`[${ts()}] ⛓ TX SENT: ${tx.hash}`);
       await tx.wait();
-      console.log("✅ TX CONFIRMED");
+      console.log(`[${ts()}] ✅ TX CONFIRMED`);
+
+      const updatedVaultBalance = await vaultUSDCBalance();
+      const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
+
+      console.log(`[${ts()}] 💰 Vault USDC balance: ${updatedVaultBalance.toFixed(6)} | Wallet MATIC: ${walletMatic.toFixed(6)}`);
     } catch (e) {
-      console.log("⚠️ TX FAILED:", e.message);
+      console.log(`[${ts()}] ⚠️ TX FAILED: ${e.message}`);
     }
   }
 
@@ -189,16 +214,21 @@ async function runWithConcurrency(tasks, limit) {
 /* ================= SCAN ================= */
 async function scan() {
   const usdc = await vault.usdc();
+  const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
+  const vaultBalance = await vaultUSDCBalance();
+
+  console.log(`[${ts()}] 💎 Wallet MATIC balance: ${walletMatic.toFixed(6)} | Vault USDC balance: ${vaultBalance.toFixed(6)}`);
+
   const tasks = [];
   const found = [];
 
-  for (const token of Object.values(TOKENS)) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-        if (buy === sell) continue;
+  for (const [sym, tokenAddr] of Object.entries(TOKENS)) {
+    for (const [buyName, buyRouter] of Object.entries(routers)) {
+      for (const [sellName, sellRouter] of Object.entries(routers)) {
+        if (buyRouter === sellRouter) continue;
 
         tasks.push(async () => {
-          const arb = await checkArb(buy, sell, token, usdc);
+          const arb = await checkArb(buyRouter, sellRouter, tokenAddr, usdc);
           if (arb) found.push(arb);
         });
       }
@@ -212,20 +242,24 @@ async function scan() {
     .forEach(a => executionQueue.push(a));
 
   if (found.length) {
-    console.log(`💡 ${found.length} profitable arbs queued`);
+    console.log(`[${ts()}] 💡 ${found.length} profitable arbs queued`);
     processQueue();
   }
 }
 
 /* ================= MAIN LOOP ================= */
 (async () => {
-  console.log("🚀 Parallel Arbitrage Bot Started (RPC Failover Enabled)");
+  console.log(`[${ts()}] 🚀 Parallel Arbitrage Bot Started (RPC Failover Enabled)`);
 
+  let cycle = 0;
   while (true) {
+    cycle++;
     try {
+      console.log(`[${ts()}] 🔄 Scan cycle ${cycle} started`);
       await scan();
+      console.log(`[${ts()}] ✅ Scan cycle ${cycle} completed`);
     } catch (e) {
-      console.log("⚠️ Scan error:", e.message);
+      console.log(`[${ts()}] ⚠️ Scan error: ${e.message}`);
     }
     await sleep(SCAN_DELAY_MS);
   }
