@@ -4,11 +4,21 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 /* ================= CONFIG ================= */
-const RPC_POLYGON = process.env.RPC_POLYGON?.trim();
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
+const RPC_LIST = (
+  process.env.RPC_POLYGON ||
+  process.env.POLYGON_RPC ||
+  process.env.RPC_URL ||
+  ""
+)
+  .split(",")
+  .map(rpc => rpc.trim())
+  .filter(Boolean);
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
-if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+const WALLET_PRIVATE_KEY =
+  (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
+
+if (!RPC_LIST.length) throw new Error("No RPC endpoints provided");
+if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
 
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1);
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0005);
@@ -17,8 +27,22 @@ const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 2000);
 const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 8);
 const DRY_RUN = (process.env.DRY_RUN || "false") === "true";
 
-/* ================= PROVIDER ================= */
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+/* ================= PROVIDER (RPC METHOD) ================= */
+async function getWorkingProvider() {
+  for (const rpc of RPC_LIST) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpc);
+      await provider.getBlockNumber();
+      console.log(`✅ Connected RPC: ${rpc}`);
+      return provider;
+    } catch {
+      console.log(`⚠️ RPC failed: ${rpc}`);
+    }
+  }
+  throw new Error("All RPC endpoints failed");
+}
+
+const provider = await getWorkingProvider();
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
@@ -58,7 +82,7 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-/* ================= TOKENS (FOCUSED SET) ================= */
+/* ================= TOKENS ================= */
 const TOKENS = {
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
@@ -83,7 +107,6 @@ async function quote(router, amountIn, path) {
 /* ================= ARB CHECK (NO TX) ================= */
 async function checkArb(buyRouter, sellRouter, token, usdc) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-
   const buyPath = [usdc, token];
   const sellPath = [token, usdc];
 
@@ -196,7 +219,7 @@ async function scan() {
 
 /* ================= MAIN LOOP ================= */
 (async () => {
-  console.log("🚀 Parallel Arbitrage Bot Started");
+  console.log("🚀 Parallel Arbitrage Bot Started (RPC Failover Enabled)");
 
   while (true) {
     try {
