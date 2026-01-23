@@ -63,7 +63,8 @@ function logArbDryRunInfo(arb) {
 // 2) Extended config defaults for testing/robustness (preserve your existing envs)  
 const SLIPPAGE_TOLERANCE = Number(process.env.SLIPPAGE_TOLERANCE || 0.005); // 0.5%  
 const VAULT_MIN_USDC = Number(process.env.VAULT_MIN_USDC || 5000);  
-const NET_PROFIT_MIN_USDC = Number(process.env
+const NET_PROFIT_MIN_USDC = Number(process.env.NET_PROFIT_MIN_USDC || 0.00001); // minimum profit
+
 
 
 // ... continuation from the exact line provided  
