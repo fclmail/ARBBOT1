@@ -90,6 +90,7 @@ const routerAbi = [
 /* ================= TOKENS ================= */
 const TOKENS = {
   USDC: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
