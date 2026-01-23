@@ -20,7 +20,7 @@ const WALLET_PRIVATE_KEY =
 if (!RPC_LIST.length) throw new Error("No RPC endpoints provided");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
 
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 1); // USDC per trade
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || .90); // USDC per trade
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.00001);
 const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 1000);
