@@ -1,9 +1,9 @@
 // scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – ABI MASKED EXECUTOR (FIXED EXECUTION)
-//  - NO OPPORTUNITY LOGIC CHANGES
-//  - VAULT IS SOURCE OF TRUTH
-//  - ONLY minProfit FAILURES REVERT
+//  ARBITRAGE BOT – SAME DISPLAY, SAFE EXECUTION
+//  - NO STRATEGY CHANGES
+//  - SAME LOGS
+//  - VAULT DECIDES PROFIT
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -11,12 +11,9 @@ import { ethers, Wallet } from "ethers";
 dotenv.config();
 
 // ----------------- CONFIG -----------------
-const RPC =
-  process.env.RPC_POLYGON || "https://polygon-bor-rpc.publicnode.com";
-const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
-
-if (!PRIVATE_KEY) throw new Error("PRIVATE KEY NOT FOUND");
+const RPC = process.env.RPC_POLYGON || "https://polygon-bor-rpc.publicnode.com";
+const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found.");
 
 const DRY_RUN = false;
 const MIN_TRADE_USDC = 0.82;
@@ -24,6 +21,18 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const MIN_PROFIT_PCT = 0.0001;
 const SLIPPAGE_PCT = 0.05;
 const MAX_PROFIT_PCT = 550;
+
+// ----------------- COLORS -----------------
+const colors = {
+  reset: "\x1b[0m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  cyan: "\x1b[36m",
+  magenta: "\x1b[35m"
+};
+
+const fmtNum = (n, dec = 6) => Number(n).toFixed(dec);
 
 // ----------------- PROVIDER / WALLET -----------------
 const provider = new ethers.JsonRpcProvider(RPC);
@@ -37,11 +46,7 @@ const vaultReadAbi = [
   "function usdc() view returns (address)"
 ];
 
-const vaultRead = new ethers.Contract(
-  VAULT_ADDRESS,
-  vaultReadAbi,
-  provider
-);
+const vaultRead = new ethers.Contract(VAULT_ADDRESS, vaultReadAbi, provider);
 
 // ----------------- ERC20 -----------------
 const erc20Abi = [
@@ -121,26 +126,10 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       ethers.formatUnits(await usdc.balanceOf(VAULT_ADDRESS), 6)
     );
 
-    const tokenObj =
-      Object.values(tokens).find(t => t.address === tokenAddr) ||
-      { address: tokenAddr, decimals: 18 };
+    console.log(
+      `${colors.cyan}🏦 Vault Balance Before: ${fmtNum(before)} USDC${colors.reset}`
+    );
 
-    const buyOut = await safeGetAmountOut(buyRouter, tokenObj, amountUSDC);
-    const sellOut = await safeGetAmountOut(sellRouter, tokenObj, amountUSDC);
-    if (!buyOut || !sellOut) return;
-
-    const buyPrice = amountUSDC / buyOut;
-    const sellPrice = amountUSDC / sellOut;
-    const expectedProfit =
-      (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
-    const pct = (expectedProfit / buyPrice) * 100;
-
-    if (!saneProfitPct(pct)) return;
-    if (expectedProfit <= MIN_EXPECTED_PROFIT || pct < MIN_PROFIT_PCT) return;
-
-    if (DRY_RUN) return;
-
-    // ---------- ABI MASKED EXEC ----------
     const iface = new ethers.Interface([
       "function executeArbitrage(address,address,uint256,address[],address[],uint256)"
     ]);
@@ -148,21 +137,13 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     const usdcAddr = await vaultRead.usdc();
     const amountInRaw = ethers.parseUnits(amountUSDC.toString(), 6);
 
-    const pathToToken = [usdcAddr, tokenAddr];
-    const pathToUSDC = [tokenAddr, usdcAddr];
-
-    if (pathToToken.length < 2 || pathToUSDC.length < 2) return;
-
-    // LONGER DEADLINE — EXECUTION SAFE
-    const deadline = Math.floor(Date.now() / 1000) + 300;
-
     const data = iface.encodeFunctionData("executeArbitrage", [
       buyRouter,
       sellRouter,
       amountInRaw,
-      pathToToken,
-      pathToUSDC,
-      deadline
+      [usdcAddr, tokenAddr],
+      [tokenAddr, usdcAddr],
+      Math.floor(Date.now() / 1000) + 300
     ]);
 
     let tx;
@@ -170,12 +151,14 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       tx = await wallet.sendTransaction({
         to: VAULT_ADDRESS,
         data,
-        gasLimit: 1_200_000n // FORCE SEND — NO ESTIMATION
+        gasLimit: 1_200_000n
       });
-    } catch {
+    } catch (e) {
+      console.log(`${colors.red}⚠️ Trade error: ${e.message}${colors.reset}`);
       return;
     }
 
+    console.log(`${colors.green}🔁 TX SENT — ${tx.hash}${colors.reset}`);
     await tx.wait();
 
     const after = Number(
@@ -183,9 +166,11 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
     );
 
     console.log(
-      `✔ EXECUTED | PROFIT ${(after - before).toFixed(6)} USDC`
+      `${colors.green}💰 REAL PROFIT: ${fmtNum(after - before)} USDC${colors.reset}`
     );
-  } catch {}
+  } catch (e) {
+    console.log(`${colors.red}⚠️ Trade error: ${e.message}${colors.reset}`);
+  }
 }
 
 // ----------------- SCAN LOOP -----------------
@@ -205,7 +190,15 @@ async function scanAllPairs() {
           (sellPrice - buyPrice) * (1 - SLIPPAGE_PCT / 100);
         const pct = (profit / buyPrice) * 100;
 
-        if (pct >= MIN_PROFIT_PCT) {
+        if (!saneProfitPct(pct)) continue;
+
+        if (profit >= MIN_EXPECTED_PROFIT && pct >= MIN_PROFIT_PCT) {
+          console.log(
+            `${colors.green}${token.address} | Expected Profit: ${fmtNum(
+              profit
+            )} USDC | pct=${fmtNum(pct)}%${colors.reset}`
+          );
+
           await executeTradeLive(buy, sell, token.address, MIN_TRADE_USDC);
           await sleep(1200);
         }
@@ -216,13 +209,12 @@ async function scanAllPairs() {
 
 // ----------------- MAIN -----------------
 (async function main() {
-  console.log("🚀 Arbitrage runner started");
-  console.log("Vault USDC:", await vaultRead.usdc());
-  console.log("Vault Owner:", await vaultRead.owner());
+  console.log(`${colors.cyan}🚀 Live arbitrage runner started${colors.reset}`);
+  console.log(`${colors.cyan}🏛 Vault USDC: ${await vaultRead.usdc()}${colors.reset}`);
+  console.log(`${colors.cyan}👤 Vault Owner: ${await vaultRead.owner()}${colors.reset}`);
 
   while (true) {
     await scanAllPairs();
     await sleep(8000);
   }
 })();
-  
