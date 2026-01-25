@@ -15,7 +15,7 @@ const RPC = process.env.RPC_POLYGON || "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found.");
 
-const DRY_RUN = false;
+const DRY_RUN = true;
 const MIN_TRADE_USDC = 0.82;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const MIN_PROFIT_PCT = 0.0001;
