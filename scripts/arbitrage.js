@@ -11,12 +11,12 @@ import { ethers, Wallet } from "ethers";
 dotenv.config();
 
 // ----------------- CONFIG -----------------
-const RPC = process.env.RPC_POLYGON || "https://polygon-rpc.com";
+const RPC = process.env.RPC_POLYGON || "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found in environment (GitHub Secrets).");
 
 const DRY_RUN = false; // set true to simulate (no on-chain execute)
-const MIN_TRADE_USDC = .02;        // minimum trade size (USDC)
+const MIN_TRADE_USDC = .012;        // minimum trade size (USDC)
 const MIN_EXPECTED_PROFIT = 0.000001;  // minimum expected profit (USDC)
 const MIN_PROFIT_PCT = .1;         // percent (e.g. 0.2% profit threshold)
 const SLIPPAGE_PCT = 0.05;           // slippage tolerance applied to expectations
