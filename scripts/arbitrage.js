@@ -20,7 +20,7 @@ const MIN_TRADE_USDC = 0.82;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const MIN_PROFIT_PCT = 0.0001;
 const SLIPPAGE_PCT = 0.05;
-const MAX_PROFIT_PCT = 550;
+const MAX_PROFIT_PCT = 5;
 
 // ----------------- COLORS -----------------
 const colors = {
