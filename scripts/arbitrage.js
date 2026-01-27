@@ -107,7 +107,7 @@ async function checkAndExecute() {
     console.log(`[${ts}] 💰 PROFIT SENT TO VAULT`);
     console.log("──────────────────────────────");
 
-  } catch (err: any) {
+  } catch (err) {
     console.error(`[${ts}] ERROR`, err.reason || err.message || err);
   }
 }
