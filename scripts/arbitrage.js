@@ -48,7 +48,7 @@ let nonce;
 // 7️⃣ NONCE HANDLER
 async function getNonce() {
   if (nonce === undefined) {
-    nonce = await wallet.getTransactionCount();
+    nonce = await provider.getTransactionCount(wallet.address);
   } else {
     nonce++;
   }
