@@ -1,7 +1,7 @@
 //🟢 Fully functional drop-in arbitrage script with fixes
 
 // 1️⃣ IMPORTS
-import { ethers, BigNumber } from "ethers";
+import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -44,7 +44,7 @@ const UNI_FEE    = 3000; // 0.3%
 const SLIPPAGE   = 0.01; // 1%
 
 let executing = false;
-let nonce; // Manual nonce management
+let nonce; // Manual nonce tracking
 
 // 7️⃣ HELPER: get nonce
 async function getNonce() {
@@ -92,9 +92,9 @@ async function checkAndExecute() {
     console.log(`[${ts}] ✅ ARBITRAGE FOUND`);
 
     // 8.5 Slippage - BigNumber safe
-    const amountOutMin = BigNumber.from(uniWmaticOut)
-      .mul(BigNumber.from(Math.floor((1 - SLIPPAGE) * 10000)))
-      .div(BigNumber.from(10000));
+    const amountOutMin = ethers.BigNumber.from(uniWmaticOut)
+      .mul(ethers.BigNumber.from(Math.floor((1 - SLIPPAGE) * 10000)))
+      .div(ethers.BigNumber.from(10000));
 
     console.log(`[${ts}] Executing TRADE_SIZE: ${TRADE_SIZE.toString()}, Min Output: ${amountOutMin.toString()}`);
 
