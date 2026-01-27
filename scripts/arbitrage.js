@@ -1,3 +1,5 @@
+Fully functional.💰reverts onchain 
+
 import { ethers } from "ethers";
 
 /* ─────────────────────────────
@@ -43,9 +45,9 @@ const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 /* ─────────────────────────────
    Config
 ───────────────────────────── */
-const TRADE_SIZE = ethers.parseUnits(".8", 6); // 800 USDC
+const TRADE_SIZE = ethers.parseUnits(".8", 6); // 1000 USDC
 const MIN_SPREAD = 0.01; // 0.01%
-const UNI_FEE = 3000; // Uniswap V3 fee tier (0.3%)
+const UNI_FEE = 3000;
 
 /* ─────────────────────────────
    Main Loop
@@ -55,15 +57,13 @@ async function checkAndExecute() {
 
   try {
     /* ── Quotes ── */
-    // Get output from SushiSwap
     const sushiOut = await sushi.getAmountsOut(
       TRADE_SIZE,
       [USDC, WMATIC]
     );
     const sushiPrice = Number(sushiOut[1]) / 1e18;
 
-    // Get output from Uniswap V3
-    const uniOut = await quoter.callStatic.quoteExactInputSingle(
+    const uniOut = await quoter.quoteExactInputSingle.staticCall(
       USDC,
       WMATIC,
       UNI_FEE,
@@ -74,49 +74,46 @@ async function checkAndExecute() {
 
     const spread = ((sushiPrice - uniPrice) / uniPrice) * 100;
 
-    console.log(`[${ts}] UNI Price: ${uniPrice.toFixed(6)} WMATIC`);
-    console.log(`[${ts}] SUSHI Price: ${sushiPrice.toFixed(6)} WMATIC`);
+    console.log(`[${ts}] UNI: ${uniPrice.toFixed(6)} WMATIC`);
+    console.log(`[${ts}] SUSHI: ${sushiPrice.toFixed(6)} WMATIC`);
     console.log(`[${ts}] Spread: ${spread.toFixed(4)}%`);
 
     if (spread < MIN_SPREAD) {
-      console.log(`[${ts}] ❌ No arbitrage opportunity`);
+      console.log(`[${ts}] ❌ No arbitrage`);
       console.log("──────────────────────────────");
       return;
     }
 
-    console.log(`[${ts}] ✅ Arbitrage found!`);
-    console.log(`[${ts}] Executing on-chain...`);
+    console.log(`[${ts}] ✅ ARBITRAGE FOUND`);
+    console.log(`[${ts}] EXECUTING ON-CHAIN...`);
 
     /* ── Execute Arbitrage ── */
-    const deadline = Math.floor(Date.now() / 1000) + 120; // 2 minutes
+    const deadline = Math.floor(Date.now() / 1000) + 120;
 
-    // Execute the arbitrage transaction
     const tx = await vault.executeArbitrage(
       UNISWAP_V3_QUOTER, // buy router (cheaper)
-      SUSHI_ROUTER,      // sell router (expensive)
+      SUSHI_ROUTER,     // sell router (expensive)
       TRADE_SIZE,
-      [USDC, WMATIC],    // Path: USDC -> WMATIC
-      [WMATIC, USDC],    // Path: WMATIC -> USDC
+      [USDC, WMATIC],
+      [WMATIC, USDC],
       deadline,
       { gasLimit: 1_200_000 }
     );
 
-    console.log(`[${ts}] Transaction sent: ${tx.hash}`);
+    console.log(`[${ts}] TX SENT: ${tx.hash}`);
 
-    // Wait for the transaction to be confirmed
     const receipt = await tx.wait();
 
-    // Log transaction confirmation and profit
-    console.log(`[${ts}] Transaction confirmed: ${receipt.transactionHash}`);
-    console.log(`[${ts}] 💰 Profit sent to vault`);
+    console.log(`[${ts}] TX CONFIRMED: ${receipt.transactionHash}`);
+    console.log(`[${ts}] 💰 PROFIT SENT TO VAULT`);
     console.log("──────────────────────────────");
 
   } catch (err) {
-    console.error(`[${ts}] ERROR:`, err.reason || err.message);
+    console.error(`[${ts}] ERROR`, err.reason || err.message);
   }
 }
 
 /* ─────────────────────────────
    Run loop
 ───────────────────────────── */
-setInterval(checkAndExecute, 5000); // Run every 5 seconds
+setInterval(checkAndExecute, 5000);
