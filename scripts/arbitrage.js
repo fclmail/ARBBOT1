@@ -1,5 +1,3 @@
-Fully functional.💰reverts onchain 
-
 import { ethers } from "ethers";
 
 /* ─────────────────────────────
