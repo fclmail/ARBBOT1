@@ -1,7 +1,9 @@
-//🟢 Fully functional drop-in arbitrage script with normalized display
+//🟢 Fully functional drop-in arbitrage script with fixes
 
 // 1️⃣ IMPORTS
-import { ethers } from "ethers";
+import { ethers, BigNumber } from "ethers";
+import dotenv from "dotenv";
+dotenv.config();
 
 // 2️⃣ RPC + WALLET SETUP
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
@@ -27,7 +29,7 @@ const sushiABI = [
 ];
 
 const quoterABI = [
-  "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external returns (uint256)"
+  "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external view returns (uint256)"
 ];
 
 // 5️⃣ CONTRACT INSTANCES
@@ -36,14 +38,25 @@ const sushi  = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
 const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 
 // 6️⃣ BOT CONFIGURATION
-const TRADE_SIZE = ethers.parseUnits(".8", 6); // 0.8 USDC
+const TRADE_SIZE = ethers.parseUnits("0.8", 6); // 0.8 USDC
 const MIN_SPREAD = 0.000001; // 0.01%
 const UNI_FEE    = 3000; // 0.3%
-const SLIPPAGE   = 1; // 0.5%
+const SLIPPAGE   = 0.01; // 1%
 
 let executing = false;
+let nonce; // Manual nonce management
 
-// 7️⃣ MAIN ARBITRAGE FUNCTION
+// 7️⃣ HELPER: get nonce
+async function getNonce() {
+  if (nonce === undefined) {
+    nonce = await wallet.getTransactionCount();
+  } else {
+    nonce++;
+  }
+  return nonce;
+}
+
+// 8️⃣ MAIN ARBITRAGE FUNCTION
 async function checkAndExecute() {
   if (executing) return;
   executing = true;
@@ -51,16 +64,16 @@ async function checkAndExecute() {
   const ts = new Date().toISOString();
 
   try {
-    // 7.1 SushiSwap quote
+    // 8.1 SushiSwap quote
     const sushiOutRaw = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
     const sushiWmaticOut = sushiOutRaw[1];
 
-    // 7.2 Uniswap V3 quote
-    const uniWmaticOut = await quoter.quoteExactInputSingle.staticCall(
+    // 8.2 Uniswap V3 quote
+    const uniWmaticOut = await quoter.callStatic.quoteExactInputSingle(
       USDC, WMATIC, UNI_FEE, TRADE_SIZE, 0
     );
 
-    // 7.3 Normalize decimals for display
+    // 8.3 Normalize decimals for display
     const sushiPrice = Number(ethers.formatUnits(TRADE_SIZE, 6)) / Number(ethers.formatUnits(sushiWmaticOut, 18));
     const uniPrice   = Number(ethers.formatUnits(TRADE_SIZE, 6)) / Number(ethers.formatUnits(uniWmaticOut, 18));
     const spread     = ((sushiPrice - uniPrice) / uniPrice) * 100;
@@ -69,7 +82,7 @@ async function checkAndExecute() {
     console.log(`[${ts}] SUSHI: ${sushiPrice.toFixed(6)} WMATIC`);
     console.log(`[${ts}] Spread: ${spread.toFixed(4)}%`);
 
-    // 7.4 Check if spread is profitable
+    // 8.4 Check if spread is profitable
     if (spread < MIN_SPREAD) {
       console.log(`[${ts}] ❌ No executable arbitrage`);
       console.log("──────────────────────────────");
@@ -78,11 +91,14 @@ async function checkAndExecute() {
 
     console.log(`[${ts}] ✅ ARBITRAGE FOUND`);
 
-    // 7.5 Slippage
-    const amountOutMin = Math.floor(Number(uniWmaticOut) * (1 - SLIPPAGE));
-    console.log(`[${ts}] Executing TRADE_SIZE: ${TRADE_SIZE.toString()}, Min Output: ${amountOutMin}`);
+    // 8.5 Slippage - BigNumber safe
+    const amountOutMin = BigNumber.from(uniWmaticOut)
+      .mul(BigNumber.from(Math.floor((1 - SLIPPAGE) * 10000)))
+      .div(BigNumber.from(10000));
 
-    // 7.6 Execute on-chain
+    console.log(`[${ts}] Executing TRADE_SIZE: ${TRADE_SIZE.toString()}, Min Output: ${amountOutMin.toString()}`);
+
+    // 8.6 Execute on-chain
     console.log(`[${ts}] EXECUTING ON-CHAIN...`);
     const deadline = Math.floor(Date.now() / 1000) + 120;
 
@@ -93,7 +109,10 @@ async function checkAndExecute() {
       [USDC, WMATIC],    // Buy path
       [WMATIC, USDC],    // Sell path
       deadline,
-      { gasLimit: 1_500_000 }
+      {
+        gasLimit: 1_500_000,
+        nonce: await getNonce()
+      }
     );
 
     console.log(`[${ts}] TX SENT: ${tx.hash}`);
@@ -109,5 +128,5 @@ async function checkAndExecute() {
   }
 }
 
-// 8️⃣ RUN MULTIPLE OPPORTUNITIES PER MINUTE (every 5 seconds)
+// 9️⃣ RUN MULTIPLE OPPORTUNITIES PER MINUTE (every 5 seconds)
 setInterval(checkAndExecute, 5000);
