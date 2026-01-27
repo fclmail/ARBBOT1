@@ -69,9 +69,13 @@ async function checkAndExecute() {
     const sushiWmaticOut = sushiOutRaw[1];
 
     // 8.2 Uniswap V3 quote
-    const uniWmaticOut = await quoter.callStatic.quoteExactInputSingle(
-      USDC, WMATIC, UNI_FEE, TRADE_SIZE, 0
-    );
+    const uniWmaticOut = await quoter.quoteExactInputSingle(
+  USDC,
+  WMATIC,
+  UNI_FEE,
+  TRADE_SIZE,
+  0
+);
 
     // 8.3 Normalize decimals for display
     const sushiPrice = Number(ethers.formatUnits(TRADE_SIZE, 6)) / Number(ethers.formatUnits(sushiWmaticOut, 18));
