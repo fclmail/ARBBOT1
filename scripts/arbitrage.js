@@ -1,4 +1,4 @@
-//🟢 Fully functional drop-in arbitrage script with fixes
+// 🟢 Fully functional bidirectional arbitrage script (ethers v6)
 
 // 1️⃣ IMPORTS
 import { ethers } from "ethers";
@@ -9,19 +9,18 @@ dotenv.config();
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
-// 3️⃣ CONTRACT ADDRESSES
+// 3️⃣ CONTRACT ADDRESSES (Polygon)
 const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
-const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // 6 decimals
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"; // 18 decimals
+const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
 const UNISWAP_V3_ROUTER = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
-const SUSHI_ROUTER      = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const SUSHI_ROUTER     = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
 // 4️⃣ ABIs
 const vaultABI = [
-  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external",
-  "event ArbitrageExecuted(address,address,address,uint256,uint256,uint256,uint256)"
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"
 ];
 
 const sushiABI = [
@@ -37,16 +36,16 @@ const vault  = new ethers.Contract(VAULT_CONTRACT, vaultABI, wallet);
 const sushi  = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
 const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 
-// 6️⃣ BOT CONFIGURATION
-const TRADE_SIZE = ethers.parseUnits("0.87", 6); // 0.8 USDC
-const MIN_SPREAD = 0.000001; // 0.01%
-const UNI_FEE    = 3000; // 0.3%
-const SLIPPAGE   = 1; // 1%
+// 6️⃣ BOT CONFIG
+const TRADE_SIZE = ethers.parseUnits("0.8", 6);
+const MIN_SPREAD = 0.05; // 0.05%
+const UNI_FEE    = 3000;
+const SLIPPAGE   = 0.01;
 
 let executing = false;
-let nonce; // Manual nonce tracking
+let nonce;
 
-// 7️⃣ HELPER: get nonce
+// 7️⃣ NONCE HANDLER
 async function getNonce() {
   if (nonce === undefined) {
     nonce = await wallet.getTransactionCount();
@@ -56,7 +55,7 @@ async function getNonce() {
   return nonce;
 }
 
-// 8️⃣ MAIN ARBITRAGE FUNCTION
+// 8️⃣ MAIN LOOP
 async function checkAndExecute() {
   if (executing) return;
   executing = true;
@@ -64,54 +63,68 @@ async function checkAndExecute() {
   const ts = new Date().toISOString();
 
   try {
-    // 8.1 SushiSwap quote
-    const sushiOutRaw = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
-    const sushiWmaticOut = sushiOutRaw[1];
+    // Sushi quote USDC → WMATIC
+    const sushiOut = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
+    const sushiWmatic = sushiOut[1];
 
-    // 8.2 Uniswap V3 quote
-    const uniWmaticOut = await quoter.quoteExactInputSingle(
-  USDC,
-  WMATIC,
-  UNI_FEE,
-  TRADE_SIZE,
-  0
-);
+    // Uni quote USDC → WMATIC
+    const uniWmatic = await quoter.quoteExactInputSingle(
+      USDC,
+      WMATIC,
+      UNI_FEE,
+      TRADE_SIZE,
+      0
+    );
 
-    // 8.3 Normalize decimals for display
-    const sushiPrice = Number(ethers.formatUnits(TRADE_SIZE, 6)) / Number(ethers.formatUnits(sushiWmaticOut, 18));
-    const uniPrice   = Number(ethers.formatUnits(TRADE_SIZE, 6)) / Number(ethers.formatUnits(uniWmaticOut, 18));
-    const spread     = ((sushiPrice - uniPrice) / uniPrice) * 100;
+    // Prices (USDC per WMATIC)
+    const sushiPrice =
+      Number(ethers.formatUnits(TRADE_SIZE, 6)) /
+      Number(ethers.formatUnits(sushiWmatic, 18));
+
+    const uniPrice =
+      Number(ethers.formatUnits(TRADE_SIZE, 6)) /
+      Number(ethers.formatUnits(uniWmatic, 18));
+
+    const spreadPct = ((sushiPrice - uniPrice) / uniPrice) * 100;
 
     console.log(`[${ts}] UNI: ${uniPrice.toFixed(6)} WMATIC`);
     console.log(`[${ts}] SUSHI: ${sushiPrice.toFixed(6)} WMATIC`);
-    console.log(`[${ts}] Spread: ${spread.toFixed(4)}%`);
+    console.log(`[${ts}] Spread: ${spreadPct.toFixed(4)}%`);
 
-    // 8.4 Check if spread is profitable
-    if (spread < MIN_SPREAD) {
+    let buyRouter, sellRouter, buyPath, sellPath, direction;
+
+    // 🔁 BIDIRECTIONAL LOGIC
+    if (spreadPct <= -MIN_SPREAD) {
+      // Buy on Uniswap (cheap), sell on Sushi (expensive)
+      buyRouter  = UNISWAP_V3_ROUTER;
+      sellRouter = SUSHI_ROUTER;
+      buyPath  = [USDC, WMATIC];
+      sellPath = [WMATIC, USDC];
+      direction = "UNI → SUSHI";
+    } else if (spreadPct >= MIN_SPREAD) {
+      // Buy on Sushi, sell on Uniswap
+      buyRouter  = SUSHI_ROUTER;
+      sellRouter = UNISWAP_V3_ROUTER;
+      buyPath  = [USDC, WMATIC];
+      sellPath = [WMATIC, USDC];
+      direction = "SUSHI → UNI";
+    } else {
       console.log(`[${ts}] ❌ No executable arbitrage`);
       console.log("──────────────────────────────");
       return;
     }
 
-    console.log(`[${ts}] ✅ ARBITRAGE FOUND`);
-
-    // 8.5 Slippage - BigNumber safe
-    const amountOutMin = ethers.BigNumber.from(uniWmaticOut)
-      .mul(ethers.BigNumber.from(Math.floor((1 - SLIPPAGE) * 10000)))
-      .div(ethers.BigNumber.from(10000));
-
-    console.log(`[${ts}] Executing TRADE_SIZE: ${TRADE_SIZE.toString()}, Min Output: ${amountOutMin.toString()}`);
-
-    // 8.6 Execute on-chain
+    console.log(`[${ts}] ✅ ARBITRAGE FOUND (${direction})`);
     console.log(`[${ts}] EXECUTING ON-CHAIN...`);
+
     const deadline = Math.floor(Date.now() / 1000) + 120;
 
     const tx = await vault.executeArbitrage(
-      UNISWAP_V3_ROUTER, // Buy
-      SUSHI_ROUTER,      // Sell
+      buyRouter,
+      sellRouter,
       TRADE_SIZE,
-      [USDC, WMATIC],    // Buy path
-      [WMATIC, USDC],    // Sell path
+      buyPath,
+      sellPath,
       deadline,
       {
         gasLimit: 1_500_000,
@@ -132,5 +145,5 @@ async function checkAndExecute() {
   }
 }
 
-// 9️⃣ RUN MULTIPLE OPPORTUNITIES PER MINUTE (every 5 seconds)
+// 9️⃣ RUN (≈10–12 checks/min)
 setInterval(checkAndExecute, 5000);
