@@ -38,10 +38,10 @@ const sushi  = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
 const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 
 // 6️⃣ BOT CONFIGURATION
-const TRADE_SIZE = ethers.parseUnits("0.8", 6); // 0.8 USDC
+const TRADE_SIZE = ethers.parseUnits("0.87", 6); // 0.8 USDC
 const MIN_SPREAD = 0.000001; // 0.01%
 const UNI_FEE    = 3000; // 0.3%
-const SLIPPAGE   = 0.01; // 1%
+const SLIPPAGE   = 1; // 1%
 
 let executing = false;
 let nonce; // Manual nonce tracking
