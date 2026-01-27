@@ -37,7 +37,7 @@ const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 
 // 6️⃣ BOT CONFIGURATION
 const TRADE_SIZE = ethers.parseUnits(".8", 6); // 0.8 USDC
-const MIN_SPREAD = 0.0001; // 0.01%
+const MIN_SPREAD = 0.000001; // 0.01%
 const UNI_FEE    = 3000; // 0.3%
 const SLIPPAGE   = 1; // 0.5%
 
