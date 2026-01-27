@@ -14,7 +14,7 @@ const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
-const UNISWAP_V3_ROUTER = "0xE592427A0AEce92De3Edee1F18E0157C05861564"; // Correct V3 Router
+const UNISWAP_V3_ROUTER = "0xE592427A0AEce92De3Edee1F18E0157C05861564"; // Swap Router
 const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
 const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
@@ -45,13 +45,18 @@ const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
    Config
 ───────────────────────────── */
 const TRADE_SIZE = ethers.parseUnits(".8", 6); // 0.8 USDC
-const MIN_SPREAD = 0.03; // 0.01%
-const UNI_FEE = 3000;
+const MIN_SPREAD = 0.01; // 0.01%
+const UNI_FEE = 3000; // 0.3%
+const SLIPPAGE = 0.005; // 0.5%
+let executing = false; // prevent overlapping TXs
 
 /* ─────────────────────────────
    Main Loop
 ───────────────────────────── */
 async function checkAndExecute() {
+  if (executing) return;
+  executing = true;
+
   const ts = new Date().toISOString();
 
   try {
@@ -84,31 +89,36 @@ async function checkAndExecute() {
     }
 
     console.log(`[${ts}] ✅ ARBITRAGE FOUND`);
+
+    // Slippage protection
+    const amountOutMin = Math.floor(Number(uniOut) * (1 - SLIPPAGE));
+    console.log(`[${ts}] Executing TRADE_SIZE: ${TRADE_SIZE.toString()}, Min Output: ${amountOutMin}`);
+
     console.log(`[${ts}] EXECUTING ON-CHAIN...`);
 
-    /* ── Execute Arbitrage ── */
     const deadline = Math.floor(Date.now() / 1000) + 120;
 
     const tx = await vault.executeArbitrage(
-      UNISWAP_V3_ROUTER, // Buy router (cheaper)
-      SUSHI_ROUTER,      // Sell router (expensive)
+      UNISWAP_V3_ROUTER, // Buy router
+      SUSHI_ROUTER,      // Sell router
       TRADE_SIZE,
       [USDC, WMATIC],    // Buy path
       [WMATIC, USDC],    // Sell path
       deadline,
-      { gasLimit: 1_200_000 }
+      { gasLimit: 1_500_000 }
     );
 
     console.log(`[${ts}] TX SENT: ${tx.hash}`);
 
     const receipt = await tx.wait();
-
     console.log(`[${ts}] TX CONFIRMED: ${receipt.transactionHash}`);
     console.log(`[${ts}] 💰 PROFIT SENT TO VAULT`);
     console.log("──────────────────────────────");
 
   } catch (err) {
     console.error(`[${ts}] ERROR`, err.reason || err.message || err);
+  } finally {
+    executing = false;
   }
 }
 
