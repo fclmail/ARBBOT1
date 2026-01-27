@@ -43,7 +43,7 @@ const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 /* ─────────────────────────────
    Config
 ───────────────────────────── */
-const TRADE_SIZE = ethers.parseUnits("1000", 6); // 1000 USDC
+const TRADE_SIZE = ethers.parseUnits(".8", 6); // 1000 USDC
 const MIN_SPREAD = 0.01; // 0.01%
 const UNI_FEE = 3000;
 
