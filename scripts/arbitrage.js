@@ -1,151 +1,106 @@
-// 🟢 Fully functional bidirectional arbitrage script (ethers v6)
-// ONLY CHANGE: aggressive EIP-1559 gas params for instant mining
+// arbitrage.js
+const { ethers } = require("ethers");
+const abi = require("./abi.json"); // Your contract ABI
+const config = require("./config.json"); // Your config with addresses, RPC, wallet
 
-import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
+// --- Setup provider and wallet ---
+const provider = new ethers.JsonRpcProvider(config.rpc);
+const wallet = new ethers.Wallet(config.privateKey, provider);
 
-// ─────────────────────────────────────────────
-// 1️⃣ RPC + WALLET
-// ─────────────────────────────────────────────
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-const wallet   = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+// --- Setup contract ---
+const contract = new ethers.Contract(config.contractAddress, abi, wallet);
 
-// ─────────────────────────────────────────────
-// 2️⃣ ADDRESSES (Polygon)
-// ─────────────────────────────────────────────
-const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+// --- Timeout helper ---
+function txWithTimeout(txPromise, timeoutMs = 15000) {
+  return Promise.race([
+    txPromise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("TX WAIT TIMEOUT")), timeoutMs)
+    ),
+  ]);
+}
 
-const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+// --- Function to handle resubmission of stalled transactions ---
+async function resendStalledTx(txHash, nonce, gasPrice) {
+  console.log(`Resubmitting stalled transaction with nonce ${nonce}`);
+  const tx = await contract.swap(/* swap params */, {
+    nonce: nonce,
+    maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+    maxFeePerGas: gasPrice.maxFeePerGas,
+  });
 
-// V2 routers only (execution)
-const UNISWAP_V2_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHI_ROUTER     = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+  console.log("Resubmitted TX SENT:", tx.hash);
+  return tx.wait(1); // Wait for the transaction to be mined
+}
 
-// V3 quoter (pricing only)
-const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
-
-// ─────────────────────────────────────────────
-// 3️⃣ ABIs
-// ─────────────────────────────────────────────
-const vaultABI = [
-  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"
-];
-
-const sushiABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"
-];
-
-const quoterABI = [
-  "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external view returns (uint256)"
-];
-
-// ─────────────────────────────────────────────
-// 4️⃣ CONTRACT INSTANCES
-// ─────────────────────────────────────────────
-const vault  = new ethers.Contract(VAULT_CONTRACT, vaultABI, wallet);
-const sushi  = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
-const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
-
-// ─────────────────────────────────────────────
-// 5️⃣ BOT CONFIG (UNCHANGED)
-// ─────────────────────────────────────────────
-const TRADE_SIZE = ethers.parseUnits("0.8", 6);
-const MIN_SPREAD = 0.05;
-const UNI_FEE    = 3000;
-
-let executing = false;
-
-// ─────────────────────────────────────────────
-// 6️⃣ MAIN LOOP
-// ─────────────────────────────────────────────
-async function checkAndExecute() {
-  if (executing) return;
-  executing = true;
-
-  const ts = new Date().toISOString();
-
+// --- Main arbitrage function ---
+async function runArbitrage() {
   try {
-    const sushiOut = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
-    const sushiWmatic = sushiOut[1];
+    // --- Example: get token prices ---
+    const uniPrice = await getUniPrice();   // Implemented elsewhere
+    const sushiPrice = await getSushiPrice(); // Implemented elsewhere
+    const spread = ((sushiPrice - uniPrice) / uniPrice) * 100;
 
-    const uniWmatic = await quoter.quoteExactInputSingle(
-      USDC,
-      WMATIC,
-      UNI_FEE,
-      TRADE_SIZE,
-      0
-    );
+    console.log(`UNI:   ${uniPrice} WMATIC`);
+    console.log(`SUSHI: ${sushiPrice} WMATIC`);
+    console.log(`Spread: ${spread.toFixed(4)}%`);
 
-    const sushiPrice =
-      Number(ethers.formatUnits(TRADE_SIZE, 6)) /
-      Number(ethers.formatUnits(sushiWmatic, 18));
+    // --- Check for arbitrage opportunity ---
+    if (spread > config.minProfit) {
+      console.log("✅ ARBITRAGE FOUND (SUSHI → UNI)");
+      console.log("EXECUTING ON-CHAIN...");
 
-    const uniPrice =
-      Number(ethers.formatUnits(TRADE_SIZE, 6)) /
-      Number(ethers.formatUnits(uniWmatic, 18));
+      // Prepare for transaction submission
+      const nonce = await provider.getTransactionCount(wallet.address, "latest");
+      const gasPrice = {
+        maxPriorityFeePerGas: ethers.utils.parseUnits("80", "gwei"),
+        maxFeePerGas: ethers.utils.parseUnits("150", "gwei"),
+      };
 
-    const spreadPct = ((sushiPrice - uniPrice) / uniPrice) * 100;
+      const tx = await contract.swap(/* swap params */, {
+        nonce: nonce,
+        maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+        maxFeePerGas: gasPrice.maxFeePerGas,
+      });
 
-    console.log(`[${ts}] UNI:   ${uniPrice.toFixed(6)} WMATIC`);
-    console.log(`[${ts}] SUSHI: ${sushiPrice.toFixed(6)} WMATIC`);
-    console.log(`[${ts}] Spread: ${spreadPct.toFixed(4)}%`);
+      console.log("TX SENT:", tx.hash);
 
-    let buyRouter, sellRouter, buyPath, sellPath, direction;
+      try {
+        const receipt = await txWithTimeout(tx.wait(1), 15000); // Wait 1 confirmation, timeout after 15s
+        console.log("TX CONFIRMED:", receipt.transactionHash);
+        console.log("💰 PROFIT SENT TO VAULT");
+      } catch (err) {
+        console.warn("⚠️ TX STALLED OR TIMEOUT:", err.message);
+        
+        // If transaction is stalled or timed out, resend with the same nonce but higher gas
+        const newGasPrice = {
+          maxPriorityFeePerGas: ethers.utils.parseUnits("100", "gwei"),
+          maxFeePerGas: ethers.utils.parseUnits("200", "gwei"),
+        };
 
-    if (spreadPct <= -MIN_SPREAD) {
-      buyRouter  = UNISWAP_V2_ROUTER;
-      sellRouter = SUSHI_ROUTER;
-      buyPath  = [USDC, WMATIC];
-      sellPath = [WMATIC, USDC];
-      direction = "UNI → SUSHI";
-    } else if (spreadPct >= MIN_SPREAD) {
-      buyRouter  = SUSHI_ROUTER;
-      sellRouter = UNISWAP_V2_ROUTER;
-      buyPath  = [USDC, WMATIC];
-      sellPath = [WMATIC, USDC];
-      direction = "SUSHI → UNI";
-    } else {
-      console.log(`[${ts}] ❌ No executable arbitrage`);
-      console.log("──────────────────────────────");
-      return;
-    }
-
-    console.log(`[${ts}] ✅ ARBITRAGE FOUND (${direction})`);
-    console.log(`[${ts}] EXECUTING ON-CHAIN...`);
-
-    const deadline = Math.floor(Date.now() / 1000) + 120;
-
-    const tx = await vault.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      TRADE_SIZE,
-      buyPath,
-      sellPath,
-      deadline,
-      {
-        gasLimit: 1_500_000,
-        maxPriorityFeePerGas: ethers.parseUnits("80", "gwei"),
-        maxFeePerGas:        ethers.parseUnits("150", "gwei")
+        await resendStalledTx(tx.hash, nonce, newGasPrice);
       }
-    );
-
-    console.log(`[${ts}] TX SENT: ${tx.hash}`);
-
-    const receipt = await tx.wait();
-    console.log(`[${ts}] TX CONFIRMED: ${receipt.transactionHash}`);
-    console.log(`[${ts}] 💰 PROFIT SENT TO VAULT`);
-    console.log("──────────────────────────────");
-
+    } else {
+      console.log("❌ No executable arbitrage");
+    }
   } catch (err) {
-    console.error(`[${ts}] ERROR`, err.reason || err.message || err);
-  } finally {
-    executing = false;
+    console.error("ERROR:", err.message);
   }
 }
 
-// ─────────────────────────────────────────────
-// 7️⃣ RUN LOOP (UNCHANGED)
-// ─────────────────────────────────────────────
-setInterval(checkAndExecute, 5000);
+// --- Periodic run ---
+setInterval(runArbitrage, config.pollIntervalMs);
+
+// --- Placeholder functions ---
+async function getUniPrice() {
+  // Replace with actual price fetch logic
+  return 0.118;
+}
+
+async function getSushiPrice() {
+  // Replace with actual price fetch logic
+  return 0.1185;
+}
+
+// --- Start ---
+runArbitrage();
