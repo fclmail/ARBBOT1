@@ -1,106 +1,71 @@
-// arbitrage.js
 const { ethers } = require("ethers");
-const abi = require("./abi.json"); // Your contract ABI
-const config = require("./config.json"); // Your config with addresses, RPC, wallet
+const axios = require("axios");
 
-// --- Setup provider and wallet ---
-const provider = new ethers.JsonRpcProvider(config.rpc);
-const wallet = new ethers.Wallet(config.privateKey, provider);
+async function executeArbitrage() {
+  // Define provider and wallet
+  const provider = new ethers.JsonRpcProvider("YOUR_RPC_URL");
+  const wallet = new ethers.Wallet("YOUR_PRIVATE_KEY", provider);
 
-// --- Setup contract ---
-const contract = new ethers.Contract(config.contractAddress, abi, wallet);
+  // Contract details
+  const contractAddress = "YOUR_CONTRACT_ADDRESS";
+  const contractABI = [ /* Your contract ABI here */ ];
+  const contract = new ethers.Contract(contractAddress, contractABI, wallet);
 
-// --- Timeout helper ---
-function txWithTimeout(txPromise, timeoutMs = 15000) {
-  return Promise.race([
-    txPromise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("TX WAIT TIMEOUT")), timeoutMs)
-    ),
-  ]);
-}
+  // Define gas parameters
+  const maxPriorityFeePerGas = ethers.utils.parseUnits("80", "gwei"); // 80 gwei
+  const maxFeePerGas = ethers.utils.parseUnits("150", "gwei"); // 150 gwei
 
-// --- Function to handle resubmission of stalled transactions ---
-async function resendStalledTx(txHash, nonce, gasPrice) {
-  console.log(`Resubmitting stalled transaction with nonce ${nonce}`);
-  const tx = await contract.swap(/* swap params */, {
-    nonce: nonce,
-    maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
-    maxFeePerGas: gasPrice.maxFeePerGas,
-  });
+  // Get the latest nonce
+  const nonce = await provider.getTransactionCount(wallet.address, "latest");
 
-  console.log("Resubmitted TX SENT:", tx.hash);
-  return tx.wait(1); // Wait for the transaction to be mined
-}
+  // Fetch arbitrage data (example with axios, adjust API URL as needed)
+  const response = await axios.get('API_URL_TO_GET_PRICE_DETAILS');
+  const data = response.data;
 
-// --- Main arbitrage function ---
-async function runArbitrage() {
-  try {
-    // --- Example: get token prices ---
-    const uniPrice = await getUniPrice();   // Implemented elsewhere
-    const sushiPrice = await getSushiPrice(); // Implemented elsewhere
-    const spread = ((sushiPrice - uniPrice) / uniPrice) * 100;
+  const uniPrice = data.uniPrice;
+  const sushiPrice = data.sushiPrice;
+  const minProfit = 0.000001; // Minimum profit in WMATIC (adjust this threshold)
 
-    console.log(`UNI:   ${uniPrice} WMATIC`);
-    console.log(`SUSHI: ${sushiPrice} WMATIC`);
-    console.log(`Spread: ${spread.toFixed(4)}%`);
+  // Calculate spread (price difference percentage)
+  const spread = (sushiPrice - uniPrice) / uniPrice * 100;
 
-    // --- Check for arbitrage opportunity ---
-    if (spread > config.minProfit) {
-      console.log("✅ ARBITRAGE FOUND (SUSHI → UNI)");
-      console.log("EXECUTING ON-CHAIN...");
+  console.log(`UNI:   ${uniPrice} WMATIC`);
+  console.log(`SUSHI: ${sushiPrice} WMATIC`);
+  console.log(`Spread: ${spread.toFixed(4)}%`);
 
-      // Prepare for transaction submission
-      const nonce = await provider.getTransactionCount(wallet.address, "latest");
-      const gasPrice = {
-        maxPriorityFeePerGas: ethers.utils.parseUnits("80", "gwei"),
-        maxFeePerGas: ethers.utils.parseUnits("150", "gwei"),
-      };
+  // Check if there is a valid arbitrage opportunity
+  if (spread > 0 && (sushiPrice - uniPrice) > minProfit) {
+    console.log("✅ ARBITRAGE FOUND (SUSHI → UNI)");
 
-      const tx = await contract.swap(/* swap params */, {
-        nonce: nonce,
-        maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
-        maxFeePerGas: gasPrice.maxFeePerGas,
-      });
+    try {
+      // Execute the arbitrage transaction (replace with actual parameters for your contract swap)
+      const tx = await contract.swap(
+        // Your contract swap parameters here (e.g., amountIn, amountOutMin, path)
+        {
+          nonce: nonce,
+          maxPriorityFeePerGas: maxPriorityFeePerGas,
+          maxFeePerGas: maxFeePerGas,
+        }
+      );
 
-      console.log("TX SENT:", tx.hash);
+      console.log(`TX SENT: ${tx.hash}`);
 
-      try {
-        const receipt = await txWithTimeout(tx.wait(1), 15000); // Wait 1 confirmation, timeout after 15s
-        console.log("TX CONFIRMED:", receipt.transactionHash);
-        console.log("💰 PROFIT SENT TO VAULT");
-      } catch (err) {
-        console.warn("⚠️ TX STALLED OR TIMEOUT:", err.message);
-        
-        // If transaction is stalled or timed out, resend with the same nonce but higher gas
-        const newGasPrice = {
-          maxPriorityFeePerGas: ethers.utils.parseUnits("100", "gwei"),
-          maxFeePerGas: ethers.utils.parseUnits("200", "gwei"),
-        };
+      // Wait for the transaction to be mined with a timeout (e.g., 2 confirmations)
+      const timeout = 60000; // 1 minute timeout
+      const txReceipt = await Promise.race([
+        tx.wait(2), // Wait for 2 confirmations
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction timed out')), timeout))
+      ]);
 
-        await resendStalledTx(tx.hash, nonce, newGasPrice);
-      }
-    } else {
-      console.log("❌ No executable arbitrage");
+      console.log(`TX SUCCESS: ${txReceipt.transactionHash}`);
+    } catch (err) {
+      console.error("Error executing arbitrage:", err);
+      // Retry or log the error for further analysis
     }
-  } catch (err) {
-    console.error("ERROR:", err.message);
+  } else {
+    console.log("❌ No executable arbitrage");
   }
 }
 
-// --- Periodic run ---
-setInterval(runArbitrage, config.pollIntervalMs);
-
-// --- Placeholder functions ---
-async function getUniPrice() {
-  // Replace with actual price fetch logic
-  return 0.118;
-}
-
-async function getSushiPrice() {
-  // Replace with actual price fetch logic
-  return 0.1185;
-}
-
-// --- Start ---
-runArbitrage();
+// Run arbitrage every 5 seconds
+setInterval(executeArbitrage, 5000);
