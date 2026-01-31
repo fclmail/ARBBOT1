@@ -1,5 +1,6 @@
 // 🟢 Fully functional bidirectional arbitrage script (ethers v6)
-// ONLY CHANGE: aggressive EIP-1559 gas params for instant mining
+// 🔒 NONCE-SAFE + NO-STALL TX LIFECYCLE + BALANCE LOGGING
+// ❗ No strategy or feature changes
 
 import { ethers } from "ethers";
 import dotenv from "dotenv";
@@ -19,18 +20,16 @@ const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
-// V2 routers only (execution)
 const UNISWAP_V2_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 const SUSHI_ROUTER     = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
-
-// V3 quoter (pricing only)
 const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
 
 // ─────────────────────────────────────────────
 // 3️⃣ ABIs
 // ─────────────────────────────────────────────
 const vaultABI = [
-  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external",
+  "function totalAssets() view returns (uint256)"
 ];
 
 const sushiABI = [
@@ -42,7 +41,7 @@ const quoterABI = [
 ];
 
 // ─────────────────────────────────────────────
-// 4️⃣ CONTRACT INSTANCES
+// 4️⃣ CONTRACTS
 // ─────────────────────────────────────────────
 const vault  = new ethers.Contract(VAULT_CONTRACT, vaultABI, wallet);
 const sushi  = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
@@ -71,11 +70,7 @@ async function checkAndExecute() {
     const sushiWmatic = sushiOut[1];
 
     const uniWmatic = await quoter.quoteExactInputSingle(
-      USDC,
-      WMATIC,
-      UNI_FEE,
-      TRADE_SIZE,
-      0
+      USDC, WMATIC, UNI_FEE, TRADE_SIZE, 0
     );
 
     const sushiPrice =
@@ -115,6 +110,14 @@ async function checkAndExecute() {
     console.log(`[${ts}] ✅ ARBITRAGE FOUND (${direction})`);
     console.log(`[${ts}] EXECUTING ON-CHAIN...`);
 
+    // ── balances (pre)
+    const walletBal = await provider.getBalance(wallet.address);
+    const vaultBalBefore = await vault.totalAssets();
+
+    console.log(`[${ts}] 🔎 Wallet MATIC: ${ethers.formatEther(walletBal)}`);
+    console.log(`[${ts}] 🏦 Vault balance (before): ${ethers.formatUnits(vaultBalBefore, 6)} USDC`);
+
+    const nonce = await provider.getTransactionCount(wallet.address, "latest");
     const deadline = Math.floor(Date.now() / 1000) + 120;
 
     const tx = await vault.executeArbitrage(
@@ -125,6 +128,7 @@ async function checkAndExecute() {
       sellPath,
       deadline,
       {
+        nonce,
         gasLimit: 1_500_000,
         maxPriorityFeePerGas: ethers.parseUnits("80", "gwei"),
         maxFeePerGas:        ethers.parseUnits("150", "gwei")
@@ -133,8 +137,36 @@ async function checkAndExecute() {
 
     console.log(`[${ts}] TX SENT: ${tx.hash}`);
 
-    const receipt = await tx.wait();
+    let receipt;
+
+    try {
+      receipt = await provider.waitForTransaction(tx.hash, 1, 20_000);
+    } catch {
+      console.log(`[${ts}] ⏫ TX STALLED — SPEEDING UP`);
+
+      const bump = await vault.executeArbitrage(
+        buyRouter,
+        sellRouter,
+        TRADE_SIZE,
+        buyPath,
+        sellPath,
+        deadline,
+        {
+          nonce,
+          gasLimit: 1_500_000,
+          maxPriorityFeePerGas: ethers.parseUnits("120", "gwei"),
+          maxFeePerGas:        ethers.parseUnits("220", "gwei")
+        }
+      );
+
+      console.log(`[${ts}] 🔁 REPLACEMENT TX SENT: ${bump.hash}`);
+      receipt = await bump.wait();
+    }
+
     console.log(`[${ts}] TX CONFIRMED: ${receipt.transactionHash}`);
+
+    const vaultBalAfter = await vault.totalAssets();
+    console.log(`[${ts}] 🏦 Vault balance (after): ${ethers.formatUnits(vaultBalAfter, 6)} USDC`);
     console.log(`[${ts}] 💰 PROFIT SENT TO VAULT`);
     console.log("──────────────────────────────");
 
