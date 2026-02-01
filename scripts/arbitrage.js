@@ -58,7 +58,7 @@ const usdcContract = new ethers.Contract(USDC, erc20ABI, wallet);
 // 5️⃣ BOT CONFIG
 // ─────────────────────────────────────────────
 const TRADE_SIZE = ethers.parseUnits("0.8", 6); // 0.8 USDC
-const MIN_SPREAD = 0.000005;                    // minimal % spread to act
+const MIN_SPREAD = 0.001;                        // 0.1% minimal % spread to act
 const UNI_FEE    = 3000;
 
 let executing = false;
@@ -114,6 +114,16 @@ async function checkAndExecute() {
       return;
     }
 
+    // --- Estimate expected profit ---
+    const tradeSizeUSD = Number(ethers.formatUnits(TRADE_SIZE, 6));
+    const expectedProfitUSD = Math.abs(spreadPct / 100) * tradeSizeUSD;
+
+    if (expectedProfitUSD <= 0) {
+      console.log(`[${ts}] ❌ Expected profit negative, skipping trade`);
+      console.log("──────────────────────────────");
+      return;
+    }
+
     // --- Check Vault balance ---
     const vaultBal = await vault.totalAssets();
     if (vaultBal.lt(TRADE_SIZE)) {
@@ -124,6 +134,7 @@ async function checkAndExecute() {
 
     // --- Bright green log for profitable arbitrage ---
     console.log(`\x1b[92m[${ts}] ✅ ARBITRAGE FOUND (${direction})\x1b[0m`);
+    console.log(`\x1b[92m[${ts}] 💵 Expected Profit: $${expectedProfitUSD.toFixed(6)} USDC\x1b[0m`);
     console.log(`\x1b[92m[${ts}] EXECUTING ON-CHAIN...\x1b[0m`);
 
     // --- Wallet + Vault balances pre-trade ---
