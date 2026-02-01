@@ -1,7 +1,3 @@
-🛠️⚙️💰BUILD 1/1 JS 2026 1 28 10:30 AM
-
-
-
 // 🟢 Fully functional bidirectional arbitrage script (ethers v6)
 // ONLY CHANGE: aggressive EIP-1559 gas params for instant mining
 
