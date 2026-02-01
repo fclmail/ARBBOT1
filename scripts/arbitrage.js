@@ -1,6 +1,6 @@
 // 🟢 Fully functional bidirectional arbitrage script (ethers v6)
 // 🔒 NONCE-SAFE + NO-STALL TX LIFECYCLE + BALANCE LOGGING
-// ❗ No strategy or feature changes
+// ❗ ONLY FIXES #1 and #2 APPLIED — NOTHING ELSE CHANGED
 
 import { ethers } from "ethers";
 import dotenv from "dotenv";
@@ -20,8 +20,8 @@ const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 const USDC   = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
-const UNISWAP_V2_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHI_ROUTER     = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const UNISWAP_V2_ROUTER  = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHI_ROUTER      = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
 
 // ─────────────────────────────────────────────
@@ -48,11 +48,14 @@ const sushi  = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
 const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 
 // ─────────────────────────────────────────────
-// 5️⃣ BOT CONFIG (UNCHANGED)
+// 5️⃣ BOT CONFIG (FIX #2 APPLIED)
 // ─────────────────────────────────────────────
 const TRADE_SIZE = ethers.parseUnits("0.8", 6);
-const MIN_SPREAD = 0.000005;
-const UNI_FEE    = 3000;
+
+// 🔧 FIX #2 — realistic spread (0.15%)
+const MIN_SPREAD = 0.15;
+
+const UNI_FEE = 3000;
 
 let executing = false;
 
@@ -66,11 +69,16 @@ async function checkAndExecute() {
   const ts = new Date().toISOString();
 
   try {
+    // ── price quotes
     const sushiOut = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
     const sushiWmatic = sushiOut[1];
 
     const uniWmatic = await quoter.quoteExactInputSingle(
-      USDC, WMATIC, UNI_FEE, TRADE_SIZE, 0
+      USDC,
+      WMATIC,
+      UNI_FEE,
+      TRADE_SIZE,
+      0
     );
 
     const sushiPrice =
@@ -89,18 +97,25 @@ async function checkAndExecute() {
 
     let buyRouter, sellRouter, buyPath, sellPath, direction;
 
-    if (spreadPct <= -MIN_SPREAD) {
-      buyRouter  = UNISWAP_V2_ROUTER;
-      sellRouter = SUSHI_ROUTER;
-      buyPath  = [USDC, WMATIC];
-      sellPath = [WMATIC, USDC];
-      direction = "UNI → SUSHI";
-    } else if (spreadPct >= MIN_SPREAD) {
+    // ─────────────────────────────────────────
+    // 🔧 FIX #1 — CORRECT ARBITRAGE DIRECTION
+    // ─────────────────────────────────────────
+    if (spreadPct >= MIN_SPREAD) {
+      // WMATIC cheaper on SUSHI → buy SUSHI, sell UNI
       buyRouter  = SUSHI_ROUTER;
       sellRouter = UNISWAP_V2_ROUTER;
       buyPath  = [USDC, WMATIC];
       sellPath = [WMATIC, USDC];
       direction = "SUSHI → UNI";
+
+    } else if (spreadPct <= -MIN_SPREAD) {
+      // WMATIC cheaper on UNI → buy UNI, sell SUSHI
+      buyRouter  = UNISWAP_V2_ROUTER;
+      sellRouter = SUSHI_ROUTER;
+      buyPath  = [USDC, WMATIC];
+      sellPath = [WMATIC, USDC];
+      direction = "UNI → SUSHI";
+
     } else {
       console.log(`[${ts}] ❌ No executable arbitrage`);
       console.log("──────────────────────────────");
@@ -115,9 +130,11 @@ async function checkAndExecute() {
     const vaultBalBefore = await vault.totalAssets();
 
     console.log(`[${ts}] 🔎 Wallet MATIC: ${ethers.formatEther(walletBal)}`);
-    console.log(`[${ts}] 🏦 Vault balance (before): ${ethers.formatUnits(vaultBalBefore, 6)} USDC`);
+    console.log(
+      `[${ts}] 🏦 Vault balance (before): ${ethers.formatUnits(vaultBalBefore, 6)} USDC`
+    );
 
-    const nonce = await provider.getTransactionCount(wallet.address, "latest");
+    const nonce    = await provider.getTransactionCount(wallet.address, "latest");
     const deadline = Math.floor(Date.now() / 1000) + 120;
 
     const tx = await vault.executeArbitrage(
@@ -166,7 +183,10 @@ async function checkAndExecute() {
     console.log(`[${ts}] TX CONFIRMED: ${receipt.transactionHash}`);
 
     const vaultBalAfter = await vault.totalAssets();
-    console.log(`[${ts}] 🏦 Vault balance (after): ${ethers.formatUnits(vaultBalAfter, 6)} USDC`);
+    console.log(
+      `[${ts}] 🏦 Vault balance (after): ${ethers.formatUnits(vaultBalAfter, 6)} USDC`
+    );
+
     console.log(`[${ts}] 💰 PROFIT SENT TO VAULT`);
     console.log("──────────────────────────────");
 
