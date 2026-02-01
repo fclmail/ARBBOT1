@@ -35,7 +35,6 @@ const quoterABI = [
   "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external view returns (uint256)"
 ];
 
-// ✅ FIX: minimal ERC20 ABI
 const erc20ABI = [
   "function balanceOf(address) view returns (uint256)"
 ];
@@ -46,8 +45,6 @@ const erc20ABI = [
 const vault = new ethers.Contract(VAULT_CONTRACT, vaultABI, wallet);
 const sushi = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
 const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
-
-// ✅ FIX: USDC contract instance
 const usdc = new ethers.Contract(USDC, erc20ABI, provider);
 
 // ─────────────────────────────────────────────
@@ -67,7 +64,7 @@ async function getPendingNonce() {
 }
 
 // ─────────────────────────────────────────────
-// 7️⃣ SEND TX WITH RELIABLE RETRIES & GAS BUMP
+// 7️⃣ SEND TX WITH RELIABLE RETRIES & GAS BUMP (ETHERS v6 FIXED)
 // ─────────────────────────────────────────────
 async function sendTxWithRetry(txRequestBase, maxRetries = 3) {
   let attempt = 0;
@@ -86,15 +83,17 @@ async function sendTxWithRetry(txRequestBase, maxRetries = 3) {
         `[${new Date().toISOString()}] [TRY ${attempt + 1}] SENDING TX to ${txRequest.to} with nonce ${nonce}`
       );
 
+      // ── GAS LIMIT ESTIMATION (v6 bigint)
       if (!txRequest.gasLimit) {
         try {
           const estimatedGas = await provider.estimateGas(txRequest);
-          txRequest.gasLimit = estimatedGas.mul(120).div(100);
+          txRequest.gasLimit = (estimatedGas * 120n) / 100n; // +20%
         } catch {
-          txRequest.gasLimit = ethers.BigNumber.from(1_000_000);
+          txRequest.gasLimit = 1_000_000n;
         }
       }
 
+      // ── DEFAULT EIP-1559 GAS (v6 bigint)
       if (!txRequest.maxFeePerGas || !txRequest.maxPriorityFeePerGas) {
         txRequest.maxPriorityFeePerGas = ethers.parseUnits("2", "gwei");
         txRequest.maxFeePerGas = ethers.parseUnits("60", "gwei");
@@ -128,8 +127,16 @@ async function sendTxWithRetry(txRequestBase, maxRetries = 3) {
       const backoffMs = 500 + Math.floor(Math.random() * 500);
       await new Promise((r) => setTimeout(r, backoffMs));
 
-      baseReq.maxPriorityFeePerGas = ethers.parseUnits("2.5", "gwei");
-      baseReq.maxFeePerGas = ethers.parseUnits("70", "gwei");
+      // ── GAS BUMP (v6 bigint)
+      if (baseReq.maxFeePerGas && baseReq.maxPriorityFeePerGas) {
+        baseReq.maxPriorityFeePerGas =
+          (baseReq.maxPriorityFeePerGas * 102n) / 100n;
+        baseReq.maxFeePerGas =
+          (baseReq.maxFeePerGas * 102n) / 100n;
+      } else {
+        baseReq.maxPriorityFeePerGas = ethers.parseUnits("2.5", "gwei");
+        baseReq.maxFeePerGas = ethers.parseUnits("70", "gwei");
+      }
     }
   }
 
@@ -207,7 +214,7 @@ async function checkAndExecute() {
         sellPath,
         deadline,
       ]),
-      gasLimit: ethers.BigNumber.from("1500000"),
+      gasLimit: 1_500_000n,
       maxPriorityFeePerGas: ethers.parseUnits("80", "gwei"),
       maxFeePerGas: ethers.parseUnits("150", "gwei"),
     };
