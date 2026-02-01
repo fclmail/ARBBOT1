@@ -64,83 +64,35 @@ async function getPendingNonce() {
 }
 
 // ─────────────────────────────────────────────
-// 7️⃣ SEND TX WITH RELIABLE RETRIES & GAS BUMP (ETHERS v6 FIXED)
+// 7️⃣ SEND TX (NON-STALLING + AGGRESSIVE GAS)
 // ─────────────────────────────────────────────
-async function sendTxWithRetry(txRequestBase, maxRetries = 3) {
-  let attempt = 0;
-  const baseReq = { ...txRequestBase };
+async function sendTxWithRetry(txRequestBase) {
+  const nonce = await getPendingNonce();
 
-  while (attempt < maxRetries) {
-    try {
-      const nonce = await getPendingNonce();
+  const feeData = await provider.getFeeData();
 
-      const txRequest = {
-        ...baseReq,
-        nonce,
-      };
+  const txRequest = {
+    ...txRequestBase,
+    nonce,
+    gasLimit: txRequestBase.gasLimit ?? 1_500_000n,
 
-      console.log(
-        `[${new Date().toISOString()}] [TRY ${attempt + 1}] SENDING TX to ${txRequest.to} with nonce ${nonce}`
-      );
+    // 🔥 EIP-1559 OVERPAY (Polygon-aggressive)
+    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas * 3n,
+    maxFeePerGas: feeData.maxFeePerGas * 3n,
+  };
 
-      // ── GAS LIMIT ESTIMATION (v6 bigint)
-      if (!txRequest.gasLimit) {
-        try {
-          const estimatedGas = await provider.estimateGas(txRequest);
-          txRequest.gasLimit = (estimatedGas * 120n) / 100n; // +20%
-        } catch {
-          txRequest.gasLimit = 1_000_000n;
-        }
-      }
+  console.log(
+    `[${new Date().toISOString()}] [TRY 1] SENDING TX to ${txRequest.to} with nonce ${nonce}`
+  );
 
-      // ── DEFAULT EIP-1559 GAS (v6 bigint)
-      if (!txRequest.maxFeePerGas || !txRequest.maxPriorityFeePerGas) {
-        txRequest.maxPriorityFeePerGas = ethers.parseUnits("2", "gwei");
-        txRequest.maxFeePerGas = ethers.parseUnits("60", "gwei");
-      }
+  const tx = await wallet.sendTransaction(txRequest);
 
-      const tx = await wallet.sendTransaction(txRequest);
-      console.log(`[${new Date().toISOString()}] TX SENT: ${tx.hash}`);
+  console.log(
+    `[${new Date().toISOString()}] TX SENT: ${tx.hash}`
+  );
 
-      const receipt = await tx.wait(1);
-      if (receipt.status === 1) {
-        console.log(
-          `[${new Date().toISOString()}] TX MINED: ${receipt.transactionHash} (block ${receipt.blockNumber})`
-        );
-        console.log(`[${new Date().toISOString()}] 💰 PROFIT SENT TO VAULT (assumed by contract)`);
-        console.log("──────────────────────────────");
-        return receipt;
-      } else {
-        throw new Error("TX REVERTED");
-      }
-    } catch (err) {
-      const msg = err?.message || String(err);
-      console.warn(`[${new Date().toISOString()}] TX FAILED OR STUCK: ${msg}`);
-
-      const retriable = /(nonce|replacement|gas|out of gas|execution reverted)/i.test(msg);
-      attempt++;
-
-      if (!retriable || attempt >= maxRetries) {
-        throw new Error("TX FAILED AFTER MAX RETRIES");
-      }
-
-      const backoffMs = 500 + Math.floor(Math.random() * 500);
-      await new Promise((r) => setTimeout(r, backoffMs));
-
-      // ── GAS BUMP (v6 bigint)
-      if (baseReq.maxFeePerGas && baseReq.maxPriorityFeePerGas) {
-        baseReq.maxPriorityFeePerGas =
-          (baseReq.maxPriorityFeePerGas * 102n) / 100n;
-        baseReq.maxFeePerGas =
-          (baseReq.maxFeePerGas * 102n) / 100n;
-      } else {
-        baseReq.maxPriorityFeePerGas = ethers.parseUnits("2.5", "gwei");
-        baseReq.maxFeePerGas = ethers.parseUnits("70", "gwei");
-      }
-    }
-  }
-
-  throw new Error("TX FAILED AFTER MAX RETRIES");
+  // 🚫 NO WAIT — DO NOT STALL LOGS
+  return tx.hash;
 }
 
 // ─────────────────────────────────────────────
@@ -196,13 +148,13 @@ async function checkAndExecute() {
       return;
     }
 
-    const deadline = Math.floor(Date.now() / 1000) + 120;
-
-    const contractBalance = await usdc.balanceOf(VAULT_CONTRACT);
-    if (contractBalance < TRADE_SIZE) {
-      console.log(`[${ts}] Insufficient USDC balance in contract for trade`);
+    const balance = await usdc.balanceOf(VAULT_CONTRACT);
+    if (balance < TRADE_SIZE) {
+      console.log(`[${ts}] Insufficient USDC balance in contract`);
       return;
     }
+
+    const deadline = Math.floor(Date.now() / 1000) + 120;
 
     const txRequestBase = {
       to: VAULT_CONTRACT,
@@ -214,14 +166,11 @@ async function checkAndExecute() {
         sellPath,
         deadline,
       ]),
-      gasLimit: 1_500_000n,
-      maxPriorityFeePerGas: ethers.parseUnits("80", "gwei"),
-      maxFeePerGas: ethers.parseUnits("150", "gwei"),
     };
 
-    await sendTxWithRetry(txRequestBase, 3);
+    await sendTxWithRetry(txRequestBase);
   } catch (err) {
-    console.error(`[${ts}] ERROR`, err?.reason || err?.message || err);
+    console.error(`[${ts}] ERROR`, err?.message || err);
   } finally {
     executing = false;
   }
