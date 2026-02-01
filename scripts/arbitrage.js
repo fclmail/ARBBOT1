@@ -1,187 +1,147 @@
-// 🟢 Fully functional bidirectional arbitrage script (ethers v6)
-// FIXES: nonce management, gas bumping, retries, and non-blocking confirmations
-
+// arbitrage.js
 import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
+import arbitrageAbi from "../abis/VaultArbitrageEnforcer.json"; // your contract ABI
+import erc20Abi from "../abis/ERC20.json"; // ERC20 ABI
 
-// ─────────────────────────────────────────────
-// 1️⃣ RPC + WALLET
-// ─────────────────────────────────────────────
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+// ---------------- CONFIG ---------------- //
+const RPC_URL = "https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY"; // use reliable RPC
+const PRIVATE_KEY = "YOUR_WALLET_PRIVATE_KEY";
+const CONTRACT_ADDRESS = "YOUR_VAULT_ARBITRAGE_ENFORCER_ADDRESS";
+const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
+const SLIPPAGE = 0.995; // 0.5% slippage
 
-// ─────────────────────────────────────────────
-// 2️⃣ ADDRESSES (Polygon)
-// ─────────────────────────────────────────────
-const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+// Routers
+const UNISWAP_ROUTER = "0x1F98431c8aD98523631AE4a59f267346ea31F984"; 
+const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"; 
+
+// Tokens
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+const UNI = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984";
+const SUSHI = "0x6b3595068778dd592e39a122f4f5a5cf09c90fe2";
 
-const UNISWAP_V2_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
-const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
+// Amount in USDC per arbitrage
+const AMOUNT_USDC = ethers.utils.parseUnits("1000", 6); // 1000 USDC
 
-// ─────────────────────────────────────────────
-// 3️⃣ ABIs
-// ─────────────────────────────────────────────
-const vaultABI = [
-  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"
-];
+// ---------------- SETUP PROVIDER & WALLET ---------------- //
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const vaultContract = new ethers.Contract(CONTRACT_ADDRESS, arbitrageAbi, wallet);
+const usdc = new ethers.Contract(USDC_ADDRESS, erc20Abi, wallet);
 
-const sushiABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"
-];
-
-const quoterABI = [
-  "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external view returns (uint256)"
-];
-
-// ─────────────────────────────────────────────
-// 4️⃣ CONTRACT INSTANCES
-// ─────────────────────────────────────────────
-const vault = new ethers.Contract(VAULT_CONTRACT, vaultABI, wallet);
-const sushi = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
-const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
-
-// ─────────────────────────────────────────────
-// 5️⃣ BOT CONFIG
-// ─────────────────────────────────────────────
-const TRADE_SIZE = ethers.parseUnits("0.8", 6);
-const MIN_SPREAD = 0.05;
-const UNI_FEE = 3000;
-
-let executing = false;
-
-// ─────────────────────────────────────────────
-// 6️⃣ NONCE MANAGEMENT
-// ─────────────────────────────────────────────
+// ---------------- NONCE MANAGEMENT ---------------- //
 let noncePromise = provider.getTransactionCount(wallet.address, "pending");
-
-// Helper to get and increment nonce
 async function getNonce() {
   const currentNonce = await noncePromise;
   noncePromise = currentNonce + 1;
   return currentNonce;
 }
 
-// ─────────────────────────────────────────────
-// 7️⃣ SEND TX WITH RETRIES & GAS BUMP
-// ─────────────────────────────────────────────
+// ---------------- TX SEND WITH RETRY ---------------- //
 async function sendTxWithRetry(txRequest, maxRetries = 3) {
   let attempt = 0;
   while (attempt < maxRetries) {
     try {
       txRequest.nonce = await getNonce();
-
       const tx = await wallet.sendTransaction(txRequest);
       console.log(`[${new Date().toISOString()}] TX SENT: ${tx.hash}`);
 
-      // Fire-and-forget confirmation
+      // Non-blocking confirmation
       provider.once(tx.hash, (receipt) => {
-        console.log(`[${new Date().toISOString()}] TX CONFIRMED: ${receipt.transactionHash}`);
-        console.log(`[${new Date().toISOString()}] 💰 PROFIT SENT TO VAULT`);
-        console.log("──────────────────────────────");
+        if (receipt && receipt.status === 1) {
+          console.log(`[${new Date().toISOString()}] TX CONFIRMED: ${receipt.transactionHash}`);
+        } else {
+          console.log(`[${new Date().toISOString()}] TX FAILED: ${tx.hash}`);
+        }
       });
-
       return tx;
     } catch (err) {
-      console.log(`[${new Date().toISOString()}] TX FAILED OR STUCK: ${err.message}`);
-      txRequest.maxPriorityFeePerGas = txRequest.maxPriorityFeePerGas.mul(2);
-      txRequest.maxFeePerGas = txRequest.maxFeePerGas.mul(2);
+      console.log(`TX attempt ${attempt + 1} failed: ${err.message}`);
+      if (!txRequest.maxPriorityFeePerGas) txRequest.maxPriorityFeePerGas = ethers.parseUnits("2", "gwei");
+      txRequest.maxPriorityFeePerGas *= 2;
+      txRequest.maxFeePerGas *= 2;
       attempt++;
-      console.log(`[${new Date().toISOString()}] Retrying transaction with higher gas (attempt ${attempt})`);
     }
   }
   throw new Error("TX FAILED AFTER MAX RETRIES");
 }
 
-// ─────────────────────────────────────────────
-// 8️⃣ MAIN LOOP
-// ─────────────────────────────────────────────
-async function checkAndExecute() {
+// ---------------- APPROVE TOKENS ---------------- //
+async function approveRouters() {
+  const routers = [UNISWAP_ROUTER, SUSHI_ROUTER];
+  for (const router of routers) {
+    const allowance = await usdc.allowance(wallet.address, router);
+    if (allowance.lt(AMOUNT_USDC)) {
+      console.log(`Approving ${router} for USDC...`);
+      const tx = await sendTxWithRetry(await usdc.populateTransaction.approve(router, ethers.MaxUint256));
+      await tx.wait();
+      console.log(`Approved ${router}`);
+    }
+  }
+}
+
+// ---------------- EXECUTE ARBITRAGE ---------------- //
+let executing = false;
+async function executeArbitrage(buyRouter, sellRouter, pathToToken, pathToUSDC) {
   if (executing) return;
   executing = true;
-
-  const ts = new Date().toISOString();
-
   try {
-    // Fetch prices
-    const sushiOut = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
-    const sushiWmatic = sushiOut[1];
-
-    const uniWmatic = await quoter.quoteExactInputSingle(
-      USDC,
-      WMATIC,
-      UNI_FEE,
-      TRADE_SIZE,
-      0
-    );
-
-    const sushiPrice =
-      Number(ethers.formatUnits(TRADE_SIZE, 6)) /
-      Number(ethers.formatUnits(sushiWmatic, 18));
-
-    const uniPrice =
-      Number(ethers.formatUnits(TRADE_SIZE, 6)) /
-      Number(ethers.formatUnits(uniWmatic, 18));
-
-    const spreadPct = ((sushiPrice - uniPrice) / uniPrice) * 100;
-
-    console.log(`[${ts}] UNI:   ${uniPrice.toFixed(6)} WMATIC`);
-    console.log(`[${ts}] SUSHI: ${sushiPrice.toFixed(6)} WMATIC`);
-    console.log(`[${ts}] Spread: ${spreadPct.toFixed(4)}%`);
-
-    let buyRouter, sellRouter, buyPath, sellPath, direction;
-
-    if (spreadPct <= -MIN_SPREAD) {
-      buyRouter = UNISWAP_V2_ROUTER;
-      sellRouter = SUSHI_ROUTER;
-      buyPath = [USDC, WMATIC];
-      sellPath = [WMATIC, USDC];
-      direction = "UNI → SUSHI";
-    } else if (spreadPct >= MIN_SPREAD) {
-      buyRouter = SUSHI_ROUTER;
-      sellRouter = UNISWAP_V2_ROUTER;
-      buyPath = [USDC, WMATIC];
-      sellPath = [WMATIC, USDC];
-      direction = "SUSHI → UNI";
-    } else {
-      console.log(`[${ts}] ❌ No executable arbitrage`);
-      console.log("──────────────────────────────");
+    // Check USDC balance
+    const balance = await usdc.balanceOf(wallet.address);
+    if (balance.lt(AMOUNT_USDC)) {
+      console.log("Insufficient USDC for arbitrage");
       return;
     }
 
-    console.log(`[${ts}] ✅ ARBITRAGE FOUND (${direction})`);
-    console.log(`[${ts}] EXECUTING ON-CHAIN...`);
+    const deadline = Math.floor(Date.now() / 1000) + 60; // 1 min
+    const txRequest = await vaultContract.populateTransaction.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      AMOUNT_USDC,
+      pathToToken,
+      pathToUSDC,
+      deadline
+    );
 
-    const deadline = Math.floor(Date.now() / 1000) + 120;
-
-    const txRequest = {
-      to: VAULT_CONTRACT,
-      data: vault.interface.encodeFunctionData("executeArbitrage", [
-        buyRouter,
-        sellRouter,
-        TRADE_SIZE,
-        buyPath,
-        sellPath,
-        deadline
-      ]),
-      gasLimit: 1_500_000,
-      maxPriorityFeePerGas: ethers.parseUnits("80", "gwei"),
-      maxFeePerGas: ethers.parseUnits("150", "gwei")
-    };
+    // Gas settings
+    txRequest.maxPriorityFeePerGas = ethers.parseUnits("2", "gwei");
+    txRequest.maxFeePerGas = ethers.parseUnits("100", "gwei"); // adjust dynamically if needed
 
     await sendTxWithRetry(txRequest);
 
   } catch (err) {
-    console.error(`[${ts}] ERROR`, err.reason || err.message || err);
+    console.log(`Arbitrage failed: ${err.message}`);
   } finally {
     executing = false;
   }
 }
 
-// ─────────────────────────────────────────────
-// 9️⃣ RUN LOOP
-// ─────────────────────────────────────────────
-setInterval(checkAndExecute, 5000);
+// ---------------- MAIN LOOP ---------------- //
+async function main() {
+  await approveRouters();
+
+  while (true) {
+    try {
+      // Fetch prices from your logic (replace below with your actual arbitrage detection)
+      const uniPrice = Math.random() * 0.001 + 0.106; // simulate
+      const sushiPrice = Math.random() * 0.001 + 0.106;
+
+      const spread = ((sushiPrice - uniPrice) / uniPrice) * 100;
+      if (spread > 0.2) { // example threshold
+        console.log(`[${new Date().toISOString()}] ✅ ARBITRAGE FOUND (UNI → SUSHI) Spread: ${spread.toFixed(4)}%`);
+        await executeArbitrage(UNISWAP_ROUTER, SUSHI_ROUTER, [USDC_ADDRESS, UNI], [UNI, USDC_ADDRESS]);
+      } else if (spread < -0.2) {
+        console.log(`[${new Date().toISOString()}] ✅ ARBITRAGE FOUND (SUSHI → UNI) Spread: ${spread.toFixed(4)}%`);
+        await executeArbitrage(SUSHI_ROUTER, UNISWAP_ROUTER, [USDC_ADDRESS, SUSHI], [SUSHI, USDC_ADDRESS]);
+      } else {
+        console.log(`[${new Date().toISOString()}] No profitable arbitrage. Spread: ${spread.toFixed(4)}%`);
+      }
+
+      await new Promise(res => setTimeout(res, 5000)); // 5s loop
+    } catch (err) {
+      console.log(`Main loop error: ${err.message}`);
+      await new Promise(res => setTimeout(res, 5000));
+    }
+  }
+}
+
+main();
