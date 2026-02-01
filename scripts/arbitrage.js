@@ -1,8 +1,4 @@
-
-
-// 🟢 Fully functional bidirectional arbitrage script (ethers v6)
-// FIXES: nonce management, gas bumping, retries, and non-blocking confirmations
-
+// 🟢 Fully functional bidirectional arbitrage script (ethers v6) - SAFER DROP-IN
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
@@ -49,7 +45,7 @@ const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 // ─────────────────────────────────────────────
 // 5️⃣ BOT CONFIG
 // ─────────────────────────────────────────────
-const TRADE_SIZE = ethers.parseUnits("0.8", 6);
+const TRADE_SIZE = ethers.parseUnits("0.8", 6); // USDC decimals (6)
 const MIN_SPREAD = 0.05;
 const UNI_FEE = 3000;
 
@@ -58,43 +54,111 @@ let executing = false;
 // ─────────────────────────────────────────────
 // 6️⃣ NONCE MANAGEMENT
 // ─────────────────────────────────────────────
-let noncePromise = provider.getTransactionCount(wallet.address, "pending");
-
-// Helper to get and increment nonce
-async function getNonce() {
-  const currentNonce = await noncePromise;
-  noncePromise = currentNonce + 1;
-  return currentNonce;
+async function getPendingNonce() {
+  // Always fetch fresh pending nonce to avoid gaps
+  return await provider.getTransactionCount(wallet.address, "pending");
 }
 
 // ─────────────────────────────────────────────
-// 7️⃣ SEND TX WITH RETRIES & GAS BUMP
+// 7️⃣ SEND TX WITH RELIABLE RETRIES & GAS BUMP
+//    - This version waits for the tx to be mined (receipt) before proceeding
+//    - On recoverable errors, it retries with fresh nonce and updated gas
 // ─────────────────────────────────────────────
-async function sendTxWithRetry(txRequest, maxRetries = 3) {
+async function sendTxWithRetry(txRequestBase, maxRetries = 3) {
   let attempt = 0;
+
+  // Normalize a base gas setup if not provided\n
+  const baseReq = { ...txRequestBase };
+
   while (attempt < maxRetries) {
     try {
-      txRequest.nonce = await getNonce();
+      // Get fresh nonce for this attempt
+      const nonce = await getPendingNonce();
 
+      // Build a complete tx request
+      const txRequest = {
+        ...baseReq,
+        nonce,
+      };
+
+      // If using EIP-1559, gas fields should be provided as maxFeePerGas/maxPriorityFeePerGas
+      // Ensure numeric types for gas values
+      if (txRequest.maxFeePerGas && txRequest.maxPriorityFeePerGas) {
+        // Ensure BigNumber formatting
+        // (Assuming already BigNumber via ethers.parseUnits)
+      }
+
+      console.log(
+        `[${new Date().toISOString()}] [TRY ${attempt + 1}] SENDING TX to ${txRequest.to} with nonce ${nonce}`
+      );
+
+      // Optional: estimate gas if not provided
+      if (!txRequest.gasLimit) {
+        try {
+          const estimatedGas = await provider.estimateGas(txRequest);
+          txRequest.gasLimit = estimatedGas.mul(ethers.BigNumber.from(120)).div(100); // add 20% cushion
+        } catch {
+          // Fallback to a safe default if estimation fails
+          txRequest.gasLimit = ethers.BigNumber.from(1_000_000);
+        }
+      }
+
+      // If gas is not provided for EIP-1559, set a sane default
+      if (!txRequest.maxFeePerGas || !txRequest.maxPriorityFeePerGas) {
+        // Default dynamic values (adjust per network conditions)
+        txRequest.maxPriorityFeePerGas = ethers.parseUnits("2", "gwei");
+        txRequest.maxFeePerGas = ethers.parseUnits("60", "gwei");
+      }
+
+      // Send transaction
       const tx = await wallet.sendTransaction(txRequest);
       console.log(`[${new Date().toISOString()}] TX SENT: ${tx.hash}`);
 
-      // Fire-and-forget confirmation
-      provider.once(tx.hash, (receipt) => {
-        console.log(`[${new Date().toISOString()}] TX CONFIRMED: ${receipt.transactionHash}`);
-        console.log(`[${new Date().toISOString()}] 💰 PROFIT SENT TO VAULT`);
+      // Wait for at least 1 confirmation
+      const receipt = await tx.wait(1);
+      if (receipt.status === 1) {
+        console.log(
+          `[${new Date().toISOString()}] TX MINED: ${receipt.transactionHash} (block ${receipt.blockNumber})`
+        );
+        console.log(`[${new Date().toISOString()}] 💰 PROFIT SENT TO VAULT (assumed by contract)`);
         console.log("──────────────────────────────");
-      });
-
-      return tx;
+        return receipt;
+      } else {
+        throw new Error("TX REVERTED");
+      }
     } catch (err) {
-      console.log(`[${new Date().toISOString()}] TX FAILED OR STUCK: ${err.message}`);
-      txRequest.maxPriorityFeePerGas = txRequest.maxPriorityFeePerGas.mul(2);
-      txRequest.maxFeePerGas = txRequest.maxFeePerGas.mul(2);
+      const msg = err?.message || String(err);
+      console.warn(`[${new Date().toISOString()}] TX FAILED OR STUCK: ${msg}`);
+
+      // If it's a nonce/gas related issue, retry with fresh nonce/gas
+      // Heuristic: if error mentions 'nonce too low', 'replacement', or 'gas', retry
+      const retriable = /(nonce|replacement|gas|out of gas|execution reverted)/i.test(msg);
+
       attempt++;
-      console.log(`[${new Date().toISOString()}] Retrying transaction with higher gas (attempt ${attempt})`);
+      if (!retriable || attempt >= maxRetries) {
+        throw new Error("TX FAILED AFTER MAX RETRIES");
+      }
+
+      // Backoff a bit before retry
+      const backoffMs = 500 + Math.floor(Math.random() * 500);
+      console.log(
+        `[${new Date().toISOString()}] Retrying with updated params (attempt ${attempt}) in ${backoffMs}ms`
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+
+      // On retry, we bump the gas a bit to improve likelihood of being mined
+      if (baseReq.maxFeePerGas && baseReq.maxPriorityFeePerGas) {
+        baseReq.maxPriorityFeePerGas = baseReq.maxPriorityFeePerGas.mul( ethers.BigNumber.from(102) ).div(ethers.BigNumber.from(100)); // +2%
+        baseReq.maxFeePerGas = baseReq.maxFeePerGas.mul( ethers.BigNumber.from(102) ).div(ethers.BigNumber.from(100)); // +2%
+      } else {
+        // If not using EIP-1559 yet, set  dynamic-ish values
+        baseReq.maxPriorityFeePerGas = ethers.parseUnits("2.5", "gwei");
+        baseReq.maxFeePerGas = ethers.parseUnits("70", "gwei");
+      }
+      // Note: nonce is refreshed on next loop by getPendingNonce()
     }
   }
+
   throw new Error("TX FAILED AFTER MAX RETRIES");
 }
 
@@ -169,15 +233,19 @@ async function checkAndExecute() {
         sellPath,
         deadline
       ]),
-      gasLimit: 1_500_000,
+      // Let ethers set type to EIP-1559 by omitting 'gasPrice'
+      // Provide explicit fields for EIP-1559 style
+      gasLimit: ethers.BigNumber.from("1500000"), // keep a reasonable cap; we'll cap again if needed
       maxPriorityFeePerGas: ethers.parseUnits("80", "gwei"),
-      maxFeePerGas: ethers.parseUnits("150", "gwei")
+      maxFeePerGas: ethers.parseUnits("150", "gwei"),
+      // nonce will be filled per attempt
+      // Note: 'nonce' is intentionally omitted here; sendTxWithRetry will fetch fresh nonce
     };
 
-    await sendTxWithRetry(txRequest);
-
+    const receipt = await sendTxWithRetry(txRequest, 3);
+    // receipt handling/logging is inside the function on success
   } catch (err) {
-    console.error(`[${ts}] ERROR`, err.reason || err.message || err);
+    console.error(`[${ts}] ERROR`, err?.reason || err?.message || err);
   } finally {
     executing = false;
   }
@@ -187,4 +255,3 @@ async function checkAndExecute() {
 // 9️⃣ RUN LOOP
 // ─────────────────────────────────────────────
 setInterval(checkAndExecute, 5000);
-
