@@ -1,5 +1,5 @@
 // 🟢 Fully functional bidirectional arbitrage script (ethers v6)
-// ONLY CHANGE: aggressive EIP-1559 gas params for instant mining
+// FIXED: nonce stuck, pending tx replacement, timeout on wait
 
 import { ethers } from "ethers";
 import dotenv from "dotenv";
@@ -49,13 +49,14 @@ const sushi  = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
 const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 
 // ─────────────────────────────────────────────
-// 5️⃣ BOT CONFIG (UNCHANGED)
+// 5️⃣ BOT CONFIG
 // ─────────────────────────────────────────────
 const TRADE_SIZE = ethers.parseUnits("0.8", 6);
-const MIN_SPREAD = 0.05;
+const MIN_SPREAD = 0.05; // 5%
 const UNI_FEE    = 3000;
 
 let executing = false;
+let pendingTx = null;
 
 // ─────────────────────────────────────────────
 // 6️⃣ MAIN LOOP
@@ -66,7 +67,20 @@ async function checkAndExecute() {
 
   const ts = new Date().toISOString();
 
+  // Skip if a previous transaction is still pending
+  if (pendingTx) {
+    const receipt = await provider.getTransactionReceipt(pendingTx.hash);
+    if (!receipt) {
+      console.log(`[${ts}] ⏳ Previous tx still pending, skipping new arbitrage`);
+      executing = false;
+      return;
+    } else {
+      pendingTx = null;
+    }
+  }
+
   try {
+    // ───────────── PRICING ─────────────
     const sushiOut = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
     const sushiWmatic = sushiOut[1];
 
@@ -109,6 +123,7 @@ async function checkAndExecute() {
     } else {
       console.log(`[${ts}] ❌ No executable arbitrage`);
       console.log("──────────────────────────────");
+      executing = false;
       return;
     }
 
@@ -116,8 +131,9 @@ async function checkAndExecute() {
     console.log(`[${ts}] EXECUTING ON-CHAIN...`);
 
     const deadline = Math.floor(Date.now() / 1000) + 120;
+    const currentNonce = await wallet.getTransactionCount("pending");
 
-    const tx = await vault.executeArbitrage(
+    let tx = await vault.executeArbitrage(
       buyRouter,
       sellRouter,
       TRADE_SIZE,
@@ -127,13 +143,28 @@ async function checkAndExecute() {
       {
         gasLimit: 1_500_000,
         maxPriorityFeePerGas: ethers.parseUnits("80", "gwei"),
-        maxFeePerGas:        ethers.parseUnits("150", "gwei")
+        maxFeePerGas: ethers.parseUnits("150", "gwei"),
+        nonce: currentNonce
       }
     );
 
+    pendingTx = tx;
+
     console.log(`[${ts}] TX SENT: ${tx.hash}`);
 
-    const receipt = await tx.wait();
+    // Wait with timeout & auto-replace if stuck
+    const receipt = await tx.wait({ timeout: 30000 }).catch(async () => {
+      console.log(`[${ts}] ⚠️ TX PENDING TOO LONG, REPLACING WITH HIGHER FEE`);
+      const replacementTx = await wallet.sendTransaction({
+        ...tx,
+        maxPriorityFeePerGas: ethers.parseUnits("120", "gwei"),
+        maxFeePerGas: ethers.parseUnits("200", "gwei"),
+        nonce: currentNonce
+      });
+      pendingTx = replacementTx;
+      return await replacementTx.wait();
+    });
+
     console.log(`[${ts}] TX CONFIRMED: ${receipt.transactionHash}`);
     console.log(`[${ts}] 💰 PROFIT SENT TO VAULT`);
     console.log("──────────────────────────────");
@@ -146,6 +177,6 @@ async function checkAndExecute() {
 }
 
 // ─────────────────────────────────────────────
-// 7️⃣ RUN LOOP (UNCHANGED)
+// 7️⃣ RUN LOOP
 // ─────────────────────────────────────────────
 setInterval(checkAndExecute, 5000);
