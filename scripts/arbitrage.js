@@ -56,33 +56,7 @@ const UNI_FEE = 3000;
 let executing = false;
 
 // ─────────────────────────────────────────────
-// 6️⃣ HELPER FUNCTION TO DECODE REVERT REASON
-// ─────────────────────────────────────────────
-function decodeRevertReason(err) {
-  // ethers v6 nested error structure handling
-  const data =
-    err?.error?.data ||
-    err?.data ||
-    err?.receipt?.revertReason;
-
-  if (!data || typeof data !== "string") return null;
-
-  // Standard Solidity Error(string) selector = 0x08c379a0
-  if (data.startsWith("0x08c379a0")) {
-    try {
-      const reason = ethers.AbiCoder.defaultAbiCoder()
-        .decode(["string"], "0x" + data.slice(10))[0];
-      return reason;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
-// ─────────────────────────────────────────────
-// 7️⃣ MAIN LOOP
+// 6️⃣ MAIN LOOP
 // ─────────────────────────────────────────────
 async function checkAndExecute() {
   if (executing) return;
@@ -213,12 +187,14 @@ async function checkAndExecute() {
     console.log("──────────────────────────────");
 
   } catch (err) {
+    // Enhanced error logging with decoded revert reason
     const decoded = decodeRevertReason(err);
-
+    
     if (decoded) {
       console.error(`[${ts}] ❌ REVERT REASON: ${decoded}`);
     } else {
-      console.error(`[${ts}] ERROR`, err.reason || err.message || err);
+      console.error(`[${ts}] ERROR: ${err.message}`);
+      console.error(`[${ts}] FULL ERROR:`, err);
     }
   } finally {
     executing = false;
@@ -226,6 +202,31 @@ async function checkAndExecute() {
 }
 
 // ─────────────────────────────────────────────
-// 8️⃣ RUN LOOP (UNCHANGED)
+// 7️⃣ RUN LOOP (UNCHANGED)
 // ─────────────────────────────────────────────
 setInterval(checkAndExecute, 5000);
+
+// ─────────────────────────────────────────────
+// Helper function to decode revert reason
+// ─────────────────────────────────────────────
+function decodeRevertReason(err) {
+  const data =
+    err?.error?.data ||
+    err?.data ||
+    err?.receipt?.revertReason;
+
+  if (!data || typeof data !== "string") return null;
+
+  // Standard Solidity Error(string) selector = 0x08c379a0
+  if (data.startsWith("0x08c379a0")) {
+    try {
+      const reason = ethers.AbiCoder.defaultAbiCoder()
+        .decode(["string"], "0x" + data.slice(10))[0];
+      return reason;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
