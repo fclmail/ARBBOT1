@@ -178,6 +178,28 @@ async function executeTradeLive(buyRouter, sellRouter, token, amountUSDC) {
     const buyOut = await safeGetAmountOut(buyRouter, token, amountUSDC);
     const sellOut = await safeGetAmountOut(sellRouter, token, amountUSDC);
 
+    // Bidirectional Skew Detection
+    const skewDir1 = detectSkew(buyOut, sellOut);
+    const skewDir2 = detectSkew(sellOut, buyOut);
+
+    if (!skewDir1 && !skewDir2) return;
+
+    // Log for the standard skew direction (buy -> sell)
+    if (skewDir1) {
+      console.log(
+        `${colors.cyan}🧠 BLIND SKEW (${skewDir1})${colors.reset} | ` +
+        `${token.address} | buyOut=${fmt(buyOut)} sellOut=${fmt(sellOut)}`
+      );
+    }
+
+    // Log for the reverse skew direction (sell -> buy)
+    if (skewDir2) {
+      console.log(
+        `${colors.magenta}🧠 REVERSE BLIND SKEW (${skewDir2})${colors.reset} | ` +
+        `${token.address} | sellOut=${fmt(sellOut)} buyOut=${fmt(buyOut)}`
+      );
+    }
+
     if (!isPositiveSkew(buyOut, sellOut)) return;
 
     const roughDelta =
