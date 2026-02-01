@@ -16,7 +16,7 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found.");
 
 const DRY_RUN = true;
-const MIN_TRADE_USDC = 80;
+const MIN_TRADE_USDC = 0.09;
 const MIN_EXPECTED_PROFIT = -0.01;
 const MIN_PROFIT_PCT = 0.01;
 const SLIPPAGE_PCT = 0.05;
