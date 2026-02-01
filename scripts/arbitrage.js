@@ -4,6 +4,7 @@
 //  - NO SOLIDITY CHANGES
 //  - NO LOGIC CHANGES
 //  - MANUAL CALLDATA ENCODING
+//  + CALLSTATIC SIMULATION (SAFE PREFLIGHT)
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -40,7 +41,6 @@ const wallet = new Wallet(PRIVATE_KEY, provider);
 // ----------------- VAULT -----------------
 const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 
-// Masked ABI (read-only only)
 const vaultReadAbi = [
   "function owner() view returns (address)",
   "function usdc() view returns (address)"
@@ -157,6 +157,23 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
       pathToUSDC,
       deadline
     ]);
+
+    // ================= CALLSTATIC SIMULATION =================
+    console.log(`${colors.yellow}🧪 Simulation start...${colors.reset}`);
+
+    try {
+      await provider.call({
+        from: wallet.address,
+        to: VAULT_ADDRESS,
+        data
+      });
+
+      console.log(`${colors.green}✅ Simulation pass — executing live tx${colors.reset}`);
+    } catch (simErr) {
+      console.log(`${colors.red}❌ Simulation fail — scanning next${colors.reset}`);
+      return;
+    }
+    // =========================================================
 
     const tx = await wallet.sendTransaction({
       to: VAULT_ADDRESS,
