@@ -53,7 +53,7 @@ const usdc = new ethers.Contract(USDC, erc20ABI, provider);
 // 5️⃣ BOT CONFIG
 // ─────────────────────────────────────────────
 const TRADE_SIZE = ethers.parseUnits("0.8", 6);
-const MIN_SPREAD = 0.05;
+const MIN_SPREAD = 0.00005;
 const UNI_FEE = 3000;
 
 let executing = false;
