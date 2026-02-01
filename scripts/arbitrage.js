@@ -1,174 +1,169 @@
+// 🟢 Fully functional drop-in arbitrage script (ethers v6) with robust fixes
+import { ethers } from "ethers";
+import dotenv from "dotenv";
+dotenv.config();
 
+// ─────────────────────────────────────────────
+// 1️⃣ RPC + WALLET
+// ─────────────────────────────────────────────
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
+// ─────────────────────────────────────────────
+// 2️⃣ ADDRESSES (Polygon)
+// ─────────────────────────────────────────────
+const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
-// 🟢 Fully functional drop-in arbitrage script (ethers v6) with robust fixes  
-import { ethers } from "ethers";  
-import dotenv from "dotenv";  
-dotenv.config();  
+const UNISWAP_V2_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";
 
-// ─────────────────────────────────────────────  
-// 1️⃣ RPC + WALLET  
-// ─────────────────────────────────────────────  
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);  
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);  
+// ─────────────────────────────────────────────
+// 3️⃣ ABIs
+// ─────────────────────────────────────────────
+const vaultABI = [
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"
+];
 
-// ─────────────────────────────────────────────  
-// 2️⃣ ADDRESSES (Polygon)  
-// ─────────────────────────────────────────────  
-const VAULT_CONTRACT = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";  
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";  
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";  
+const sushiABI = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"
+];
 
-const UNISWAP_V2_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";  
-const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";  
-// Uniswap V3 Quoter is used here as a price oracle (adapt if needed)  
-const UNISWAP_V3_QUOTER = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6";  
+const quoterABI = [
+  "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external view returns (uint256)"
+];
 
-// ─────────────────────────────────────────────  
-// 3️⃣ ABIs  
-// ─────────────────────────────────────────────  
-const vaultABI = [  
-  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"  
-];  
+const erc20ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)"
+];
 
-const sushiABI = [  
-  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory)"  
-];  
+// ─────────────────────────────────────────────
+// 4️⃣ CONTRACT INSTANCES
+// ─────────────────────────────────────────────
+const vault = new ethers.Contract(VAULT_CONTRACT, vaultABI, wallet);
+const sushi = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);
+const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
+const usdc = new ethers.Contract(USDC, erc20ABI, provider);
 
-const quoterABI = [  
-  "function quoteExactInputSingle(address,address,uint24,uint256,uint160) external view returns (uint256)"  
-];  
+// ─────────────────────────────────────────────
+// 5️⃣ BOT CONFIG
+// ─────────────────────────────────────────────
+const TRADE_SIZE = ethers.parseUnits("0.8", 6);
+const MIN_SPREAD = 0.05;
+const UNI_FEE = 3000;
 
-// ERC20 minimal ABI for balance/allowance if needed  
-const erc20ABI = [  
-  "function balanceOf(address) view returns (uint256)",  
-  "function allowance(address owner, address spender) view returns (uint256)",  
-  "function approve(address spender, uint256 amount) returns (bool)"  
-];  
+let executing = false;
 
-// ─────────────────────────────────────────────  
-// 4️⃣ CONTRACT INSTANCES  
-// ─────────────────────────────────────────────  
-const vault = new ethers.Contract(VAULT_CONTRACT, vaultABI, wallet);  
-const sushi = new ethers.Contract(SUSHI_ROUTER, sushiABI, provider);  
-const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);  
-const usdc = new ethers.Contract(USDC, erc20ABI, provider);  
+// ─────────────────────────────────────────────
+// 6️⃣ NONCE MANAGEMENT
+// ─────────────────────────────────────────────
+async function getPendingNonce() {
+  return await provider.getTransactionCount(wallet.address, "pending");
+}
 
-// ─────────────────────────────────────────────  
-// 5️⃣ BOT CONFIG  
-// ─────────────────────────────────────────────  
-const TRADE_SIZE = ethers.parseUnits("0.8", 6); // USDC has 6 decimals  
-const MIN_SPREAD = 0.05; // 5%  
-const UNI_FEE = 3000;  
+// ─────────────────────────────────────────────
+// 7️⃣ GAS ESTIMATION & TX SENDING WITH RETRY
+// ─────────────────────────────────────────────
+async function sendTxWithRetry(txRequestBase, maxRetries = 3) {
+  let attempt = 0;
 
-// Safety: ensure we don't run multiple overlaps  
-let executing = false;  
+  while (attempt < maxRetries) {
+    try {
+      const nonce = await getPendingNonce();
 
-// ─────────────────────────────────────────────  
-// 6️⃣ NONCE MANAGEMENT  
-// ─────────────────────────────────────────────  
-async function getPendingNonce() {  
-  return await provider.getTransactionCount(wallet.address, "pending");  
-}  
+      let gasLimit = txRequestBase.gasLimit;
+      if (!gasLimit) {
+        try {
+          const estimate = await provider.estimateGas({
+            to: txRequestBase.to,
+            data: txRequestBase.data,
+            value: txRequestBase.value || 0,
+            from: wallet.address
+          });
 
-// ─────────────────────────────────────────────  
-// 7️⃣ GAS ESTIMATION & TX SENDING WITH RETRY (continued)  
-// ─────────────────────────────────────────────  
-async function sendTxWithRetry(txRequestBase, maxRetries = 3) {  
-  let attempt = 0;  
+          // ✅ FIX: ethers v6 bigint math
+          gasLimit = (estimate * 120n) / 100n;
+        } catch {
+          gasLimit = 1_200_000n;
+        }
+      }
 
-  while (attempt < maxRetries) {  
-    try {  
-      // Fresh nonce per attempt  
-      const nonce = await getPendingNonce();  
+      const feeData = await provider.getFeeData();
+      const maxPriorityFeePerGas =
+        feeData.maxPriorityFeePerGas ?? ethers.parseUnits("2", "gwei");
+      const maxFeePerGas =
+        feeData.maxFeePerGas ?? ethers.parseUnits("60", "gwei");
 
-      // Basic gas estimation with a safety margin if not provided  
-      let gasLimit = txRequestBase.gasLimit;  
-      if (!gasLimit) {  
-        try {  
-          const estimate = await provider.estimateGas({  
-            to: txRequestBase.to,  
-            data: txRequestBase.data,  
-            value: txRequestBase.value || 0,  
-            from: wallet.address  
-          });  
-          gasLimit = estimate.mul(ethers.BigNumber.from(120)).div(ethers.BigNumber.from(100)); // +20%  
-        } catch {  
-          gasLimit = ethers.BigNumber.from(1_200_000);  
-        }  
-      }  
+      const txRequest = {
+        ...txRequestBase,
+        nonce,
+        gasLimit,
+        maxPriorityFeePerGas,
+        maxFeePerGas
+      };
 
-      // Fetch current fee data for EIP-1559  
-      const feeData = await provider.getFeeData();  
-      // If the network returns nulls, fall back to sane defaults  
-      const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? ethers.parseUnits("2", "gwei");  
-      const maxFeePerGas = feeData.maxFeePerGas ?? ethers.parseUnits("60", "gwei");  
+      console.log(
+        `[${new Date().toISOString()}] [TRY ${attempt + 1}] SENDING TX to ${txRequest.to} with nonce ${nonce}`
+      );
 
-      // Build full tx request  
-      const txRequest = {  
-        ...txRequestBase,  
-        nonce,  
-        gasLimit,  
-        maxPriorityFeePerGas,  
-        maxFeePerGas  
-      };  
+      const tx = await wallet.sendTransaction(txRequest);
+      console.log(`[${new Date().toISOString()}] TX SENT: ${tx.hash}`);
 
-      console.log(  
-        `[${new Date().toISOString()}] [TRY ${attempt + 1}] SENDING TX to ${txRequest.to} with nonce ${nonce}`  
-      );  
+      const receipt = await tx.wait(1);
+      if (receipt.status === 1) {
+        console.log(
+          `[${new Date().toISOString()}] TX MINED: ${receipt.transactionHash} (block ${receipt.blockNumber})`
+        );
+        console.log(`[${new Date().toISOString()}] 🚀 Arbitrage executed`);
+        return receipt;
+      } else {
+        throw new Error("TX_REVERTED");
+      }
+    } catch (err) {
+      const msg = err?.message || String(err);
+      console.warn(`[${new Date().toISOString()}] TX FAILED: ${msg}`);
 
-      const tx = await wallet.sendTransaction(txRequest);  
-      console.log(`[${new Date().toISOString()}] TX SENT: ${tx.hash}`);  
+      const retriable = /(nonce|replacement|gas|insufficient|reverted)/i.test(msg);
+      attempt++;
+      if (!retriable || attempt >= maxRetries) {
+        throw new Error("TX_FAILED_AFTER_MAX_RETRIES");
+      }
 
-      // Wait for at least 1 confirmation  
-      const receipt = await tx.wait(1);  
-      if (receipt.status === 1) {  
-        console.log(  
-          `[${new Date().toISOString()}] TX MINED: ${receipt.transactionHash} (block ${receipt.blockNumber})`  
-        );  
-        console.log(`[${new Date().toISOString()}] 🚀 Arbitrage executed and funds returned to vault if applicable`);  
-        return receipt;  
-      } else {  
-        throw new Error("TX_REVERTED");  
-      }  
-    } catch (err) {  
-      const msg = err?.message || String(err);  
-      console.warn(`[${new Date().toISOString()}] TX FAILED: ${msg}`);  
+      const backoffMs = 500 + Math.floor(Math.random() * 700);
+      console.log(
+        `[${new Date().toISOString()}] Retrying (attempt ${attempt + 1}) in ${backoffMs}ms`
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
 
-      // Non-fatal retriable conditions  
-      const retriable = /(nonce|replacement|gas|insufficient funds|insufficient|reverted)/i.test(msg);  
-      attempt++;  
-      if (!retriable || attempt >= maxRetries) {  
-        throw new Error("TX_FAILED_AFTER_MAX_RETRIES");  
-      }  
+  throw new Error("TX_FAILED_AFTER_MAX_RETRIES");
+}
 
-      // Backoff before retry  
-      const backoffMs = 500 + Math.floor(Math.random() * 700);  
-      console.log(  
-        `[${new Date().toISOString()}] Retrying (attempt ${attempt + 1}) in ${backoffMs}ms`  
-      );  
-      await new Promise((r) => setTimeout(r, backoffMs));  
-    }  
-  }  
+// ─────────────────────────────────────────────
+// 8️⃣ MAIN ARBITRAGE CHECK / EXECUTION
+// ─────────────────────────────────────────────
+async function checkAndExecute() {
+  if (executing) return;
+  executing = true;
 
-  throw new Error("TX_FAILED_AFTER_MAX_RETRIES");  
-}  
+  const ts = new Date().toISOString();
 
-// ─────────────────────────────────────────────  
-// 8️⃣ MAIN ARBITRAGE CHECK / EXECUTION  
-// ─────────────────────────────────────────────  
-async function checkAndExecute() {  
-  if (executing) return;  
-  executing = true;  
-
-  const ts = new Date().toISOString();  
-
-  try {  
-    // Prices and spreads
+  try {
     const sushiOut = await sushi.getAmountsOut(TRADE_SIZE, [USDC, WMATIC]);
     const sushiWmatic = sushiOut[1];
 
-    const uniWmatic = await quoter.quoteExactInputSingle(USDC, WMATIC, UNI_FEE, TRADE_SIZE, 0);
+    const uniWmatic = await quoter.quoteExactInputSingle(
+      USDC,
+      WMATIC,
+      UNI_FEE,
+      TRADE_SIZE,
+      0
+    );
 
     const sushiPrice =
       Number(ethers.formatUnits(TRADE_SIZE, 6)) /
@@ -202,29 +197,16 @@ async function checkAndExecute() {
       return;
     }
 
-    // Basic input validation
-    if (
-      !ethers.isAddress(buyRouter) ||
-      !ethers.isAddress(sellRouter) ||
-      !Array.isArray(buyPath) ||
-      !Array.isArray(sellPath) ||
-      buyPath.length === 0 ||
-      sellPath.length === 0
-    ) {
-      throw new Error("Invalid input parameters for executeArbitrage");
-    }
-
-    // Deadline as a simple timestamp (seconds since epoch)
     const deadline = Math.floor(Date.now() / 1000) + 120;
 
-    // Validate vault USDC balance availability
     const contractBalance = await usdc.balanceOf(VAULT_CONTRACT);
-    if (contractBalance.lt(TRADE_SIZE)) {
+
+    // ✅ FIX: ethers v6 bigint comparison
+    if (contractBalance < TRADE_SIZE) {
       console.log(`[${ts}] Insufficient USDC balance in vault for trade`);
       return;
     }
 
-    // Build tx data for executeArbitrage on the vault
     const txRequestBase = {
       to: VAULT_CONTRACT,
       data: vault.interface.encodeFunctionData("executeArbitrage", [
@@ -235,12 +217,9 @@ async function checkAndExecute() {
         sellPath,
         deadline
       ])
-      // gasLimit / fee are managed in sendTxWithRetry
     };
 
-    // Send with retry
-    const receipt = await sendTxWithRetry(txRequestBase, 3);
-    // If needed, you can inspect receipt here
+    await sendTxWithRetry(txRequestBase, 3);
   } catch (err) {
     console.error(`[${ts}] ERROR`, err?.message || err);
   } finally {
