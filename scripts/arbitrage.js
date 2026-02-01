@@ -163,59 +163,46 @@ function isPositiveSkew(buyOut, sellOut) {
   );
 }
 
+// Detect bidirectional skew
+function detectSkew(buyOut, sellOut) {
+  // Positive skew: buyOut > sellOut (arbitrage opportunity)
+  if (buyOut > sellOut) {
+    return "BUY"; // Arbitrage opportunity: Buy is more profitable
+  }
+  // Negative skew: sellOut > buyOut (reverse arbitrage opportunity)
+  if (sellOut > buyOut) {
+    return "SELL"; // Arbitrage opportunity: Sell is more profitable
+  }
+  // No skew detected
+  return null;
+}
+
 /* ===================== EXECUTION ===================== */
 
 async function executeTradeLive(buyRouter, sellRouter, token, amountUSDC) {
   try {
     const usdc = await getVaultUsdcContract();
-    const before = Number(
-      ethers.formatUnits(
-        await usdc.balanceOf(VAULT_ADDRESS),
-        6
-      )
-    );
+    const before = Number(ethers.formatUnits(await usdc.balanceOf(VAULT_ADDRESS), 6));
 
     const buyOut = await safeGetAmountOut(buyRouter, token, amountUSDC);
     const sellOut = await safeGetAmountOut(sellRouter, token, amountUSDC);
 
-    // Bidirectional Skew Detection
-    const skewDir1 = detectSkew(buyOut, sellOut);
-    const skewDir2 = detectSkew(sellOut, buyOut);
+    // Detect skew direction using the detectSkew function
+    const skewDir = detectSkew(buyOut, sellOut);
+    if (!skewDir) return; // No arbitrage opportunity, so skip execution
 
-    if (!skewDir1 && !skewDir2) return;
-
-    // Log for the standard skew direction (buy -> sell)
-    if (skewDir1) {
-      console.log(
-        `${colors.cyan}🧠 BLIND SKEW (${skewDir1})${colors.reset} | ` +
-        `${token.address} | buyOut=${fmt(buyOut)} sellOut=${fmt(sellOut)}`
-      );
-    }
-
-    // Log for the reverse skew direction (sell -> buy)
-    if (skewDir2) {
-      console.log(
-        `${colors.magenta}🧠 REVERSE BLIND SKEW (${skewDir2})${colors.reset} | ` +
-        `${token.address} | sellOut=${fmt(sellOut)} buyOut=${fmt(buyOut)}`
-      );
-    }
-
-    if (!isPositiveSkew(buyOut, sellOut)) return;
-
-    const roughDelta =
-      (buyOut - sellOut) * (amountUSDC / buyOut);
-
-    if (roughDelta < JS_MIN_PROFIT) {
-      console.log(
-        `${colors.yellow}⚠️ Skew too small (JS soft): ${fmt(roughDelta)} USDC${colors.reset}`
-      );
-      return;
-    }
-
+    // Log skew direction and relevant prices
     console.log(
-      `${colors.cyan}🧠 BLIND SKEW TRIGGER${colors.reset} | ` +
+      `${colors.cyan}🧠 BLIND SKEW (${skewDir})${colors.reset} | ` +
       `${token.address} | buyOut=${fmt(buyOut)} sellOut=${fmt(sellOut)}`
     );
+
+    const roughDelta = (buyOut - sellOut) * (amountUSDC / buyOut);
+
+    if (roughDelta < JS_MIN_PROFIT) {
+      console.log(`${colors.yellow}⚠️ Skew too small (JS soft): ${fmt(roughDelta)} USDC${colors.reset}`);
+      return;
+    }
 
     if (DRY_RUN) return;
 
@@ -241,34 +228,19 @@ async function executeTradeLive(buyRouter, sellRouter, token, amountUSDC) {
       data
     });
 
-    console.log(
-      `${colors.green}🔁 TX SENT — ${tx.hash}${colors.reset}`
-    );
+    console.log(`${colors.green}🔁 TX SENT — ${tx.hash}${colors.reset}`);
 
     const receipt = await tx.wait();
     if (!receipt || receipt.status === 0) return;
 
-    const after = Number(
-      ethers.formatUnits(
-        await usdc.balanceOf(VAULT_ADDRESS),
-        6
-      )
-    );
-
-    console.log(
-      `${colors.green}💰 ON-CHAIN PROFIT: ${fmt(after - before)} USDC${colors.reset}`
-    );
-
-    console.log(
-      `${colors.magenta}⏱ Waiting 3 seconds before next tx...${colors.reset}`
-    );
+    const after = Number(ethers.formatUnits(await usdc.balanceOf(VAULT_ADDRESS), 6));
+    console.log(`${colors.green}💰 ON-CHAIN PROFIT: ${fmt(after - before)} USDC${colors.reset}`);
+    console.log(`${colors.magenta}⏱ Waiting 3 seconds before next tx...${colors.reset}`);
 
     await sleep(TX_DELAY_MS);
 
   } catch (e) {
-    console.log(
-      `${colors.red}❌ TX FAILED / REVERTED: ${e.message}${colors.reset}`
-    );
+    console.log(`${colors.red}❌ TX FAILED / REVERTED: ${e.message}${colors.reset}`);
   }
 }
 
