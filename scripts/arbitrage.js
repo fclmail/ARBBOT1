@@ -23,10 +23,10 @@ if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
 const DRY_RUN = false;
 
 // Trade sizing
-const MIN_TRADE_USDC = 0.12;
+const MIN_TRADE_USDC = 0.82;
 
 // JS-side SOFT filter (not authoritative)
-const JS_MIN_PROFIT = 0.00001; // adjustable
+const JS_MIN_PROFIT = 0.000001; // adjustable
 
 // Timing
 const TX_DELAY_MS = 3000;
