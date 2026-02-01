@@ -53,7 +53,7 @@ const quoter = new ethers.Contract(UNISWAP_V3_QUOTER, quoterABI, provider);
 const TRADE_SIZE = ethers.parseUnits("0.8", 6);
 
 // 🔧 FIX #2 — realistic spread (0.15%)
-const MIN_SPREAD = 0.15;
+const MIN_SPREAD = 0.000015;
 
 const UNI_FEE = 3000;
 
