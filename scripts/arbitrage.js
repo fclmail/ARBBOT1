@@ -27,7 +27,7 @@ const DRY_RUN = false;
 const MIN_TRADE_USDC = 0.82;
 
 // JS-side SOFT filter (not authoritative)
-const JS_MIN_PROFIT = 0.000001; // adjustable
+const JS_MIN_PROFIT = -0.01; // adjustable
 
 // Timing
 const TX_DELAY_MS = 3000;
