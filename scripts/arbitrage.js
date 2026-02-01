@@ -4,6 +4,7 @@
 //  - ZERO OFF-CHAIN PROFIT FILTERS
 //  - ABI MASKED EXECUTION
 //  - 3s TX DELAY
+//  - PARALLELIZED SCAN LOOP
 // ---------------------------------------------------------
 
 import dotenv from "dotenv";
@@ -165,15 +166,8 @@ function isPositiveSkew(buyOut, sellOut) {
 
 // Detect bidirectional skew
 function detectSkew(buyOut, sellOut) {
-  // Positive skew: buyOut > sellOut (arbitrage opportunity)
-  if (buyOut > sellOut) {
-    return "BUY"; // Arbitrage opportunity: Buy is more profitable
-  }
-  // Negative skew: sellOut > buyOut (reverse arbitrage opportunity)
-  if (sellOut > buyOut) {
-    return "SELL"; // Arbitrage opportunity: Sell is more profitable
-  }
-  // No skew detected
+  if (buyOut > sellOut) return "BUY";
+  if (sellOut > buyOut) return "SELL";
   return null;
 }
 
@@ -187,11 +181,9 @@ async function executeTradeLive(buyRouter, sellRouter, token, amountUSDC) {
     const buyOut = await safeGetAmountOut(buyRouter, token, amountUSDC);
     const sellOut = await safeGetAmountOut(sellRouter, token, amountUSDC);
 
-    // Detect skew direction using the detectSkew function
     const skewDir = detectSkew(buyOut, sellOut);
-    if (!skewDir) return; // No arbitrage opportunity, so skip execution
+    if (!skewDir) return;
 
-    // Log skew direction and relevant prices
     console.log(
       `${colors.cyan}🧠 BLIND SKEW (${skewDir})${colors.reset} | ` +
       `${token.address} | buyOut=${fmt(buyOut)} sellOut=${fmt(sellOut)}`
@@ -244,22 +236,29 @@ async function executeTradeLive(buyRouter, sellRouter, token, amountUSDC) {
   }
 }
 
-/* ===================== SCAN LOOP ===================== */
+/* ===================== PARALLEL SCAN LOOP ===================== */
 
-async function scanAllPairs() {
+async function scanAllPairsParallel() {
+  const tasks = [];
+
   for (const token of Object.values(tokens)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
-        await executeTradeLive(
-          buy,
-          sell,
-          token,
-          MIN_TRADE_USDC
-        );
+        tasks.push(executeTradeLive(buy, sell, token, MIN_TRADE_USDC));
       }
     }
   }
+
+  const results = await Promise.allSettled(tasks);
+
+  results.forEach((res) => {
+    if (res.status === "rejected") {
+      console.log(`${colors.red}❌ Parallel task failed: ${res.reason}${colors.reset}`);
+    }
+  });
+
+  await sleep(SCAN_DELAY_MS);
 }
 
 /* ===================== MAIN ===================== */
@@ -271,7 +270,6 @@ async function scanAllPairs() {
   console.log(`${colors.cyan}🧾 JS Min Profit (soft): ${JS_MIN_PROFIT} USDC${colors.reset}`);
 
   while (true) {
-    await scanAllPairs();
-    await sleep(SCAN_DELAY_MS);
+    await scanAllPairsParallel();
   }
 })();
