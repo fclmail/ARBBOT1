@@ -18,8 +18,8 @@ if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found.");
 const DRY_RUN = false;
 const MIN_TRADE_USDC = 0.09;
 const MIN_EXPECTED_PROFIT = -0.01;
-const MIN_PROFIT_PCT = 0.01;
-const SLIPPAGE_PCT = 0.05;
+const MIN_PROFIT_PCT = 1;
+const SLIPPAGE_PCT = 0.00;
 const MAX_PROFIT_PCT = 550;
 
 // ----------------- COLORS -----------------
