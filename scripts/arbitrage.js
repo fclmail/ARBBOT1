@@ -1,147 +1,116 @@
-// arbitrage.js
 import { ethers } from "ethers";
-import arbitrageAbi from "../abis/VaultArbitrageEnforcer.json"; // your contract ABI
-import erc20Abi from "../abis/ERC20.json"; // ERC20 ABI
+import fs from "fs";
+import path from "path";
 
-// ---------------- CONFIG ---------------- //
-const RPC_URL = "https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY"; // use reliable RPC
-const PRIVATE_KEY = "YOUR_WALLET_PRIVATE_KEY";
-const CONTRACT_ADDRESS = "YOUR_VAULT_ARBITRAGE_ENFORCER_ADDRESS";
-const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC
-const SLIPPAGE = 0.995; // 0.5% slippage
+// Import the ABI files using fs or the new ESM import assert syntax
+const arbitrageAbi = JSON.parse(
+  fs.readFileSync(path.resolve("./abis/VaultArbitrageEnforcer.json"), "utf8")
+);
+const erc20Abi = JSON.parse(
+  fs.readFileSync(path.resolve("./abis/ERC20.json"), "utf8")
+);
 
-// Routers
-const UNISWAP_ROUTER = "0x1F98431c8aD98523631AE4a59f267346ea31F984"; 
-const SUSHI_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"; 
+// Set up your provider (use Infura or Alchemy for actual network)
+const provider = new ethers.JsonRpcProvider("YOUR_INFURA_OR_ALCHEMY_URL");
 
-// Tokens
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
-const UNI = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984";
-const SUSHI = "0x6b3595068778dd592e39a122f4f5a5cf09c90fe2";
+// Set up wallet
+const wallet = new ethers.Wallet("YOUR_PRIVATE_KEY", provider);
 
-// Amount in USDC per arbitrage
-const AMOUNT_USDC = ethers.utils.parseUnits("1000", 6); // 1000 USDC
+// Set up contracts
+const vaultArbitrageEnforcerAddress = "VAULT_ARBITRAGE_ENFORCER_ADDRESS";
+const vault = new ethers.Contract(vaultArbitrageEnforcerAddress, arbitrageAbi, wallet);
 
-// ---------------- SETUP PROVIDER & WALLET ---------------- //
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-const vaultContract = new ethers.Contract(CONTRACT_ADDRESS, arbitrageAbi, wallet);
-const usdc = new ethers.Contract(USDC_ADDRESS, erc20Abi, wallet);
+// Set up the USDC token contract (replace with correct USDC address)
+const usdcAddress = "USDC_ADDRESS";
+const usdc = new ethers.Contract(usdcAddress, erc20Abi, wallet);
 
-// ---------------- NONCE MANAGEMENT ---------------- //
-let noncePromise = provider.getTransactionCount(wallet.address, "pending");
-async function getNonce() {
-  const currentNonce = await noncePromise;
-  noncePromise = currentNonce + 1;
-  return currentNonce;
-}
+// Minimum profit threshold in USDC (can adjust based on your requirement)
+const minimumProfitUSDC = ethers.utils.parseUnits("1", 6); // 1 USDC = 1 * 10^6 for 6 decimals
 
-// ---------------- TX SEND WITH RETRY ---------------- //
-async function sendTxWithRetry(txRequest, maxRetries = 3) {
-  let attempt = 0;
-  while (attempt < maxRetries) {
-    try {
-      txRequest.nonce = await getNonce();
-      const tx = await wallet.sendTransaction(txRequest);
-      console.log(`[${new Date().toISOString()}] TX SENT: ${tx.hash}`);
-
-      // Non-blocking confirmation
-      provider.once(tx.hash, (receipt) => {
-        if (receipt && receipt.status === 1) {
-          console.log(`[${new Date().toISOString()}] TX CONFIRMED: ${receipt.transactionHash}`);
-        } else {
-          console.log(`[${new Date().toISOString()}] TX FAILED: ${tx.hash}`);
-        }
-      });
-      return tx;
-    } catch (err) {
-      console.log(`TX attempt ${attempt + 1} failed: ${err.message}`);
-      if (!txRequest.maxPriorityFeePerGas) txRequest.maxPriorityFeePerGas = ethers.parseUnits("2", "gwei");
-      txRequest.maxPriorityFeePerGas *= 2;
-      txRequest.maxFeePerGas *= 2;
-      attempt++;
-    }
-  }
-  throw new Error("TX FAILED AFTER MAX RETRIES");
-}
-
-// ---------------- APPROVE TOKENS ---------------- //
-async function approveRouters() {
-  const routers = [UNISWAP_ROUTER, SUSHI_ROUTER];
-  for (const router of routers) {
-    const allowance = await usdc.allowance(wallet.address, router);
-    if (allowance.lt(AMOUNT_USDC)) {
-      console.log(`Approving ${router} for USDC...`);
-      const tx = await sendTxWithRetry(await usdc.populateTransaction.approve(router, ethers.MaxUint256));
-      await tx.wait();
-      console.log(`Approved ${router}`);
-    }
-  }
-}
-
-// ---------------- EXECUTE ARBITRAGE ---------------- //
-let executing = false;
-async function executeArbitrage(buyRouter, sellRouter, pathToToken, pathToUSDC) {
-  if (executing) return;
-  executing = true;
+// Arbitrage function
+async function executeArbitrage(buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC, deadline) {
   try {
-    // Check USDC balance
-    const balance = await usdc.balanceOf(wallet.address);
-    if (balance.lt(AMOUNT_USDC)) {
-      console.log("Insufficient USDC for arbitrage");
-      return;
-    }
+    console.log(`Executing Arbitrage from ${buyRouter} → ${sellRouter}...`);
 
-    const deadline = Math.floor(Date.now() / 1000) + 60; // 1 min
-    const txRequest = await vaultContract.populateTransaction.executeArbitrage(
+    // Get the current balance of USDC
+    const beforeBal = await usdc.balanceOf(vault.address);
+    console.log(`Before Balance: ${ethers.utils.formatUnits(beforeBal, 6)} USDC`);
+
+    // Perform on-chain arbitrage logic
+    const tx = await vault.executeArbitrage(
       buyRouter,
       sellRouter,
-      AMOUNT_USDC,
+      amountInUSDC,
       pathToToken,
       pathToUSDC,
       deadline
     );
 
-    // Gas settings
-    txRequest.maxPriorityFeePerGas = ethers.parseUnits("2", "gwei");
-    txRequest.maxFeePerGas = ethers.parseUnits("100", "gwei"); // adjust dynamically if needed
+    console.log(`TX SENT: ${tx.hash}`);
 
-    await sendTxWithRetry(txRequest);
+    // Wait for the transaction to be mined
+    const receipt = await tx.wait();
+    console.log(`Transaction mined in block: ${receipt.blockNumber}`);
 
-  } catch (err) {
-    console.log(`Arbitrage failed: ${err.message}`);
-  } finally {
-    executing = false;
-  }
-}
+    const afterBal = await usdc.balanceOf(vault.address);
+    const profitUSDC = afterBal.sub(beforeBal);
 
-// ---------------- MAIN LOOP ---------------- //
-async function main() {
-  await approveRouters();
-
-  while (true) {
-    try {
-      // Fetch prices from your logic (replace below with your actual arbitrage detection)
-      const uniPrice = Math.random() * 0.001 + 0.106; // simulate
-      const sushiPrice = Math.random() * 0.001 + 0.106;
-
-      const spread = ((sushiPrice - uniPrice) / uniPrice) * 100;
-      if (spread > 0.2) { // example threshold
-        console.log(`[${new Date().toISOString()}] ✅ ARBITRAGE FOUND (UNI → SUSHI) Spread: ${spread.toFixed(4)}%`);
-        await executeArbitrage(UNISWAP_ROUTER, SUSHI_ROUTER, [USDC_ADDRESS, UNI], [UNI, USDC_ADDRESS]);
-      } else if (spread < -0.2) {
-        console.log(`[${new Date().toISOString()}] ✅ ARBITRAGE FOUND (SUSHI → UNI) Spread: ${spread.toFixed(4)}%`);
-        await executeArbitrage(SUSHI_ROUTER, UNISWAP_ROUTER, [USDC_ADDRESS, SUSHI], [SUSHI, USDC_ADDRESS]);
-      } else {
-        console.log(`[${new Date().toISOString()}] No profitable arbitrage. Spread: ${spread.toFixed(4)}%`);
-      }
-
-      await new Promise(res => setTimeout(res, 5000)); // 5s loop
-    } catch (err) {
-      console.log(`Main loop error: ${err.message}`);
-      await new Promise(res => setTimeout(res, 5000));
+    if (profitUSDC.gte(minimumProfitUSDC)) {
+      console.log(`Profit is above threshold! Profit: ${ethers.utils.formatUnits(profitUSDC, 6)} USDC`);
+      await usdc.transfer(vault.address, profitUSDC);
+      console.log("Profit sent to vault!");
+    } else {
+      console.log("Profit below minimum threshold, no transfer made.");
     }
+
+    // Emitting log after arbitrage completion
+    console.log(`Arbitrage executed successfully. Profit: ${ethers.utils.formatUnits(profitUSDC, 6)} USDC`);
+  } catch (err) {
+    console.error("Arbitrage execution failed:", err);
   }
 }
 
-main();
+// Main function to check for arbitrage opportunities
+async function checkArbitrageOpportunity() {
+  try {
+    const buyRouter = "SUSHI_ROUTER_ADDRESS";
+    const sellRouter = "UNI_ROUTER_ADDRESS";
+    const amountInUSDC = ethers.utils.parseUnits("1000", 6); // 1000 USDC as input
+    const pathToToken = ["USDC_ADDRESS", "TOKEN_ADDRESS"]; // USDC -> Token path
+    const pathToUSDC = ["TOKEN_ADDRESS", "USDC_ADDRESS"]; // Token -> USDC path
+    const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 minutes deadline
+
+    // Fetch prices from both routers (this is for demonstration purposes)
+    const uniPrice = await getPriceFromRouter("UNI_ROUTER_ADDRESS", pathToToken);
+    const sushiPrice = await getPriceFromRouter("SUSHI_ROUTER_ADDRESS", pathToToken);
+
+    console.log(`UNI Price: ${uniPrice} WMATIC`);
+    console.log(`SUSHI Price: ${sushiPrice} WMATIC`);
+
+    const spread = ((sushiPrice - uniPrice) / uniPrice) * 100; // Calculate arbitrage spread
+    console.log(`Spread: ${spread.toFixed(2)}%`);
+
+    // If spread is above a threshold, execute the arbitrage
+    if (spread > 0.1) {
+      console.log("Arbitrage Opportunity Found! Executing...");
+      await executeArbitrage(buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC, deadline);
+    } else {
+      console.log("No significant arbitrage opportunity found.");
+    }
+  } catch (err) {
+    console.error("Error while checking for arbitrage opportunities:", err);
+  }
+}
+
+// Helper function to fetch price from a router (example with Uniswap/SushiSwap)
+async function getPriceFromRouter(routerAddress, path) {
+  const router = new ethers.Contract(routerAddress, erc20Abi, provider);
+  const amountsOut = await router.getAmountsOut(ethers.utils.parseUnits("1", 6), path);
+  return ethers.utils.formatUnits(amountsOut[amountsOut.length - 1], 18); // Return price in token decimals
+}
+
+// Start the bot
+checkArbitrageOpportunity();
+
+// For continuous monitoring, you can set this inside a setInterval or similar
+// setInterval(checkArbitrageOpportunity, 10000); // Run every 10 seconds
