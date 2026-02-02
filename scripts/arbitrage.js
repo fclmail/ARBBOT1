@@ -1,5 +1,5 @@
 // 🟢1 FILE PURPOSE
-// scripts/arbitrage.js
+// scripts/arbitrage.js.
 // This script scans DEX prices on Polygon and executes arbitrage
 // trades through a deployed Vault smart contract.
 
