@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-/* ================= CONFIG ================= */
+/* ===2============== CONFIG ================= */
 dotenv.config({ override: false });
 
 const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || "").trim();
