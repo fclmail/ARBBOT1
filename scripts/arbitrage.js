@@ -12,10 +12,10 @@ if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty
 
 /* ================= CONSTANTS / SAFEGUARDS ================= */
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.90); // input USDC
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001); // USDC
+const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || -0.1); // USDC
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 4000);
 const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
-let MIN_SWEEP_AMOUNT = Number(process.env.MIN_SWEEP_AMOUNT || 0.000001); // Not used
+let MIN_SWEEP_AMOUNT = Number(process.env.MIN_SWEEP_AMOUNT || -0.01); // Not used
 const DRY_RUN = (process.env.DRY_RUN || "false").toLowerCase() === "true";
 
 // Gas controls (optional)
