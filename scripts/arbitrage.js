@@ -1,13 +1,22 @@
-import { ethers } from "ethers";
+// drop-in-arb.js
+// Drops in with robust handling and fixes as described.
+
+require("dotenv").config(); // Optional: loads from .env if present
+
+const { ethers } = require("ethers");
 
 // ================= CONFIG =================
-const RPC_URL = "https://polygon-rpc.com";
+const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
 // Load private key from secrets / env variable
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-if (!PRIVATE_KEY || PRIVATE_KEY.length !== 66 || !PRIVATE_KEY.startsWith("0x")) {
-  throw new Error("Invalid or missing PRIVATE_KEY in environment variables");
+const PRIVATE_KEY_REGEX = /^0x[a-fA-F0-9]{64}$/;
+
+if (!PRIVATE_KEY || !PRIVATE_KEY_REGEX.test(PRIVATE_KEY)) {
+  throw new Error(
+    "Invalid or missing PRIVATE_KEY in environment variables. Expected hex with 0x + 64 hex chars."
+  );
 }
 
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
@@ -43,15 +52,23 @@ const PATHS = {
 
 const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, wallet);
 
+// Simple cooldown/log helper
+let lastAttemptTs = 0;
+const COOLDOWN_MS = 1500; // 1.5 seconds between attempts (adjust as needed)
+const CYCLE_DELAY_MS = 5000; // 5 seconds between full cycles
+
 // ================= HELPERS =================
 async function approveRouter(router, amount) {
   try {
-    console.log(`Approving ${amount} USDC for router ${router}`);
+    console.log(`[${new Date().toISOString()}] Approving ${amount.toString()} USDC for router ${router}`);
     const tx = await vaultContract.approveRouter(router, amount);
-    await tx.wait();
-    console.log(`Router approved: ${router}`);
+    const receipt = await tx.wait();
+    console.log(`[${new Date().toISOString()}] Router approved: ${router} (Tx ${receipt.transactionHash})`);
   } catch (err) {
-    console.error(`Approval failed for ${router}:`, err.reason || err);
+    console.error(
+      `[${new Date().toISOString()}] Approval failed for ${router}:`,
+      err?.reason || err?.message || err
+    );
   }
 }
 
@@ -66,34 +83,77 @@ async function executeArb(buyRouter, sellRouter, amountInUSDC) {
       PATHS.WETH_TO_USDC,
       deadline
     );
-    console.log(`Arbitrage tx sent: Buy ${buyRouter}, Sell ${sellRouter}`);
+    console.log(
+      `[${new Date().toISOString()}] Arbitrage tx sent: Buy ${buyRouter}, Sell ${sellRouter}, amountInUSDC=${amountInUSDC.toString()}`
+    );
     const receipt = await tx.wait();
-    console.log("Transaction confirmed. Hash:", receipt.transactionHash);
+    console.log(`[${new Date().toISOString()}] Transaction confirmed. Hash: ${receipt.transactionHash}`);
   } catch (err) {
-    console.error("Arbitrage execution failed:", err.reason || err);
+    console.error(
+      `[${new Date().toISOString()}] Arbitra ge execution failed:`,
+      err?.reason || err?.message || err
+    );
+    // Return false to indicate failure for cooldown logic
+    return false;
   }
+  return true;
 }
 
 // ================= CONTINUOUS SCAN =================
 async function scanAndExecute() {
-  const amountInUSDC = ethers.parseUnits("1000", 6); // $1000
+  const amountInUSDC = ethers.BigNumber.from("1000000000000").div(ethers.BigNumber.from(1000)); // 1,000,000 with 6 decimals? We'll set explicitly below
+  // We'll compute precisely: 1000 USDC with 6 decimals -> 1000 * 10^6
+  const amountUSDC = ethers.utils.parseUnits("1000", 6);
+  const routerAddresses = Object.values(ROUTERS);
+
   while (true) {
-    for (const buyRouter of Object.values(ROUTERS)) {
-      for (const sellRouter of Object.values(ROUTERS)) {
+    const now = Date.now();
+    // cooldown check
+    if (now - lastAttemptTs < COOLDOWN_MS) {
+      await new Promise(r => setTimeout(r, 200));
+      continue;
+    }
+
+    for (const buyRouter of routerAddresses) {
+      for (const sellRouter of routerAddresses) {
         if (buyRouter === sellRouter) continue;
-        await executeArb(buyRouter, sellRouter, amountInUSDC);
-        await new Promise(r => setTimeout(r, 500)); // avoid rate limit
+
+        // Throttle a bit between each attempt
+        try {
+          const ok = await executeArb(buyRouter, sellRouter, amountUSDC);
+          if (ok) {
+            // Logged success; update cooldown
+            lastAttemptTs = Date.now();
+          } else {
+            // On failure, apply cooldown to avoid rapid retries
+            lastAttemptTs = Date.now();
+            // Optional: break or continue with next pair after cooldown
+          }
+        } catch (err) {
+          console.error(`[${new Date().toISOString()}] Unexpected error:`, err);
+        }
+
+        // small delay to respect node rate limits
+        await new Promise(r => setTimeout(r, 500));
       }
     }
-    console.log("Cycle complete. Restarting scan in 5s...");
-    await new Promise(r => setTimeout(r, 5000));
+
+    console.log(`[${new Date().toISOString()}] Cycle complete. Restarting scan in ${CYCLE_DELAY_MS / 1000}s...`);
+    await new Promise(r => setTimeout(r, CYCLE_DELAY_MS));
   }
 }
 
 // ================= MAIN =================
 async function main() {
-  const approveAmount = ethers.parseUnits("1000000", 6);
-  for (const router of Object.values(ROUTERS)) {
+  // Validation: ensure ROUTERS exist
+  const routerAddresses = Object.values(ROUTERS);
+  if (routerAddresses.length === 0) {
+    throw new Error("No routers configured.");
+  }
+
+  // Pre-approve: set a sane large allowance, but not absurd
+  const approveAmount = ethers.utils.parseUnits("1000000", 6); // 1,000,000 USDC
+  for (const router of routerAddresses) {
     await approveRouter(router, approveAmount);
     await new Promise(r => setTimeout(r, 500)); // avoid rate limits
   }
@@ -102,4 +162,17 @@ async function main() {
   await scanAndExecute();
 }
 
-main();
+// Graceful shutdown
+let shuttingDown = false;
+process.on("SIGINT", () => {
+  if (!shuttingDown) {
+    shuttingDown = true;
+    console.log("Received SIGINT. Exiting gracefully...");
+    process.exit(0);
+  }
+});
+
+main().catch(err => {
+  console.error("Fatal error in main:", err?.message || err);
+  process.exit(1);
+});
