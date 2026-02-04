@@ -1,11 +1,15 @@
-// scripts/arbitrage.js
-
 import { ethers } from "ethers";
 
 // ================= CONFIG =================
 const RPC_URL = "https://polygon-rpc.com";
-const PRIVATE_KEY = "0xYOUR_PRIVATE_KEY"; // Replace with your wallet private key
 const provider = new ethers.JsonRpcProvider(RPC_URL);
+
+// Load private key from secrets / env variable
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+if (!PRIVATE_KEY || PRIVATE_KEY.length !== 66 || !PRIVATE_KEY.startsWith("0x")) {
+  throw new Error("Invalid or missing PRIVATE_KEY in environment variables");
+}
+
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 // ================= CONTRACT =================
