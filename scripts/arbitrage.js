@@ -9,7 +9,7 @@ dotenv.config();
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const CONTRACT_ADDRESS = "0x19B64f74553eE0ee26BA01BF34321735E4701C43"; // Hardcoded contract
-const MIN_NET_PROFIT_USDC = 1; // Only execute if profit after gas > $1
+const MIN_NET_PROFIT_USDC = 0.000001; // Only execute if profit after gas > $1
 
 if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
   throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS");
@@ -56,8 +56,8 @@ const tokens = {
 };
 
 // ─────────────── SETTINGS ───────────────
-const TRADE_AMOUNT_USDC = 10; // per trade
-const MIN_PROFIT_PCT = 3;
+const TRADE_AMOUNT_USDC = .2; // per trade
+const MIN_PROFIT_PCT = .002;
 const SLIPPAGE_PCT = 0;
 
 // ─────────────── HELPERS ───────────────
