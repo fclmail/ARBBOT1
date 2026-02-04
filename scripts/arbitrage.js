@@ -1,24 +1,20 @@
 // arb-dropin-esm.js
-// Drop-in arbitrage script (ethers v6 compatible, ES Modules)
+// Drop-in arbitrage bot (ethers v6, ES Modules, profit-safe)
 
-// ================= IMPORTS =================
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 
-// ================= ENV =================
 dotenv.config();
 
+// ================= ENV =================
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-// PRIVATE_KEY: must be 0x + 64 hex chars
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const PRIVATE_KEY_REGEX = /^0x[a-fA-F0-9]{64}$/;
 
 if (!PRIVATE_KEY || !PRIVATE_KEY_REGEX.test(PRIVATE_KEY)) {
-  throw new Error(
-    "Invalid or missing PRIVATE_KEY in environment variables. Expected: 0x + 64 hex chars."
-  );
+  throw new Error("Invalid or missing PRIVATE_KEY");
 }
 
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
@@ -28,8 +24,12 @@ const VAULT_CONTRACT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 const USDC_ADDRESS = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
 const VAULT_ABI = [
-  "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
-  "function approveRouter(address router, uint256 amount) external"
+  "function owner() view returns (address)",
+  "function vault() view returns (address)",
+  "function minimumProfitUSDC() view returns (uint256)",
+  "function routerAllowance(address router) view returns (uint256)",
+  "function approveRouter(address router, uint256 amount) external",
+  "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external"
 ];
 
 const vaultContract = new ethers.Contract(
@@ -48,8 +48,8 @@ const ROUTERS = {
 
 // ================= TOKENS =================
 const TOKENS = {
-  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  USDC: USDC_ADDRESS
+  USDC: USDC_ADDRESS,
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
 };
 
 // ================= PATHS =================
@@ -59,127 +59,111 @@ const PATHS = {
 };
 
 // ================= HELPERS =================
-let lastAttemptTs = 0;
-const COOLDOWN_MS = 1500;      // 1.5s between attempts
-const CYCLE_DELAY_MS = 5000;  // 5s between cycles
-
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ================= ACTIONS =================
-async function approveRouter(router, amount) {
-  try {
-    console.log(
-      `[${new Date().toISOString()}] Approving ${amount.toString()} USDC for router ${router}`
-    );
-    const tx = await vaultContract.approveRouter(router, amount);
-    const receipt = await tx.wait();
-    console.log(
-      `[${new Date().toISOString()}] Router approved: ${router} (Tx ${receipt.transactionHash})`
-    );
-  } catch (err) {
-    console.error(
-      `[${new Date().toISOString()}] Approval failed for ${router}:`,
-      err?.reason || err?.message || err
+const AMOUNT_USDC = ethers.parseUnits("1000", 6);
+const APPROVE_AMOUNT = ethers.parseUnits("1000000", 6);
+
+// ================= SAFETY CHECKS =================
+async function assertOwnership() {
+  const owner = await vaultContract.owner();
+  if (owner.toLowerCase() !== wallet.address.toLowerCase()) {
+    throw new Error(
+      `Wallet is not contract owner.\nOwner: ${owner}\nWallet: ${wallet.address}`
     );
   }
+  console.log("✔ Wallet is contract owner");
 }
 
-async function executeArb(buyRouter, sellRouter, amountInUSDC) {
-  const deadline = Math.floor(Date.now() / 1000) + 300; // 5 min
+// ================= APPROVAL =================
+async function ensureRouterApproval(router) {
+  const allowance = await vaultContract.routerAllowance(router);
+
+  if (allowance >= AMOUNT_USDC) {
+    return;
+  }
+
+  console.log(`Approving router ${router}...`);
+  const tx = await vaultContract.approveRouter(router, APPROVE_AMOUNT);
+  await tx.wait();
+  console.log(`✔ Approved ${router}`);
+}
+
+// ================= ARBITRAGE =================
+async function tryArb(buyRouter, sellRouter) {
+  const deadline = Math.floor(Date.now() / 1000) + 300;
 
   try {
-    const tx = await vaultContract.executeArbitrage(
+    // -------- STATIC CALL (NO GAS) --------
+    await vaultContract.executeArbitrage.staticCall(
       buyRouter,
       sellRouter,
-      amountInUSDC,
+      AMOUNT_USDC,
       PATHS.USDC_TO_WETH,
       PATHS.WETH_TO_USDC,
       deadline
     );
 
-    console.log(
-      `[${new Date().toISOString()}] Arbitrage sent: buy=${buyRouter}, sell=${sellRouter}, amount=${amountInUSDC.toString()}`
+    // -------- REAL TX --------
+    const tx = await vaultContract.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      AMOUNT_USDC,
+      PATHS.USDC_TO_WETH,
+      PATHS.WETH_TO_USDC,
+      deadline
     );
 
-    const receipt = await tx.wait();
-
-    console.log(
-      `[${new Date().toISOString()}] Arbitrage confirmed: ${receipt.transactionHash}`
-    );
-
-    return true;
+    console.log(`🚀 Arb sent: ${tx.hash}`);
+    await tx.wait();
+    console.log(`✅ Arb confirmed`);
   } catch (err) {
-    console.error(
-      `[${new Date().toISOString()}] Arbitrage failed:`,
-      err?.reason || err?.message || err
-    );
-    return false;
+    // Silent skip — expected for unprofitable paths
   }
 }
 
 // ================= SCANNER =================
-async function scanAndExecute() {
-  // ✅ ethers v6 fix here
-  const amountUSDC = ethers.parseUnits("1000", 6);
-  const routerAddresses = Object.values(ROUTERS);
+async function scanLoop() {
+  const routers = Object.values(ROUTERS);
 
   while (true) {
-    const now = Date.now();
-
-    if (now - lastAttemptTs < COOLDOWN_MS) {
-      await sleep(200);
-      continue;
-    }
-
-    for (const buyRouter of routerAddresses) {
-      for (const sellRouter of routerAddresses) {
-        if (buyRouter === sellRouter) continue;
-
-        await executeArb(buyRouter, sellRouter, amountUSDC);
-        lastAttemptTs = Date.now();
-
-        await sleep(500);
+    for (const buy of routers) {
+      for (const sell of routers) {
+        if (buy === sell) continue;
+        await tryArb(buy, sell);
+        await sleep(400);
       }
     }
-
-    console.log(
-      `[${new Date().toISOString()}] Cycle complete. Sleeping ${CYCLE_DELAY_MS / 1000}s...`
-    );
-    await sleep(CYCLE_DELAY_MS);
+    await sleep(3000);
   }
 }
 
 // ================= MAIN =================
 async function main() {
-  const routerAddresses = Object.values(ROUTERS);
-  if (routerAddresses.length === 0) {
-    throw new Error("No routers configured.");
+  console.log("Starting arbitrage bot…");
+
+  await assertOwnership();
+
+  for (const router of Object.values(ROUTERS)) {
+    await ensureRouterApproval(router);
+    await sleep(300);
   }
 
-  // ✅ ethers v6 fix here
-  const approveAmount = ethers.parseUnits("1000000", 6); // 1,000,000 USDC
+  const minProfit = await vaultContract.minimumProfitUSDC();
+  console.log(
+    `Minimum profit enforced: ${ethers.formatUnits(minProfit, 6)} USDC`
+  );
 
-  for (const router of routerAddresses) {
-    await approveRouter(router, approveAmount);
-    await sleep(500);
-  }
-
-  console.log("Starting continuous arbitrage scan...");
-  await scanAndExecute();
+  await scanLoop();
 }
 
 // ================= SHUTDOWN =================
-let shuttingDown = false;
 process.on("SIGINT", () => {
-  if (!shuttingDown) {
-    shuttingDown = true;
-    console.log("Received SIGINT. Exiting gracefully...");
-    process.exit(0);
-  }
+  console.log("Graceful shutdown");
+  process.exit(0);
 });
 
-// ================= BOOT =================
 main().catch(err => {
-  console.error("Fatal error in main:", err?.message || err);
+  console.error("Fatal error:", err);
   process.exit(1);
 });
