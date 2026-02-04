@@ -1,8 +1,28 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-import VaultABI from "../abi/VaultArbitrage.json" assert { type: "json" };
 
 dotenv.config();
+
+/* =========================================================
+   INLINE ABI (no filesystem / json import issues anymore)
+   ========================================================= */
+
+const VaultABI = [
+  {
+    inputs: [
+      { internalType: "address", name: "buyRouter", type: "address" },
+      { internalType: "address", name: "sellRouter", type: "address" },
+      { internalType: "uint256", name: "amountInUSDC", type: "uint256" },
+      { internalType: "address[]", name: "pathToToken", type: "address[]" },
+      { internalType: "address[]", name: "pathToUSDC", type: "address[]" },
+      { internalType: "uint256", name: "deadline", type: "uint256" }
+    ],
+    name: "executeArbitrage",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function"
+  }
+];
 
 /* ===================== CONFIG ===================== */
 
@@ -11,14 +31,14 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 const VAULT_ADDRESS = "0xYOUR_VAULT_ADDRESS";
 
-// TOKEN ADDRESSES
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // polygon USDC
+// Polygon USDC
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-// ROUTER ADDRESSES (real routers, NOT enums)
+// REAL ROUTERS (addresses, NOT enums)
 const ROUTERS = {
   QUICKSWAP: "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff",
   SUSHISWAP: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  APESWAP: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  APESWAP: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
 const MIN_PROFIT_USDC = 0.01;
@@ -34,13 +54,9 @@ const vault = new ethers.Contract(
   wallet
 );
 
-if (!vault.executeArbitrage) {
-  throw new Error("❌ executeArbitrage not found in Vault ABI");
-}
+console.log("✅ Vault loaded:", vault.target);
 
-console.log("✅ Vault contract loaded:", vault.target);
-
-/* ===================== CORE EXECUTION ===================== */
+/* ===================== EXECUTION ===================== */
 
 async function executeOpportunity(op) {
   const {
@@ -49,13 +65,13 @@ async function executeOpportunity(op) {
     buyDex,
     sellDex,
     amountIn,
-    profitUSDC,
+    profitUSDC
   } = op;
 
   if (profitUSDC < MIN_PROFIT_USDC) return;
 
   console.log(
-    `🚨 ${token} | Buy:${buyDex} → Sell:${sellDex} | Profit: ${profitUSDC}`
+    `🚨 ${token} | ${buyDex} → ${sellDex} | profit: ${profitUSDC} USDC`
   );
 
   try {
@@ -66,7 +82,7 @@ async function executeOpportunity(op) {
       throw new Error("Router not configured");
     }
 
-    // REQUIRED BY CONTRACT
+    // REQUIRED by Solidity
     const pathToToken = [USDC, tokenAddress];
     const pathToUSDC = [tokenAddress, USDC];
 
@@ -79,21 +95,15 @@ async function executeOpportunity(op) {
       pathToToken,
       pathToUSDC,
       deadline,
-      {
-        gasLimit: 1_200_000,
-      }
+      { gasLimit: 1_200_000 }
     );
 
     console.log("⏳ TX sent:", tx.hash);
 
     const receipt = await tx.wait();
 
-    if (receipt.status !== 1) {
-      throw new Error("Transaction reverted");
-    }
-
     console.log(
-      `✅ Arbitrage executed | Gas used: ${receipt.gasUsed.toString()}`
+      `✅ Success | gasUsed: ${receipt.gasUsed.toString()}`
     );
   } catch (err) {
     console.error("⚠️ Trade failed:", err.reason || err.message);
@@ -110,11 +120,15 @@ async function scanLoop() {
     tokenAddress: "0x172370d5Cd63279eFa6d502DAB29171933a610AF",
     buyDex: "APESWAP",
     sellDex: "SUSHISWAP",
-    amountIn: ethers.parseUnits("500", 6), // USDC = 6 decimals
-    profitUSDC: 0.5321,
+
+    // USDC has 6 decimals
+    amountIn: ethers.parseUnits("500", 6),
+
+    profitUSDC: 0.53
   });
 }
 
 /* ===================== RUN ===================== */
 
+scanLoop(); // run once immediately
 setInterval(scanLoop, 15_000);
