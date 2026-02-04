@@ -1,21 +1,24 @@
-// drop-in-arb.js
-// Drops in with robust handling and fixes as described.
+// arb-dropin-esm.js
+// Drop-in arbitrage script with fixes for ES Module environments
 
-require("dotenv").config(); // Optional: loads from .env if present
+// Import dependencies (ESM)
+import { ethers } from "ethers";
+import dotenv from "dotenv";
 
-const { ethers } = require("ethers");
+// Load env vars from .env if present (optional)
+dotenv.config();
 
 // ================= CONFIG =================
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-// Load private key from secrets / env variable
+// PRIVATE_KEY: must be a 0x-prefixed 64-hex-character string
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const PRIVATE_KEY_REGEX = /^0x[a-fA-F0-9]{64}$/;
 
 if (!PRIVATE_KEY || !PRIVATE_KEY_REGEX.test(PRIVATE_KEY)) {
   throw new Error(
-    "Invalid or missing PRIVATE_KEY in environment variables. Expected hex with 0x + 64 hex chars."
+    "Invalid or missing PRIVATE_KEY in environment variables. Expected: 0x + 64 hex chars."
   );
 }
 
@@ -52,12 +55,11 @@ const PATHS = {
 
 const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, wallet);
 
-// Simple cooldown/log helper
+// ================= HELPERS =================
 let lastAttemptTs = 0;
-const COOLDOWN_MS = 1500; // 1.5 seconds between attempts (adjust as needed)
+const COOLDOWN_MS = 1500; // 1.5 seconds between attempts
 const CYCLE_DELAY_MS = 5000; // 5 seconds between full cycles
 
-// ================= HELPERS =================
 async function approveRouter(router, amount) {
   try {
     console.log(`[${new Date().toISOString()}] Approving ${amount.toString()} USDC for router ${router}`);
@@ -73,7 +75,7 @@ async function approveRouter(router, amount) {
 }
 
 async function executeArb(buyRouter, sellRouter, amountInUSDC) {
-  const deadline = Math.floor(Date.now() / 1000) + 300; // 5 min
+  const deadline = Math.floor(Date.now() / 1000) + 300; // 5 minutes
   try {
     const tx = await vaultContract.executeArbitrage(
       buyRouter,
@@ -88,27 +90,24 @@ async function executeArb(buyRouter, sellRouter, amountInUSDC) {
     );
     const receipt = await tx.wait();
     console.log(`[${new Date().toISOString()}] Transaction confirmed. Hash: ${receipt.transactionHash}`);
+    return true;
   } catch (err) {
     console.error(
-      `[${new Date().toISOString()}] Arbitra ge execution failed:`,
+      `[${new Date().toISOString()}] Arbitrage execution failed:`,
       err?.reason || err?.message || err
     );
-    // Return false to indicate failure for cooldown logic
     return false;
   }
-  return true;
 }
 
 // ================= CONTINUOUS SCAN =================
 async function scanAndExecute() {
-  const amountInUSDC = ethers.BigNumber.from("1000000000000").div(ethers.BigNumber.from(1000)); // 1,000,000 with 6 decimals? We'll set explicitly below
-  // We'll compute precisely: 1000 USDC with 6 decimals -> 1000 * 10^6
   const amountUSDC = ethers.utils.parseUnits("1000", 6);
   const routerAddresses = Object.values(ROUTERS);
 
   while (true) {
     const now = Date.now();
-    // cooldown check
+    // Apply a simple per-attempt cooldown
     if (now - lastAttemptTs < COOLDOWN_MS) {
       await new Promise(r => setTimeout(r, 200));
       continue;
@@ -118,22 +117,15 @@ async function scanAndExecute() {
       for (const sellRouter of routerAddresses) {
         if (buyRouter === sellRouter) continue;
 
-        // Throttle a bit between each attempt
-        try {
-          const ok = await executeArb(buyRouter, sellRouter, amountUSDC);
-          if (ok) {
-            // Logged success; update cooldown
-            lastAttemptTs = Date.now();
-          } else {
-            // On failure, apply cooldown to avoid rapid retries
-            lastAttemptTs = Date.now();
-            // Optional: break or continue with next pair after cooldown
-          }
-        } catch (err) {
-          console.error(`[${new Date().toISOString()}] Unexpected error:`, err);
+        const ok = await executeArb(buyRouter, sellRouter, amountUSDC);
+        if (ok) {
+          lastAttemptTs = Date.now();
+        } else {
+          lastAttemptTs = Date.now();
+          // Optional: could break or continue; here we continue to try other pairs
         }
 
-        // small delay to respect node rate limits
+        // Small throttle between attempts
         await new Promise(r => setTimeout(r, 500));
       }
     }
@@ -145,17 +137,17 @@ async function scanAndExecute() {
 
 // ================= MAIN =================
 async function main() {
-  // Validation: ensure ROUTERS exist
+  // Validate routers exist
   const routerAddresses = Object.values(ROUTERS);
   if (routerAddresses.length === 0) {
     throw new Error("No routers configured.");
   }
 
-  // Pre-approve: set a sane large allowance, but not absurd
+  // Pre-approve a sane amount per router
   const approveAmount = ethers.utils.parseUnits("1000000", 6); // 1,000,000 USDC
   for (const router of routerAddresses) {
     await approveRouter(router, approveAmount);
-    await new Promise(r => setTimeout(r, 500)); // avoid rate limits
+    await new Promise(r => setTimeout(r, 500));
   }
 
   console.log("Starting continuous arbitrage scan...");
