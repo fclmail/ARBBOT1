@@ -5,7 +5,8 @@ import { ethers } from "ethers";
 
 // ─────────────── CONFIG ───────────────
 // Hardcoded public RPC (no signup/API key)
-const RPC_URL = "https://rpc.ankr.com/polygon";
+const RPC_URL = "https://polygon-bor.publicnode.com"
+;
 
 // Private key from GitHub secrets or local env
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
