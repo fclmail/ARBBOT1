@@ -1,18 +1,17 @@
 // arb-dropin-esm.js
-// Drop-in arbitrage script with fixes for ES Module environments
+// Drop-in arbitrage script (ethers v6 compatible, ES Modules)
 
-// Import dependencies (ESM)
+// ================= IMPORTS =================
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 
-// Load env vars from .env if present (optional)
+// ================= ENV =================
 dotenv.config();
 
-// ================= CONFIG =================
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-// PRIVATE_KEY: must be a 0x-prefixed 64-hex-character string
+// PRIVATE_KEY: must be 0x + 64 hex chars
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const PRIVATE_KEY_REGEX = /^0x[a-fA-F0-9]{64}$/;
 
@@ -33,6 +32,12 @@ const VAULT_ABI = [
   "function approveRouter(address router, uint256 amount) external"
 ];
 
+const vaultContract = new ethers.Contract(
+  VAULT_CONTRACT_ADDRESS,
+  VAULT_ABI,
+  wallet
+);
+
 // ================= ROUTERS =================
 const ROUTERS = {
   quickswap: "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff",
@@ -44,7 +49,7 @@ const ROUTERS = {
 // ================= TOKENS =================
 const TOKENS = {
   WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  USDC: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+  USDC: USDC_ADDRESS
 };
 
 // ================= PATHS =================
@@ -53,19 +58,24 @@ const PATHS = {
   WETH_TO_USDC: [TOKENS.WETH, TOKENS.USDC]
 };
 
-const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, wallet);
-
 // ================= HELPERS =================
 let lastAttemptTs = 0;
-const COOLDOWN_MS = 1500; // 1.5 seconds between attempts
-const CYCLE_DELAY_MS = 5000; // 5 seconds between full cycles
+const COOLDOWN_MS = 1500;      // 1.5s between attempts
+const CYCLE_DELAY_MS = 5000;  // 5s between cycles
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ================= ACTIONS =================
 async function approveRouter(router, amount) {
   try {
-    console.log(`[${new Date().toISOString()}] Approving ${amount.toString()} USDC for router ${router}`);
+    console.log(
+      `[${new Date().toISOString()}] Approving ${amount.toString()} USDC for router ${router}`
+    );
     const tx = await vaultContract.approveRouter(router, amount);
     const receipt = await tx.wait();
-    console.log(`[${new Date().toISOString()}] Router approved: ${router} (Tx ${receipt.transactionHash})`);
+    console.log(
+      `[${new Date().toISOString()}] Router approved: ${router} (Tx ${receipt.transactionHash})`
+    );
   } catch (err) {
     console.error(
       `[${new Date().toISOString()}] Approval failed for ${router}:`,
@@ -75,7 +85,8 @@ async function approveRouter(router, amount) {
 }
 
 async function executeArb(buyRouter, sellRouter, amountInUSDC) {
-  const deadline = Math.floor(Date.now() / 1000) + 300; // 5 minutes
+  const deadline = Math.floor(Date.now() / 1000) + 300; // 5 min
+
   try {
     const tx = await vaultContract.executeArbitrage(
       buyRouter,
@@ -85,31 +96,38 @@ async function executeArb(buyRouter, sellRouter, amountInUSDC) {
       PATHS.WETH_TO_USDC,
       deadline
     );
+
     console.log(
-      `[${new Date().toISOString()}] Arbitrage tx sent: Buy ${buyRouter}, Sell ${sellRouter}, amountInUSDC=${amountInUSDC.toString()}`
+      `[${new Date().toISOString()}] Arbitrage sent: buy=${buyRouter}, sell=${sellRouter}, amount=${amountInUSDC.toString()}`
     );
+
     const receipt = await tx.wait();
-    console.log(`[${new Date().toISOString()}] Transaction confirmed. Hash: ${receipt.transactionHash}`);
+
+    console.log(
+      `[${new Date().toISOString()}] Arbitrage confirmed: ${receipt.transactionHash}`
+    );
+
     return true;
   } catch (err) {
     console.error(
-      `[${new Date().toISOString()}] Arbitrage execution failed:`,
+      `[${new Date().toISOString()}] Arbitrage failed:`,
       err?.reason || err?.message || err
     );
     return false;
   }
 }
 
-// ================= CONTINUOUS SCAN =================
+// ================= SCANNER =================
 async function scanAndExecute() {
-  const amountUSDC = ethers.utils.parseUnits("1000", 6);
+  // ✅ ethers v6 fix here
+  const amountUSDC = ethers.parseUnits("1000", 6);
   const routerAddresses = Object.values(ROUTERS);
 
   while (true) {
     const now = Date.now();
-    // Apply a simple per-attempt cooldown
+
     if (now - lastAttemptTs < COOLDOWN_MS) {
-      await new Promise(r => setTimeout(r, 200));
+      await sleep(200);
       continue;
     }
 
@@ -117,44 +135,40 @@ async function scanAndExecute() {
       for (const sellRouter of routerAddresses) {
         if (buyRouter === sellRouter) continue;
 
-        const ok = await executeArb(buyRouter, sellRouter, amountUSDC);
-        if (ok) {
-          lastAttemptTs = Date.now();
-        } else {
-          lastAttemptTs = Date.now();
-          // Optional: could break or continue; here we continue to try other pairs
-        }
+        await executeArb(buyRouter, sellRouter, amountUSDC);
+        lastAttemptTs = Date.now();
 
-        // Small throttle between attempts
-        await new Promise(r => setTimeout(r, 500));
+        await sleep(500);
       }
     }
 
-    console.log(`[${new Date().toISOString()}] Cycle complete. Restarting scan in ${CYCLE_DELAY_MS / 1000}s...`);
-    await new Promise(r => setTimeout(r, CYCLE_DELAY_MS));
+    console.log(
+      `[${new Date().toISOString()}] Cycle complete. Sleeping ${CYCLE_DELAY_MS / 1000}s...`
+    );
+    await sleep(CYCLE_DELAY_MS);
   }
 }
 
 // ================= MAIN =================
 async function main() {
-  // Validate routers exist
   const routerAddresses = Object.values(ROUTERS);
   if (routerAddresses.length === 0) {
     throw new Error("No routers configured.");
   }
 
-  // Pre-approve a sane amount per router
-  const approveAmount = ethers.utils.parseUnits("1000000", 6); // 1,000,000 USDC
+  // ✅ ethers v6 fix here
+  const approveAmount = ethers.parseUnits("1000000", 6); // 1,000,000 USDC
+
   for (const router of routerAddresses) {
     await approveRouter(router, approveAmount);
-    await new Promise(r => setTimeout(r, 500));
+    await sleep(500);
   }
 
   console.log("Starting continuous arbitrage scan...");
   await scanAndExecute();
 }
 
-// Graceful shutdown
+// ================= SHUTDOWN =================
 let shuttingDown = false;
 process.on("SIGINT", () => {
   if (!shuttingDown) {
@@ -164,6 +178,7 @@ process.on("SIGINT", () => {
   }
 });
 
+// ================= BOOT =================
 main().catch(err => {
   console.error("Fatal error in main:", err?.message || err);
   process.exit(1);
