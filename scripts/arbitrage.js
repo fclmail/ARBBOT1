@@ -4,8 +4,8 @@ import { ethers } from "ethers";
 const RPC_URL = "https://polygon-rpc.com"; // Example for Polygon
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-const CONTRACT_ADDRESS = "0xYourVaultContractAddressHere";
-const USDC_ADDRESS = "0xYourUSDCAddressHere";
+const CONTRACT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+const USDC_ADDRESS = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
 // Routers you want to scan
 const ROUTERS = {
