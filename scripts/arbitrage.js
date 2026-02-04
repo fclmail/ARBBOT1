@@ -1,183 +1,95 @@
-// ─────────────────────────────────────────────
-// 🔹 AAVE FLASH ARB BOT — Polygon (Full ABI + Gas Checks)
-// ─────────────────────────────────────────────
 import { ethers } from "ethers";
 
-// ─────────────── CONFIG ───────────────
-// Hardcoded public RPC (no signup/API key)
-const RPC_URL = "https://polygon-bor.publicnode.com"
-;
+// ========== CONFIG ==========
+const RPC_URL = "https://polygon-rpc.com"; // Example for Polygon
+const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-// Private key from GitHub secrets or local env
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const CONTRACT_ADDRESS = "0xYourVaultContractAddressHere";
+const USDC_ADDRESS = "0xYourUSDCAddressHere";
 
-// Updated Vault contract
-const CONTRACT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+// Routers you want to scan
+const ROUTERS = {
+  quickswap: "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff",
+  sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+};
 
-// Minimum net profit after gas to execute
-const MIN_NET_PROFIT_USDC = 0.000001; 
+// Tokens for simulation
+const TOKENS = {
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  USDC: USDC_ADDRESS,
+  AAVE: "0xD6DF932A45C0f255f85145f286eA0b292B21C90B",
+};
 
-if (!PRIVATE_KEY || !CONTRACT_ADDRESS) {
-  throw new Error("❌ Missing PRIVATE_KEY or CONTRACT_ADDRESS");
-}
+// Path examples
+const PATHS = {
+  WETH_TO_USDC: [TOKENS.WETH, TOKENS.USDC],
+  USDC_TO_WETH: [TOKENS.USDC, TOKENS.WETH],
+};
 
-const provider = new ethers.JsonRpcProvider(RPC_URL, { name: "polygon", chainId: 137 });
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-// ─────────────── FULL CONTRACT ABI ───────────────
-const arbAbi = [
-  {
-    "inputs": [
-      { "internalType": "address", "name": "buyRouter", "type": "address" },
-      { "internalType": "address", "name": "sellRouter", "type": "address" },
-      { "internalType": "address", "name": "token", "type": "address" },
-      { "internalType": "uint256", "name": "amountIn", "type": "uint256" }
-    ],
-    "name": "executeArbitrage",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  { "inputs": [], "name": "USDC", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
+// ABI fragments
+const ROUTER_ABI = [
+  "function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"
 ];
 
-const arbContract = new ethers.Contract(CONTRACT_ADDRESS, arbAbi, wallet);
+const simulateArbitrage = async (amountIn, buyRouterAddr, sellRouterAddr, pathToToken, pathToUSDC) => {
+  const buyRouter = new ethers.Contract(buyRouterAddr, ROUTER_ABI, provider);
+  const sellRouter = new ethers.Contract(sellRouterAddr, ROUTER_ABI, provider);
 
-// ─────────────── ROUTERS ───────────────
-const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn: "0xA8b607Aa09B6A2641CF6F90f643E76d3F6E6Ff73",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  // Simulate first swap
+  const amountsOut1 = await buyRouter.getAmountsOut(amountIn, pathToToken);
+  const tokenAmount = amountsOut1[amountsOut1.length - 1];
+
+  // Simulate second swap
+  const amountsOut2 = await sellRouter.getAmountsOut(tokenAmount, pathToUSDC);
+  const finalUSDC = amountsOut2[amountsOut2.length - 1];
+
+  const profit = finalUSDC - amountIn;
+
+  return {
+    buyRouter: buyRouterAddr,
+    sellRouter: sellRouterAddr,
+    amountIn,
+    tokenAmount,
+    finalUSDC,
+    profit
+  };
 };
 
-// ─────────────── TOKENS ───────────────
-const tokens = {
-  AAVE: { address: "0xd6df932a45c0f255f85145f286ea0b292b21c90b", decimals: 18 },
-  CRV: { address: "0x172370d5cd63279efa6d502dab29171933a610af", decimals: 18 },
-  DAI: { address: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", decimals: 18 },
-  LINK: { address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", decimals: 18 },
-  WBTC: { address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", decimals: 8 },
-  WETH: { address: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619", decimals: 18 }
-};
+const main = async () => {
+  const amountInUSDC = ethers.parseUnits("1000", 6); // simulate $1000 USDC
 
-// ─────────────── SETTINGS ───────────────
-const TRADE_AMOUNT_USDC = 0.2;
-const MIN_PROFIT_PCT = 0.002;
-const SLIPPAGE_PCT = 0;
+  // Example: WETH arbitrage
+  const results = [];
 
-// ─────────────── HELPERS ───────────────
-function fmt(n, dec = 4) { return Number(n).toFixed(dec); }
+  const routers = Object.values(ROUTERS);
 
-async function getAmountOut(routerAddr, token, amountIn) {
-  const router = new ethers.Contract(
-    routerAddr,
-    ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"],
-    provider
-  );
-
-  const usdcAddress = await arbContract.USDC();
-  const path = [usdcAddress, token.address];
-  try {
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), 6),
-      path
-    );
-    return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
-  } catch {
-    const path2 = [usdcAddress, tokens.WETH.address, token.address];
-    const amounts = await router.getAmountsOut(
-      ethers.parseUnits(amountIn.toString(), 6),
-      path2
-    );
-    return Number(ethers.formatUnits(amounts[amounts.length - 1], token.decimals));
-  }
-}
-
-// ─────────────── EXECUTE TRADE WITH GAS CHECK ───────────────
-async function executeTrade(buyRouter, sellRouter, tokenAddr, amount) {
-  try {
-    const txData = await arbContract.populateTransaction.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      tokenAddr,
-      ethers.parseUnits(amount.toString(), 6)
-    );
-
-    const gasEstimate = await wallet.estimateGas(txData);
-    const gasPrice = await provider.getGasPrice();
-    const gasCostUSDC = Number(ethers.formatUnits(gasEstimate.mul(gasPrice), 6));
-
-    console.log(`💸 Estimated gas cost: ${fmt(gasCostUSDC)} USDC`);
-
-    if (TRADE_AMOUNT_USDC < gasCostUSDC + MIN_NET_PROFIT_USDC) {
-      console.log(`⚠️ Skipping trade, estimated gas > profit`);
-      return;
-    }
-
-    await arbContract.callStatic.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), 6)
-    );
-
-    const tx = await arbContract.executeArbitrage(
-      buyRouter, sellRouter, tokenAddr, ethers.parseUnits(amount.toString(), 6),
-      { gasLimit: gasEstimate.mul(2) }
-    );
-
-    console.log(`⏳ Trade sent: ${tx.hash}`);
-    await tx.wait();
-    console.log(`✅ Trade executed successfully!`);
-  } catch (err) {
-    console.error(`⚠️ Trade failed: ${err.reason || err.message}`);
-  }
-}
-
-// ─────────────── SCAN LOOP ───────────────
-async function scan() {
-  console.log("🔍 Scanning for arbitrage opportunities...");
-  const opportunities = [];
-
-  for (const [symbol, token] of Object.entries(tokens)) {
-    for (const [buyName, buyRouter] of Object.entries(routers)) {
-      for (const [sellName, sellRouter] of Object.entries(routers)) {
-        if (buyName === sellName) continue;
-
-        try {
-          const buyOut = await getAmountOut(buyRouter, token, TRADE_AMOUNT_USDC);
-          const sellOut = await getAmountOut(sellRouter, token, TRADE_AMOUNT_USDC);
-
-          const buyPrice = TRADE_AMOUNT_USDC / buyOut;
-          const sellPrice = TRADE_AMOUNT_USDC / sellOut;
-
-          let profitUSDC = sellPrice - buyPrice;
-          let profitPct = (profitUSDC / buyPrice) * 100;
-          profitUSDC *= (1 - SLIPPAGE_PCT / 100);
-          profitPct *= (1 - SLIPPAGE_PCT / 100);
-
-          if (profitPct >= MIN_PROFIT_PCT) {
-            opportunities.push({ token: symbol, buyName, sellName, profitUSDC, profitPct });
-            console.log(`🚨 ${symbol} | Buy:${buyName} → Sell:${sellName} | Profit: ${fmt(profitUSDC)} USDC (${fmt(profitPct,2)}%)`);
-            await executeTrade(buyRouter, sellRouter, token.address, TRADE_AMOUNT_USDC);
-          }
-
-        } catch (e) {
-          console.warn(`⚠️ Error scanning ${symbol} ${buyName}->${sellName}: ${e.message}`);
-        }
+  // Scan all router pairs
+  for (let i = 0; i < routers.length; i++) {
+    for (let j = 0; j < routers.length; j++) {
+      if (i === j) continue; // skip same router
+      try {
+        const result = await simulateArbitrage(
+          amountInUSDC,
+          routers[i],
+          routers[j],
+          PATHS.USDC_TO_WETH,
+          PATHS.WETH_TO_USDC
+        );
+        results.push(result);
+      } catch (err) {
+        console.log(`Error simulating ${routers[i]} -> ${routers[j]}: ${err.reason || err}`);
       }
     }
   }
 
-  console.log(`🔍 Scan complete. Found ${opportunities.length} opportunities.\n`);
-  return opportunities;
-}
+  console.log("=== Arbitrage Simulation Results ===");
+  results.forEach(r => {
+    console.log(`Buy: ${r.buyRouter} | Sell: ${r.sellRouter}`);
+    console.log(`USDC In: ${ethers.formatUnits(r.amountIn, 6)} | USDC Out: ${ethers.formatUnits(r.finalUSDC, 6)} | Profit: ${ethers.formatUnits(r.profit, 6)}`);
+    console.log("----------------------------");
+  });
+};
 
-// ─────────────── MAIN LOOP ───────────────
-async function main() {
-  console.log("🚀 Aave Flash Arbitrage Bot running on Polygon...");
-  while (true) {
-    await scan();
-    await new Promise(r => setTimeout(r, 5000));
-  }
-}
-
-main().catch(console.error);
+main();
