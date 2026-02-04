@@ -9,32 +9,31 @@ dotenv.config();
 const RPC_URL = process.env.POLYGON_RPC;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-// VAULT = ARBITRAGE CONTRACT
 const VAULT_ADDRESS = "0xYOUR_VAULT_ADDRESS";
 
-// token decimals assumed handled in scanner
-const MIN_PROFIT_USDC = 0.01;
+// TOKEN ADDRESSES
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // polygon USDC
 
-// DEX IDs MUST MATCH SOLIDITY ENUM
-const DEX = {
-  QUICKSWAP: 0,
-  SUSHISWAP: 1,
-  APESWAP: 2,
+// ROUTER ADDRESSES (real routers, NOT enums)
+const ROUTERS = {
+  QUICKSWAP: "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff",
+  SUSHISWAP: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  APESWAP: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
 };
+
+const MIN_PROFIT_USDC = 0.01;
 
 /* ===================== SETUP ===================== */
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// vault == arbitrage executor
 const vault = new ethers.Contract(
   VAULT_ADDRESS,
   VaultABI,
   wallet
 );
 
-// HARD FAIL EARLY IF MISWIRED
 if (!vault.executeArbitrage) {
   throw new Error("❌ executeArbitrage not found in Vault ABI");
 }
@@ -56,21 +55,36 @@ async function executeOpportunity(op) {
   if (profitUSDC < MIN_PROFIT_USDC) return;
 
   console.log(
-    `🚨 ${token} | Buy:${buyDex} → Sell:${sellDex} | Profit: ${profitUSDC} USDC`
+    `🚨 ${token} | Buy:${buyDex} → Sell:${sellDex} | Profit: ${profitUSDC}`
   );
 
   try {
+    const buyRouter = ROUTERS[buyDex.toUpperCase()];
+    const sellRouter = ROUTERS[sellDex.toUpperCase()];
+
+    if (!buyRouter || !sellRouter) {
+      throw new Error("Router not configured");
+    }
+
+    // REQUIRED BY CONTRACT
+    const pathToToken = [USDC, tokenAddress];
+    const pathToUSDC = [tokenAddress, USDC];
+
+    const deadline = Math.floor(Date.now() / 1000) + 60;
+
     const tx = await vault.executeArbitrage(
-      tokenAddress,
-      DEX[buyDex.toUpperCase()],
-      DEX[sellDex.toUpperCase()],
+      buyRouter,
+      sellRouter,
       amountIn,
+      pathToToken,
+      pathToUSDC,
+      deadline,
       {
         gasLimit: 1_200_000,
       }
     );
 
-    console.log(`⏳ TX sent: ${tx.hash}`);
+    console.log("⏳ TX sent:", tx.hash);
 
     const receipt = await tx.wait();
 
@@ -86,19 +100,17 @@ async function executeOpportunity(op) {
   }
 }
 
-/* ===================== MOCK SCANNER HOOK ===================== */
-/* Replace this with your real scanner output */
+/* ===================== MOCK SCANNER ===================== */
 
 async function scanLoop() {
   console.log("🔍 Scanning for arbitrage opportunities...");
 
-  // example opportunity (matches your logs)
   await executeOpportunity({
     token: "CRV",
     tokenAddress: "0x172370d5Cd63279eFa6d502DAB29171933a610AF",
-    buyDex: "ApeSwap",
-    sellDex: "SushiSwap",
-    amountIn: ethers.parseUnits("500", 18),
+    buyDex: "APESWAP",
+    sellDex: "SUSHISWAP",
+    amountIn: ethers.parseUnits("500", 6), // USDC = 6 decimals
     profitUSDC: 0.5321,
   });
 }
