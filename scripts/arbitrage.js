@@ -36,9 +36,9 @@ if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty
 
 /* ================= CONSTANTS ================= */
 
-// 🟢7 TRADE SETTINGS (UNCHANGED)
+// 🟢7 TRADE SETTINGS
 const MIN_TRADE_USDC = 1.7;
-const MIN_EXPECTED_PROFIT = 0.0000001;
+const MIN_EXPECTED_PROFIT = 0.01; // Match contract's minimumProfitUSDC
 const SLIPPAGE_PCT = 0.05;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -91,7 +91,7 @@ const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
 // 🟢14 ROUTER ABI
@@ -101,18 +101,14 @@ const routerAbi = [
 
 /* ================= TOKENS ================= */
 
-// 🟢15 TOKENS
+// 🟢15 TOKENS — removed fee-on-transfer / low-liquidity
 const TOKENS = {
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  APE:"0x4d224452801aced8b2f0aebe155379bb5d594381",
-  CRV:"0x172370d5cd63279efa6d502dab29171933a610af",
-  DAI:"0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  MATICX:"0xa3fa99a148fa48d14ed51d610c367c61876997f1",
-  UNI:"0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-  UNI2:"0xb33eaad8d922b1083446dc23f610c2567fb5180f",
-  WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  WETH:"0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
@@ -145,7 +141,6 @@ function buildPaths(usdc, token) {
 /* ================= CORE LOGIC ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
@@ -165,7 +160,8 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (!bestBuyOut) return;
 
-  const sellPath = [...bestBuyPath].reverse();
+  // 🔴 FIX: sell path is always direct token->USDC
+  const sellPath = [tokenAddr, usdc];
 
   const sellOut = await quote(sellRouter, bestBuyOut, sellPath);
   if (!sellOut) return;
@@ -178,8 +174,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   console.log(`🔥 ARB FOUND | Profit ≈ ${profit.toFixed(6)} USDC`);
-
-  /* ================= GAS BUMP ADDED ONLY ================= */
 
   const fee = await provider.getFeeData();
 
@@ -196,12 +190,10 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     }
   );
 
-  /* ======================================================= */
-
   console.log(`⛓ TX SENT: ${tx.hash}`);
 
   tx.wait().then(() => {
-    console.log(`✅ CONFIRMED & DEPOSITED | ${tx.hash}`);
+    console.log(`✅ CONFIRMED & DEPOSITED`);
   }).catch(() => {});
 }
 
