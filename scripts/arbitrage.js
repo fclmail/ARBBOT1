@@ -40,7 +40,7 @@ if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty
 const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.0000001;
 const SLIPPAGE_PCT = 0.05;
-const SCAN_INTERVAL_MS = 1_000;
+const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
