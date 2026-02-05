@@ -130,7 +130,7 @@ async function main() {
       for (const sell of ROUTERS) {
         if (buy.toLowerCase() === sell.toLowerCase()) continue;
 
-        const amountInUSDC = ethers.parseUnits("10", 6); // 10 USDC per attempt
+        const amountInUSDC = ethers.parseUnits(".5", 6); // 10 USDC per attempt
 
         // Execute arbitrage safely
         await executeArbSafe(buy, sell, amountInUSDC);
