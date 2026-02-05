@@ -112,7 +112,7 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ========= PATH BUILDERS ========= */
+/* ================= PATH BUILDERS ================= */
 
 function buildPaths(usdc, token) {
   return [
@@ -125,7 +125,6 @@ function buildPaths(usdc, token) {
   ];
 }
 
-/* 🔥 FIX: SAFE SELL PATHS (NO REVERSE) */
 function buildSellPaths(usdc, token) {
   return [
     [token, usdc],
@@ -137,26 +136,31 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ========= BALANCE DISPLAY ========= */
+/* ================= BALANCE DISPLAY (ONLY CHANGE) ================= */
 
 async function showBalances(usdcAddr) {
-  const matic = await provider.getBalance(wallet.address);
-  const usdc = new ethers.Contract(usdcAddr, ["function balanceOf(address) view returns(uint256)"], provider);
+  const maticBal = await provider.getBalance(wallet.address);
+  const usdc = new ethers.Contract(
+    usdcAddr,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  );
+
   const vaultBal = await usdc.balanceOf(VAULT_ADDRESS);
 
   console.log(
-    `💰 Wallet MATIC: ${ethers.formatEther(matic)} | Vault USDC: ${ethers.formatUnits(vaultBal, 6)}`
+    `💰 Wallet MATIC: ${ethers.formatEther(maticBal)} | Vault USDC: ${Number(
+      ethers.formatUnits(vaultBal, 6)
+    ).toFixed(6)}`
   );
 }
 
 /* ================= CORE LOGIC ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  /* BUY */
   const buyPaths = buildPaths(usdc, tokenAddr);
 
   let bestBuyOut = null;
@@ -165,7 +169,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   for (const path of buyPaths) {
     const out = await quote(buyRouter, amountIn, path);
     if (!out) continue;
-
     if (!bestBuyOut || out > bestBuyOut) {
       bestBuyOut = out;
       bestBuyPath = path;
@@ -174,7 +177,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (!bestBuyOut) return;
 
-  /* 🔥 FIXED SELL LOGIC */
   const sellPaths = buildSellPaths(usdc, tokenAddr);
 
   let bestSellOut = null;
@@ -183,7 +185,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   for (const path of sellPaths) {
     const out = await quote(sellRouter, bestBuyOut, path);
     if (!out) continue;
-
     if (!bestSellOut || out > bestSellOut) {
       bestSellOut = out;
       bestSellPath = path;
@@ -201,20 +202,14 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   console.log(`🔥 ARB FOUND | Profit ≈ ${profit.toFixed(6)} USDC`);
 
-  let tx;
-  try {
-    tx = await vault.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      amountIn,
-      bestBuyPath,
-      bestSellPath,
-      deadline
-    );
-  } catch (e) {
-    console.log("❌ TX FAILED:", e.reason || e.message);
-    return;
-  }
+  const tx = await vault.executeArbitrage(
+    buyRouter,
+    sellRouter,
+    amountIn,
+    bestBuyPath,
+    bestSellPath,
+    deadline
+  );
 
   console.log(`⛓ TX SENT: ${tx.hash}`);
 
