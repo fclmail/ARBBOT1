@@ -155,6 +155,59 @@ async function showBalances(usdcAddr) {
   );
 }
 
+/* ================= AUTO WITHDRAW OPTION 1 ================= */
+
+const AUTO_WITHDRAW_PERCENT = 5; // adjustable 1-100 (% of vault balance)
+const AUTO_SWAP_THRESHOLD_USDC = 0.05; // minimum vault balance to trigger swap
+
+async function autoWithdraw(usdcAddr) {
+  const vaultUsdc = new ethers.Contract(usdcAddr, ["function balanceOf(address) view returns(uint256)"], provider);
+  const vaultBalanceRaw = await vaultUsdc.balanceOf(VAULT_ADDRESS);
+  const vaultBalance = Number(ethers.formatUnits(vaultBalanceRaw, 6));
+
+  if (vaultBalance < AUTO_SWAP_THRESHOLD_USDC) return; // below threshold → skip
+
+  const percentToSwap = Math.min(Math.max(AUTO_WITHDRAW_PERCENT, 1), 100); // clamp 1-100%
+  const amountToSwapUSDC = (vaultBalance * percentToSwap) / 100;
+  const amountToSwapRaw = ethers.parseUnits(amountToSwapUSDC.toFixed(6), 6);
+
+  console.log(
+    `💸 Auto-withdraw triggered | Swapping ${amountToSwapUSDC.toFixed(6)} USDC (${percentToSwap}% of vault)`
+  );
+
+  const path = [usdcAddr, TOKENS.WMATIC];
+
+  const router = new ethers.Contract(
+    routers.QuickSwap,
+    ["function swapExactTokensForTokens(uint256,uint256,address[],address,uint256) returns (uint256[])"],
+    wallet
+  );
+
+  const usdcWithSigner = vaultUsdc.connect(wallet);
+  const allowance = await usdcWithSigner.allowance(VAULT_ADDRESS, routers.QuickSwap);
+  if (allowance < amountToSwapRaw) {
+    const approveTx = await usdcWithSigner.approve(routers.QuickSwap, amountToSwapRaw);
+    await approveTx.wait();
+  }
+
+  const deadline = Math.floor(Date.now() / 1000) + 60;
+  try {
+    const tx = await router.swapExactTokensForTokens(
+      amountToSwapRaw,
+      0,
+      path,
+      wallet.address,
+      deadline
+    );
+    console.log(`⛓ Auto-withdraw TX SENT: ${tx.hash}`);
+    await tx.wait();
+    console.log(`✅ Auto-withdraw CONFIRMED`);
+    await showBalances(usdcAddr);
+  } catch (e) {
+    console.log(`⚠️ Auto-withdraw failed: ${e.message}`);
+  }
+}
+
 /* ================= CORE LOGIC ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
@@ -226,6 +279,7 @@ async function scan() {
 
   const usdc = await vault.usdc();
   await showBalances(usdc);
+  await autoWithdraw(usdc); // <-- NEW LINE ADDED
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
