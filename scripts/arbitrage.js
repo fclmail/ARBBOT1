@@ -25,7 +25,7 @@ const WALLET_PRIVATE_KEY = PRIVATE_KEY_RAW.trim();
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
 
-/* ================= CONSTANTS (UNCHANGED) ================= */
+/* ================= CONSTANTS ================= */
 
 const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.0000001;
@@ -35,8 +35,8 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= AUTO-WITHDRAW SETTINGS ================= */
 
-const AUTO_WITHDRAW_THRESHOLD_USDC = 1.0; // trigger threshold
-let AUTO_WITHDRAW_PERCENT = 5; // 5% of vault, adjustable 1-100%
+const AUTO_WITHDRAW_THRESHOLD = 2.0; // USDC in vault to trigger
+let AUTO_WITHDRAW_PERCENT = 5;       // % of vault to send, adjustable 1-100
 
 /* ================= PROVIDER ================= */
 
@@ -68,6 +68,16 @@ const vaultAbi = [
     outputs: [{ type: "address" }],
     stateMutability: "view",
     type: "function"
+  },
+  {
+    inputs: [
+      { type: "address", name: "tokenAddr" },
+      { type: "uint256", name: "amount" }
+    ],
+    name: "withdrawERC20",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function"
   }
 ];
 
@@ -77,13 +87,14 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  Wault:     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef",
+  Dfyn: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
+  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
@@ -141,7 +152,7 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= BALANCE DISPLAY (UNCHANGED) ================= */
+/* ================= BALANCE DISPLAY ================= */
 
 async function showBalances(usdcAddr) {
   const maticBal = await provider.getBalance(wallet.address);
@@ -160,31 +171,49 @@ async function showBalances(usdcAddr) {
   );
 }
 
-/* ================= AUTO-WITHDRAW FUNCTION ================= */
+/* ================= AUTO-WITHDRAW ================= */
 
 async function autoWithdraw(usdcAddr) {
-  const erc20Abi = [
-    "function balanceOf(address owner) view returns (uint256)",
-    "function allowance(address owner, address spender) view returns (uint256)",
-    "function approve(address spender, uint256 amount) returns (bool)",
-    "function transfer(address recipient, uint256 amount) returns (bool)"
-  ];
+  const usdc = new ethers.Contract(
+    usdcAddr,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  );
 
-  const usdcWithSigner = new ethers.Contract(usdcAddr, erc20Abi, wallet);
-
-  const vaultBalRaw = await usdcWithSigner.balanceOf(VAULT_ADDRESS);
+  const vaultBalRaw = await usdc.balanceOf(VAULT_ADDRESS);
   const vaultBal = Number(ethers.formatUnits(vaultBalRaw, 6));
 
-  if (vaultBal >= AUTO_WITHDRAW_THRESHOLD_USDC) {
-    const amountToSwap = (vaultBal * AUTO_WITHDRAW_PERCENT) / 100;
-    console.log(`💸 Auto-withdraw triggered | Swapping ${amountToSwap.toFixed(6)} USDC (${AUTO_WITHDRAW_PERCENT}% of vault)`);
+  if (vaultBal < AUTO_WITHDRAW_THRESHOLD) return;
 
-    // **For demo: transfer USDC to wallet directly**
-    const amountUnits = ethers.parseUnits(amountToSwap.toFixed(6), 6);
-    const tx = await usdcWithSigner.transfer(wallet.address, amountUnits);
+  const amountToSend = (vaultBal * AUTO_WITHDRAW_PERCENT) / 100;
+  console.log(
+    `💸 Auto-withdraw triggered | Swapping ${amountToSend.toFixed(6)} USDC (${AUTO_WITHDRAW_PERCENT}% of vault)`
+  );
+
+  // Withdraw from vault to wallet
+  const amountRaw = ethers.parseUnits(amountToSend.toFixed(6), 6);
+  try {
+    await vault.withdrawERC20(usdcAddr, amountRaw);
+    console.log(`✅ Withdrawn ${amountToSend.toFixed(6)} USDC to wallet`);
+
+    // Swap USDC -> MATIC via QuickSwap
+    const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
+    await usdc.connect(wallet).approve(router.address, amountRaw);
+
+    const path = [usdcAddr, TOKENS.WMATIC];
+    const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+
+    const tx = await router.swapExactTokensForTokens(
+      amountRaw,
+      0,
+      path,
+      wallet.address,
+      deadline
+    );
     await tx.wait();
-
-    console.log(`✅ Transferred ${amountToSwap.toFixed(6)} USDC to wallet`);
+    console.log(`💱 Swapped ${amountToSend.toFixed(6)} USDC -> MATIC`);
+  } catch (err) {
+    console.log(`⚠️ Auto-withdraw failed: ${err.message}`);
   }
 }
 
@@ -248,9 +277,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   tx.wait().then(async () => {
     console.log(`✅ CONFIRMED & DEPOSITED | ${tx.hash}`);
-    const usdc = await vault.usdc();
     await showBalances(usdc);
-    await autoWithdraw(usdc); // trigger auto-withdraw after each arb
   });
 }
 
