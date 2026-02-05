@@ -30,14 +30,14 @@ if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty
 const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.0000001;
 const SLIPPAGE_PCT = 0.05;
-const SCAN_INTERVAL_MS = 1_000;
+const SCAN_INTERVAL_MS = 20_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= AUTO WITHDRAW SETTINGS ================= */
 /* ===== ONLY SETTINGS ADDED (nothing else changed) ===== */
 
 const AUTO_WITHDRAW_ENABLED = true;
-const WITHDRAW_PERCENT_OF_VAULT = 0.005;     // 1–100 %
+const WITHDRAW_PERCENT_OF_VAULT = 1;     // 1–100 %
 const WITHDRAW_THRESHOLD_USDC = 1.2;     // withdraw ONLY if vault ≥ this
 
 /* ================= PROVIDER ================= */
