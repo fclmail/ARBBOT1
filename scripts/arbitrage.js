@@ -1,5 +1,5 @@
-// arb-dropin-esm-fixed.js
-// Self-contained arbitrage bot drop-in for Ethers v6
+// arb-dropin-esm-robust.js
+// Self-contained ES Module drop-in for Ethers v6 with robust checksum handling
 
 import { ethers } from "ethers";
 import dotenv from "dotenv";
@@ -10,19 +10,17 @@ dotenv.config();
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 
-// PRIVATE_KEY must be 0x + 64 hex chars
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const PRIVATE_KEY_REGEX = /^0x[a-fA-F0-9]{64}$/;
-if (!PRIVATE_KEY || !PRIVATE_KEY_REGEX.test(PRIVATE_KEY)) {
+if (!PRIVATE_KEY || !/^0x[a-fA-F0-9]{64}$/.test(PRIVATE_KEY)) {
   throw new Error("Invalid or missing PRIVATE_KEY. Expect 0x + 64 hex chars.");
 }
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Vault contract and token addresses (adjust as needed)
+// Vault contract and token addresses
 const VAULT_CONTRACT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-// Inline ABIs
+// Minimal ABIs (expand if needed)
 const VAULT_ABI = [
   "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
   "function approveRouter(address router, uint256 amount) external"
@@ -34,33 +32,45 @@ const ERC20_ABI = [
 ];
 
 // ================= ROUTERS =================
-// All addresses normalized to checksummed form
-const ROUTERS = [
-  "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff", // QuickSwap
+// Use lowercase, then filter out invalid addresses safely
+const ROUTERS_RAW = [
+  "0xa5e0829caecd8ffdd4de3c43696c57f7d7a678ff", // QuickSwap
   "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506", // SushiSwap
-  "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607", // ApeSwap
-  "0xA102072A4C07F06EC3B4900FDC4C7B80b6C57429"  // Dfyn
-].map(a => ethers.getAddress(a)); // checksummed
+  "0xc0788a3ad43d79aa53b09c2eacc313a787d1d607", // ApeSwap
+  "0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429"  // Dfyn
+];
+
+// Make checksumed addresses, skip invalid ones
+const ROUTERS = ROUTERS_RAW.map(addr => {
+  try {
+    return ethers.getAddress(addr);
+  } catch (err) {
+    console.warn(`[${new Date().toISOString()}] ⚠ Invalid router address skipped: ${addr}`);
+    return null;
+  }
+}).filter(Boolean);
 
 // ================= PATHS =================
 const TOKENS = {
   WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
   USDC: USDC_ADDRESS
 };
+
 const PATHS = {
   USDC_TO_WETH: [TOKENS.USDC, TOKENS.WETH],
   WETH_TO_USDC: [TOKENS.WETH, TOKENS.USDC]
 };
 
-// ================= CONTRACT INSTANCES =================
+// CONTRACT INSTANCES
 const vault = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, wallet);
 const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
 
 // ================= HELPERS =================
 async function safeApprove(token, spender, amount) {
   try {
-    const allowance = await token.allowance(wallet.address, spender); // BigInt
-    if (allowance < amount) {
+    const allowance = await token.allowance(wallet.address, spender);
+    // ethers v6 returns BigInt
+    if (BigInt(allowance.toString()) < BigInt(amount.toString())) {
       console.log(`[${new Date().toISOString()}] Approving ${ethers.formatUnits(amount, 6)} USDC for ${spender}`);
       const tx = await token.approve(spender, amount);
       await tx.wait();
@@ -87,12 +97,17 @@ async function executeArbSafe(buyRouter, sellRouter, amountInUSDC) {
 
     const receipt = await tx.wait();
     const after = await usdc.balanceOf(wallet.address);
-    const profit = after - before;
+    const profit = after.sub(before);
 
-    console.log(`[${new Date().toISOString()}] Arbitrage executed: Profit ${ethers.formatUnits(profit, 6)} USDC`);
+    console.log(
+      `[${new Date().toISOString()}] Arbitrage executed: Profit ${ethers.formatUnits(profit, 6)} USDC`
+    );
     return true;
   } catch (err) {
-    console.log(`[${new Date().toISOString()}] 💤 Skipped ${buyRouter} -> ${sellRouter}:`, err?.message || err);
+    console.log(
+      `[${new Date().toISOString()}] 💤 Skipped ${buyRouter} -> ${sellRouter}:`,
+      err?.message || err
+    );
     return false;
   }
 }
@@ -101,8 +116,8 @@ async function executeArbSafe(buyRouter, sellRouter, amountInUSDC) {
 async function main() {
   console.log("Starting arbitrage bot…");
   console.log(`✔ Wallet address: ${wallet.address}`);
+  console.log(`✔ Routers: ${ROUTERS.join(", ")}`);
 
-  // Approve USDC for all routers (one-time)
   const amountToApprove = ethers.parseUnits("1000000", 6); // 1,000,000 USDC
   for (const router of ROUTERS) {
     await safeApprove(usdc, router, amountToApprove);
@@ -116,9 +131,11 @@ async function main() {
         if (buy.toLowerCase() === sell.toLowerCase()) continue;
 
         const amountInUSDC = ethers.parseUnits("10", 6); // 10 USDC per attempt
+
+        // Execute arbitrage safely
         await executeArbSafe(buy, sell, amountInUSDC);
 
-        // Throttle to avoid spamming
+        // Throttle per attempt
         await new Promise(r => setTimeout(r, 500));
       }
     }
