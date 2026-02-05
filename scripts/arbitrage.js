@@ -1,9 +1,3 @@
-
-
-
-
-
-
 // arb-dropin-esm-selfcontained.js  
 // Self-contained ES Module drop-in with fixes  
 
