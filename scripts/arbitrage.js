@@ -38,7 +38,7 @@ if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty
 
 // 🟢7 TRADE SETTINGS
 const MIN_TRADE_USDC = 1.7;
-const MIN_EXPECTED_PROFIT = 0.01; // Match contract's minimumProfitUSDC
+const MIN_EXPECTED_PROFIT = 0.000001; // Match contract's minimumProfitUSDC
 const SLIPPAGE_PCT = 0.05;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
