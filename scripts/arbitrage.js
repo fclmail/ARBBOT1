@@ -1,42 +1,32 @@
 // 🟢1 FILE PURPOSE
 // scripts/arbitrage.js
-// This script scans DEX prices on Polygon and executes arbitrage
-// trades through a deployed Vault smart contract.
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-/**
- * 🟢2 ENVIRONMENT HANDLING
- */
+/* ================= ENV ================= */
+
 dotenv.config({ override: false });
 
-/* ================= CONFIG ================= */
-
-// 🟢3 RPC URL SELECTION
 const RPC_RAW =
   process.env.RPC_POLYGON ||
   process.env.POLYGON_RPC ||
   process.env.RPC_URL ||
   "";
 
-// 🟢4 PRIVATE KEY SELECTION
 const PRIVATE_KEY_RAW =
   process.env.WALLET_PRIVATE_KEY ||
   process.env.PRIVATE_KEY ||
   "";
 
-// 🟢5 NORMALIZATION
 const RPC_POLYGON = RPC_RAW.trim();
 const WALLET_PRIVATE_KEY = PRIVATE_KEY_RAW.trim();
 
-// 🟢6 STRICT VALIDATION
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
 
-/* ================= CONSTANTS ================= */
+/* ================= CONSTANTS (UNCHANGED) ================= */
 
-// 🟢7 TRADE SETTINGS (UNCHANGED)
 const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.0000001;
 const SLIPPAGE_PCT = 0.05;
@@ -45,27 +35,22 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
 
-// 🟢8 BLOCKCHAIN CONNECTION
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-
-// 🟢9 WALLET INSTANCE
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-// 🟢10 VAULT CONTRACT ADDRESS
 const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 
-// 🟢11 VAULT ABI
 const vaultAbi = [
   {
     inputs: [
-      { internalType: "address", name: "buyRouter", type: "address" },
-      { internalType: "address", name: "sellRouter", type: "address" },
-      { internalType: "uint256", name: "amountInUSDC", type: "uint256" },
-      { internalType: "address[]", name: "pathToToken", type: "address[]" },
-      { internalType: "address[]", name: "pathToUSDC", type: "address[]" },
-      { internalType: "uint256", name: "deadline", type: "uint256" }
+      { type: "address", name: "buyRouter" },
+      { type: "address", name: "sellRouter" },
+      { type: "uint256", name: "amountInUSDC" },
+      { type: "address[]", name: "pathToToken" },
+      { type: "address[]", name: "pathToUSDC" },
+      { type: "uint256", name: "deadline" }
     ],
     name: "executeArbitrage",
     outputs: [],
@@ -81,27 +66,23 @@ const vaultAbi = [
   }
 ];
 
-// 🟢12 VAULT CONTRACT INSTANCE
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
 
-// 🟢13 DEX ROUTERS
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-//  Dfyn: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73",
+  Dfyn: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
-// 🟢14 ROUTER ABI
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
 
-// 🟢15 TOKENS
 const TOKENS = {
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
@@ -119,10 +100,8 @@ const TOKENS = {
 
 /* ================= HELPERS ================= */
 
-// 🟢17 SLEEP HELPER
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 🟢18 PRICE QUOTE FUNCTION
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -133,7 +112,8 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-// 🟢18.1 FALLBACK PATH BUILDER
+/* ========= PATH BUILDERS ========= */
+
 function buildPaths(usdc, token) {
   return [
     [usdc, token],
@@ -145,24 +125,43 @@ function buildPaths(usdc, token) {
   ];
 }
 
+/* 🔥 FIX: SAFE SELL PATHS (NO REVERSE) */
+function buildSellPaths(usdc, token) {
+  return [
+    [token, usdc],
+    [token, TOKENS.WMATIC, usdc],
+    [token, TOKENS.WETH, usdc],
+    [token, TOKENS.USDT, usdc],
+    [token, TOKENS.DAI, usdc],
+    [token, TOKENS.WETH, TOKENS.WMATIC, usdc]
+  ];
+}
+
+/* ========= BALANCE DISPLAY ========= */
+
+async function showBalances(usdcAddr) {
+  const matic = await provider.getBalance(wallet.address);
+  const usdc = new ethers.Contract(usdcAddr, ["function balanceOf(address) view returns(uint256)"], provider);
+  const vaultBal = await usdc.balanceOf(VAULT_ADDRESS);
+
+  console.log(
+    `💰 Wallet MATIC: ${ethers.formatEther(matic)} | Vault USDC: ${ethers.formatUnits(vaultBal, 6)}`
+  );
+}
+
 /* ================= CORE LOGIC ================= */
 
-// 🟢19 ARBITRAGE ATTEMPT FUNCTION
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
-  // 🟢20 FETCH USDC
   const usdc = await vault.usdc();
-
-  // 🟢21 TRADE SIZE
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  // 🟢22 BUILD BUY PATHS
+  /* BUY */
   const buyPaths = buildPaths(usdc, tokenAddr);
 
   let bestBuyOut = null;
   let bestBuyPath = null;
 
-  // 🟢23 SELECT BEST BUY PATH
   for (const path of buyPaths) {
     const out = await quote(buyRouter, amountIn, path);
     if (!out) continue;
@@ -175,47 +174,63 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (!bestBuyOut) return;
 
-  // 🟢24 SELL PATH (REVERSE BUY PATH)
-  const sellPath = [...bestBuyPath].reverse();
+  /* 🔥 FIXED SELL LOGIC */
+  const sellPaths = buildSellPaths(usdc, tokenAddr);
 
-  const sellOut = await quote(sellRouter, bestBuyOut, sellPath);
-  if (!sellOut) return;
+  let bestSellOut = null;
+  let bestSellPath = null;
 
-  // 🟢25 PROFIT CALC
-  const receivedUSDC = Number(ethers.formatUnits(sellOut, 6));
+  for (const path of sellPaths) {
+    const out = await quote(sellRouter, bestBuyOut, path);
+    if (!out) continue;
+
+    if (!bestSellOut || out > bestSellOut) {
+      bestSellOut = out;
+      bestSellPath = path;
+    }
+  }
+
+  if (!bestSellOut) return;
+
+  const receivedUSDC = Number(ethers.formatUnits(bestSellOut, 6));
   const profit = receivedUSDC - MIN_TRADE_USDC;
 
-  // 🟢26 PROFIT FILTER
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  // 🟢27 DEADLINE
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   console.log(`🔥 ARB FOUND | Profit ≈ ${profit.toFixed(6)} USDC`);
 
-  // 🟢28 EXECUTE ARB
-  const tx = await vault.executeArbitrage(
-    buyRouter,
-    sellRouter,
-    amountIn,
-    bestBuyPath,
-    sellPath,
-    deadline
-  );
+  let tx;
+  try {
+    tx = await vault.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      amountIn,
+      bestBuyPath,
+      bestSellPath,
+      deadline
+    );
+  } catch (e) {
+    console.log("❌ TX FAILED:", e.reason || e.message);
+    return;
+  }
 
   console.log(`⛓ TX SENT: ${tx.hash}`);
 
-  // 🟢29 NON-BLOCKING CONFIRMATION
-  tx.wait()
-    .then(() => console.log(`✅ CONFIRMED & DEPOSITED | ${tx.hash}`))
-    .catch(() => {});
+  tx.wait().then(async () => {
+    console.log(`✅ CONFIRMED & DEPOSITED | ${tx.hash}`);
+    await showBalances(usdc);
+  });
 }
 
 /* ================= SCANNER ================= */
 
-// 🟢30 FULL MARKET SCAN
 async function scan() {
   console.log(`🔍 Scan started @ ${new Date().toISOString()}`);
+
+  const usdc = await vault.usdc();
+  await showBalances(usdc);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
@@ -232,12 +247,10 @@ async function scan() {
   }
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= MAIN ================= */
 
-// 🟢31 BOT ENTRY POINT
 console.log("🚀 Arbitrage bot started");
 
-// 🟢32 TIME-BASED SCANNER
 setInterval(() => {
   scan().catch(console.error);
 }, SCAN_INTERVAL_MS);
