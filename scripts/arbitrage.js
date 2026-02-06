@@ -40,10 +40,10 @@ const MIN_TRADE_USDC = 1;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 // Execution safety margin (assume worst-case loss)
-const PROFIT_SAFETY_MULTIPLIER = 0.0007;
+const PROFIT_SAFETY_MULTIPLIER = 0.07;
 
 const SCAN_INTERVAL_MS = 10_000;
-const DADLINE_SECONDS = 60;
+const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
 
