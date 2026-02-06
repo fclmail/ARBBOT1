@@ -1,4 +1,3 @@
-// 🟢1 FILE PURPOSE
 // scripts/arbitrage.js
 
 import dotenv from "dotenv";
@@ -8,35 +7,26 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-const RPC_RAW =
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL ||
-  "";
+const RPC_POLYGON =
+  (process.env.RPC_POLYGON ||
+    process.env.POLYGON_RPC ||
+    process.env.RPC_URL ||
+    "").trim();
 
-const PRIVATE_KEY_RAW =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  "";
+const WALLET_PRIVATE_KEY =
+  (process.env.WALLET_PRIVATE_KEY ||
+    process.env.PRIVATE_KEY ||
+    "").trim();
 
-const RPC_POLYGON = RPC_RAW.trim();
-const WALLET_PRIVATE_KEY = PRIVATE_KEY_RAW.trim();
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
+if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
-if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
-
-/* ================= CONSTANTS (UNCHANGED) ================= */
+/* ================= CONSTANTS ================= */
 
 const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.0000001;
-const SLIPPAGE_PCT = 0.05;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
-
-/* ================= WITHDRAW SETTINGS (UNCHANGED) ================= */
-
-const WITHDRAW_THRESHOLD_USDC = 11772281;
-const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
 
@@ -49,57 +39,44 @@ const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 
 const vaultAbi = [
   {
-    inputs: [
-      { type: "address", name: "buyRouter" },
-      { type: "address", name: "sellRouter" },
-      { type: "uint256", name: "amountInUSDC" },
-      { type: "address[]", name: "pathToToken" },
-      { type: "address[]", name: "pathToUSDC" },
-      { type: "uint256", name: "deadline" }
-    ],
     name: "executeArbitrage",
-    outputs: [],
+    type: "function",
     stateMutability: "nonpayable",
-    type: "function"
-  },
-  {
-    inputs: [],
-    name: "usdc",
-    outputs: [{ type: "address" }],
-    stateMutability: "view",
-    type: "function"
-  },
-  {
     inputs: [
-      { type: "address", name: "tokenAddr" },
-      { type: "uint256", name: "amount" }
+      { name: "buyRouter", type: "address" },
+      { name: "sellRouter", type: "address" },
+      { name: "amountInUSDC", type: "uint256" },
+      { name: "pathToToken", type: "address[]" },
+      { name: "pathToUSDC", type: "address[]" },
+      { name: "deadline", type: "uint256" }
     ],
-    name: "withdrawERC20",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function"
+    outputs: []
+  },
+  {
+    name: "usdc",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }]
   }
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= ROUTERS (UNCHANGED) ================= */
+/* ================= ROUTERS ================= */
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  Wault:     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-/* ========================================================= */
-/* 🔥 RESTORED: FULL TOKEN LIST FROM JS2 (ONLY CHANGE HERE)  */
-/* ========================================================= */
+/* ================= TOKENS ================= */
 
 const TOKENS = {
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
@@ -107,9 +84,6 @@ const TOKENS = {
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
   CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  MATICX: "0xa3fa99a148fa48d14ed51d610c367c61876997f1",
-  UNI: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-  UNI2: "0xb33eaad8d922b1083446dc23f610c2567fb5180f",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
   LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
@@ -130,9 +104,7 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ========================================================= */
-/* 🔥 RESTORED: MULTI-HOP PATH BUILDERS FROM JS2              */
-/* ========================================================= */
+/* ================= MULTI-HOP PATHS ================= */
 
 function buildPaths(usdc, token) {
   return [
@@ -140,8 +112,7 @@ function buildPaths(usdc, token) {
     [usdc, TOKENS.WMATIC, token],
     [usdc, TOKENS.WETH, token],
     [usdc, TOKENS.USDT, token],
-    [usdc, TOKENS.DAI, token],
-    [usdc, TOKENS.WMATIC, TOKENS.WETH, token]
+    [usdc, TOKENS.DAI, token]
   ];
 }
 
@@ -151,108 +122,63 @@ function buildSellPaths(usdc, token) {
     [token, TOKENS.WMATIC, usdc],
     [token, TOKENS.WETH, usdc],
     [token, TOKENS.USDT, usdc],
-    [token, TOKENS.DAI, usdc],
-    [token, TOKENS.WETH, TOKENS.WMATIC, usdc]
+    [token, TOKENS.DAI, usdc]
   ];
 }
 
-/* ================= BALANCE DISPLAY ================= */
+/* ================= VAULT-AWARE SIMULATION ================= */
 
-async function showBalances(usdcAddr) {
-  const maticBal = await provider.getBalance(wallet.address);
-
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
-
-  const vaultBal = await usdc.balanceOf(VAULT_ADDRESS);
-
-  console.log(
-    `💰 Wallet MATIC: ${ethers.formatEther(maticBal)} | Vault USDC: ${ethers.formatUnits(vaultBal, 6)}`
-  );
-}
-
-/* ================= AUTO WITHDRAW (UNCHANGED) ================= */
-
-async function autoWithdraw(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    [
-      "function balanceOf(address) view returns(uint256)",
-      "function approve(address,uint256)"
-    ],
-    wallet
-  );
-
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);
-  const balFloat = Number(ethers.formatUnits(bal, 6));
-
-  if (balFloat < WITHDRAW_THRESHOLD_USDC) return;
-
-  const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
-
+async function vaultWillExecute(
+  buyRouter,
+  sellRouter,
+  amountIn,
+  buyPath,
+  sellPath,
+  deadline
+) {
   try {
-    await (await vault.withdrawERC20(usdcAddr, amount)).wait();
-    await (await usdc.approve(routers.QuickSwap, amount)).wait();
-
-    const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
-
-    await (
-      await router.swapExactTokensForTokens(
-        amount,
-        0,
-        [usdcAddr, TOKENS.WMATIC],
-        wallet.address,
-        Math.floor(Date.now() / 1000) + 120
-      )
-    ).wait();
-
-    console.log("✅ USDC swapped → MATIC");
-  } catch (e) {
-    console.log(`⚠️ Auto-withdraw failed: ${e.message}`);
+    await vault.callStatic.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      amountIn,
+      buyPath,
+      sellPath,
+      deadline
+    );
+    return true;
+  } catch {
+    return false;
   }
 }
 
-/* ========================================================= */
-/* 🔥 RESTORED: FULL ARB LOOP FROM JS2                        */
-/* ========================================================= */
+/* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const buyPaths = buildPaths(usdc, tokenAddr);
-
   let bestBuyOut = null;
   let bestBuyPath = null;
 
-  for (const path of buyPaths) {
+  for (const path of buildPaths(usdc, tokenAddr)) {
     const out = await quote(buyRouter, amountIn, path);
-    if (!out) continue;
-    if (!bestBuyOut || out > bestBuyOut) {
+    if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
       bestBuyPath = path;
     }
   }
-
   if (!bestBuyOut) return;
-
-  const sellPaths = buildSellPaths(usdc, tokenAddr);
 
   let bestSellOut = null;
   let bestSellPath = null;
 
-  for (const path of sellPaths) {
+  for (const path of buildSellPaths(usdc, tokenAddr)) {
     const out = await quote(sellRouter, bestBuyOut, path);
-    if (!out) continue;
-    if (!bestSellOut || out > bestSellOut) {
+    if (out && (!bestSellOut || out > bestSellOut)) {
       bestSellOut = out;
       bestSellPath = path;
     }
   }
-
   if (!bestSellOut) return;
 
   const profit =
@@ -260,25 +186,41 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  await vault.executeArbitrage(
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+
+  // 🥇 FEATURE #1 — EXACT VAULT SIMULATION
+  const ok = await vaultWillExecute(
     buyRouter,
     sellRouter,
     amountIn,
     bestBuyPath,
     bestSellPath,
-    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
+    deadline
   );
+
+  if (!ok) return;
+
+  console.log(`🔥 EXECUTING | Profit ≈ ${profit.toFixed(6)} USDC`);
+
+  // 🟢 FEATURE #2 + #3 — JS1 STYLE + NON-BLOCKING
+  const tx = await vault.executeArbitrage(
+    buyRouter,
+    sellRouter,
+    amountIn,
+    bestBuyPath,
+    bestSellPath,
+    deadline
+  );
+
+  tx.wait()
+    .then(() => console.log(`✅ CONFIRMED & DEPOSITED | ${tx.hash}`))
+    .catch(() => {});
 }
 
 /* ================= SCANNER ================= */
 
 async function scan() {
-  console.log(`🔍 Scan started @ ${new Date().toISOString()}`);
-
-  const usdc = await vault.usdc();
-
-  await autoWithdraw(usdc);
-  await showBalances(usdc);
+  console.log(`🔍 Scan @ ${new Date().toISOString()}`);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
