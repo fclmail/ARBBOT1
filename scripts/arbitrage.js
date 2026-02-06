@@ -30,12 +30,12 @@ if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty
 const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.0000001;
 const SLIPPAGE_PCT = 0.05;
-const SCAN_INTERVAL_MS = 30_000;
+const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= WITHDRAW SETTINGS (UNCHANGED) ================= */
 
-const WITHDRAW_THRESHOLD_USDC = 1;
+const WITHDRAW_THRESHOLD_USDC = 11772281;
 const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
@@ -87,7 +87,7 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  Dfyn: "0xA8b607Aa09B6A2641cF6F90f643E76d3f6e6Ff73",
+  Wault:     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
