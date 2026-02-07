@@ -150,7 +150,7 @@ async function logBalances() {
 
   console.log(`${CYAN}👛 Wallet:${RESET} ${wallet.address}`);
   console.log(`${YELLOW}⛽ MATIC:${RESET} ${ethers.formatEther(maticBal)}`);
-  console.log(`${GREEN}🏦 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`);
+  console.log(`${GREEN}🏦 Vault USDC:${RESET} ${Number(ethers.formatUnits(vaultBal, 6))} USDC`);
 }
 
 /* ================= ARB CORE ================= */
@@ -185,7 +185,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const safeProfit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`${GREEN}🔥 FLASH PROFIT:${RESET} ${safeProfit} USDC`);
+ console.log(`${GREEN}🔥 FLASH PROFIT:${RESET} ${safeProfit.toFixed(6)} USDC`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
