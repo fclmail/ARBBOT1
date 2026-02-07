@@ -199,7 +199,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     `${safeProfit.toFixed(6)} USDC`
   );
 
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  DEADLINE_SECONDS = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   const args = [
     buyRouter,
