@@ -185,7 +185,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const safeProfit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`${GREEN}🔥 FLASH PROFIT:${RESET} ${safeProfit.toPrecision(8)} USDC`);
+  console.log(`${GREEN}🔥 FLASH PROFIT:${RESET} ${safeProfit} USDC`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
