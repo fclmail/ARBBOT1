@@ -34,7 +34,7 @@ const RED = "\x1b[91m";
 /* ================= CONSTANTS ================= */
 
 // ⚠️ Increased trade size for real execution
-const MIN_TRADE_USDC = 1;
+const MIN_TRADE_USDC = 4.8;
 
 // JS safety profit (must exceed on-chain minimum comfortably)
 const MIN_EXPECTED_PROFIT = 0.000001;
