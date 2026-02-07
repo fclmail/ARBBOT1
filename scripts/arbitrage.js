@@ -3,8 +3,6 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-/* ================= ENV ================= */
-
 dotenv.config({ override: false });
 
 const RPC_POLYGON = (
@@ -23,34 +21,20 @@ const WALLET_PRIVATE_KEY = (
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
-/* ================= COLORS ================= */
-
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
 const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
-/* ================= CONSTANTS ================= */
-
-// ⚠️ Increased trade size for real execution
-const MIN_TRADE_USDC = 4.8;
-
-// JS safety profit (must exceed on-chain minimum comfortably)
+const MIN_TRADE_USDC = 1;
 const MIN_EXPECTED_PROFIT = 0.000001;
-
-// Execution safety margin (assume worst-case loss)
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
-
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
-/* ================= PROVIDER ================= */
-
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
-
-/* ================= CONTRACT ================= */
 
 const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 
@@ -79,8 +63,6 @@ const vaultAbi = [
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= ROUTERS ================= */
-
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -91,8 +73,6 @@ const routers = {
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
-
-/* ================= TOKENS ================= */
 
 const TOKENS = {
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
@@ -106,7 +86,10 @@ const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
-/* ================= HELPERS ================= */
+const erc20Abi = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -119,8 +102,6 @@ async function quote(routerAddr, amountIn, path) {
     return null;
   }
 }
-
-/* ================= PATHS ================= */
 
 function buildPaths(usdc, token) {
   return [
@@ -142,8 +123,6 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= SIMULATION ================= */
-
 async function vaultWillExecute(args) {
   try {
     await vault.executeArbitrage.staticCall(...args);
@@ -151,17 +130,27 @@ async function vaultWillExecute(args) {
     return true;
   } catch (e) {
     console.log(`${RED}🧪 SIMULATION FAILED${RESET}`);
-    console.log(
-      e?.shortMessage ||
-      e?.reason ||
-      e?.error?.message ||
-      e
-    );
+    console.log(e?.shortMessage || e?.reason || e?.error?.message || e);
     return false;
   }
 }
 
-/* ================= ARBITRAGE ================= */
+async function logBalances() {
+  const maticBal = await provider.getBalance(wallet.address);
+  const usdcAddr = await vault.usdc();
+  const usdc = new ethers.Contract(usdcAddr, erc20Abi, provider);
+  const vaultBal = await usdc.balanceOf(VAULT_ADDRESS);
+
+  console.log(
+    `${CYAN}👛 Wallet:${RESET} ${wallet.address}`
+  );
+  console.log(
+    `${YELLOW}⛽ MATIC:${RESET} ${ethers.formatEther(maticBal)}`
+  );
+  console.log(
+    `${GREEN}🏦 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`
+  );
+}
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
@@ -195,8 +184,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(
-    `${GREEN}🔥 REAL PROFIT:${RESET} ` +
-    `${safeProfit.toFixed(6)} USDC`
+    `${GREEN}🔥 REAL PROFIT:${RESET} ${safeProfit.toFixed(6)} USDC`
   );
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
@@ -218,10 +206,10 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   console.log(`${GREEN}✅ PROFITS DEPOSITED | ${tx.hash}${RESET}`);
 }
 
-/* ================= SCAN ================= */
-
 async function scan() {
+  await logBalances();
   console.log(`🔍 Scan @ ${new Date().toISOString()}`);
+
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
@@ -231,8 +219,6 @@ async function scan() {
     }
   }
 }
-
-/* ================= MAIN ================= */
 
 console.log("🚀 Arbitrage bot started");
 
