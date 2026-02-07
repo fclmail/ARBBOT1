@@ -40,7 +40,7 @@ const MIN_TRADE_USDC = 1;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 // Execution safety margin (assume worst-case loss)
-const PROFIT_SAFETY_MULTIPLIER = 0.07;
+const PROFIT_SAFETY_MULTIPLIER = 0.9;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -199,7 +199,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     `${safeProfit.toFixed(6)} USDC`
   );
 
-  DEADLINE_SECONDS = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   const args = [
     buyRouter,
