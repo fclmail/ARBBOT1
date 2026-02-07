@@ -146,7 +146,7 @@ function buildSellPaths(usdc, token) {
 
 async function vaultWillExecute(args) {
   try {
-    await vault.callStatic.executeArbitrage(...args);
+    await vault.executeArbitrage.staticCall(...args);
     console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
     return true;
   } catch (e) {
