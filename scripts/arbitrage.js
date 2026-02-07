@@ -46,7 +46,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= FLASH VAULT ================= */
 
-const VAULT_ADDRESS = "0x35b618636Da1832B1DA71Ca5c06855c79cBd48e4";
+const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
