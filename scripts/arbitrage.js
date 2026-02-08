@@ -29,8 +29,8 @@ const YELLOW = "\x1b[93m";
 /* ================= CONSTANTS ================= */
 
 // FIX #1 — real trade size + real profit threshold
-const MIN_TRADE_USDC = 100;
-const MIN_EXPECTED_PROFIT = 0.5;
+const MIN_TRADE_USDC = .90;
+const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
