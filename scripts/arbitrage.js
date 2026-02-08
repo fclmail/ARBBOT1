@@ -1,5 +1,3 @@
-// scripts/arbitrage.js
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -142,27 +140,59 @@ async function tryArb(buyRouter, sellRouter, token) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuy, bestBuyPath;
-  for (const p of buyPaths(usdc, token)) {
-    const out = await quote(buyRouter, amountIn, p);
+  // Parallelize buy path quotes for a given buyRouter
+  const buyPromises = buyPaths(usdc, token).map(p => quote(buyRouter, amountIn, p));
+  const buyOuts = await Promise.all(buyPromises);
+  buyOuts.forEach((out, idx) => {
+    const path = buyPaths(usdc, token)[idx];
     if (out && (!bestBuy || out > bestBuy)) {
       bestBuy = out;
-      bestBuyPath = p;
+      bestBuyPath = path;
     }
-  }
+  });
   if (!bestBuy) return;
 
   let bestSell, bestSellPath;
-  for (const p of sellPaths(usdc, token)) {
-    const out = await quote(sellRouter, bestBuy, p);
+  const sellPathsList = sellPaths(usdc, token);
+  const sellPromises = sellPathsList.map(p => quote(sellRouter, bestBuy, p));
+  const sellOuts = await Promise.all(sellPromises);
+  sellOuts.forEach((out, idx) => {
+    const path = sellPathsList[idx];
     if (out && (!bestSell || out > bestSell)) {
       bestSell = out;
-      bestSellPath = p;
+      bestSellPath = path;
     }
-  }
+  });
   if (!bestSell) return;
 
-  const profit =
-    Number(ethers.formatUnits(bestSell, 6)) - MIN_TRADE_USDC;
+  const profit = Number(ethers.formatUnits(bestSell, 6)) - MIN_TRADE_USDC;
+  const profitPct = (profit / MIN_TRADE_USDC) * 100;
+
+  // Debug / visibility: show current buy/sell prices and potential profit
+  console.log(
+    `${CYAN}🔎 ARB CHECK${RESET} token=${token} buyRouter=${buyRouter.substring(0,6)}... sellRouter=${sellRouter.substring(0,6)}...`
+  );
+  console.log(
+    `  ${YELLOW}Buy path:${RESET} ${bestBuyPath.map(addr => addr.toLowerCase()).join(" -> ")}`
+  );
+  console.log(
+    `  ${YELLOW}Best buy (USDC -> token) price:${RESET} ${ethers.FormatUnits
+      ? "" // placeholder to keep syntax consistent in environments without this path
+      : ""}`
+  );
+  // Print actual numeric price for bestBuy in human-readable form
+  console.log(
+    `  ${YELLOW}Best buy amountOut:${RESET} ${bestBuy ? ethers.formatUnits(bestBuy, 18) : "N/A"}`
+  );
+  console.log(
+    `  ${YELLOW}Sell path:${RESET} ${bestSellPath.map(addr => addr.toLowerCase()).join(" -> ")}`
+  );
+  console.log(
+    `  ${YELLOW}Best sell amountOut (USDC):${RESET} ${bestSell ? ethers.formatUnits(bestSell, 6) : "N/A"}`
+  );
+  console.log(
+    `  ${YELLOW}Estimated profit:${RESET} ${profit.toFixed(6)} USDC (${profitPct.toFixed(6)}%)`
+  );
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
@@ -196,6 +226,8 @@ async function scan() {
   const usdc = await vault.usdc();
   await logBalances(usdc);
 
+  // To keep behavior identical to the original, we iterate all combos but
+  // we also show per-combination price data via tryArb logs.
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
