@@ -27,10 +27,10 @@ const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
 const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
+const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-// SMART CONTRACT: minimum profit = 1 = 0.000001 USDCe
 const MIN_TRADE_USDC = 1.0;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
@@ -46,6 +46,10 @@ const WITHDRAW_PERCENT = 1;
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
+/* ================= TX LOCK ================= */
+
+let txInFlight = false;
 
 /* ================= CONTRACT ================= */
 
@@ -167,38 +171,6 @@ async function showBalances(usdcAddr) {
   );
 }
 
-/* ================= AUTO WITHDRAW → MATIC ================= */
-
-async function autoWithdraw(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)", "function approve(address,uint256)"],
-    wallet
-  );
-
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);
-  if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC) return;
-
-  const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
-
-  await (await vault.withdrawERC20(usdcAddr, amount)).wait();
-  await (await usdc.approve(routers.QuickSwap, amount)).wait();
-
-  const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
-
-  await (
-    await router.swapExactTokensForTokens(
-      amount,
-      0,
-      [usdcAddr, TOKENS.WMATIC],
-      wallet.address,
-      Math.floor(Date.now() / 1000) + 120
-    )
-  ).wait();
-
-  console.log(`${GREEN}💸 PROFITS WITHDRAWN → MATIC${RESET}`);
-}
-
 /* ================= SIMULATION ================= */
 
 async function vaultWillExecute(args) {
@@ -207,7 +179,11 @@ async function vaultWillExecute(args) {
     await vault.callStatic.executeArbitrage(...args);
     console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
     return true;
-  } catch {
+  } catch (e) {
+    console.log(
+      `${RED}❌ SIMULATION FAILED:${RESET}`,
+      e.reason || e.shortMessage || e.message
+    );
     return false;
   }
 }
@@ -215,11 +191,13 @@ async function vaultWillExecute(args) {
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = await vault.usdc();
+  if (txInFlight) return;
+
+  const usdcAddr = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
-  for (const p of buildPaths(usdc, tokenAddr)) {
+  for (const p of buildPaths(usdcAddr, tokenAddr)) {
     const out = await quote(buyRouter, amountIn, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
@@ -229,7 +207,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (!bestBuyOut) return;
 
   let bestSellOut, bestSellPath;
-  for (const p of buildSellPaths(usdc, tokenAddr)) {
+  for (const p of buildSellPaths(usdcAddr, tokenAddr)) {
     const out = await quote(sellRouter, bestBuyOut, p);
     if (out && (!bestSellOut || out > bestSellOut)) {
       bestSellOut = out;
@@ -238,13 +216,12 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
-  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+  const profit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(
-    `${GREEN}🔥 PROFIT FOUND:${RESET} ` +
-    `${GREEN}${profit.toFixed(6)} USDCe${RESET}`
-  );
+  console.log(`${GREEN}🔥 PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDCe`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
@@ -259,11 +236,33 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (!(await vaultWillExecute(args))) return;
 
-  const tx = await vault.executeArbitrage(...args);
+  txInFlight = true;
 
-  tx.wait().then(() => {
-    console.log(`${GREEN}✅ PROFITS DEPOSITED INTO VAULT${RESET} | ${tx.hash}`);
-  });
+  try {
+    const usdc = new ethers.Contract(
+      usdcAddr,
+      ["function balanceOf(address) view returns(uint256)"],
+      provider
+    );
+
+    const before = await usdc.balanceOf(VAULT_ADDRESS);
+
+    console.log(`${YELLOW}⚡ EXECUTING ARBITRAGE TX...${RESET}`);
+    const tx = await vault.executeArbitrage(...args);
+    console.log(`${CYAN}📤 TX SENT:${RESET} ${tx.hash}`);
+
+    await tx.wait();
+    console.log(`${GREEN}✅ TX CONFIRMED${RESET}`);
+
+    const after = await usdc.balanceOf(VAULT_ADDRESS);
+    console.log(
+      `${GREEN}🏦 VAULT PROFIT:${RESET}`,
+      ethers.formatUnits(after - before, 6),
+      "USDC"
+    );
+  } finally {
+    txInFlight = false;
+  }
 }
 
 /* ================= SCAN ================= */
@@ -272,7 +271,6 @@ async function scan() {
   console.log(`🔍 Scan @ ${new Date().toISOString()}`);
   const usdc = await vault.usdc();
   await showBalances(usdc);
-  await autoWithdraw(usdc);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
