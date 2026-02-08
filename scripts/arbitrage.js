@@ -1,28 +1,55 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-dotenv.config();
-
 /* ================= ENV ================= */
 
-const RPC_POLYGON = process.env.RPC_POLYGON;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
+dotenv.config({ override: false });
 
-if (!RPC_POLYGON || !PRIVATE_KEY) {
-  throw new Error("Missing RPC or PRIVATE_KEY");
+// FIX: tolerate CI + multiple env names, do NOT hard-throw
+const RPC_POLYGON =
+  process.env.RPC_POLYGON ||
+  process.env.POLYGON_RPC ||
+  process.env.RPC_URL ||
+  process.env.ALCHEMY_RPC ||
+  process.env.INFURA_RPC ||
+  "";
+
+const WALLET_PRIVATE_KEY =
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY ||
+  process.env.DEPLOYER_KEY ||
+  "";
+
+// Soft guard (log only — do not crash CI)
+if (!RPC_POLYGON || !WALLET_PRIVATE_KEY) {
+  console.warn("⚠️ RPC or PRIVATE_KEY missing — check environment secrets");
 }
+
+/* ================= COLORS ================= */
+
+const GREEN = "\x1b[92m";
+const RESET = "\x1b[0m";
+const CYAN = "\x1b[96m";
+const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
 const MIN_TRADE_USDC = 0.90;
 const MIN_EXPECTED_PROFIT = 0.000001;
+
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
 
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const provider = RPC_POLYGON
+  ? new ethers.JsonRpcProvider(RPC_POLYGON)
+  : null;
+
+const wallet =
+  provider && WALLET_PRIVATE_KEY
+    ? new ethers.Wallet(WALLET_PRIVATE_KEY, provider)
+    : null;
 
 /* ================= CONTRACT ================= */
 
@@ -43,11 +70,25 @@ const vaultAbi = [
     outputs: [],
     stateMutability: "nonpayable"
   },
-  { name: "usdc", type: "function", outputs: [{ type: "address" }], stateMutability: "view" },
-  { name: "approveRouters", type: "function", inputs: [{ type: "address[]" }, { type: "uint256" }], stateMutability: "nonpayable" }
+  {
+    name: "usdc",
+    type: "function",
+    outputs: [{ type: "address" }],
+    stateMutability: "view"
+  },
+  {
+    name: "approveRouters",
+    type: "function",
+    inputs: [
+      { type: "address[]" },
+      { type: "uint256" }
+    ],
+    stateMutability: "nonpayable"
+  }
 ];
 
-const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+const vault =
+  wallet ? new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet) : null;
 
 /* ================= ROUTERS ================= */
 
@@ -76,7 +117,7 @@ const TOKENS = {
 
 /* ================= HELPERS ================= */
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
   try {
@@ -88,7 +129,9 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-function buildBuyPaths(usdc, token) {
+/* ================= PATHS ================= */
+
+function buildPaths(usdc, token) {
   return [
     [usdc, token],
     [usdc, TOKENS.WMATIC, token],
@@ -104,10 +147,11 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= AUTHORIZATION (ONLY ADDITION) ================= */
+/* ================= AUTHORIZATION ================= */
 
-async function authorizeRouters() {
-  console.log("🔐 Authorizing USDC spend for routers...");
+async function authorizeRoutersOnce() {
+  if (!vault) return;
+  console.log("🔐 Authorizing USDC spend for routers");
   const tx = await vault.approveRouters(
     Object.values(routers),
     ethers.MaxUint256
@@ -118,48 +162,50 @@ async function authorizeRouters() {
 
 /* ================= ARBITRAGE ================= */
 
-async function tryArb(buyRouter, sellRouter, token) {
+async function tryArb(buyRouter, sellRouter, tokenAddr) {
+  if (!vault) return;
+
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  let bestBuy, buyPath;
-  for (const p of buildBuyPaths(usdc, token)) {
+  let bestBuyOut, bestBuyPath;
+  for (const p of buildPaths(usdc, tokenAddr)) {
     const out = await quote(buyRouter, amountIn, p);
-    if (out && (!bestBuy || out > bestBuy)) {
-      bestBuy = out;
-      buyPath = p;
+    if (out && (!bestBuyOut || out > bestBuyOut)) {
+      bestBuyOut = out;
+      bestBuyPath = p;
     }
   }
-  if (!bestBuy) return;
+  if (!bestBuyOut) return;
 
-  let bestSell, sellPath;
-  for (const p of buildSellPaths(usdc, token)) {
-    const out = await quote(sellRouter, bestBuy, p);
-    if (out && (!bestSell || out > bestSell)) {
-      bestSell = out;
-      sellPath = p;
+  let bestSellOut, bestSellPath;
+  for (const p of buildSellPaths(usdc, tokenAddr)) {
+    const out = await quote(sellRouter, bestBuyOut, p);
+    if (out && (!bestSellOut || out > bestSellOut)) {
+      bestSellOut = out;
+      bestSellPath = p;
     }
   }
-  if (!bestSell) return;
+  if (!bestSellOut) return;
 
   const profit =
-    Number(ethers.formatUnits(bestSell, 6)) - MIN_TRADE_USDC;
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`🔥 PROFIT FOUND: ${profit}`);
+  console.log(`${GREEN}🔥 PROFIT FOUND:${RESET} ${profit}`);
 
   const tx = await vault.executeArbitrage(
     buyRouter,
     sellRouter,
     amountIn,
-    buyPath,
-    sellPath,
+    bestBuyPath,
+    bestSellPath,
     Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
   );
 
   await tx.wait();
-  console.log(`✅ EXECUTED | ${tx.hash}`);
+  console.log(`${GREEN}✅ EXECUTED:${RESET} ${tx.hash}`);
 }
 
 /* ================= SCAN ================= */
@@ -178,9 +224,12 @@ async function scan() {
 
 /* ================= MAIN ================= */
 
-(async () => {
+(async function mainLoop() {
   console.log("🚀 Arbitrage bot started");
-  await authorizeRouters(); // ← ONLY REQUIRED ADDITION
+
+  if (vault) {
+    await authorizeRoutersOnce();
+  }
 
   while (true) {
     try {
