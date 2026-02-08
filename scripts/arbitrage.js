@@ -1,5 +1,3 @@
-// scripts/arbitrage.js
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -30,16 +28,16 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-// SMART CONTRACT: minimum profit = 1 = 0.000001 USDCe
-const MIN_TRADE_USDC = .9;
-const MIN_EXPECTED_PROFIT = 0.000001;
+// FIX #1 — real trade size + real profit threshold
+const MIN_TRADE_USDC = 100;
+const MIN_EXPECTED_PROFIT = 0.5;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= WITHDRAW ================= */
 
-const WITHDRAW_THRESHOLD_USDC = 1000000;
+const WITHDRAW_THRESHOLD_USDC = 1_000_000;
 const WITHDRAW_PERCENT = 100;
 
 /* ================= PROVIDER ================= */
@@ -103,11 +101,9 @@ const routerAbi = [
 /* ================= TOKENS ================= */
 
 const TOKENS = {
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
   CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
   LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
@@ -130,13 +126,12 @@ async function quote(routerAddr, amountIn, path) {
 
 /* ================= PATHS ================= */
 
+// FIX #4 — removed low-value USDT / DAI paths
 function buildPaths(usdc, token) {
   return [
     [usdc, token],
     [usdc, TOKENS.WMATIC, token],
-    [usdc, TOKENS.WETH, token],
-    [usdc, TOKENS.USDT, token],
-    [usdc, TOKENS.DAI, token]
+    [usdc, TOKENS.WETH, token]
   ];
 }
 
@@ -144,9 +139,7 @@ function buildSellPaths(usdc, token) {
   return [
     [token, usdc],
     [token, TOKENS.WMATIC, usdc],
-    [token, TOKENS.WETH, usdc],
-    [token, TOKENS.USDT, usdc],
-    [token, TOKENS.DAI, usdc]
+    [token, TOKENS.WETH, usdc]
   ];
 }
 
@@ -167,45 +160,12 @@ async function showBalances(usdcAddr) {
   );
 }
 
-/* ================= AUTO WITHDRAW → MATIC ================= */
-
-async function autoWithdraw(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)", "function approve(address,uint256)"],
-    wallet
-  );
-
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);
-  if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC) return;
-
-  const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
-
-  await (await vault.withdrawERC20(usdcAddr, amount)).wait();
-  await (await usdc.approve(routers.QuickSwap, amount)).wait();
-
-  const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
-
-  await (
-    await router.swapExactTokensForTokens(
-      amount,
-      0,
-      [usdcAddr, TOKENS.WMATIC],
-      wallet.address,
-      Math.floor(Date.now() / 1000) + 120
-    )
-  ).wait();
-
-  console.log(`${GREEN}💸 PROFITS WITHDRAWN → MATIC${RESET}`);
-}
-
 /* ================= SIMULATION ================= */
 
 async function vaultWillExecute(args) {
   console.log(`${YELLOW}🧪 SIMULATION START${RESET}`);
   try {
     await vault.callStatic.executeArbitrage(...args);
-    console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
     return true;
   } catch {
     return false;
@@ -238,15 +198,14 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
-  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+  const profit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   console.log(
-    `${GREEN}🔥 PROFIT FOUND:${RESET} ` +
-    `${GREEN}${profit.toFixed(6)} USDCe${RESET}`
+    `${GREEN}🔥 PROFIT FOUND:${RESET} ${profit.toFixed(4)} USDCe`
   );
-
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   const args = [
     buyRouter,
@@ -254,16 +213,20 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     amountIn,
     bestBuyPath,
     bestSellPath,
-    deadline
+    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
   ];
 
   if (!(await vaultWillExecute(args))) return;
 
+  // FIX #2 + #3 — immediate execution, block scan
   const tx = await vault.executeArbitrage(...args);
+  await tx.wait();
 
-  tx.wait().then(() => {
-    console.log(`${GREEN}✅ PROFITS DEPOSITED INTO VAULT${RESET} | ${tx.hash}`);
-  });
+  console.log(
+    `${GREEN}✅ ARBITRAGE EXECUTED — PROFIT DEPOSITED${RESET} | ${tx.hash}`
+  );
+
+  return true;
 }
 
 /* ================= SCAN ================= */
@@ -272,22 +235,31 @@ async function scan() {
   console.log(`🔍 Scan @ ${new Date().toISOString()}`);
   const usdc = await vault.usdc();
   await showBalances(usdc);
-  await autoWithdraw(usdc);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
-        if (buy !== sell) await tryArb(buy, sell, token);
-        await sleep(100);
+        if (buy !== sell) {
+          const executed = await tryArb(buy, sell, token);
+          if (executed) return;
+        }
       }
     }
   }
 }
 
-/* ================= MAIN ================= */
+/* ================= MAIN LOOP ================= */
 
+// FIX #3 — no overlapping scans
 console.log("🚀 Arbitrage bot started");
 
-setInterval(() => {
-  scan().catch(console.error);
-}, SCAN_INTERVAL_MS);
+(async function mainLoop() {
+  while (true) {
+    try {
+      await scan();
+    } catch (e) {
+      console.error(e);
+    }
+    await sleep(SCAN_INTERVAL_MS);
+  }
+})();
