@@ -1,92 +1,74 @@
-// 1) IMPORTS AND ENV  
+// ============================================================
+// POLYGON ARBITRAGE BOT — SINGLE FILE DROP-IN
+// ============================================================
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-// 2) ENV VARIABLES  
+// ============================================================
+// ENV
+// ============================================================
 
 const RPC_POLYGON =
-  (process.env.RPC_POLYGON ||
-    process.env.POLYGON_RPC ||
-    process.env.RPC_URL ||
-    "").trim();
+  process.env.RPC_POLYGON ||
+  process.env.POLYGON_RPC ||
+  process.env.RPC_URL;
 
 const WALLET_PRIVATE_KEY =
-  (process.env.WALLET_PRIVATE_KEY ||
-    process.env.PRIVATE_KEY ||
-    "").trim();
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY;
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
-// 3) COLORS  
+// ============================================================
+// COLORS
+// ============================================================
 
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
 const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 
-// 4) CONSTANTS  
+// ============================================================
+// SETTINGS
+// ============================================================
 
-// SMART CONTRACT: minimum profit = 1 = 0.000001 USDCe  
 const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
-// 5) WITHDRAW CONFIG  
-
 const WITHDRAW_THRESHOLD_USDC = 1;
 const WITHDRAW_PERCENT = 100;
 
-// 6) PROVIDER AND WALLET  
+// ============================================================
+// PROVIDER + WALLET
+// ============================================================
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-// 7) VAULT CONTRACT  
+// ============================================================
+// VAULT
+// ============================================================
 
 const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 
 const vaultAbi = [
-  {
-    name: "executeArbitrage",
-    type: "function",
-    inputs: [
-      { name: "buyRouter", type: "address" },
-      { name: "sellRouter", type: "address" },
-      { name: "amountInUSDC", type: "uint256" },
-      { name: "pathToToken", type: "address[]" },
-      { name: "pathToUSDC", type: "address[]" },
-      { name: "deadline", type: "uint256" }
-    ],
-    outputs: [],
-    stateMutability: "nonpayable"
-  },
-  {
-    name: "usdc",
-    type: "function",
-    outputs: [{ type: "address" }],
-    stateMutability: "view"
-  },
-  {
-    name: "withdrawERC20",
-    type: "function",
-    inputs: [
-      { name: "tokenAddr", type: "address" },
-      { name: "amount", type: "uint256" }
-    ],
-    outputs: [],
-    stateMutability: "nonpayable"
-  }
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256)",
+  "function usdc() view returns(address)",
+  "function withdrawERC20(address,uint256)"
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-// 8) ROUTERS  
+// ============================================================
+// ROUTERS
+// ============================================================
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -95,24 +77,32 @@ const routers = {
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-// 9) ROUTER ABI  
+// ============================================================
+// ROUTER ABI
+// ============================================================
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
+  "function getAmountsOut(uint,address[]) view returns(uint[])",
   "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
 ];
 
-// 10) TOKENS  
+// ============================================================
+// TOKENS (Polygon)
+// ============================================================
 
 const TOKENS = {
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-  CRV: "0x172370d5cd63279efa6d502dab291
-...
+  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+  WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
 };
 
-// 11) HELPERS  
+// ============================================================
+// HELPERS
+// ============================================================
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -126,46 +116,54 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-// 12) PATHS BUILDER  
+// ============================================================
+// PATH BUILDERS
+// ============================================================
 
-function buildPaths(usdc, tokenAddr) {
+function buildPaths(usdc, token) {
   return [
-    [usdc, tokenAddr],
-    [usdc, TOKENS.WMATIC, tokenAddr],
-    [usdc, TOKENS.WETH, tokenAddr],
-    [usdc, TOKENS.USDT, tokenAddr],
-    [usdc, TOKENS.DAI, tokenAddr]
+    [usdc, token],
+    [usdc, TOKENS.WMATIC, token],
+    [usdc, TOKENS.WETH, token],
+    [usdc, TOKENS.USDT, token],
+    [usdc, TOKENS.DAI, token]
   ];
 }
 
-function buildSellPaths(usdc, tokenAddr) {
+function buildSellPaths(usdc, token) {
   return [
-    [tokenAddr, usdc],
-    [tokenAddr, TOKENS.WMATIC, usdc],
-    [tokenAddr, TOKENS.WETH, usdc],
-    [tokenAddr, TOKENS.USDT, usdc],
-    [tokenAddr, TOKENS.DAI, usdc]
+    [token, usdc],
+    [token, TOKENS.WMATIC, usdc],
+    [token, TOKENS.WETH, usdc],
+    [token, TOKENS.USDT, usdc],
+    [token, TOKENS.DAI, usdc]
   ];
 }
 
-// 13) DISPLAY BALANCES  
+// ============================================================
+// BALANCES
+// ============================================================
 
 async function showBalances(usdcAddr) {
   const matic = await provider.getBalance(wallet.address);
+
   const usdc = new ethers.Contract(
     usdcAddr,
     ["function balanceOf(address) view returns(uint256)"],
     provider
   );
+
   const vaultBal = await usdc.balanceOf(VAULT_ADDRESS);
 
   console.log(
-    `${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(matic)} | ` +
-    `${CYAN}Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`
+    `${CYAN}Wallet MATIC:${RESET} ${ethers.formatEther(matic)} | ` +
+      `${CYAN}Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`
   );
 }
 
-// 14) WITHDRAW LOGIC  
+// ============================================================
+// WITHDRAW PROFITS
+// ============================================================
 
 async function autoWithdraw(usdcAddr) {
   const usdc = new ethers.Contract(
@@ -175,6 +173,7 @@ async function autoWithdraw(usdcAddr) {
   );
 
   const bal = await usdc.balanceOf(VAULT_ADDRESS);
+
   if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC) return;
 
   const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
@@ -197,79 +196,67 @@ async function autoWithdraw(usdcAddr) {
   console.log(`${GREEN}💸 PROFITS WITHDRAWN → MATIC${RESET}`);
 }
 
-// 15) SIMULATION CHECK  
+// ============================================================
+// ARBITRAGE LOGIC
+// ============================================================
 
-async function vaultWillExecute(args) {
-  console.log(`${YELLOW}🧪 SIMULATION START${RESET}`);
-  try {
-    await vault.callStatic.executeArbitrage(...args);
-    console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// 16) ARBITRAGE TRY LOGIC  
-
-async function tryArb(buyRouter, sellRouter, tokenAddr) {
+async function tryArb(buyRouter, sellRouter, token) {
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
-  for (const p of buildPaths(usdc, tokenAddr)) {
+
+  for (const p of buildPaths(usdc, token)) {
     const out = await quote(buyRouter, amountIn, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
       bestBuyPath = p;
     }
   }
+
   if (!bestBuyOut) return;
 
   let bestSellOut, bestSellPath;
-  for (const p of buildSellPaths(usdc, tokenAddr)) {
+
+  for (const p of buildSellPaths(usdc, token)) {
     const out = await quote(sellRouter, bestBuyOut, p);
     if (out && (!bestSellOut || out > bestSellOut)) {
       bestSellOut = out;
       bestSellPath = p;
     }
-...
   }
+
   if (!bestSellOut) return;
 
-  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+  const profit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(
-    `${GREEN}🔥 PROFIT FOUND:${RESET} ` +
-    `${GREEN}${profit.toFixed(6)} USDCe${RESET}`
-  );
+  console.log(`${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDCe${RESET}`);
 
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  const deadline =
+    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  const args = [
+  await vault.executeArbitrage(
     buyRouter,
     sellRouter,
     amountIn,
     bestBuyPath,
     bestSellPath,
     deadline
-  ];
-
-  if (!(await vaultWillExecute(args))) return;
-
-  const tx = await vault.executeArbitrage(...args);
-
-  tx.wait().then(() => {
-    console.log(`${GREEN}✅ PROFITS DEPOSITED INTO VAULT${RESET} | ${tx.hash}`);
-  });
+  );
 }
 
-/* ================= SCAN ================= */
+// ============================================================
+// SCAN LOOP
+// ============================================================
 
 async function scan() {
   console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
+
   const usdc = await vault.usdc();
+
   await showBalances(usdc);
   await autoWithdraw(usdc);
 
@@ -283,7 +270,9 @@ async function scan() {
   }
 }
 
-/* ================= MAIN ================= */
+// ============================================================
+// MAIN
+// ============================================================
 
 console.log("🚀 Arbitrage bot started");
 
