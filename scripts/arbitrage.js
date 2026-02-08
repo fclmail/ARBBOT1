@@ -3,7 +3,7 @@ import { ethers } from "ethers";
 
 dotenv.config();
 
-/* ================= ENV ================= */
+/* =============.==== ENV ================= */
 
 const RPC_POLYGON =
   process.env.RPC_POLYGON ||
