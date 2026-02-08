@@ -5,25 +5,16 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-// FIX: tolerate CI + multiple env names, do NOT hard-throw
 const RPC_POLYGON =
   process.env.RPC_POLYGON ||
   process.env.POLYGON_RPC ||
   process.env.RPC_URL ||
-  process.env.ALCHEMY_RPC ||
-  process.env.INFURA_RPC ||
   "";
 
 const WALLET_PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY ||
   process.env.PRIVATE_KEY ||
-  process.env.DEPLOYER_KEY ||
   "";
-
-// Soft guard (log only — do not crash CI)
-if (!RPC_POLYGON || !WALLET_PRIVATE_KEY) {
-  console.warn("⚠️ RPC or PRIVATE_KEY missing — check environment secrets");
-}
 
 /* ================= COLORS ================= */
 
@@ -147,17 +138,15 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= AUTHORIZATION ================= */
+/* ================= AUTHORIZATION (STALL FIX) ================= */
 
 async function authorizeRoutersOnce() {
   if (!vault) return;
   console.log("🔐 Authorizing USDC spend for routers");
-  const tx = await vault.approveRouters(
-    Object.values(routers),
-    ethers.MaxUint256
-  );
-  await tx.wait();
-  console.log("✅ Router authorization complete");
+  vault
+    .approveRouters(Object.values(routers), ethers.MaxUint256)
+    .then(() => console.log("✅ Router authorization broadcast"))
+    .catch(() => console.warn("⚠️ Router authorization skipped"));
 }
 
 /* ================= ARBITRAGE ================= */
@@ -211,6 +200,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 /* ================= SCAN ================= */
 
 async function scan() {
+  console.log(`🔍 Scan @ ${new Date().toISOString()}`);
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
@@ -227,9 +217,7 @@ async function scan() {
 (async function mainLoop() {
   console.log("🚀 Arbitrage bot started");
 
-  if (vault) {
-    await authorizeRoutersOnce();
-  }
+  await authorizeRoutersOnce(); // no await wait() — no stall
 
   while (true) {
     try {
