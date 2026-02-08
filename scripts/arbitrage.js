@@ -33,9 +33,9 @@ const RED = "\x1b[91m";
 
 /* ================= PARAMS ================= */
 
-const MIN_TRADE_USDC = 1001;
+const MIN_TRADE_USDC = 4;
 const MIN_EXPECTED_PROFIT = 0.00000;
-const PROFIT_SAFETY_MULTIPLIER = 1;
+const PROFIT_SAFETY_MULTIPLIER = 0.09;
 const SCAN_INTERVAL_MS = 15_000;
 const DEADLINE_SECONDS = 60;
 
