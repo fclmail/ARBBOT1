@@ -31,7 +31,7 @@ const YELLOW = "\x1b[93m";
 /* ================= CONSTANTS ================= */
 
 // SMART CONTRACT: minimum profit = 1 = 0.000001 USDCe
-const MIN_TRADE_USDC = 10000;
+const MIN_TRADE_USDC = 1.7;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -46,6 +46,7 @@ const WITHDRAW_PERCENT = 100;
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
 /* ================= CONTRACT ================= */
 
 const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
