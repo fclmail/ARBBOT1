@@ -5,13 +5,25 @@ import { ethers } from "ethers";
 
 dotenv.config();
 
-/* ================= ENV ================= */
+/* ================= ENV (FIXED) ================= */
 
-const RPC_POLYGON = process.env.RPC_POLYGON?.trim();
-const PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
+const RPC_POLYGON =
+  process.env.RPC_POLYGON ||
+  process.env.POLYGON_RPC ||
+  process.env.RPC_URL ||
+  "";
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
-if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+const PRIVATE_KEY =
+  process.env.PRIVATE_KEY ||
+  process.env.WALLET_PRIVATE_KEY ||
+  "";
+
+if (!RPC_POLYGON || !PRIVATE_KEY) {
+  console.error("❌ ENV ERROR");
+  console.error("RPC_POLYGON set:", !!RPC_POLYGON);
+  console.error("PRIVATE_KEY set:", !!PRIVATE_KEY);
+  process.exit(1);
+}
 
 /* ================= PROVIDER ================= */
 
@@ -22,7 +34,7 @@ const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
-const TRADE_AMOUNT_USDC = 1.0; // vault-funded, matches your logs
+const TRADE_AMOUNT_USDC = 1.0;
 
 /* ================= CONTRACT ================= */
 
@@ -53,9 +65,9 @@ const routerAbi = [
 /* ================= TOKENS ================= */
 
 const TOKENS = {
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
+  DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
 };
 
 /* ================= HELPERS ================= */
@@ -125,6 +137,7 @@ async function tryArb(buyRouter, sellRouter, token) {
   console.log(`🧪 SIMULATION START`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+
   const args = [
     buyRouter,
     sellRouter,
@@ -134,14 +147,13 @@ async function tryArb(buyRouter, sellRouter, token) {
     deadline
   ];
 
-  // STATIC SIMULATION
   await vault.callStatic.executeArbitrage(...args);
   console.log(`🧪 SIMULATION PASSED`);
 
-  // EXECUTION
   const tx = await vault.executeArbitrage(...args);
   console.log(`⚡ TX SENT: ${tx.hash}`);
   await tx.wait();
+
   console.log(`✅ ARBITRAGE CONFIRMED`);
 }
 
@@ -155,8 +167,8 @@ async function scan() {
     provider
   );
 
-  const vaultBal = await usdcToken.balanceOf(VAULT_CONTRACT);
-  console.log(`🏦 Vault USDC: ${ethers.formatUnits(vaultBal, 6)}`);
+  const bal = await usdcToken.balanceOf(VAULT_CONTRACT);
+  console.log(`🏦 Vault USDC: ${ethers.formatUnits(bal, 6)}`);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
