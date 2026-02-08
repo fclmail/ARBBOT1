@@ -35,7 +35,7 @@ const RESET = "\x1b[0m";
 
 const MIN_TRADE_USDC = 1.0;
 const MIN_EXPECTED_PROFIT = 0.000001; // adjustable
-const SCAN_INTERVAL_MS = 10_000;
+const SCAN_INTERVAL_MS = 5_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
