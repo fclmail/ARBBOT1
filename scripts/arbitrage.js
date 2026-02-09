@@ -16,7 +16,7 @@ const WALLET_PRIVATE_KEY =
   process.env.PRIVATE_KEY ||
   "";
 
-/* ================= COLORS ================= */
+/* ================= COLORS ================== */
 
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
