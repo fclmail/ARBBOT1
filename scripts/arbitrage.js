@@ -25,7 +25,7 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 1.00;
+const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -33,32 +33,39 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
 
-const provider = RPC_POLYGON
-  ? new ethers.JsonRpcProvider(RPC_POLYGON)
-  : null;
-
-const wallet =
-  provider && WALLET_PRIVATE_KEY
-    ? new ethers.Wallet(WALLET_PRIVATE_KEY, provider)
-    : null;
+const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+const VAULT_ADDRESS =
+  "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
   {
     name: "executeArbitrage",
     type: "function",
     inputs: [
-      { name: "buyRouter", type: "address" },
-      { name: "sellRouter", type: "address" },
-      { name: "amountInUSDC", type: "uint256" },
-      { name: "pathToToken", type: "address[]" },
-      { name: "pathToUSDC", type: "address[]" },
-      { name: "deadline", type: "uint256" }
+      { type: "address" },
+      { type: "address" },
+      { type: "uint256" },
+      { type: "address[]" },
+      { type: "address[]" },
+      { type: "uint256" }
     ],
-    outputs: [],
+    stateMutability: "nonpayable"
+  },
+  {
+    name: "executeFlashArbitrage",
+    type: "function",
+    inputs: [
+      { type: "address" },
+      { type: "address" },
+      { type: "uint256" },
+      { type: "address[]" },
+      { type: "address[]" },
+      { type: "uint256" }
+    ],
     stateMutability: "nonpayable"
   },
   {
@@ -66,20 +73,10 @@ const vaultAbi = [
     type: "function",
     outputs: [{ type: "address" }],
     stateMutability: "view"
-  },
-  {
-    name: "approveRouters",
-    type: "function",
-    inputs: [
-      { type: "address[]" },
-      { type: "uint256" }
-    ],
-    stateMutability: "nonpayable"
   }
 ];
 
-const vault =
-  wallet ? new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet) : null;
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
 
@@ -138,28 +135,50 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= AUTHORIZATION (STALL FIX) ================= */
+/* ================= FLASH SIZING ================= */
 
-async function authorizeRoutersOnce() {
-  if (!vault) return;
-  console.log("🔐 Authorizing USDC spend for routers");
-  vault
-    .approveRouters(Object.values(routers), ethers.MaxUint256)
-    .then(() => console.log("✅ Router authorization broadcast"))
-    .catch(() => console.warn("⚠️ Router authorization skipped"));
+async function findOptimalFlashAmount(
+  buyRouter,
+  sellRouter,
+  baseAmount,
+  buyPath,
+  sellPath
+) {
+  const multipliers = [1n, 2n, 4n, 8n, 12n, 16n];
+  let bestAmount = baseAmount;
+  let bestProfit = 0n;
+
+  for (const m of multipliers) {
+    const amountIn = baseAmount * m;
+
+    const buyOut = await quote(buyRouter, amountIn, buyPath);
+    if (!buyOut) break;
+
+    const sellOut = await quote(sellRouter, buyOut, sellPath);
+    if (!sellOut) break;
+
+    const profit = sellOut - amountIn;
+    if (profit <= bestProfit) break;
+
+    bestProfit = profit;
+    bestAmount = amountIn;
+  }
+
+  return bestAmount;
 }
 
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  if (!vault) return;
-
   const usdc = await vault.usdc();
-  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+  const baseAmount = ethers.parseUnits(
+    MIN_TRADE_USDC.toString(),
+    6
+  );
 
   let bestBuyOut, bestBuyPath;
   for (const p of buildPaths(usdc, tokenAddr)) {
-    const out = await quote(buyRouter, amountIn, p);
+    const out = await quote(buyRouter, baseAmount, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
       bestBuyPath = p;
@@ -178,23 +197,41 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (!bestSellOut) return;
 
   const profit =
-    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+    Number(ethers.formatUnits(bestSellOut, 6)) -
+    MIN_TRADE_USDC;
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`${GREEN}🔥 PROFIT FOUND:${RESET} ${profit}`);
+  console.log(
+    `${GREEN}🔥 PROFIT FOUND:${RESET}`,
+    profit.toFixed(6)
+  );
 
-  const tx = await vault.executeArbitrage(
+  const flashAmount = await findOptimalFlashAmount(
     buyRouter,
     sellRouter,
-    amountIn,
+    baseAmount,
+    bestBuyPath,
+    bestSellPath
+  );
+
+  console.log(
+    `${CYAN}⚡ Flash size:${RESET}`,
+    ethers.formatUnits(flashAmount, 6),
+    "USDC"
+  );
+
+  const tx = await vault.executeFlashArbitrage(
+    buyRouter,
+    sellRouter,
+    flashAmount,
     bestBuyPath,
     bestSellPath,
     Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
   );
 
   await tx.wait();
-  console.log(`${GREEN}✅ EXECUTED:${RESET} ${tx.hash}`);
+  console.log(`${GREEN}✅ FLASH EXECUTED:${RESET} ${tx.hash}`);
 }
 
 /* ================= SCAN ================= */
@@ -215,10 +252,7 @@ async function scan() {
 /* ================= MAIN ================= */
 
 (async function mainLoop() {
-  console.log("🚀 Arbitrage bot started");
-
-  await authorizeRoutersOnce(); // no await wait() — no stall
-
+  console.log("🚀 Flash-enabled arbitrage bot started");
   while (true) {
     try {
       await scan();
@@ -228,4 +262,3 @@ async function scan() {
     await sleep(SCAN_INTERVAL_MS);
   }
 })();
-
