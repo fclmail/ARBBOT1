@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -44,8 +43,21 @@ const vaultAbi = [
     outputs: [],
     stateMutability: "nonpayable"
   },
-  { name: "usdc", type: "function", outputs: [{ type: "address" }], stateMutability: "view" },
-  { name: "approveRouters", type: "function", inputs: [{ type: "address[]" }, { type: "uint256" }], stateMutability: "nonpayable" }
+  {
+    name: "usdc",
+    type: "function",
+    outputs: [{ type: "address" }],
+    stateMutability: "view"
+  },
+  {
+    name: "approveRouters",
+    type: "function",
+    inputs: [
+      { type: "address[]" },
+      { type: "uint256" }
+    ],
+    stateMutability: "nonpayable"
+  }
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
@@ -105,7 +117,7 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= AUTHORIZATION (ONLY ADDITION) ================= */
+/* ================= AUTHORIZATION ================= */
 
 async function authorizeRouters() {
   console.log("🔐 Authorizing USDC spend for routers...");
@@ -181,7 +193,7 @@ async function scan() {
 
 (async () => {
   console.log("🚀 Arbitrage bot started");
-  await authorizeRouters(); // ← ONLY REQUIRED ADDITION
+  await authorizeRouters();
 
   while (true) {
     try {
