@@ -33,14 +33,13 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
 
-const provider = RPC_POLYGON
-  ? new ethers.JsonRpcProvider(RPC_POLYGON)
-  : null;
+if (!RPC_POLYGON) throw new Error("❌ RPC not set");
+if (!WALLET_PRIVATE_KEY) throw new Error("❌ PRIVATE_KEY not set");
 
-const wallet =
-  provider && WALLET_PRIVATE_KEY
-    ? new ethers.Wallet(WALLET_PRIVATE_KEY, provider)
-    : null;
+const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
+console.log("✅ Wallet:", wallet.address);
 
 /* ================= CONTRACT ================= */
 
@@ -78,8 +77,7 @@ const vaultAbi = [
   }
 ];
 
-const vault =
-  wallet ? new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet) : null;
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
 
@@ -138,22 +136,31 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= AUTHORIZATION (STALL FIX) ================= */
+/* ================= AUTHORIZATION (FIXED) ================= */
 
 async function authorizeRoutersOnce() {
-  if (!vault) return;
   console.log("🔐 Authorizing USDC spend for routers");
-  vault
-    .approveRouters(Object.values(routers), ethers.MaxUint256)
-    .then(() => console.log("✅ Router authorization broadcast"))
-    .catch(() => console.warn("⚠️ Router authorization skipped"));
+
+  try {
+    const tx = await vault.approveRouters(
+      Object.values(routers),
+      ethers.MaxUint256
+    );
+
+    console.log("⏳ Approval tx sent:", tx.hash);
+    await tx.wait();
+
+    console.log("✅ Routers approved");
+  } catch (e) {
+    console.error("❌ Router authorization failed");
+    console.error(e?.reason || e?.message || e);
+    process.exit(1);
+  }
 }
 
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  if (!vault) return;
-
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
@@ -217,7 +224,7 @@ async function scan() {
 (async function mainLoop() {
   console.log("🚀 Arbitrage bot started");
 
-  await authorizeRoutersOnce(); // no await wait() — no stall
+  await authorizeRoutersOnce();
 
   while (true) {
     try {
