@@ -25,7 +25,7 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02;
+const MIN_TRADE_USDC = 0.9;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -117,6 +117,37 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
+/* ================= BALANCE DISPLAY (RESTORED) ================= */
+
+async function displayBalances() {
+  try {
+    const maticBalance = await provider.getBalance(wallet.address);
+    const usdcAddress = await vault.usdc();
+
+    const erc20Abi = [
+      "function balanceOf(address) view returns (uint256)",
+      "function decimals() view returns (uint8)"
+    ];
+
+    const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
+
+    const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
+    const decimals = await usdc.decimals();
+
+    console.log(
+      `${YELLOW}Wallet MATIC:${RESET}`,
+      ethers.formatEther(maticBalance)
+    );
+
+    console.log(
+      `${YELLOW}Vault USDC:${RESET}`,
+      ethers.formatUnits(vaultBalance, decimals)
+    );
+  } catch (err) {
+    console.error("Balance display error:", err.message);
+  }
+}
+
 /* ================= PATHS ================= */
 
 function buildPaths(usdc, token) {
@@ -144,7 +175,7 @@ async function findOptimalFlashAmount(
   buyPath,
   sellPath
 ) {
-  const multipliers = [10000n, 20000n, 40000n, 80000n, 120000n, 160000n];
+  const multipliers = [1n, 2n, 4n, 8n, 12n, 16n];
   let bestAmount = baseAmount;
   let bestProfit = 0n;
 
@@ -238,6 +269,8 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
 async function scan() {
   console.log(`🔍 Scan @ ${new Date().toISOString()}`);
+  await displayBalances(); // restored live balance display
+
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
