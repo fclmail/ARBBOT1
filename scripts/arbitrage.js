@@ -26,9 +26,9 @@ const YELLOW = "\x1b[93m";
 /* ================= CONSTANTS ================= */
 
 const MIN_TRADE_USDC = 3;
-const MIN_EXPECTED_PROFIT = 0.000001;
+const MIN_EXPECTED_PROFIT = 0.35;
 
-const SCAN_INTERVAL_MS = 10_000;
+const SCAN_INTERVAL_MS = 2_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
