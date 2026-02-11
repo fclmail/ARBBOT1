@@ -144,7 +144,7 @@ async function findOptimalFlashAmount(
   buyPath,
   sellPath
 ) {
-  const multipliers = [100n, 200n, 400n, 800n, 1200n, 1600n];
+  const multipliers = [10000n, 20000n, 40000n, 80000n, 120000n, 160000n];
   let bestAmount = baseAmount;
   let bestProfit = 0n;
 
