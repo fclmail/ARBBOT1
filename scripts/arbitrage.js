@@ -1,19 +1,15 @@
 // scripts/arbitrage.js
 
-import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 // ================= ENV =================
-// Load .env locally (ignored in CI if using GitHub Secrets)
-dotenv.config({ override: false });
-
-// Use environment variables
-const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "").trim();
+// Private key from environment (e.g., GitHub Secrets)
 const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
-
-// Validate required variables
-if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+
+// ================= RPC =================
+// Hardcoded Polygon WebSocket RPC
+const RPC_POLYGON_WS = "wss://polygon-rpc.com/ws"; // <-- directly in script
 
 // ================= COLORS =================
 const GREEN = "\x1b[92m";
@@ -25,7 +21,7 @@ const FLASH_AMOUNT_USDC = 10000; // Fixed flash trade amount
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10; // Max parallel tryArb calls
+const PARALLEL_LIMIT = 10;
 
 // ================= PROVIDER & WALLET =================
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
@@ -108,7 +104,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdcAddr = await vault.usdc();
   const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
 
-  // Find best buy path
   let bestBuyOut, bestBuyPath;
   for (const p of buildPaths(usdcAddr, tokenAddr)) {
     const out = await quote(buyRouter, amountIn, p);
@@ -119,7 +114,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestBuyOut) return;
 
-  // Find best sell path
   let bestSellOut, bestSellPath;
   for (const p of buildSellPaths(usdcAddr, tokenAddr)) {
     const out = await quote(sellRouter, bestBuyOut, p);
@@ -137,14 +131,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-  const args = [
-    buyRouter,
-    sellRouter,
-    amountIn,
-    bestBuyPath,
-    bestSellPath,
-    deadline
-  ];
+  const args = [buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath, deadline];
 
   if (!(await vaultWillExecute(args))) return;
 
