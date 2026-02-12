@@ -3,46 +3,54 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-/* ================================
-   CONFIG
-================================ */
+/* =====================================
+   LOAD ENVIRONMENT VARIABLES
+===================================== */
 
-const RPC_URL = process.env.RPC_URL;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const {
+  RPC_URL,
+  PRIVATE_KEY,
+  ARB_CONTRACT_ADDRESS
+} = process.env;
 
-// Example token (USDC style 6 decimals)
-const FLASH_AMOUNT = ethers.parseUnits("10000", 6);
+/* =====================================
+   VALIDATE ENV VARIABLES
+===================================== */
 
-// Replace with your deployed arbitrage contract
-const ARB_CONTRACT_ADDRESS = process.env.ARB_CONTRACT_ADDRESS;
+function validateEnv() {
+  const missing = [];
 
-/* ================================
-   BASIC SAFETY CHECKS
-================================ */
+  if (!RPC_URL) missing.push("RPC_URL");
+  if (!PRIVATE_KEY) missing.push("PRIVATE_KEY");
+  if (!ARB_CONTRACT_ADDRESS) missing.push("ARB_CONTRACT_ADDRESS");
 
-if (!RPC_URL) {
-  throw new Error("RPC_URL not set in environment variables");
+  if (missing.length > 0) {
+    console.error("❌ Missing required environment variables:");
+    missing.forEach((v) => console.error(`   - ${v}`));
+    process.exit(1);
+  }
 }
 
-if (!PRIVATE_KEY) {
-  throw new Error("PRIVATE_KEY not set in environment variables");
-}
+validateEnv();
 
-if (!ARB_CONTRACT_ADDRESS) {
-  throw new Error("ARB_CONTRACT_ADDRESS not set in environment variables");
-}
-
-/* ================================
-   SETUP PROVIDER + WALLET
-================================ */
+/* =====================================
+   SETUP PROVIDER & WALLET
+===================================== */
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-/* ================================
-   CONTRACT ABI (MINIMAL EXAMPLE)
-   Replace with your real ABI
-================================ */
+/* =====================================
+   CONFIG
+===================================== */
+
+// Example: 10,000 USDC (6 decimals)
+const FLASH_AMOUNT = ethers.parseUnits("10000", 6);
+
+/* =====================================
+   CONTRACT ABI
+   Replace with your real ABI if needed
+===================================== */
 
 const arbAbi = [
   "function executeArbitrage(uint256 amount) external"
@@ -54,25 +62,42 @@ const arbContract = new ethers.Contract(
   wallet
 );
 
-/* ================================
+/* =====================================
    MAIN EXECUTION
-================================ */
+===================================== */
 
 async function main() {
   try {
-    console.log("🚀 Starting arbitrage bot...");
+    console.log("=================================");
+    console.log("🚀 ARB BOT STARTED");
     console.log("Wallet:", wallet.address);
+    console.log("Contract:", ARB_CONTRACT_ADDRESS);
     console.log("Flash Amount:", FLASH_AMOUNT.toString());
+    console.log("=================================");
 
+    // Check wallet balance first
+    const balance = await provider.getBalance(wallet.address);
+    console.log("Wallet ETH Balance:", ethers.formatEther(balance));
+
+    if (balance === 0n) {
+      console.error("❌ Wallet has 0 ETH for gas.");
+      process.exit(1);
+    }
+
+    // Send transaction
     const tx = await arbContract.executeArbitrage(FLASH_AMOUNT);
 
-    console.log("⏳ Transaction sent:", tx.hash);
+    console.log("⏳ Transaction submitted:");
+    console.log("Tx Hash:", tx.hash);
 
     const receipt = await tx.wait();
 
-    console.log("✅ Arbitrage executed in block:", receipt.blockNumber);
+    console.log("✅ Transaction confirmed!");
+    console.log("Block:", receipt.blockNumber);
+    console.log("Gas Used:", receipt.gasUsed.toString());
+
   } catch (error) {
-    console.error("❌ Error executing arbitrage:");
+    console.error("❌ Arbitrage execution failed:");
     console.error(error);
     process.exit(1);
   }
