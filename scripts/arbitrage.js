@@ -1,5 +1,3 @@
-// scripts/arbitrage.js
-
 import { ethers } from "ethers";
 
 // ================= ENV =================
@@ -8,8 +6,9 @@ const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 // ================= RPC =================
-// Hardcoded Polygon WebSocket RPC
-const RPC_POLYGON_WS = "wss://polygon-rpc.com/ws"; // <-- directly in script
+// Hardcoded Polygon HTTP RPC
+const RPC_POLYGON_HTTP = "https://polygon-rpc.com";
+const provider = new ethers.JsonRpcProvider(RPC_POLYGON_HTTP);
 
 // ================= COLORS =================
 const GREEN = "\x1b[92m";
@@ -22,12 +21,11 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
 const PARALLEL_LIMIT = 10;
+const POLL_INTERVAL_MS = 1000; // Poll every 1 second
 
-// ================= PROVIDER & WALLET =================
-const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+// ================= WALLET & VAULT =================
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-// ================= FLASH VAULT =================
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
@@ -141,18 +139,23 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
 }
 
-// ================= MEMPOOL SCANNER =================
-async function startMempoolScanner() {
-  console.log("🚀 Listening to Polygon mempool...");
+// ================= POLLING LOOP (HTTP version) =================
+let lastBlock = 0;
+async function pollBlocks() {
+  try {
+    const blockNumber = await provider.getBlockNumber();
+    if (blockNumber === lastBlock) {
+      await sleep(POLL_INTERVAL_MS);
+      return pollBlocks();
+    }
 
-  provider.on("pending", async (txHash) => {
-    try {
-      const tx = await provider.getTransaction(txHash);
-      if (!tx || !tx.to) return;
+    lastBlock = blockNumber;
+    const block = await provider.getBlockWithTransactions(blockNumber);
+    for (const tx of block.transactions) {
+      if (!tx.to) continue;
+      if (!Object.values(routers).includes(tx.to)) continue;
 
-      if (!Object.values(routers).includes(tx.to)) return;
-
-      console.log(`⚡ Pending swap detected: ${txHash}`);
+      console.log(`⚡ Swap detected in block ${blockNumber}: ${tx.hash}`);
 
       const tasks = [];
       for (const token of Object.values(TOKENS)) {
@@ -169,12 +172,18 @@ async function startMempoolScanner() {
         }
       }
       if (tasks.length) await Promise.allSettled(tasks);
-
-    } catch (err) {
-      console.error(RED, err, RESET);
     }
-  });
+
+    await sleep(POLL_INTERVAL_MS);
+    pollBlocks();
+
+  } catch (err) {
+    console.error(RED, err, RESET);
+    await sleep(POLL_INTERVAL_MS);
+    pollBlocks();
+  }
 }
 
 // ================= START =================
-startMempoolScanner().catch(console.error);
+console.log("🚀 Starting arbitrage scanner (HTTP version)...");
+pollBlocks();
