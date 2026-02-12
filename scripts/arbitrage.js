@@ -22,7 +22,7 @@ const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
-const FIXED_FLASH_USDC = 10_000; // always flash 10k
+const FIXED_FLASH_USDC = 100; // always flash 10k
 const MIN_PROFIT_PERCENT = 0.00001; // 0.000001 USDC min profit
 const SCAN_INTERVAL_MS = 2_000;
 const DEADLINE_SECONDS = 60;
