@@ -1,97 +1,73 @@
+// scripts/arbitrage_flash_ws.js
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-/* ================= ENV ================= */
 dotenv.config({ override: false });
 
-const RPC_POLYGON =
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL ||
-  "";
+/* ================= ENV ================= */
+const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "").trim();
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
-const WALLET_PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  "";
+if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
+if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= COLORS ================= */
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
 const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
+const RED = "\x1b[91m";
 
-/* ================= CONSTANTS ================= */
-const FIXED_FLASH_USDC = 100; // always flash 10k
-const MIN_PROFIT_PERCENT = 0.00001; // 0.000001 USDC min profit
-const SCAN_INTERVAL_MS = 2_000;
+/* ================= PARAMETERS ================= */
+const MIN_TRADE_USDC = 2000; // Minimum arb trade in USDC
+const MIN_EXPECTED_PROFIT = 0.000001;
+const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
+const PARALLEL_LIMIT = 10; // Prevent too many parallel requests
 
-/* ================= PROVIDER ================= */
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+/* ================= PROVIDER & WALLET ================= */
+const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-/* ================= CONTRACT ================= */
+/* ================= FLASH VAULT ================= */
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
-
 const vaultAbi = [
-  {
-    name: "executeArbitrage",
-    type: "function",
-    inputs: [
-      { type: "address" },
-      { type: "address" },
-      { type: "uint256" },
-      { type: "address[]" },
-      { type: "address[]" },
-      { type: "uint256" },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
-    name: "executeFlashArbitrage",
-    type: "function",
-    inputs: [
-      { type: "address" },
-      { type: "address" },
-      { type: "uint256" },
-      { type: "address[]" },
-      { type: "address[]" },
-      { type: "uint256" },
-    ],
-    stateMutability: "nonpayable",
-  },
-  { name: "usdc", type: "function", outputs: [{ type: "address" }], stateMutability: "view" },
-  { name: "vault", type: "function", outputs: [{ type: "address" }], stateMutability: "view" },
+  "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
+  "function usdc() view returns(address)"
 ];
-
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef",
+  ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  Wault:     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
-
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-];
+const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"];
 
 /* ================= TOKENS ================= */
 const TOKENS = {
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+  USDT:   "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  APE:    "0x4d224452801aced8b2f0aebe155379bb5d594381",
+  CRV:    "0x172370d5cd63279efa6d502dab29171933a610af",
+  DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+  WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  LINK:   "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+  AAVE:   "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
+/* ================= ERC20 ================= */
+const erc20Abi = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
+
 /* ================= HELPERS ================= */
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
   try {
@@ -103,49 +79,13 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= BALANCE DISPLAY ================= */
-let lastVaultBalance = 0n;
-
-async function displayBalances() {
-  try {
-    const maticBalance = await provider.getBalance(wallet.address);
-    const usdcAddress = await vault.usdc();
-    const vaultReceiverAddress = await vault.vault();
-
-    const erc20Abi = [
-      "function balanceOf(address) view returns (uint256)",
-      "function decimals() view returns (uint8)",
-    ];
-
-    const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
-    const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
-    const vaultReceiverBalance = await usdc.balanceOf(vaultReceiverAddress);
-    const decimals = await usdc.decimals();
-
-    console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
-    console.log(`${YELLOW}Wallet MATIC:${RESET}`, ethers.formatEther(maticBalance));
-    console.log(`${CYAN}Contract USDC Balance:${RESET}`, ethers.formatUnits(contractBalance, decimals));
-
-    if (lastVaultBalance !== 0n) {
-      const diff = vaultReceiverBalance - lastVaultBalance;
-      if (diff > 0n) {
-        console.log(`${GREEN}📈 Profit Gained:${RESET}`, ethers.formatUnits(diff, decimals));
-      }
-    }
-
-    console.log(`${GREEN}Vault Receiver USDC Balance:${RESET}`, ethers.formatUnits(vaultReceiverBalance, decimals));
-    lastVaultBalance = vaultReceiverBalance;
-  } catch (err) {
-    console.error("Balance display error:", err.message);
-  }
-}
-
-/* ================= PATH BUILDERS ================= */
 function buildPaths(usdc, token) {
   return [
     [usdc, token],
     [usdc, TOKENS.WMATIC, token],
     [usdc, TOKENS.WETH, token],
+    [usdc, TOKENS.USDT, token],
+    [usdc, TOKENS.DAI, token]
   ];
 }
 
@@ -154,17 +94,29 @@ function buildSellPaths(usdc, token) {
     [token, usdc],
     [token, TOKENS.WMATIC, usdc],
     [token, TOKENS.WETH, usdc],
+    [token, TOKENS.USDT, usdc],
+    [token, TOKENS.DAI, usdc]
   ];
 }
 
-/* ================= ARBITRAGE ================= */
+/* ================= SIMULATION ================= */
+async function vaultWillExecute(args) {
+  try {
+    await vault.executeFlashArbitrage.staticCall(...args);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ================= ARBITRAGE CORE ================= */
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = await vault.usdc();
-  const sampleAmount = ethers.parseUnits("1", 6); // 1 USDC for spread check
+  const usdcAddr = await vault.usdc();
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
-  for (const p of buildPaths(usdc, tokenAddr)) {
-    const out = await quote(buyRouter, sampleAmount, p);
+  for (const p of buildPaths(usdcAddr, tokenAddr)) {
+    const out = await quote(buyRouter, amountIn, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
       bestBuyPath = p;
@@ -173,7 +125,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (!bestBuyOut) return;
 
   let bestSellOut, bestSellPath;
-  for (const p of buildSellPaths(usdc, tokenAddr)) {
+  for (const p of buildSellPaths(usdcAddr, tokenAddr)) {
     const out = await quote(sellRouter, bestBuyOut, p);
     if (out && (!bestSellOut || out > bestSellOut)) {
       bestSellOut = out;
@@ -182,54 +134,68 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
-  const finalUSDC = Number(ethers.formatUnits(bestSellOut, 6));
-  const profitPercent = ((finalUSDC - 1) / 1) * 100;
+  const grossProfit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
-  if (profitPercent < MIN_PROFIT_PERCENT) return;
+  const safeProfit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
+  if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`🔥 Spread Found: ${profitPercent.toFixed(2)}%`);
+  console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
 
-  // === EXECUTE FIXED FLASH ===
-  const flashAmount = ethers.parseUnits(FIXED_FLASH_USDC.toString(), 6);
-  console.log(`⚡ Executing fixed flash: ${FIXED_FLASH_USDC} USDC`);
-
-  const tx = await vault.executeFlashArbitrage(
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  const args = [
     buyRouter,
     sellRouter,
-    flashAmount,
+    amountIn,
     bestBuyPath,
     bestSellPath,
-    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
-  );
+    deadline
+  ];
 
+  if (!(await vaultWillExecute(args))) return;
+
+  const nonce = await provider.getTransactionCount(wallet.address, "pending");
+  const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
   await tx.wait();
-  console.log(`✅ FLASH EXECUTED: ${tx.hash}`);
+  console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
 }
 
-/* ================= SCAN ================= */
-async function scan() {
-  await displayBalances();
+/* ================= MEMPOOL SCANNER ================= */
+async function startMempoolScanner() {
+  console.log("🚀 Listening to Polygon mempool...");
 
-  for (const token of Object.values(TOKENS)) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-        if (buy !== sell) {
-          await tryArb(buy, sell, token);
+  provider.on("pending", async (txHash) => {
+    try {
+      const tx = await provider.getTransaction(txHash);
+      if (!tx || !tx.to) return;
+
+      // Only consider DEX routers
+      if (!Object.values(routers).includes(tx.to)) return;
+
+      console.log(`⚡ Pending swap detected: ${txHash}`);
+
+      // Execute all token/router combos in parallel (throttle to PARALLEL_LIMIT)
+      const tasks = [];
+      for (const token of Object.values(TOKENS)) {
+        for (const buy of Object.values(routers)) {
+          for (const sell of Object.values(routers)) {
+            if (buy !== sell) {
+              tasks.push(tryArb(buy, sell, token));
+              if (tasks.length >= PARALLEL_LIMIT) {
+                await Promise.allSettled(tasks);
+                tasks.length = 0;
+              }
+            }
+          }
         }
       }
+      if (tasks.length) await Promise.allSettled(tasks);
+
+    } catch (err) {
+      console.error(RED, err, RESET);
     }
-  }
+  });
 }
 
-/* ================= MAIN LOOP ================= */
-(async function mainLoop() {
-  console.log("🚀 Flash-enabled arbitrage bot started");
-  while (true) {
-    try {
-      await scan();
-    } catch (e) {
-      console.error(e);
-    }
-    await sleep(SCAN_INTERVAL_MS);
-  }
-})();
+/* ================= START ================= */
+startMempoolScanner().catch(console.error);
