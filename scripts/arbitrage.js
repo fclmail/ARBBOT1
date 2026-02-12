@@ -1,74 +1,81 @@
-/* ================= CONFIG ================= */
+import { ethers } from "ethers";
+import dotenv from "dotenv";
 
-const FLASH_AMOUNT_USDC = 10_000;
+dotenv.config();
+
+/* ================================
+   CONFIG
+================================ */
+
+const RPC_URL = process.env.RPC_URL;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+
+// Example token (USDC style 6 decimals)
 const FLASH_AMOUNT = ethers.parseUnits("10000", 6);
 
-// AAVE V3 Polygon premium ≈ 0.05% (0.0005)
-const FLASH_PREMIUM_RATE = 0.0005;
+// Replace with your deployed arbitrage contract
+const ARB_CONTRACT_ADDRESS = process.env.ARB_CONTRACT_ADDRESS;
 
-// Minimum PROFIT in USDC (not percent)
-const MIN_PROFIT_USDC = 0.000001; // adjustable
+/* ================================
+   BASIC SAFETY CHECKS
+================================ */
 
-/* ================= ARBITRAGE ================= */
+if (!RPC_URL) {
+  throw new Error("RPC_URL not set in environment variables");
+}
 
-async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = await vault.usdc();
+if (!PRIVATE_KEY) {
+  throw new Error("PRIVATE_KEY not set in environment variables");
+}
 
-  // 1️⃣ Simulate FULL 10k buy
-  let bestBuyOut, bestBuyPath;
+if (!ARB_CONTRACT_ADDRESS) {
+  throw new Error("ARB_CONTRACT_ADDRESS not set in environment variables");
+}
 
-  for (const p of buildPaths(usdc, tokenAddr)) {
-    const out = await quote(buyRouter, FLASH_AMOUNT, p);
-    if (out && (!bestBuyOut || out > bestBuyOut)) {
-      bestBuyOut = out;
-      bestBuyPath = p;
-    }
-  }
+/* ================================
+   SETUP PROVIDER + WALLET
+================================ */
 
-  if (!bestBuyOut) return;
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  // 2️⃣ Simulate FULL 10k sell
-  let bestSellOut, bestSellPath;
+/* ================================
+   CONTRACT ABI (MINIMAL EXAMPLE)
+   Replace with your real ABI
+================================ */
 
-  for (const p of buildSellPaths(usdc, tokenAddr)) {
-    const out = await quote(sellRouter, bestBuyOut, p);
-    if (out && (!bestSellOut || out > bestSellOut)) {
-      bestSellOut = out;
-      bestSellPath = p;
-    }
-  }
+const arbAbi = [
+  "function executeArbitrage(uint256 amount) external"
+];
 
-  if (!bestSellOut) return;
+const arbContract = new ethers.Contract(
+  ARB_CONTRACT_ADDRESS,
+  arbAbi,
+  wallet
+);
 
-  const finalUSDC = Number(ethers.formatUnits(bestSellOut, 6));
+/* ================================
+   MAIN EXECUTION
+================================ */
 
-  const premiumCost = FLASH_AMOUNT_USDC * FLASH_PREMIUM_RATE;
-  const rawProfit = finalUSDC - FLASH_AMOUNT_USDC;
-  const netAfterPremium = rawProfit - premiumCost;
-
-  if (netAfterPremium <= MIN_PROFIT_USDC) return;
-
-  console.log(`🔥 PROFITABLE FLASH FOUND`);
-  console.log(`Gross Profit: ${rawProfit.toFixed(6)} USDC`);
-  console.log(`Premium Cost: ${premiumCost.toFixed(6)} USDC`);
-  console.log(`Net Profit: ${netAfterPremium.toFixed(6)} USDC`);
-
+async function main() {
   try {
-    const tx = await vault.executeFlashArbitrage(
-      buyRouter,
-      sellRouter,
-      FLASH_AMOUNT,
-      bestBuyPath,
-      bestSellPath,
-      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
-    );
+    console.log("🚀 Starting arbitrage bot...");
+    console.log("Wallet:", wallet.address);
+    console.log("Flash Amount:", FLASH_AMOUNT.toString());
 
-    console.log("⏳ Waiting confirmation...");
+    const tx = await arbContract.executeArbitrage(FLASH_AMOUNT);
+
+    console.log("⏳ Transaction sent:", tx.hash);
+
     const receipt = await tx.wait();
 
-    console.log("✅ FLASH SUCCESS");
-    console.log("Transaction Hash:", receipt.hash);
-  } catch (err) {
-    console.log("❌ Flash reverted:", err.reason || err.message);
+    console.log("✅ Arbitrage executed in block:", receipt.blockNumber);
+  } catch (error) {
+    console.error("❌ Error executing arbitrage:");
+    console.error(error);
+    process.exit(1);
   }
 }
+
+main();
