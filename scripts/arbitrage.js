@@ -1,22 +1,19 @@
-// scripts/arbitrage_flash_ws.js
-
+// scripts/arbitrage_http.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
-const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "").trim();
+const RPC_POLYGON_HTTP = (process.env.RPC_POLYGON_HTTP || "https://polygon-rpc.com").trim();
 const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
-if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
+if (!RPC_POLYGON_HTTP) throw new Error("RPC_POLYGON_HTTP missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= COLORS ================= */
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
@@ -24,10 +21,9 @@ const MIN_TRADE_USDC = 2000; // Minimum arb trade in USDC
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10; // Prevent too many parallel requests
 
 /* ================= PROVIDER & WALLET ================= */
-const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+const provider = new ethers.JsonRpcProvider(RPC_POLYGON_HTTP);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= FLASH VAULT ================= */
@@ -160,42 +156,11 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
 }
 
-/* ================= MEMPOOL SCANNER ================= */
-async function startMempoolScanner() {
-  console.log("🚀 Listening to Polygon mempool...");
-
-  provider.on("pending", async (txHash) => {
-    try {
-      const tx = await provider.getTransaction(txHash);
-      if (!tx || !tx.to) return;
-
-      // Only consider DEX routers
-      if (!Object.values(routers).includes(tx.to)) return;
-
-      console.log(`⚡ Pending swap detected: ${txHash}`);
-
-      // Execute all token/router combos in parallel (throttle to PARALLEL_LIMIT)
-      const tasks = [];
-      for (const token of Object.values(TOKENS)) {
-        for (const buy of Object.values(routers)) {
-          for (const sell of Object.values(routers)) {
-            if (buy !== sell) {
-              tasks.push(tryArb(buy, sell, token));
-              if (tasks.length >= PARALLEL_LIMIT) {
-                await Promise.allSettled(tasks);
-                tasks.length = 0;
-              }
-            }
-          }
-        }
-      }
-      if (tasks.length) await Promise.allSettled(tasks);
-
-    } catch (err) {
-      console.error(RED, err, RESET);
-    }
-  });
+/* ================= START ================= */
+async function main() {
+  console.log("⚡ Starting HTTP-based arbitrage bot (mempool scanning disabled)");
+  // Example: run arbitrage for QuickSwap -> SushiSwap with USDT
+  await tryArb(routers.QuickSwap, routers.SushiSwap, TOKENS.USDT);
 }
 
-/* ================= START ================= */
-startMempoolScanner().catch(console.error);
+main().catch(console.error);
