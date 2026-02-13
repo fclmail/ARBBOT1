@@ -197,8 +197,11 @@ async function performScanCycle() {
     const buyRouterName = "QuickSwap";
     const sellRouterName = "SushiSwap";
     const amountIn = ethers.parseUnits("1000", 6);
-    const path = [ TOKENS.USDT, TOKENS.WETH ];
-    const sellPath = [ TOKENS.WETH, TOKENS.USDT ];
+   // Polygon USDC (correct address)
+   const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+   const path = [ USDC, TOKENS.WETH ];
+   const sellPath = [ TOKENS.WETH, USDC ];
+
 
     await withRetry(
       () => tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath),
