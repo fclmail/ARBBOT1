@@ -6,8 +6,8 @@ import { ethers } from "ethers";
 // Hardcoded Moralis WebSocket URL
 const RPC_POLYGON_WS = "wss://speedy-nodes-nyc.moralis.io/a9382ae4-8773-428a-8c11-ebfabb8d65fa/polygon/mainnet/ws";
 
-// Read private key from GitHub Secrets / environment variables
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
+// Fetch private key from environment variables (GitHub Secrets)
+const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
 
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
@@ -17,11 +17,11 @@ const RESET = "\x1b[0m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 2000;
+const MIN_TRADE_USDC = 2000; // Minimum trade in USDC
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10;
+const PARALLEL_LIMIT = 10; // Max parallel arb tasks
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
