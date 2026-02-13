@@ -1,13 +1,13 @@
 // File: scripts/arbitrage.js
 // Drop-in replacement with reliability hardening while preserving existing logic structure.
-// Only fix applied: ethers.constants.MaxUint256 → ethers.MaxUint256
+// Fixes: BigInt comparisons, proper UniswapV2 deadline, and full ERC-20 approvals.
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-/* ================= STARTUP CHECKS (from JS1) ================= */
+/* ================= STARTUP CHECKS ================= */
 
 if (!process.env.RPC_URL?.trim() || !process.env.PRIVATE_KEY?.trim()) process.exit(1);
 
@@ -116,26 +116,24 @@ async function quote(router, amountIn, path) {
   }
 }
 
-/* ================= TOKEN APPROVALS ================= */
-async function approveTokens() {
-  const erc20Abi = [
-    "function approve(address spender, uint256 amount) returns (bool)",
-    "function allowance(address owner, address spender) view returns (uint256)"
-  ];
+/* ================= ERC-20 APPROVALS ================= */
+const erc20Abi = [
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)"
+];
 
+async function approveTokens() {
   for (const tokenAddress of Object.values(TOKENS)) {
-    const tokenContract = new ethers.Contract(tokenAddress, erc20Abi, wallet);
     try {
-      const allowance = await tokenContract.allowance(wallet.address, VAULT_ADDRESS);
-      if (allowance < ethers.MaxUint256) { // <-- FIXED FOR ETHERS v6
-        try {
-          console.log(`${timestamp()} 🔑 Approving ${tokenAddress} for vault...`);
-          const tx = await tokenContract.approve(VAULT_ADDRESS, ethers.MaxUint256);
-          await tx.wait();
-          console.log(`${timestamp()} ✅ Approved ${tokenAddress} for vault`);
-        } catch (e) {
-          console.error(`${timestamp()} ❌ Approval failed for ${tokenAddress}: ${e?.message ?? e}`);
-        }
+      const tokenContract = new ethers.Contract(tokenAddress, erc20Abi, wallet);
+      let allowance = await tokenContract.allowance(wallet.address, VAULT_ADDRESS);
+
+      // Normalize allowance and handle MaxUint256 safely
+      if (!allowance || allowance.lt(ethers.constants.MaxUint256.div(2))) {
+        console.log(`${timestamp()} 🔑 Approving ${tokenAddress} for vault...`);
+        const tx = await tokenContract.approve(VAULT_ADDRESS, ethers.constants.MaxUint256);
+        await tx.wait();
+        console.log(`${timestamp()} ✅ Approved ${tokenAddress} for vault`);
       }
     } catch (e) {
       console.error(`${timestamp()} ❌ Allowance check failed for ${tokenAddress}: ${e?.message ?? e}`);
@@ -163,10 +161,7 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
       backoff: 2
     });
 
-    // ✅ FIXED: BigInt-safe comparison
     if (sellOutput && sellOutput > 0n) {
-
-      // ✅ FIXED: proper UniswapV2 deadline
       const tx = await withRetry(
         () =>
           vault.executeFlashArbitrage(
@@ -231,11 +226,13 @@ async function mainLoop() {
     console.error(`${timestamp()} ❗ Sanity check failed: ${e?.message ?? e}`);
   }
 
-  await approveTokens(); // <-- added call to ensure approvals
+  // ✅ Approve all tokens first
+  await approveTokens();
 
   await mainLoop();
 })();
 
+/* ================= RETRY HELPER ================= */
 async function withRetry(promiseFn, opts = {}) {
   const { retries = 5, delayMs = 1000, backoff = 1.5 } = opts;
   let attempt = 0;
