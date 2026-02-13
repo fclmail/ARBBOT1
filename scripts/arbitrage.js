@@ -68,8 +68,7 @@ const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
-  "function usdc() view returns(address)",
-  "function balanceOf(address) view returns(uint256)"
+  "function usdc() view returns(address)"
 ];
 
 let vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
@@ -86,7 +85,6 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-// routerContracts is mutable to allow rebind on reconnect
 let routerContracts = Object.fromEntries(
   Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
 );
@@ -118,35 +116,6 @@ async function quote(router, amountIn, path) {
   }
 }
 
-function buildPaths(usdc, token) {
-  return [
-    [usdc, token],
-    [usdc, TOKENS.WMATIC, token],
-    [usdc, TOKENS.WETH, token],
-    [usdc, TOKENS.USDT, token],
-    [usdc, TOKENS.DAI, token]
-  ];
-}
-
-function buildSellPaths(usdc, token) {
-  return [
-    [token, usdc],
-    [token, TOKENS.WMATIC, usdc],
-    [token, TOKENS.WETH, usdc],
-    [token, TOKENS.USDT, usdc],
-    [token, TOKENS.DAI, usdc]
-  ];
-}
-
-async function vaultWillExecute(args) {
-  try {
-    await vault.executeFlashArbitrage.staticCall(...args);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /* ================= ARBITRAGE ================= */
 async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
   try {
@@ -159,10 +128,7 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
       backoff: 2
     });
 
-    if (!buyOutput) {
-      console.log(`${timestamp()} ❌ Unable to quote buy path`);
-      return null;
-    }
+    if (!buyOutput) return null;
 
     const sellOutput = await withRetry(() => quote(sellRouter, buyOutput, sellPath), {
       retries: 3,
@@ -171,18 +137,14 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
     });
 
     if (sellOutput && sellOutput.gt(0)) {
-      const amountInWei = amountIn;
-      const pathBuy = path;
-      const pathSell = sellPath;
-
       const tx = await withRetry(
         () =>
           vault.executeFlashArbitrage(
             routers[buyRouterName],
             routers[sellRouterName],
             amountIn,
-            pathBuy,
-            pathSell,
+            path,
+            sellPath,
             Math.floor(DEADLINE_SECONDS)
           ),
         { retries: 3, delayMs: 1000, backoff: 2 }
@@ -190,22 +152,21 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
 
       console.log(`${timestamp()} ✅ Arb tx submitted: ${tx?.hash ?? "unknown"}`);
       return tx;
-    } else {
-      console.log(`${timestamp()} ℹ️ No profitable arb found for this cycle.`);
-      return null;
     }
+
+    return null;
   } catch (e) {
     console.error(`${timestamp()} ❌ tryArb failed: ${e?.message ?? e}`);
     return null;
   }
 }
 
-/* ================= SCAN LOOP (reliable, never stops) ================= */
+/* ================= SCAN LOOP ================= */
 async function performScanCycle() {
   try {
     const buyRouterName = "QuickSwap";
     const sellRouterName = "SushiSwap";
-    const amountIn = ethers.utils.parseUnits("1000", 6);
+    const amountIn = ethers.parseUnits("1000", 6);
     const path = [ TOKENS.USDT, TOKENS.WETH ];
     const sellPath = [ TOKENS.WETH, TOKENS.USDT ];
 
@@ -218,65 +179,10 @@ async function performScanCycle() {
   }
 }
 
-/* ================= GAS/NONCE SAFE SENDING (helper) ================= */
-async function safeSendTx(rawTx) {
-  const nonce = await provider.getTransactionCount(wallet.address, "latest");
-  const tx = { ...rawTx, nonce };
-  if (!tx.gasPrice) {
-    tx.gasPrice = await provider.getGasPrice();
-  }
-  if (!tx.gasLimit) {
-    try {
-      tx.gasLimit = await wallet.estimateGas(tx);
-    } catch {
-      tx.gasLimit = ethers.BigNumber.from("100000");
-    }
-  }
-  return wallet.sendTransaction(tx);
-}
-
-/* ================= TIMEOUT WRAPPER ================= */
-async function withTimeout(promise, ms) {
-  let timeout;
-  const timeoutPromise = new Promise((_, reject) =>
-    timeout = setTimeout(() => reject(new Error("Operation timed out")), ms)
-  );
-  try {
-    const result = await Promise.race([promise, timeoutPromise]);
-    clearTimeout(timeout);
-    return result;
-  } catch (e) {
-    throw e;
-  }
-}
-
-/* ================= RECONNECTABLE PROVIDER (robust) ================= */
-async function recreateProviderIfNeeded() {
-  const isOpen = provider._websocket?.readyState === 1;
-  if (!isOpen) {
-    console.warn(`${timestamp()} 🔄 Recreating WebSocket provider...`);
-    try {
-      provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
-      const newWallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
-
-      vault = vault.connect(newWallet);
-      routerContracts = Object.fromEntries(
-        Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
-      );
-
-      wallet = newWallet;
-      console.log(`${timestamp()} ✅ Reconnected WebSocket provider`);
-    } catch (e) {
-      console.error(`${timestamp()} ❌ WebSocket reconnect failed: ${e?.message ?? e}`);
-    }
-  }
-}
-
-/* ================= MAIN LOOP (reliable, never stops) ================= */
+/* ================= MAIN LOOP ================= */
 async function mainLoop() {
   while (true) {
     try {
-      await recreateProviderIfNeeded();
       await performScanCycle();
     } catch (e) {
       console.error(`${timestamp()} ❌ Main loop error: ${e?.message ?? e}`);
@@ -290,8 +196,7 @@ async function mainLoop() {
   console.log(`${timestamp()} 🚀 Starting arbitrage bot with reliability hardening`);
   try {
     const usdcAddress = await vault.usdc();
-    const bal = await vault.balanceOf(wallet.address);
-    console.log(`${timestamp()} 🧭 Sanity check: vault USDC=${usdcAddress}, balance=${bal.toString()}`);
+    console.log(`${timestamp()} 🧭 Sanity check: vault USDC=${usdcAddress}`);
   } catch (e) {
     console.error(`${timestamp()} ❗ Sanity check failed: ${e?.message ?? e}`);
   }
@@ -300,27 +205,16 @@ async function mainLoop() {
 })();
 
 async function withRetry(promiseFn, opts = {}) {
-  const {
-    retries = 5,
-    delayMs = 1000,
-    backoff = 1.5,
-    shouldRetry = (e) => true
-  } = opts;
-
+  const { retries = 5, delayMs = 1000, backoff = 1.5 } = opts;
   let attempt = 0;
-  let lastErr;
   while (attempt <= retries) {
     try {
       return await promiseFn();
     } catch (e) {
-      lastErr = e;
-      if (!shouldRetry(e) || attempt === retries) {
-        throw e;
-      }
-      const wait = Math.max(0, Math.round(delayMs * Math.pow(backoff, attempt)));
+      if (attempt === retries) throw e;
+      const wait = Math.round(delayMs * Math.pow(backoff, attempt));
       await new Promise((r) => setTimeout(r, wait));
       attempt++;
     }
   }
-  throw lastErr;
 }
