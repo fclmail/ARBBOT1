@@ -2,16 +2,18 @@
 
 import { ethers } from "ethers";
 
-/* ================= ENV (HARDCODED) ================= */
+/* ================= ENV ================= */
+// Hardcoded Moralis WebSocket URL
 const RPC_POLYGON_WS = "wss://speedy-nodes-nyc.moralis.io/a9382ae4-8773-428a-8c11-ebfabb8d65fa/polygon/mainnet/ws";
-const WALLET_PRIVATE_KEY = "YOUR_PRIVATE_KEY_HERE"; // Replace with your actual private key
-const WEBHOOK_URL = "https://webhook.site/a9382ae4-8773-428a-8c11-ebfabb8d65fa";
+
+// Read private key from GitHub Secrets / environment variables
+const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
+
+if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= COLORS ================= */
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
@@ -36,7 +38,7 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 /* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d47997506",
   ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Wault:     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
@@ -88,19 +90,6 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= WEBHOOK ================= */
-async function sendWebhook(message) {
-  try {
-    await fetch(WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: message })
-    });
-  } catch (err) {
-    console.error(RED, "Webhook error:", err.message, RESET);
-  }
-}
-
 /* ================= SIMULATION ================= */
 async function vaultWillExecute(args) {
   try {
@@ -143,7 +132,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
-  await sendWebhook(`🔥 Flash profit: ${safeProfit.toFixed(6)} USDC | Token: ${tokenAddr}`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
   const args = [
@@ -161,7 +149,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
   await tx.wait();
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
-  await sendWebhook(`⚡ Flash executed | Tx: ${tx.hash}`);
 }
 
 /* ================= MEMPOOL SCANNER ================= */
