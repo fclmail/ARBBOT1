@@ -6,11 +6,10 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
-// Hard-fetched from process.env for GitHub Actions
-const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY").trim();
 
-// GitHub Actions secret: WALLET_PRIVATE_KEY
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+// Hard fetch from environment secrets, using optional chaining and trim
+const RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim() || "";
+const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim() || "";
 
 console.log("Wallet private key present?", !!WALLET_PRIVATE_KEY);
 
@@ -25,11 +24,11 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 2000; // Minimum arb trade in USDC
+const MIN_TRADE_USDC = 2000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10; // Prevent too many parallel requests
+const PARALLEL_LIMIT = 10;
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
@@ -174,12 +173,10 @@ async function startMempoolScanner() {
       const tx = await provider.getTransaction(txHash);
       if (!tx || !tx.to) return;
 
-      // Only consider DEX routers
       if (!Object.values(routers).includes(tx.to)) return;
 
       console.log(`⚡ Pending swap detected: ${txHash}`);
 
-      // Execute all token/router combos in parallel (throttle to PARALLEL_LIMIT)
       const tasks = [];
       for (const token of Object.values(TOKENS)) {
         for (const buy of Object.values(routers)) {
