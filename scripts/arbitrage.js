@@ -32,30 +32,27 @@ console.log("✅ PRIVATE_KEY active");
 
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
 
-const MIN_TRADE_USDC = 2000;
+const MIN_TRADE_USDC = 10000;          // larger trades
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
-const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10;
+const DEADLINE_SECONDS = 20;           // faster execution
+const PARALLEL_LIMIT = 100;            // higher concurrency
 
-/* ================= PROVIDER & WALLET ================= */
+/* ================= PROVIDER ================= */
 
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 
-// ✅ ethers v6 compatible WebSocket listeners
-provider._websocket?.on("close", () => {
-  console.error("❌ WebSocket connection closed.");
-});
+provider._websocket?.on("close", () =>
+  console.error("❌ WebSocket connection closed.")
+);
 
-provider._websocket?.on("error", (err) => {
-  console.error("❌ WebSocket error:", err?.message || err);
-});
+provider._websocket?.on("error", (err) =>
+  console.error("❌ WebSocket error:", err?.message || err)
+);
 
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
@@ -83,6 +80,15 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
+/* ========= PRE-CREATE ROUTER CONTRACTS (MAJOR SPEED BOOST) ========= */
+
+const routerContracts = Object.fromEntries(
+  Object.entries(routers).map(([k, v]) => [
+    k,
+    new ethers.Contract(v, routerAbi, provider)
+  ])
+);
+
 /* ================= TOKENS ================= */
 
 const TOKENS = {
@@ -97,20 +103,10 @@ const TOKENS = {
   AAVE:   "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
-/* ================= ERC20 ================= */
-
-const erc20Abi = [
-  "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)"
-];
-
 /* ================= HELPERS ================= */
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-async function quote(routerAddr, amountIn, path) {
+async function quote(router, amountIn, path) {
   try {
-    const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts.at(-1);
   } catch {
@@ -151,43 +147,65 @@ async function vaultWillExecute(args) {
 
 /* ================= ARBITRAGE CORE ================= */
 
-async function tryArb(buyRouter, sellRouter, tokenAddr) {
+async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
   const usdcAddr = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
+  const buyRouter = routerContracts[buyRouterName];
+  const sellRouter = routerContracts[sellRouterName];
+
+  /* ===== PARALLEL BUY QUOTES ===== */
+
+  const buyPaths = buildPaths(usdcAddr, tokenAddr);
+
+  const buyQuotes = await Promise.all(
+    buyPaths.map(p => quote(buyRouter, amountIn, p))
+  );
+
   let bestBuyOut, bestBuyPath;
-  for (const p of buildPaths(usdcAddr, tokenAddr)) {
-    const out = await quote(buyRouter, amountIn, p);
+
+  buyQuotes.forEach((out, i) => {
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
-      bestBuyPath = p;
+      bestBuyPath = buyPaths[i];
     }
-  }
+  });
+
   if (!bestBuyOut) return;
 
+  /* ===== PARALLEL SELL QUOTES ===== */
+
+  const sellPaths = buildSellPaths(usdcAddr, tokenAddr);
+
+  const sellQuotes = await Promise.all(
+    sellPaths.map(p => quote(sellRouter, bestBuyOut, p))
+  );
+
   let bestSellOut, bestSellPath;
-  for (const p of buildSellPaths(usdcAddr, tokenAddr)) {
-    const out = await quote(sellRouter, bestBuyOut, p);
+
+  sellQuotes.forEach((out, i) => {
     if (out && (!bestSellOut || out > bestSellOut)) {
       bestSellOut = out;
-      bestSellPath = p;
+      bestSellPath = sellPaths[i];
     }
-  }
+  });
+
   if (!bestSellOut) return;
 
-  const grossProfit =
+  const gross =
     Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
-  const safeProfit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
-  if (safeProfit < MIN_EXPECTED_PROFIT) return;
+  const profit = gross * PROFIT_SAFETY_MULTIPLIER;
 
-  console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
+  if (profit < MIN_EXPECTED_PROFIT) return;
+
+  console.log(`${GREEN}🔥 Flash profit:${RESET} ${profit.toFixed(6)} USDC`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   const args = [
-    buyRouter,
-    sellRouter,
+    routers[buyRouterName],
+    routers[sellRouterName],
     amountIn,
     bestBuyPath,
     bestSellPath,
@@ -208,50 +226,42 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
 }
 
-/* ================= MEMPOOL SCANNER ================= */
+/* ================= NON-BLOCKING MEMPOOL ================= */
 
-async function startMempoolScanner() {
-  console.log("🚀 Listening to Polygon mempool...");
+async function handlePending(txHash) {
+  try {
+    const tx = await provider.getTransaction(txHash);
+    if (!tx || !tx.to) return;
 
-  provider.on("pending", async (txHash) => {
-    try {
-      const tx = await provider.getTransaction(txHash);
-      if (!tx || !tx.to) return;
+    if (!Object.values(routers).includes(tx.to)) return;
 
-      if (!Object.values(routers).includes(tx.to)) return;
+    console.log(`⚡ Pending swap: ${txHash}`);
 
-      console.log(`⚡ Pending swap detected: ${txHash}`);
+    const jobs = [];
 
-      const tasks = [];
-
-      for (const token of Object.values(TOKENS)) {
-        for (const buy of Object.values(routers)) {
-          for (const sell of Object.values(routers)) {
-            if (buy !== sell) {
-              tasks.push(tryArb(buy, sell, token));
-
-              if (tasks.length >= PARALLEL_LIMIT) {
-                await Promise.allSettled(tasks);
-                tasks.length = 0;
-              }
-            }
-          }
+    for (const token of Object.values(TOKENS)) {
+      for (const buy of Object.keys(routers)) {
+        for (const sell of Object.keys(routers)) {
+          if (buy !== sell) jobs.push(tryArb(buy, sell, token));
         }
       }
-
-      if (tasks.length) {
-        await Promise.allSettled(tasks);
-      }
-
-    } catch (err) {
-      console.error(RED, err.message || err, RESET);
     }
+
+    await Promise.allSettled(jobs);
+
+  } catch (err) {
+    console.error(RED, err.message || err);
+  }
+}
+
+function startMempoolScanner() {
+  console.log("🚀 Listening to Polygon mempool...");
+
+  provider.on("pending", (txHash) => {
+    handlePending(txHash); // NOT awaited → no stall
   });
 }
 
 /* ================= START ================= */
 
-startMempoolScanner().catch((err) => {
-  console.error("Fatal Error:", err);
-  process.exit(1);
-});
+startMempoolScanner();
