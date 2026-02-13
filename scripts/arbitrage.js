@@ -1,31 +1,39 @@
+// scripts/arbitrage_flash_ws.js
+
+import dotenv from "dotenv";
 import { ethers } from "ethers";
+import axios from "axios";
 
-// ================= ENV =================
-// Private key from environment (e.g., GitHub Secrets)
+dotenv.config({ override: false });
+
+/* ================= ENV ================= */
+const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "").trim();
 const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+const WEBHOOK_URL = "https://webhook.site/a9382ae4-8773-428a-8c11-ebfabb8d65fa";
+
+if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+if (!WEBHOOK_URL) throw new Error("WEBHOOK_URL missing");
 
-// ================= RPC =================
-// Hardcoded Polygon HTTP RPC
-const RPC_POLYGON_HTTP = "https://polygon-rpc.com";
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON_HTTP);
-
-// ================= COLORS =================
+/* ================= COLORS ================= */
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
+const CYAN = "\x1b[96m";
+const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
-// ================= PARAMETERS =================
-const FLASH_AMOUNT_USDC = 10000; // Fixed flash trade amount
+/* ================= PARAMETERS ================= */
+const MIN_TRADE_USDC = 2000; // Minimum arb trade in USDC
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10;
-const POLL_INTERVAL_MS = 1000; // Poll every 1 second
+const PARALLEL_LIMIT = 10; // Prevent too many parallel requests
 
-// ================= WALLET & VAULT =================
+/* ================= PROVIDER & WALLET ================= */
+const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
+/* ================= FLASH VAULT ================= */
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
@@ -33,7 +41,7 @@ const vaultAbi = [
 ];
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-// ================= ROUTERS =================
+/* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -42,7 +50,7 @@ const routers = {
 };
 const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"];
 
-// ================= TOKENS =================
+/* ================= TOKENS ================= */
 const TOKENS = {
   USDT:   "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
@@ -55,7 +63,13 @@ const TOKENS = {
   AAVE:   "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
-// ================= HELPERS =================
+/* ================= ERC20 ================= */
+const erc20Abi = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
+
+/* ================= HELPERS ================= */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
@@ -88,6 +102,16 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
+/* ================= WEBHOOK ================= */
+async function sendWebhook(message) {
+  try {
+    await axios.post(WEBHOOK_URL, { content: message });
+  } catch (err) {
+    console.error(RED, "Webhook error:", err.message, RESET);
+  }
+}
+
+/* ================= SIMULATION ================= */
 async function vaultWillExecute(args) {
   try {
     await vault.executeFlashArbitrage.staticCall(...args);
@@ -97,10 +121,10 @@ async function vaultWillExecute(args) {
   }
 }
 
-// ================= ARBITRAGE CORE =================
+/* ================= ARBITRAGE CORE ================= */
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdcAddr = await vault.usdc();
-  const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
   for (const p of buildPaths(usdcAddr, tokenAddr)) {
@@ -122,14 +146,24 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
-  const grossProfit = Number(ethers.formatUnits(bestSellOut, 6)) - FLASH_AMOUNT_USDC;
+  const grossProfit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+
   const safeProfit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
+  await sendWebhook(`🔥 Flash profit: ${safeProfit.toFixed(6)} USDC | Token: ${tokenAddr}`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-  const args = [buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath, deadline];
+  const args = [
+    buyRouter,
+    sellRouter,
+    amountIn,
+    bestBuyPath,
+    bestSellPath,
+    deadline
+  ];
 
   if (!(await vaultWillExecute(args))) return;
 
@@ -137,26 +171,24 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
   await tx.wait();
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
+  await sendWebhook(`⚡ Flash executed | Tx: ${tx.hash}`);
 }
 
-// ================= POLLING LOOP (HTTP version) =================
-let lastBlock = 0;
-async function pollBlocks() {
-  try {
-    const blockNumber = await provider.getBlockNumber();
-    if (blockNumber === lastBlock) {
-      await sleep(POLL_INTERVAL_MS);
-      return pollBlocks();
-    }
+/* ================= MEMPOOL SCANNER ================= */
+async function startMempoolScanner() {
+  console.log("🚀 Listening to Polygon mempool...");
 
-    lastBlock = blockNumber;
-    const block = await provider.getBlockWithTransactions(blockNumber);
-    for (const tx of block.transactions) {
-      if (!tx.to) continue;
-      if (!Object.values(routers).includes(tx.to)) continue;
+  provider.on("pending", async (txHash) => {
+    try {
+      const tx = await provider.getTransaction(txHash);
+      if (!tx || !tx.to) return;
 
-      console.log(`⚡ Swap detected in block ${blockNumber}: ${tx.hash}`);
+      // Only consider DEX routers
+      if (!Object.values(routers).includes(tx.to)) return;
 
+      console.log(`⚡ Pending swap detected: ${txHash}`);
+
+      // Execute all token/router combos in parallel (throttle to PARALLEL_LIMIT)
       const tasks = [];
       for (const token of Object.values(TOKENS)) {
         for (const buy of Object.values(routers)) {
@@ -172,18 +204,12 @@ async function pollBlocks() {
         }
       }
       if (tasks.length) await Promise.allSettled(tasks);
+
+    } catch (err) {
+      console.error(RED, err, RESET);
     }
-
-    await sleep(POLL_INTERVAL_MS);
-    pollBlocks();
-
-  } catch (err) {
-    console.error(RED, err, RESET);
-    await sleep(POLL_INTERVAL_MS);
-    pollBlocks();
-  }
+  });
 }
 
-// ================= START =================
-console.log("🚀 Starting arbitrage scanner (HTTP version)...");
-pollBlocks();
+/* ================= START ================= */
+startMempoolScanner().catch(console.error);
