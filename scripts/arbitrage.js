@@ -1,41 +1,52 @@
-// scripts/arbitrage.js
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-/* ================= ENV ================= */
+/* =========================================================
+   ENV
+========================================================= */
 
-const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
-const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
+const RPC_URL = process.env.RPC_URL?.trim();
+const PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
-if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) process.exit(1);
+if (!RPC_URL || !PRIVATE_KEY) process.exit(1);
 
 console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
 
-/* ================= SETTINGS ================= */
+/* =========================================================
+   COLORS
+========================================================= */
 
-const GREEN = "\x1b[92m";
-const CYAN = "\x1b[96m";
+const RESET  = "\x1b[0m";
+const GREEN  = "\x1b[92m";
+const CYAN   = "\x1b[96m";
 const YELLOW = "\x1b[93m";
-const RESET = "\x1b[0m";
+const RED    = "\x1b[91m";
+
+/* =========================================================
+   SETTINGS
+========================================================= */
 
 const MIN_TRADE_USDC = 10;
 const MIN_EXPECTED_PROFIT = 0.000001;
-const PROFIT_SAFETY_MULTIPLIER = 0.9;
-const DEADLINE_SECONDS = 20;
+const PROFIT_MULT = 0.9;
 
 const WORKERS = 25;
 const LOOP_DELAY = 50;
+const DEADLINE_SECONDS = 20;
 
-/* ================= PROVIDER ================= */
+/* =========================================================
+   PROVIDER
+========================================================= */
 
-const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
-const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+const provider = new ethers.WebSocketProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-/* ================= VAULT ================= */
+/* =========================================================
+   VAULT
+========================================================= */
 
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
@@ -50,7 +61,9 @@ const vault = new ethers.Contract(
 
 const USDC_ADDR = await vault.usdc();
 
-/* ================= ERC20 ================= */
+/* =========================================================
+   ERC20
+========================================================= */
 
 const erc20Abi = [
   "function balanceOf(address) view returns(uint256)",
@@ -59,7 +72,9 @@ const erc20Abi = [
 
 const usdc = new ethers.Contract(USDC_ADDR, erc20Abi, provider);
 
-/* ================= ROUTERS ================= */
+/* =========================================================
+   ROUTERS
+========================================================= */
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -79,15 +94,22 @@ const routerContracts = Object.fromEntries(
   ])
 );
 
-/* ================= TOKENS ================= */
+/* =========================================================
+   TOKENS
+========================================================= */
 
 const TOKENS = [
-  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
-  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", // WBTC
-  "0x4d224452801aced8b2f0aebe155379bb5d594381"  // APE
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  "0x4d224452801aced8b2f0aebe155379bb5d594381"
 ];
 
-/* ================= HELPERS ================= */
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const ts = () =>
+  new Date().toLocaleTimeString("en-GB", { hour12: false });
 
 async function quote(router, amountIn, path) {
   try {
@@ -98,16 +120,26 @@ async function quote(router, amountIn, path) {
   }
 }
 
-async function logBalances(label) {
+async function balances() {
   const matic = await provider.getBalance(wallet.address);
-  const vaultUsdc = await usdc.balanceOf(VAULT_ADDRESS);
+  const vaultBal = await usdc.balanceOf(VAULT_ADDRESS);
 
+  return {
+    matic: ethers.formatEther(matic),
+    vault: ethers.formatUnits(vaultBal, 6)
+  };
+}
+
+async function logBalances(label) {
+  const b = await balances();
   console.log(
-    `${CYAN}💰 ${label} | Wallet MATIC: ${ethers.formatEther(matic)} | Vault USDC: ${ethers.formatUnits(vaultUsdc, 6)}${RESET}`
+    `${CYAN}💰 ${label} | MATIC ${b.matic} | Vault ${b.vault}${RESET}`
   );
 }
 
-/* ================= ARB ================= */
+/* =========================================================
+   ARB EXECUTION
+========================================================= */
 
 async function tryArb(buyName, sellName, token) {
 
@@ -127,42 +159,67 @@ async function tryArb(buyName, sellName, token) {
   );
   if (!sellOut) return;
 
+  const buyPrice  = Number(ethers.formatUnits(buyOut, 6));
+  const sellPrice = Number(ethers.formatUnits(sellOut, 6));
+
   const profit =
-    (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC)
-    * PROFIT_SAFETY_MULTIPLIER;
+    (sellPrice - MIN_TRADE_USDC) * PROFIT_MULT;
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
+  /* ===== PROFIT LOG ===== */
+
   console.log(
-    `${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`
+`${GREEN}
+[${ts()}] 🟢 PROFITABLE
+Buy  : ${buyName} @ ${buyPrice.toFixed(6)}
+Sell : ${sellName} @ ${sellPrice.toFixed(6)}
+Profit: +${profit.toFixed(6)} USDC
+${RESET}`
   );
 
   await logBalances("BEFORE");
 
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  /* ===== EXECUTE ===== */
 
-  const tx = await vault.executeFlashArbitrage(
-    routers[buyName],
-    routers[sellName],
-    amountIn,
-    [USDC_ADDR, token],
-    [token, USDC_ADDR],
-    deadline,
-    { gasLimit: 2_000_000 }
-  );
+  const deadline =
+    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  console.log(`${YELLOW}⏳ TX SENT: ${tx.hash}${RESET}`);
+  try {
 
-  const receipt = await tx.wait();
+    const tx = await vault.executeFlashArbitrage(
+      routers[buyName],
+      routers[sellName],
+      amountIn,
+      [USDC_ADDR, token],
+      [token, USDC_ADDR],
+      deadline,
+      { gasLimit: 2_000_000 }
+    );
 
-  console.log(
-    `${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`
-  );
+    console.log(`${YELLOW}⏳ TX SENT ${tx.hash}${RESET}`);
 
-  await logBalances("AFTER");
+    const receipt = await tx.wait();
+
+    if (receipt.status !== 1) {
+      console.log(`${RED}❌ TX FAILED${RESET}`);
+      return;
+    }
+
+    console.log(
+      `${GREEN}✅ MINED block=${receipt.blockNumber}${RESET}`
+    );
+
+    await logBalances("AFTER");
+
+  } catch (e) {
+    console.log(`${RED}❌ TX ERROR ${e.message}${RESET}`);
+  }
 }
 
-/* ================= SAFE CONTINUOUS LOOP ================= */
+/* =========================================================
+   CONTINUOUS LOOP (RESTORED)
+========================================================= */
 
 async function scanLoop() {
 
@@ -175,21 +232,21 @@ async function scanLoop() {
           jobs.push({ buy, sell, token });
 
   console.log(
-    `${CYAN}🚀 Continuous arbitrage scanning | Pairs loaded: ${jobs.length}${RESET}`
+    `${CYAN}🚀 Continuous arbitrage scanning | ${jobs.length} pairs${RESET}`
   );
 
   while (true) {
 
     for (let i = 0; i < jobs.length; i += WORKERS) {
 
-      const batch = jobs.slice(i, i + WORKERS);
-
       console.log(
-        `${YELLOW}🔎 Scanning pairs ${i + 1} → ${i + batch.length}${RESET}`
+        `${YELLOW}[${ts()}] 🔎 Scanning ${i + 1} → ${Math.min(i + WORKERS, jobs.length)}${RESET}`
       );
 
       await Promise.allSettled(
-        batch.map(j => tryArb(j.buy, j.sell, j.token))
+        jobs.slice(i, i + WORKERS).map(j =>
+          tryArb(j.buy, j.sell, j.token)
+        )
       );
     }
 
@@ -197,6 +254,8 @@ async function scanLoop() {
   }
 }
 
-/* ================= START ================= */
+/* =========================================================
+   START
+========================================================= */
 
 scanLoop();
