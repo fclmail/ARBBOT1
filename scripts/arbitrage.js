@@ -38,9 +38,9 @@ const RESET = "\x1b[0m";
 const MIN_TRADE_USDC = 10;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
-const DEADLINE_SECONDS = 20;
-const PARALLEL_LIMIT = 25;
-const SCAN_INTERVAL_MS = 1000;
+const DEADLINE_SECONDS = 60;
+const PARALLEL_LIMIT = 15;
+const SCAN_INTERVAL_MS = 30000;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
