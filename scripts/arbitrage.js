@@ -36,7 +36,7 @@ const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
 
-const MIN_TRADE_USDC = 10000;          // larger trades
+const MIN_TRADE_USDC = 10;          // larger trades
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 20;           // faster execution
