@@ -6,13 +6,13 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
-// Hardcoded Moralis WebSocket URL for Polygon mainnet
-const RPC_POLYGON_WS = "wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY"; // replace with actual URL if needed
+// Hard-fetched from process.env for GitHub Actions
+const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "wss://polygon-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY").trim();
 
-// Fetch private key from GitHub secrets / environment variables
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
+// GitHub Actions secret: WALLET_PRIVATE_KEY
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
-console.log("Wallet private key present?", !!WALLET_PRIVATE_KEY); // debug line
+console.log("Wallet private key present?", !!WALLET_PRIVATE_KEY);
 
 if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
