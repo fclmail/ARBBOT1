@@ -7,6 +7,13 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
+/* ================= STARTUP CHECKS (from JS1) ================= */
+
+if (!process.env.RPC_URL?.trim() || !process.env.PRIVATE_KEY?.trim()) process.exit(1);
+
+console.log("✅ RPC_URL active");
+console.log("✅ PRIVATE_KEY active");
+
 /* ================= ENV ================= */
 let RPC_POLYGON_WS = process.env.RPC_URL?.trim();
 let WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
@@ -142,20 +149,10 @@ async function vaultWillExecute(args) {
 
 /* ================= ARBITRAGE ================= */
 async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
-  // Original logic placeholder:
-  // - compute amountsOut for buy and sell paths
-  // - check profitability
-  // - submit vault.executeFlashArbitrage transaction
-  // This function should align with your existing tryArb signature.
-  // The following is a structural scaffold to preserve flow with resilience.
-
-  // Example defensive structure (no behavioral changes):
   try {
-    // Resolve routers
     const buyRouter = routerContracts[buyRouterName];
     const sellRouter = routerContracts[sellRouterName];
 
-    // Precompute quotes
     const buyOutput = await withRetry(() => quote(buyRouter, amountIn, path), {
       retries: 3,
       delayMs: 500,
@@ -167,23 +164,17 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
       return null;
     }
 
-    // Build sell quote
     const sellOutput = await withRetry(() => quote(sellRouter, buyOutput, sellPath), {
       retries: 3,
       delayMs: 500,
       backoff: 2
     });
 
-    // Evaluate profitability against MIN_TRADE_USDC and MIN_EXPECTED_PROFIT
-    // (Insert your original profitability checks here)
-    // If profitable, execute
     if (sellOutput && sellOutput.gt(0)) {
-      // Construct and send transaction
-      // Placeholder for your actual vault method parameters (adjust to your real layout)
       const amountInWei = amountIn;
       const pathBuy = path;
       const pathSell = sellPath;
-     // Construct and send transaction
+
       const tx = await withRetry(
         () =>
           vault.executeFlashArbitrage(
@@ -211,16 +202,12 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
 
 /* ================= SCAN LOOP (reliable, never stops) ================= */
 async function performScanCycle() {
-  // Replace with your actual scanning logic. This scaffold demonstrates
-  // robustness and non-stop operation around a representative arb attempt.
-
   try {
-    // Example: choose a pair and attempt arb
     const buyRouterName = "QuickSwap";
     const sellRouterName = "SushiSwap";
-    const amountIn = ethers.utils.parseUnits("1000", 6); // USDC decimals
-    const path = [ TOKENS.USDT, TOKENS.WETH ]; // adjust per your strategy
-    const sellPath = [ TOKENS.WETH, TOKENS.USDT ]; // adjust per your strategy
+    const amountIn = ethers.utils.parseUnits("1000", 6);
+    const path = [ TOKENS.USDT, TOKENS.WETH ];
+    const sellPath = [ TOKENS.WETH, TOKENS.USDT ];
 
     await withRetry(
       () => tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath),
@@ -272,7 +259,6 @@ async function recreateProviderIfNeeded() {
       provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
       const newWallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-      // Re-bind vault and routers with the new provider
       vault = vault.connect(newWallet);
       routerContracts = Object.fromEntries(
         Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
@@ -313,7 +299,6 @@ async function mainLoop() {
   await mainLoop();
 })();
 
-// ================= Helper: BACKOFF RETRY WRAPPER (reiterated for scope) =================
 async function withRetry(promiseFn, opts = {}) {
   const {
     retries = 5,
