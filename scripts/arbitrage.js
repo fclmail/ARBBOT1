@@ -7,24 +7,24 @@ dotenv.config({ override: false });
 
 /* ================= ENV ================= */
 
-// 1️⃣ Try environment variables first
-let RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim();
-let WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
+// 1️⃣ Load from environment ONLY
+const RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim();
+const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
 
-// 2️⃣ Fallback to hardcoded values if not provided
+// 2️⃣ Hard fail if missing
 if (!RPC_POLYGON_WS) {
-  console.warn("⚠ Using hardcoded RPC (no secret found)");
-  RPC_POLYGON_WS = "wss://polygon-mainnet.g.alchemy.com/v2/YOUR_RPC_KEY_HERE";
+  console.error("❌ RPC_POLYGON_WS is missing.");
+  process.exit(1);
 }
 
 if (!WALLET_PRIVATE_KEY) {
-  console.warn("⚠ Using hardcoded private key (no secret found)");
-  WALLET_PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE";
+  console.error("❌ WALLET_PRIVATE_KEY is missing.");
+  process.exit(1);
 }
 
-// 3️⃣ Final safety check
-if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) {
-  console.error("❌ RPC or Private Key still missing.");
+// 3️⃣ Validate private key format (0x + 64 hex chars)
+if (!/^0x[a-fA-F0-9]{64}$/.test(WALLET_PRIVATE_KEY)) {
+  console.error("❌ Invalid private key format.");
   process.exit(1);
 }
 
