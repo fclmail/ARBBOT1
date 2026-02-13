@@ -1,4 +1,4 @@
-// scripts/arbitrage_flash_ws.js
+// scripts/arbitrage.js
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
@@ -7,10 +7,11 @@ dotenv.config({ override: false });
 
 /* ================= ENV ================= */
 
-// Hard fetch from environment secrets, using optional chaining and trim
-const RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim() || "";
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim() || "";
+// Load environment variables from secrets
+const RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim();
+const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
 
+console.log("RPC_POLYGON_WS present?", !!RPC_POLYGON_WS);
 console.log("Wallet private key present?", !!WALLET_PRIVATE_KEY);
 
 if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
@@ -24,11 +25,11 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 2000;
+const MIN_TRADE_USDC = 2000; // Minimum arb trade in USDC
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10;
+const PARALLEL_LIMIT = 10; // Prevent too many parallel requests
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
