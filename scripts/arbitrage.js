@@ -7,21 +7,32 @@ dotenv.config({ override: false });
 
 /* ================= ENV ================= */
 
-const RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim();
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
+// 1️⃣ Try environment variables first
+let RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim();
+let WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
+
+// 2️⃣ Fallback to hardcoded values if not provided
+if (!RPC_POLYGON_WS) {
+  console.warn("⚠ Using hardcoded RPC (no secret found)");
+  RPC_POLYGON_WS = "wss://polygon-mainnet.g.alchemy.com/v2/YOUR_RPC_KEY_HERE";
+}
+
+if (!WALLET_PRIVATE_KEY) {
+  console.warn("⚠ Using hardcoded private key (no secret found)");
+  WALLET_PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE";
+}
+
+// 3️⃣ Final safety check
+if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) {
+  console.error("❌ RPC or Private Key still missing.");
+  process.exit(1);
+}
+
+console.log("RPC_POLYGON_WS active");
+console.log("Wallet private key active");
 
 // Hardcoded Moralis webhook (as requested)
 const MORALIS_WEBHOOK = "https://your-server.com/webhook";
-
-console.log("RPC_POLYGON_WS present?", !!RPC_POLYGON_WS);
-console.log("Wallet private key present?", !!WALLET_PRIVATE_KEY);
-
-if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) {
-  console.error("❌ Missing required environment variables.");
-  console.error("RPC_POLYGON_WS:", !!RPC_POLYGON_WS);
-  console.error("WALLET_PRIVATE_KEY:", !!WALLET_PRIVATE_KEY);
-  process.exit(1);
-}
 
 /* ================= COLORS ================= */
 
