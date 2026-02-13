@@ -6,6 +6,7 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
+
 const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
@@ -28,57 +29,70 @@ console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
 
 /* ================= COLORS ================= */
+
 const GREEN = "\x1b[92m";
+const BRIGHT_GREEN = "\x1b[1;92m";
 const RED = "\x1b[91m";
+const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 const RESET = "\x1b[0m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 7.0;          // minimum trade amount
+
+const MIN_TRADE_USDC = 10;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
-const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10;          // safe concurrency batching
-const SCAN_BATCH = 10;              // batch size for scanning jobs
+const DEADLINE_SECONDS = 20;
+const PARALLEL_LIMIT = 25; // safe concurrency
+const SCAN_INTERVAL_MS = 2000; // 2 seconds between loops
 
 /* ================= PROVIDER & WALLET ================= */
-let provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+
+const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+
+provider._websocket?.on("close", () =>
+  console.error(RED, "❌ WebSocket connection closed", RESET)
+);
+
+provider._websocket?.on("error", (err) =>
+  console.error(RED, "❌ WebSocket error:", err?.message || err, RESET)
+);
+
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-provider._websocket?.on("close", async () => {
-  console.error("❌ WebSocket closed. Reconnecting...");
-  await sleep(1000);
-  startMempoolScanner();
-});
-
-provider._websocket?.on("error", (err) => {
-  console.error("❌ WebSocket error:", err?.message || err);
-});
-
 /* ================= FLASH VAULT ================= */
+
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
-  "function usdc() view returns(address)"
+  "function usdc() view returns(address)",
+  "function balanceOf(address) view returns(uint256)"
 ];
+
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
+
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Wault:     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
+
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
-// Pre-create router contracts for speed
+
+/* ================= PRE-CREATED ROUTER CONTRACTS ================= */
+
 const routerContracts = Object.fromEntries(
   Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
 );
 
 /* ================= TOKENS ================= */
+
 const TOKENS = {
   USDT:   "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
@@ -92,7 +106,6 @@ const TOKENS = {
 };
 
 /* ================= HELPERS ================= */
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function quote(router, amountIn, path) {
   try {
@@ -123,7 +136,10 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= SIMULATION ================= */
+function timestamp() {
+  return `[${new Date().toLocaleTimeString()}]`;
+}
+
 async function vaultWillExecute(args) {
   try {
     await vault.executeFlashArbitrage.staticCall(...args);
@@ -134,6 +150,7 @@ async function vaultWillExecute(args) {
 }
 
 /* ================= ARBITRAGE CORE ================= */
+
 async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
   const usdcAddr = await vault.usdc();
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
@@ -141,47 +158,32 @@ async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
   const buyRouter = routerContracts[buyRouterName];
   const sellRouter = routerContracts[sellRouterName];
 
-  // Get best buy
   const buyPaths = buildPaths(usdcAddr, tokenAddr);
-  const buyQuotes = await Promise.all(buyPaths.map(p => quote(buyRouter, amountIn, p)));
+  const sellPaths = buildSellPaths(usdcAddr, tokenAddr);
 
+  // Parallel buy quotes
+  const buyQuotes = await Promise.all(buyPaths.map(p => quote(buyRouter, amountIn, p)));
   let bestBuyOut, bestBuyPath;
-  buyQuotes.forEach((out, i) => {
-    if (out && (!bestBuyOut || out > bestBuyOut)) {
-      bestBuyOut = out;
-      bestBuyPath = buyPaths[i];
-    }
-  });
+  buyQuotes.forEach((out, i) => { if (out && (!bestBuyOut || out > bestBuyOut)) { bestBuyOut = out; bestBuyPath = buyPaths[i]; } });
+
   if (!bestBuyOut) return;
 
-  // Get best sell
-  const sellPaths = buildSellPaths(usdcAddr, tokenAddr);
+  // Parallel sell quotes
   const sellQuotes = await Promise.all(sellPaths.map(p => quote(sellRouter, bestBuyOut, p)));
-
   let bestSellOut, bestSellPath;
-  sellQuotes.forEach((out, i) => {
-    if (out && (!bestSellOut || out > bestSellOut)) {
-      bestSellOut = out;
-      bestSellPath = sellPaths[i];
-    }
-  });
+  sellQuotes.forEach((out, i) => { if (out && (!bestSellOut || out > bestSellOut)) { bestSellOut = out; bestSellPath = sellPaths[i]; } });
+
   if (!bestSellOut) return;
 
-  // Calculate profit
-  const buyPrice = Number(ethers.formatUnits(bestBuyOut, 6));
-  const sellPrice = Number(ethers.formatUnits(bestSellOut, 6));
-  const grossProfit = sellPrice - MIN_TRADE_USDC;
-  const safeProfit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
+  const grossProfit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+  const profit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
 
-  const now = new Date().toISOString();
-  const color = safeProfit > 0 ? GREEN : RED;
+  const profitColor = profit > 0 ? BRIGHT_GREEN : RED;
 
-  // Log scan result
-  console.log(`[${now}] ${color}Scan | Buy:${buyRouterName} ${buyPrice.toFixed(6)} | Sell:${sellRouterName} ${sellPrice.toFixed(6)} | Profit:${safeProfit.toFixed(6)} USDC${RESET}`);
+  console.log(`${timestamp()} Scan | Buy:${buyRouterName} ${Number(ethers.formatUnits(bestBuyOut,6)).toFixed(6)} | Sell:${sellRouterName} ${Number(ethers.formatUnits(bestSellOut,6)).toFixed(6)} | Profit:${profitColor}${profit.toFixed(6)} USDC${RESET}`);
 
-  if (safeProfit < MIN_EXPECTED_PROFIT) return;
+  if (profit < MIN_EXPECTED_PROFIT) return;
 
-  // Prepare args
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
   const args = [routers[buyRouterName], routers[sellRouterName], amountIn, bestBuyPath, bestSellPath, deadline];
 
@@ -191,42 +193,38 @@ async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
   const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
   await tx.wait();
 
-  console.log(`[${now}] ${GREEN}⚡ Flash executed | TX:${tx.hash} | Profit:${safeProfit.toFixed(6)} USDC${RESET}`);
+  console.log(`${timestamp()} ⚡ Flash executed | ${BRIGHT_GREEN}${tx.hash}${RESET}`);
 }
 
-/* ================= NON-BLOCKING MEMPOOL SCANNER ================= */
-async function handlePending(txHash) {
-  try {
-    const tx = await provider.getTransaction(txHash);
-    if (!tx || !tx.to) return;
-    if (!Object.values(routers).includes(tx.to)) return;
+/* ================= CONTINUOUS SCAN LOOP ================= */
 
+async function continuousScanLoop() {
+  const tokens = Object.values(TOKENS);
+  const routerKeys = Object.keys(routers);
+
+  while (true) {
     const jobs = [];
-    for (const token of Object.values(TOKENS)) {
-      for (const buy of Object.keys(routers)) {
-        for (const sell of Object.keys(routers)) {
-          if (buy !== sell) jobs.push(tryArb(buy, sell, token));
+    for (const token of tokens) {
+      for (const buy of routerKeys) {
+        for (const sell of routerKeys) {
+          if (buy !== sell) {
+            jobs.push(tryArb(buy, sell, token));
+            if (jobs.length >= PARALLEL_LIMIT) {
+              await Promise.allSettled(jobs);
+              jobs.length = 0;
+            }
+          }
         }
       }
     }
+    if (jobs.length) await Promise.allSettled(jobs);
 
-    // Batch jobs to avoid memory overload
-    for (let i = 0; i < jobs.length; i += SCAN_BATCH) {
-      await Promise.allSettled(jobs.slice(i, i + SCAN_BATCH));
-    }
-
-  } catch (err) {
-    console.error(RED, err.message || err);
+    console.log(`${timestamp()} 🔎 Continuous scan complete. Sleeping ${SCAN_INTERVAL_MS/1000}s...`);
+    await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
   }
 }
 
-function startMempoolScanner() {
-  console.log(`🚀 Continuous arbitrage scanning | ${Object.keys(TOKENS).length * Object.keys(routers).length ** 2} pairs`);
-
-  provider.on("pending", (txHash) => {
-    handlePending(txHash).catch(console.error);
-  });
-}
-
 /* ================= START ================= */
-startMempoolScanner();
+
+console.log("🚀 Continuous arbitrage scanning...");
+continuousScanLoop().catch(err => console.error("Fatal Error:", err));
