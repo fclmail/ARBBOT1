@@ -1,6 +1,6 @@
 // File: scripts/arbitrage.js
 // Drop-in replacement with reliability hardening while preserving existing logic structure.
-// All enhancements are additive and aim at resilience.
+// Only change: ethers v6 BigInt comparison fix in tryArb.
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
@@ -127,8 +127,7 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
       delayMs: 500,
       backoff: 2
     });
-
-    if (!buyOutput) return null;
+    if (!buyOutput || buyOutput <= 0n) return null;
 
     const sellOutput = await withRetry(() => quote(sellRouter, buyOutput, sellPath), {
       retries: 3,
@@ -136,7 +135,8 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
       backoff: 2
     });
 
-    if (sellOutput && sellOutput.gt(0)) {
+    // ---------- FIX APPLIED: BigInt comparison instead of .gt() ----------
+    if (sellOutput && sellOutput > 0n) {
       const tx = await withRetry(
         () =>
           vault.executeFlashArbitrage(
