@@ -1,6 +1,6 @@
 // File: scripts/arbitrage.js
 // Drop-in replacement with reliability hardening while preserving existing logic structure.
-// Only two fixes applied: BigInt check and proper UniswapV2 deadline.
+// Only fixes applied: BigInt-safe comparison, proper UniswapV2 deadline, and full token approvals.
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
@@ -116,6 +116,32 @@ async function quote(router, amountIn, path) {
   }
 }
 
+/* ================= TOKEN APPROVALS ================= */
+async function approveTokens() {
+  const ERC20_ABI = [
+    "function approve(address spender, uint256 amount) public returns (bool)",
+    "function allowance(address owner, address spender) view returns (uint256)"
+  ];
+
+  const tokensToApprove = [TOKENS.USDT, TOKENS.WETH];
+
+  for (const tokenAddress of tokensToApprove) {
+    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
+    const allowance = await tokenContract.allowance(wallet.address, VAULT_ADDRESS);
+
+    if (allowance < ethers.constants.MaxUint256) {
+      try {
+        console.log(`${timestamp()} 🔑 Approving ${tokenAddress} for vault...`);
+        const tx = await tokenContract.approve(VAULT_ADDRESS, ethers.constants.MaxUint256);
+        await tx.wait();
+        console.log(`${timestamp()} ✅ Approved ${tokenAddress} for vault`);
+      } catch (e) {
+        console.error(`${timestamp()} ❌ Approval failed for ${tokenAddress}: ${e?.message ?? e}`);
+      }
+    }
+  }
+}
+
 /* ================= ARBITRAGE ================= */
 async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
   try {
@@ -136,10 +162,10 @@ async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
       backoff: 2
     });
 
-    // ✅ FIXED: BigInt-safe comparison
+    // ✅ BigInt-safe comparison
     if (sellOutput && sellOutput > 0n) {
 
-      // ✅ FIXED: proper UniswapV2 deadline
+      // ✅ Proper UniswapV2 deadline
       const tx = await withRetry(
         () =>
           vault.executeFlashArbitrage(
@@ -204,9 +230,12 @@ async function mainLoop() {
     console.error(`${timestamp()} ❗ Sanity check failed: ${e?.message ?? e}`);
   }
 
+  await approveTokens(); // ✅ Added token approvals
+
   await mainLoop();
 })();
 
+/* ================= RETRY HELPER ================= */
 async function withRetry(promiseFn, opts = {}) {
   const { retries = 5, delayMs = 1000, backoff = 1.5 } = opts;
   let attempt = 0;
