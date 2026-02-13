@@ -1,18 +1,11 @@
 // scripts/arbitrage_flash_ws.js
 
-import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-dotenv.config({ override: false });
-
-/* ================= ENV ================= */
-const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "").trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+/* ================= ENV (HARDCODED) ================= */
+const RPC_POLYGON_WS = "wss://speedy-nodes-nyc.moralis.io/a9382ae4-8773-428a-8c11-ebfabb8d65fa/polygon/mainnet/ws";
+const WALLET_PRIVATE_KEY = "YOUR_PRIVATE_KEY_HERE"; // Replace with your actual private key
 const WEBHOOK_URL = "https://webhook.site/a9382ae4-8773-428a-8c11-ebfabb8d65fa";
-
-if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
-if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
-if (!WEBHOOK_URL) throw new Error("WEBHOOK_URL missing");
 
 /* ================= COLORS ================= */
 const GREEN = "\x1b[92m";
@@ -22,11 +15,11 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 2000; // Minimum arb trade in USDC
+const MIN_TRADE_USDC = 2000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10; // Prevent too many parallel requests
+const PARALLEL_LIMIT = 10;
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
@@ -61,12 +54,6 @@ const TOKENS = {
   LINK:   "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   AAVE:   "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
-
-/* ================= ERC20 ================= */
-const erc20Abi = [
-  "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)"
-];
 
 /* ================= HELPERS ================= */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -186,12 +173,10 @@ async function startMempoolScanner() {
       const tx = await provider.getTransaction(txHash);
       if (!tx || !tx.to) return;
 
-      // Only consider DEX routers
       if (!Object.values(routers).includes(tx.to)) return;
 
       console.log(`⚡ Pending swap detected: ${txHash}`);
 
-      // Execute all token/router combos in parallel (throttle to PARALLEL_LIMIT)
       const tasks = [];
       for (const token of Object.values(TOKENS)) {
         for (const buy of Object.values(routers)) {
