@@ -7,11 +7,9 @@ dotenv.config({ override: false });
 
 /* ================= ENV ================= */
 
-// 🔥 MODIFIED TO MATCH YOUR EXISTING GITHUB SECRETS
 const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
-// Hard fail if missing
 if (!RPC_POLYGON_WS) {
   console.error("❌ RPC_URL is missing.");
   process.exit(1);
@@ -22,7 +20,6 @@ if (!WALLET_PRIVATE_KEY) {
   process.exit(1);
 }
 
-// Validate private key format (0x + 64 hex chars)
 if (!/^0x[a-fA-F0-9]{64}$/.test(WALLET_PRIVATE_KEY)) {
   console.error("❌ Invalid private key format.");
   process.exit(1);
@@ -30,9 +27,6 @@ if (!/^0x[a-fA-F0-9]{64}$/.test(WALLET_PRIVATE_KEY)) {
 
 console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
-
-// Hardcoded Moralis webhook
-const MORALIS_WEBHOOK = "https://your-server.com/webhook";
 
 /* ================= COLORS ================= */
 
@@ -54,12 +48,13 @@ const PARALLEL_LIMIT = 10;
 
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 
-provider.on("error", (err) => {
-  console.error("❌ WebSocket Provider Error:", err.message);
+// ✅ ethers v6 compatible WebSocket listeners
+provider._websocket?.on("close", () => {
+  console.error("❌ WebSocket connection closed.");
 });
 
-provider.on("close", () => {
-  console.error("❌ WebSocket connection closed.");
+provider._websocket?.on("error", (err) => {
+  console.error("❌ WebSocket error:", err?.message || err);
 });
 
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
