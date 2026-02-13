@@ -2,7 +2,6 @@
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-import axios from "axios";
 
 dotenv.config({ override: false });
 
@@ -105,7 +104,11 @@ function buildSellPaths(usdc, token) {
 /* ================= WEBHOOK ================= */
 async function sendWebhook(message) {
   try {
-    await axios.post(WEBHOOK_URL, { content: message });
+    await fetch(WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: message })
+    });
   } catch (err) {
     console.error(RED, "Webhook error:", err.message, RESET);
   }
