@@ -7,31 +7,31 @@ dotenv.config({ override: false });
 
 /* ================= ENV ================= */
 
-// 1️⃣ Load from environment ONLY
-const RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim();
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
+// 🔥 MODIFIED TO MATCH YOUR EXISTING GITHUB SECRETS
+const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
-// 2️⃣ Hard fail if missing
+// Hard fail if missing
 if (!RPC_POLYGON_WS) {
-  console.error("❌ RPC_POLYGON_WS is missing.");
+  console.error("❌ RPC_URL is missing.");
   process.exit(1);
 }
 
 if (!WALLET_PRIVATE_KEY) {
-  console.error("❌ WALLET_PRIVATE_KEY is missing.");
+  console.error("❌ PRIVATE_KEY is missing.");
   process.exit(1);
 }
 
-// 3️⃣ Validate private key format (0x + 64 hex chars)
+// Validate private key format (0x + 64 hex chars)
 if (!/^0x[a-fA-F0-9]{64}$/.test(WALLET_PRIVATE_KEY)) {
   console.error("❌ Invalid private key format.");
   process.exit(1);
 }
 
-console.log("RPC_POLYGON_WS active");
-console.log("Wallet private key active");
+console.log("✅ RPC_URL active");
+console.log("✅ PRIVATE_KEY active");
 
-// Hardcoded Moralis webhook (as requested)
+// Hardcoded Moralis webhook
 const MORALIS_WEBHOOK = "https://your-server.com/webhook";
 
 /* ================= COLORS ================= */
