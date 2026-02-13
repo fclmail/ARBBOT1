@@ -3,12 +3,11 @@
 import { ethers } from "ethers";
 
 /* ================= ENV ================= */
-// Hardcoded Moralis WebSocket URL
+// Moralis WS URL hardcoded
 const RPC_POLYGON_WS = "wss://speedy-nodes-nyc.moralis.io/a9382ae4-8773-428a-8c11-ebfabb8d65fa/polygon/mainnet/ws";
 
-// Fetch private key from environment variables (GitHub Secrets)
+// Private key from environment variable
 const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
-
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= COLORS ================= */
@@ -17,15 +16,17 @@ const RESET = "\x1b[0m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 2000; // Minimum trade in USDC
+const MIN_TRADE_USDC = 2000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10; // Max parallel arb tasks
+const PARALLEL_LIMIT = 10;
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
+console.log("✅ Wallet loaded:", wallet.address);
 
 /* ================= FLASH VAULT ================= */
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
@@ -38,7 +39,7 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 /* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d47997506",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
   ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Wault:     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
@@ -125,23 +126,14 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
-  const grossProfit =
-    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
-
+  const grossProfit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
   const safeProfit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-  const args = [
-    buyRouter,
-    sellRouter,
-    amountIn,
-    bestBuyPath,
-    bestSellPath,
-    deadline
-  ];
+  const args = [buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath, deadline];
 
   if (!(await vaultWillExecute(args))) return;
 
