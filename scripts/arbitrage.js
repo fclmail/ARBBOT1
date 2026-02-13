@@ -28,26 +28,23 @@ if (!/^0x[a-fA-F0-9]{64}$/.test(WALLET_PRIVATE_KEY)) {
 console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
 
-/* ================= COLORS ================= */
+/* ================= SETTINGS ================= */
 
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
 const RED = "\x1b[91m";
 
-/* ================= PARAMETERS ================= */
-
-const MIN_TRADE_USDC = 10;          // larger trades
+const MIN_TRADE_USDC = 10;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
-const DEADLINE_SECONDS = 20;           // faster execution
-const PARALLEL_LIMIT = 100;            // higher concurrency
+const DEADLINE_SECONDS = 20;
 
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 
 provider._websocket?.on("close", () =>
-  console.error("❌ WebSocket connection closed.")
+  console.error("❌ WebSocket closed")
 );
 
 provider._websocket?.on("error", (err) =>
@@ -80,8 +77,6 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-/* ========= PRE-CREATE ROUTER CONTRACTS (MAJOR SPEED BOOST) ========= */
-
 const routerContracts = Object.fromEntries(
   Object.entries(routers).map(([k, v]) => [
     k,
@@ -103,6 +98,10 @@ const TOKENS = {
   AAVE:   "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
+/* ================= INIT CACHE ================= */
+
+const USDC_ADDR = await vault.usdc(); // HUGE speed fix
+
 /* ================= HELPERS ================= */
 
 async function quote(router, amountIn, path) {
@@ -118,9 +117,7 @@ function buildPaths(usdc, token) {
   return [
     [usdc, token],
     [usdc, TOKENS.WMATIC, token],
-    [usdc, TOKENS.WETH, token],
-    [usdc, TOKENS.USDT, token],
-    [usdc, TOKENS.DAI, token]
+    [usdc, TOKENS.WETH, token]
   ];
 }
 
@@ -128,38 +125,19 @@ function buildSellPaths(usdc, token) {
   return [
     [token, usdc],
     [token, TOKENS.WMATIC, usdc],
-    [token, TOKENS.WETH, usdc],
-    [token, TOKENS.USDT, usdc],
-    [token, TOKENS.DAI, usdc]
+    [token, TOKENS.WETH, usdc]
   ];
 }
 
-/* ================= SIMULATION ================= */
+/* ================= ARB ================= */
 
-async function vaultWillExecute(args) {
-  try {
-    await vault.executeFlashArbitrage.staticCall(...args);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/* ================= ARBITRAGE CORE ================= */
-
-async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
-  const usdcAddr = await vault.usdc();
+async function tryArb(buyName, sellName, tokenAddr) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const buyRouter = routerContracts[buyRouterName];
-  const sellRouter = routerContracts[sellRouterName];
-
-  /* ===== PARALLEL BUY QUOTES ===== */
-
-  const buyPaths = buildPaths(usdcAddr, tokenAddr);
+  const buyPaths = buildPaths(USDC_ADDR, tokenAddr);
 
   const buyQuotes = await Promise.all(
-    buyPaths.map(p => quote(buyRouter, amountIn, p))
+    buyPaths.map(p => quote(routerContracts[buyName], amountIn, p))
   );
 
   let bestBuyOut, bestBuyPath;
@@ -173,12 +151,10 @@ async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
 
   if (!bestBuyOut) return;
 
-  /* ===== PARALLEL SELL QUOTES ===== */
-
-  const sellPaths = buildSellPaths(usdcAddr, tokenAddr);
+  const sellPaths = buildSellPaths(USDC_ADDR, tokenAddr);
 
   const sellQuotes = await Promise.all(
-    sellPaths.map(p => quote(sellRouter, bestBuyOut, p))
+    sellPaths.map(p => quote(routerContracts[sellName], bestBuyOut, p))
   );
 
   let bestSellOut, bestSellPath;
@@ -192,76 +168,53 @@ async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
 
   if (!bestSellOut) return;
 
-  const gross =
-    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
-
-  const profit = gross * PROFIT_SAFETY_MULTIPLIER;
+  const profit =
+    (Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC)
+    * PROFIT_SAFETY_MULTIPLIER;
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`${GREEN}🔥 Flash profit:${RESET} ${profit.toFixed(6)} USDC`);
+  console.log(`${GREEN}🔥 Flash profit:${RESET} ${profit.toFixed(4)}`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  const args = [
-    routers[buyRouterName],
-    routers[sellRouterName],
+  const tx = await vault.executeFlashArbitrage(
+    routers[buyName],
+    routers[sellName],
     amountIn,
     bestBuyPath,
     bestSellPath,
-    deadline
-  ];
-
-  if (!(await vaultWillExecute(args))) return;
-
-  const nonce = await provider.getTransactionCount(wallet.address, "pending");
-
-  const tx = await vault.executeFlashArbitrage(...args, {
-    nonce,
-    gasLimit: 2_000_000
-  });
+    deadline,
+    { gasLimit: 2_000_000 }
+  );
 
   await tx.wait();
 
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
 }
 
-/* ================= NON-BLOCKING MEMPOOL ================= */
+/* ================= CONTINUOUS SCAN LOOP ================= */
 
-async function handlePending(txHash) {
-  try {
-    const tx = await provider.getTransaction(txHash);
-    if (!tx || !tx.to) return;
-
-    if (!Object.values(routers).includes(tx.to)) return;
-
-    console.log(`⚡ Pending swap: ${txHash}`);
-
-    const jobs = [];
-
-    for (const token of Object.values(TOKENS)) {
-      for (const buy of Object.keys(routers)) {
-        for (const sell of Object.keys(routers)) {
-          if (buy !== sell) jobs.push(tryArb(buy, sell, token));
+async function scanLoop() {
+  while (true) {
+    try {
+      for (const token of Object.values(TOKENS)) {
+        for (const buy of Object.keys(routers)) {
+          for (const sell of Object.keys(routers)) {
+            if (buy !== sell) tryArb(buy, sell, token);
+          }
         }
       }
+    } catch (e) {
+      console.error(RED, e.message);
     }
 
-    await Promise.allSettled(jobs);
-
-  } catch (err) {
-    console.error(RED, err.message || err);
+    await new Promise(r => setTimeout(r, 250)); // continuous
   }
-}
-
-function startMempoolScanner() {
-  console.log("🚀 Listening to Polygon mempool...");
-
-  provider.on("pending", (txHash) => {
-    handlePending(txHash); // NOT awaited → no stall
-  });
 }
 
 /* ================= START ================= */
 
-startMempoolScanner();
+console.log("🚀 Continuous arbitrage scanning...");
+
+scanLoop();
