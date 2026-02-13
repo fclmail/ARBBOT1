@@ -44,7 +44,7 @@ const YELLOW = "\x1b[93m";
 const RESET = "\x1b[0m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 1000000;
+const MIN_TRADE_USDC = .10;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
