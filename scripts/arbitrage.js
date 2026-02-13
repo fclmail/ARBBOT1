@@ -6,7 +6,6 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
-
 const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
@@ -29,39 +28,33 @@ console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
 
 /* ================= COLORS ================= */
-
 const GREEN = "\x1b[92m";
 const BRIGHT_GREEN = "\x1b[1;92m";
 const RED = "\x1b[91m";
-const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 const RESET = "\x1b[0m";
 
 /* ================= PARAMETERS ================= */
-
 const MIN_TRADE_USDC = 10;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 20;
-const PARALLEL_LIMIT = 25; // safe concurrency
-const SCAN_INTERVAL_MS = 2000; // 2 seconds between loops
+const PARALLEL_LIMIT = 25;
+const SCAN_INTERVAL_MS = 1000;
 
-/* ================= PROVIDER & WALLET ================= */
-
+/* ================= PROVIDER ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 
 provider._websocket?.on("close", () =>
-  console.error(RED, "❌ WebSocket connection closed", RESET)
+  console.error("❌ WebSocket connection closed.")
 );
-
 provider._websocket?.on("error", (err) =>
-  console.error(RED, "❌ WebSocket error:", err?.message || err, RESET)
+  console.error("❌ WebSocket error:", err?.message || err)
 );
 
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= FLASH VAULT ================= */
-
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
@@ -73,7 +66,6 @@ const vaultAbi = [
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
-
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -85,14 +77,11 @@ const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
-/* ================= PRE-CREATED ROUTER CONTRACTS ================= */
-
 const routerContracts = Object.fromEntries(
   Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
 );
 
 /* ================= TOKENS ================= */
-
 const TOKENS = {
   USDT:   "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
@@ -106,6 +95,9 @@ const TOKENS = {
 };
 
 /* ================= HELPERS ================= */
+function timestamp() {
+  return `[${new Date().toLocaleTimeString()}]`;
+}
 
 async function quote(router, amountIn, path) {
   try {
@@ -136,10 +128,6 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-function timestamp() {
-  return `[${new Date().toLocaleTimeString()}]`;
-}
-
 async function vaultWillExecute(args) {
   try {
     await vault.executeFlashArbitrage.staticCall(...args);
@@ -149,82 +137,97 @@ async function vaultWillExecute(args) {
   }
 }
 
-/* ================= ARBITRAGE CORE ================= */
-
+/* ================= ARBITRAGE ================= */
 async function tryArb(buyRouterName, sellRouterName, tokenAddr) {
-  const usdcAddr = await vault.usdc();
-  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+  try {
+    const usdcAddr = await vault.usdc();
+    const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const buyRouter = routerContracts[buyRouterName];
-  const sellRouter = routerContracts[sellRouterName];
+    const buyRouter = routerContracts[buyRouterName];
+    const sellRouter = routerContracts[sellRouterName];
 
-  const buyPaths = buildPaths(usdcAddr, tokenAddr);
-  const sellPaths = buildSellPaths(usdcAddr, tokenAddr);
+    const buyPaths = buildPaths(usdcAddr, tokenAddr);
+    const buyQuotes = await Promise.all(buyPaths.map(p => quote(buyRouter, amountIn, p)));
 
-  // Parallel buy quotes
-  const buyQuotes = await Promise.all(buyPaths.map(p => quote(buyRouter, amountIn, p)));
-  let bestBuyOut, bestBuyPath;
-  buyQuotes.forEach((out, i) => { if (out && (!bestBuyOut || out > bestBuyOut)) { bestBuyOut = out; bestBuyPath = buyPaths[i]; } });
+    let bestBuyOut, bestBuyPath;
+    buyQuotes.forEach((out, i) => {
+      if (out && (!bestBuyOut || out > bestBuyOut)) {
+        bestBuyOut = out;
+        bestBuyPath = buyPaths[i];
+      }
+    });
+    if (!bestBuyOut || bestBuyOut > 1e12) return;
 
-  if (!bestBuyOut) return;
+    const sellPaths = buildSellPaths(usdcAddr, tokenAddr);
+    const sellQuotes = await Promise.all(sellPaths.map(p => quote(sellRouter, bestBuyOut, p)));
 
-  // Parallel sell quotes
-  const sellQuotes = await Promise.all(sellPaths.map(p => quote(sellRouter, bestBuyOut, p)));
-  let bestSellOut, bestSellPath;
-  sellQuotes.forEach((out, i) => { if (out && (!bestSellOut || out > bestSellOut)) { bestSellOut = out; bestSellPath = sellPaths[i]; } });
+    let bestSellOut, bestSellPath;
+    sellQuotes.forEach((out, i) => {
+      if (out && (!bestSellOut || out > bestSellOut)) {
+        bestSellOut = out;
+        bestSellPath = sellPaths[i];
+      }
+    });
+    if (!bestSellOut || bestSellOut > 1e12) return;
 
-  if (!bestSellOut) return;
+    const gross = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+    const profit = gross * PROFIT_SAFETY_MULTIPLIER;
 
-  const grossProfit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
-  const profit = grossProfit * PROFIT_SAFETY_MULTIPLIER;
+    const logColor = profit > 0 ? BRIGHT_GREEN : RED;
+    console.log(`${timestamp()} ${logColor}Scan | Buy:${buyRouterName} ${Number(ethers.formatUnits(bestBuyOut, 6)).toFixed(6)} | Sell:${sellRouterName} ${Number(ethers.formatUnits(bestSellOut, 6)).toFixed(6)} | Profit:${profit.toFixed(6)} USDC${RESET}`);
 
-  const profitColor = profit > 0 ? BRIGHT_GREEN : RED;
+    if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`${timestamp()} Scan | Buy:${buyRouterName} ${Number(ethers.formatUnits(bestBuyOut,6)).toFixed(6)} | Sell:${sellRouterName} ${Number(ethers.formatUnits(bestSellOut,6)).toFixed(6)} | Profit:${profitColor}${profit.toFixed(6)} USDC${RESET}`);
+    const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+    const args = [routers[buyRouterName], routers[sellRouterName], amountIn, bestBuyPath, bestSellPath, deadline];
 
-  if (profit < MIN_EXPECTED_PROFIT) return;
+    if (!(await vaultWillExecute(args))) return;
 
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-  const args = [routers[buyRouterName], routers[sellRouterName], amountIn, bestBuyPath, bestSellPath, deadline];
+    const nonce = await provider.getTransactionCount(wallet.address, "pending");
+    const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
+    await tx.wait();
 
-  if (!(await vaultWillExecute(args))) return;
+    console.log(`${timestamp()} ${GREEN}⚡ Flash executed | TX: ${tx.hash}${RESET}`);
 
-  const nonce = await provider.getTransactionCount(wallet.address, "pending");
-  const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
-  await tx.wait();
-
-  console.log(`${timestamp()} ⚡ Flash executed | ${BRIGHT_GREEN}${tx.hash}${RESET}`);
+  } catch (err) {
+    console.error(RED, "[tryArb Error]", err.message || err, RESET);
+  }
 }
 
-/* ================= CONTINUOUS SCAN LOOP ================= */
+/* ================= SAFE BATCHING ================= */
+async function batchPromises(tasks, limit = PARALLEL_LIMIT) {
+  for (let i = 0; i < tasks.length; i += limit) {
+    const batch = tasks.slice(i, i + limit).map(fn => fn());
+    await Promise.allSettled(batch);
+  }
+}
 
+/* ================= CONTINUOUS LOOP ================= */
 async function continuousScanLoop() {
   const tokens = Object.values(TOKENS);
   const routerKeys = Object.keys(routers);
 
+  console.log(`🚀 Continuous arbitrage scanning | ${tokens.length * routerKeys.length * (routerKeys.length-1)} pairs`);
+
   while (true) {
-    const jobs = [];
-    for (const token of tokens) {
-      for (const buy of routerKeys) {
-        for (const sell of routerKeys) {
-          if (buy !== sell) {
-            jobs.push(tryArb(buy, sell, token));
-            if (jobs.length >= PARALLEL_LIMIT) {
-              await Promise.allSettled(jobs);
-              jobs.length = 0;
-            }
+    try {
+      const tasks = [];
+      for (const token of tokens) {
+        for (const buy of routerKeys) {
+          for (const sell of routerKeys) {
+            if (buy !== sell) tasks.push(() => tryArb(buy, sell, token));
           }
         }
       }
-    }
-    if (jobs.length) await Promise.allSettled(jobs);
+      await batchPromises(tasks);
 
-    console.log(`${timestamp()} 🔎 Continuous scan complete. Sleeping ${SCAN_INTERVAL_MS/1000}s...`);
-    await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
+      await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
+    } catch (loopErr) {
+      console.error(RED, "[Loop Error]", loopErr.message || loopErr, RESET);
+      await new Promise(r => setTimeout(r, 2000));
+    }
   }
 }
 
 /* ================= START ================= */
-
-console.log("🚀 Continuous arbitrage scanning...");
-continuousScanLoop().catch(err => console.error("Fatal Error:", err));
+continuousScanLoop();
