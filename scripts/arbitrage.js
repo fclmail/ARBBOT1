@@ -1,4 +1,4 @@
-// scripts/arbitrage-mempool.js
+// scripts/arbitrage-persistent.js
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
@@ -26,7 +26,8 @@ const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 20;
 
 const WORKERS = 25;
-const LOOP_DELAY = 50; // ms between scan loop cycles
+const LOOP_DELAY = 50; // ms delay between scan cycles
+const ARB_TIMEOUT = 5000; // ms per tryArb to prevent hangs
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
@@ -91,77 +92,49 @@ async function logBalances(label) {
 
 /* ================= ARBITRAGE EXECUTION ================= */
 async function tryArb(buyName, sellName, token) {
-  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+  try {
+    const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const buyOut = await quote(routerContracts[buyName], amountIn, [USDC_ADDR, token]);
-  if (!buyOut) return;
+    const buyOut = await quote(routerContracts[buyName], amountIn, [USDC_ADDR, token]);
+    if (!buyOut) return;
 
-  const sellOut = await quote(routerContracts[sellName], buyOut, [token, USDC_ADDR]);
-  if (!sellOut) return;
+    const sellOut = await quote(routerContracts[sellName], buyOut, [token, USDC_ADDR]);
+    if (!sellOut) return;
 
-  const profit =
-    (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC) * PROFIT_SAFETY_MULTIPLIER;
+    const profit =
+      (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC) * PROFIT_SAFETY_MULTIPLIER;
 
-  if (profit < MIN_EXPECTED_PROFIT) return;
+    if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(
-    `${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`
-  );
+    console.log(
+      `${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`
+    );
 
-  await logBalances("BEFORE");
+    await logBalances("BEFORE");
 
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+    const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  const tx = await vault.executeFlashArbitrage(
-    routers[buyName],
-    routers[sellName],
-    amountIn,
-    [USDC_ADDR, token],
-    [token, USDC_ADDR],
-    deadline,
-    { gasLimit: 2_000_000 }
-  );
+    const tx = await vault.executeFlashArbitrage(
+      routers[buyName],
+      routers[sellName],
+      amountIn,
+      [USDC_ADDR, token],
+      [token, USDC_ADDR],
+      deadline,
+      { gasLimit: 2_000_000 }
+    );
 
-  console.log(`${YELLOW}⏳ TX SENT: ${tx.hash}${RESET}`);
+    console.log(`${YELLOW}⏳ TX SENT: ${tx.hash}${RESET}`);
+    const receipt = await tx.wait();
+    console.log(`${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`);
 
-  const receipt = await tx.wait();
-
-  console.log(
-    `${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`
-  );
-
-  await logBalances("AFTER");
+    await logBalances("AFTER");
+  } catch (err) {
+    console.error(`${YELLOW}⚠️ tryArb error: ${err?.message || err}${RESET}`);
+  }
 }
 
-/* ================= MEMPOOL LISTENER ================= */
-console.log("🎧 Starting mempool listener...");
-
-provider.on("pending", async (txHash) => {
-  try {
-    const tx = await provider.getTransaction(txHash);
-    if (!tx || !tx.to) return;
-
-    const to = tx.to.toLowerCase();
-
-    // Filter only DEX routers
-    if (Object.values(routers).map(r => r.toLowerCase()).includes(to)) {
-      console.log(`${YELLOW}⚡ Pending DEX tx detected: ${txHash}${RESET}`);
-
-      // For simplicity, attempt arbitrage on all tokens for this router
-      for (const token of TOKENS) {
-        for (const buy of Object.keys(routers)) {
-          for (const sell of Object.keys(routers)) {
-            if (buy !== sell) {
-              tryArb(buy, sell, token);
-            }
-          }
-        }
-      }
-    }
-  } catch {}
-});
-
-/* ================= SCAN LOOP (fallback) ================= */
+/* ================= SAFE PERSISTENT LOOP ================= */
 async function scanLoop() {
   const jobs = [];
   for (const token of TOKENS)
@@ -175,12 +148,47 @@ async function scanLoop() {
   while (true) {
     for (let i = 0; i < jobs.length; i += WORKERS) {
       const batch = jobs.slice(i, i + WORKERS);
+
       console.log(`${YELLOW}🔎 Scanning pairs ${i + 1} → ${i + batch.length}${RESET}`);
-      await Promise.allSettled(batch.map(j => tryArb(j.buy, j.sell, j.token)));
+
+      // Wrap each tryArb in a timeout to prevent any single hang from stopping the loop
+      await Promise.allSettled(batch.map(j =>
+        Promise.race([
+          tryArb(j.buy, j.sell, j.token),
+          new Promise(r => setTimeout(r, ARB_TIMEOUT))
+        ])
+      ));
     }
     await new Promise(r => setTimeout(r, LOOP_DELAY));
   }
 }
 
+/* ================= MEMPOOL LISTENER ================= */
+console.log("🎧 Starting mempool listener...");
+
+provider.on("pending", async (txHash) => {
+  try {
+    const tx = await provider.getTransaction(txHash);
+    if (!tx || !tx.to) return;
+
+    const to = tx.to.toLowerCase();
+
+    if (Object.values(routers).map(r => r.toLowerCase()).includes(to)) {
+      console.log(`${YELLOW}⚡ Pending DEX tx detected: ${txHash}${RESET}`);
+
+      for (const token of TOKENS) {
+        for (const buy of Object.keys(routers)) {
+          for (const sell of Object.keys(routers)) {
+            if (buy !== sell) {
+              // fire and forget, wrapped in timeout
+              Promise.race([tryArb(buy, sell, token), new Promise(r => setTimeout(r, ARB_TIMEOUT))]);
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+});
+
 /* ================= START ================= */
-scanLoop(); // fallback loop
+scanLoop(); // main persistent scanning loop
