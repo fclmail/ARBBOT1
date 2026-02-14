@@ -1,7 +1,7 @@
-// scripts/arbitrage-mempool-proof.js
-
+// scripts/arbitrage-proof.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
+import fetch from "node-fetch";
 
 dotenv.config({ override: false });
 
@@ -9,10 +9,7 @@ dotenv.config({ override: false });
 const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
-if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) {
-  console.error("❌ Missing RPC_URL or PRIVATE_KEY");
-  process.exit(1);
-}
+if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) process.exit(1);
 
 console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
@@ -23,15 +20,33 @@ const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 const RESET = "\x1b[0m";
 
-const MIN_TRADE_USDC = 10;            // small trade for proof
-const MIN_EXPECTED_PROFIT = 0.000001;
+const MIN_TRADE_USDC = 10; // very small trade for proof
+const MIN_EXPECTED_PROFIT = 0.000001; 
+const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 20;
+
 const WORKERS = 25;
-const LOOP_DELAY = 50;
+const LOOP_DELAY = 50; // ms
+
+const WEBHOOK_URL = "https://webhook.site/a9382ae4-8773-428a-8c11-ebfabb8d65fa";
 
 /* ================= PROVIDER ================= */
-const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
-const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+let provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+let wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
+// Auto reconnect WebSocket if disconnected
+function setupProviderListeners() {
+  provider._websocket?.on("close", () => {
+    console.warn("❌ WebSocket closed, reconnecting...");
+    provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+    wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+    setupProviderListeners();
+  });
+  provider._websocket?.on("error", (err) => {
+    console.error("❌ WebSocket error:", err?.message || err);
+  });
+}
+setupProviderListeners();
 
 /* ================= VAULT ================= */
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
@@ -44,19 +59,13 @@ const vault = new ethers.Contract(
   wallet
 );
 
+const USDC_ADDR = await vault.usdc();
+
 /* ================= ERC20 ================= */
 const erc20Abi = [
   "function balanceOf(address) view returns(uint256)",
   "function decimals() view returns(uint8)"
 ];
-
-let USDC_ADDR;
-
-async function initUSDC() {
-  USDC_ADDR = await vault.usdc();
-}
-await initUSDC();
-
 const usdc = new ethers.Contract(USDC_ADDR, erc20Abi, provider);
 
 /* ================= ROUTERS ================= */
@@ -95,13 +104,47 @@ async function quote(router, amountIn, path) {
 async function logBalances(label) {
   const matic = await provider.getBalance(wallet.address);
   const vaultUsdc = await usdc.balanceOf(VAULT_ADDRESS);
-
   console.log(
     `${CYAN}💰 ${label} | Wallet MATIC: ${ethers.formatEther(matic)} | Vault USDC: ${ethers.formatUnits(vaultUsdc, 6)}${RESET}`
   );
 }
 
-/* ================= ARB FUNCTION ================= */
+// Send pending transaction info to Moralis webhook
+async function sendWebhook(tx) {
+  try {
+    await fetch(WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "pending_dex_tx",
+        hash: tx.hash,
+        from: tx.from,
+        to: tx.to,
+        value: ethers.formatEther(tx.value),
+        time: new Date().toISOString()
+      })
+    });
+    console.log(`📡 Webhook sent for tx ${tx.hash}`);
+  } catch (err) {
+    console.error("❌ Failed to send webhook:", err?.message ?? err);
+  }
+}
+
+/* ================= MEMPOOL LISTENER ================= */
+provider.on("pending", async (txHash) => {
+  try {
+    const tx = await provider.getTransaction(txHash);
+    if (!tx || !tx.to) return;
+
+    const dexAddresses = Object.values(routers).map(a => a.toLowerCase());
+    if (dexAddresses.includes(tx.to.toLowerCase())) {
+      console.log(`⚡ Pending DEX tx detected: https://polygonscan.com/tx/${tx.hash}`);
+      await sendWebhook(tx);
+    }
+  } catch {}
+});
+
+/* ================= ARBITRAGE ================= */
 async function tryArb(buyName, sellName, token) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
@@ -111,60 +154,33 @@ async function tryArb(buyName, sellName, token) {
   const sellOut = await quote(routerContracts[sellName], buyOut, [token, USDC_ADDR]);
   if (!sellOut) return;
 
-  const profit = (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC);
-
+  const profit = (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC) * PROFIT_SAFETY_MULTIPLIER;
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`);
-
   await logBalances("BEFORE");
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-
-  const tx = await vault.executeFlashArbitrage(
-    routers[buyName],
-    routers[sellName],
-    amountIn,
-    [USDC_ADDR, token],
-    [token, USDC_ADDR],
-    deadline,
-    { gasLimit: 2_000_000 }
-  );
-
-  console.log(`${YELLOW}⏳ TX SENT: https://polygonscan.com/tx/${tx.hash}${RESET}`);
-
-  const receipt = await tx.wait();
-
-  console.log(
-    `${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`
-  );
-
-  await logBalances("AFTER");
+  try {
+    const tx = await vault.executeFlashArbitrage(
+      routers[buyName],
+      routers[sellName],
+      amountIn,
+      [USDC_ADDR, token],
+      [token, USDC_ADDR],
+      deadline,
+      { gasLimit: 2_000_000 }
+    );
+    console.log(`${YELLOW}⏳ TX SENT: ${tx.hash}${RESET}`);
+    const receipt = await tx.wait();
+    console.log(`${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`);
+    await logBalances("AFTER");
+  } catch (err) {
+    console.error(`${RED}❌ Flash arbitrage failed: ${err?.message ?? err}${RESET}`);
+  }
 }
 
-/* ================= MEMPOOL LISTENER ================= */
-console.log("🎧 Starting mempool listener...");
-const routerAddrs = Object.values(routers).map(a => a.toLowerCase());
-
-provider.on("pending", async (txHash) => {
-  try {
-    const tx = await provider.getTransaction(txHash);
-    if (!tx || !tx.to) return;
-
-    const to = tx.to.toLowerCase();
-    if (routerAddrs.includes(to)) {
-      console.log(`⚡ Pending DEX tx detected: https://polygonscan.com/tx/${txHash}`);
-      // Fire small proof arb
-      for (const token of TOKENS) {
-        await tryArb("QuickSwap", "SushiSwap", token);
-      }
-    }
-  } catch (err) {
-    console.error("❌ Error fetching pending tx:", err?.message || err);
-  }
-});
-
-/* ================= SCAN LOOP (failsafe) ================= */
+/* ================= CONTINUOUS SCAN LOOP ================= */
 async function scanLoop() {
   const jobs = [];
   for (const token of TOKENS)
@@ -185,4 +201,5 @@ async function scanLoop() {
 }
 
 /* ================= START ================= */
+console.log(`${CYAN}🎧 Starting mempool listener + arbitrage scanning...${RESET}`);
 scanLoop();
