@@ -1,4 +1,4 @@
-// scripts/arbitrage-persistent.js
+// scripts/arbitrage-mempool-proof.js
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
@@ -9,7 +9,10 @@ dotenv.config({ override: false });
 const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
-if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) process.exit(1);
+if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) {
+  console.error("❌ Missing RPC_URL or PRIVATE_KEY");
+  process.exit(1);
+}
 
 console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
@@ -20,34 +23,40 @@ const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 const RESET = "\x1b[0m";
 
-const MIN_TRADE_USDC = 10;           // Minimum trade size
-const MIN_EXPECTED_PROFIT = 0.000001; // Minimum expected profit in USDC
-const PROFIT_SAFETY_MULTIPLIER = 0.9; 
+const MIN_TRADE_USDC = 10;            // small trade for proof
+const MIN_EXPECTED_PROFIT = 0.000001;
 const DEADLINE_SECONDS = 20;
-
 const WORKERS = 25;
-const LOOP_DELAY = 50; // ms delay between scan cycles
-const ARB_TIMEOUT = 5000; // ms per tryArb to prevent hangs
+const LOOP_DELAY = 50;
 
-/* ================= PROVIDER & WALLET ================= */
+/* ================= PROVIDER ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= VAULT ================= */
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
-const vaultAbi = [
-  "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
-  "function usdc() view returns(address)"
-];
-const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
-
-const USDC_ADDR = await vault.usdc();
+const vault = new ethers.Contract(
+  VAULT_ADDRESS,
+  [
+    "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
+    "function usdc() view returns(address)"
+  ],
+  wallet
+);
 
 /* ================= ERC20 ================= */
 const erc20Abi = [
   "function balanceOf(address) view returns(uint256)",
   "function decimals() view returns(uint8)"
 ];
+
+let USDC_ADDR;
+
+async function initUSDC() {
+  USDC_ADDR = await vault.usdc();
+}
+await initUSDC();
+
 const usdc = new ethers.Contract(USDC_ADDR, erc20Abi, provider);
 
 /* ================= ROUTERS ================= */
@@ -61,6 +70,7 @@ const routers = {
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[])"
 ];
+
 const routerContracts = Object.fromEntries(
   Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
 );
@@ -75,8 +85,8 @@ const TOKENS = [
 /* ================= HELPERS ================= */
 async function quote(router, amountIn, path) {
   try {
-    const amounts = await router.getAmountsOut(amountIn, path);
-    return amounts.at(-1);
+    const r = await router.getAmountsOut(amountIn, path);
+    return r.at(-1);
   } catch {
     return null;
   }
@@ -85,86 +95,56 @@ async function quote(router, amountIn, path) {
 async function logBalances(label) {
   const matic = await provider.getBalance(wallet.address);
   const vaultUsdc = await usdc.balanceOf(VAULT_ADDRESS);
+
   console.log(
     `${CYAN}💰 ${label} | Wallet MATIC: ${ethers.formatEther(matic)} | Vault USDC: ${ethers.formatUnits(vaultUsdc, 6)}${RESET}`
   );
 }
 
-/* ================= ARBITRAGE EXECUTION ================= */
+/* ================= ARB FUNCTION ================= */
 async function tryArb(buyName, sellName, token) {
-  try {
-    const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-    const buyOut = await quote(routerContracts[buyName], amountIn, [USDC_ADDR, token]);
-    if (!buyOut) return;
+  const buyOut = await quote(routerContracts[buyName], amountIn, [USDC_ADDR, token]);
+  if (!buyOut) return;
 
-    const sellOut = await quote(routerContracts[sellName], buyOut, [token, USDC_ADDR]);
-    if (!sellOut) return;
+  const sellOut = await quote(routerContracts[sellName], buyOut, [token, USDC_ADDR]);
+  if (!sellOut) return;
 
-    const profit =
-      (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC) * PROFIT_SAFETY_MULTIPLIER;
+  const profit = (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC);
 
-    if (profit < MIN_EXPECTED_PROFIT) return;
+  if (profit < MIN_EXPECTED_PROFIT) return;
 
-    console.log(
-      `${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`
-    );
+  console.log(`${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`);
 
-    await logBalances("BEFORE");
+  await logBalances("BEFORE");
 
-    const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-    const tx = await vault.executeFlashArbitrage(
-      routers[buyName],
-      routers[sellName],
-      amountIn,
-      [USDC_ADDR, token],
-      [token, USDC_ADDR],
-      deadline,
-      { gasLimit: 2_000_000 }
-    );
+  const tx = await vault.executeFlashArbitrage(
+    routers[buyName],
+    routers[sellName],
+    amountIn,
+    [USDC_ADDR, token],
+    [token, USDC_ADDR],
+    deadline,
+    { gasLimit: 2_000_000 }
+  );
 
-    console.log(`${YELLOW}⏳ TX SENT: ${tx.hash}${RESET}`);
-    const receipt = await tx.wait();
-    console.log(`${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`);
+  console.log(`${YELLOW}⏳ TX SENT: https://polygonscan.com/tx/${tx.hash}${RESET}`);
 
-    await logBalances("AFTER");
-  } catch (err) {
-    console.error(`${YELLOW}⚠️ tryArb error: ${err?.message || err}${RESET}`);
-  }
-}
+  const receipt = await tx.wait();
 
-/* ================= SAFE PERSISTENT LOOP ================= */
-async function scanLoop() {
-  const jobs = [];
-  for (const token of TOKENS)
-    for (const buy of Object.keys(routers))
-      for (const sell of Object.keys(routers))
-        if (buy !== sell)
-          jobs.push({ buy, sell, token });
+  console.log(
+    `${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`
+  );
 
-  console.log(`${CYAN}🚀 Continuous arbitrage scanning | Pairs loaded: ${jobs.length}${RESET}`);
-
-  while (true) {
-    for (let i = 0; i < jobs.length; i += WORKERS) {
-      const batch = jobs.slice(i, i + WORKERS);
-
-      console.log(`${YELLOW}🔎 Scanning pairs ${i + 1} → ${i + batch.length}${RESET}`);
-
-      // Wrap each tryArb in a timeout to prevent any single hang from stopping the loop
-      await Promise.allSettled(batch.map(j =>
-        Promise.race([
-          tryArb(j.buy, j.sell, j.token),
-          new Promise(r => setTimeout(r, ARB_TIMEOUT))
-        ])
-      ));
-    }
-    await new Promise(r => setTimeout(r, LOOP_DELAY));
-  }
+  await logBalances("AFTER");
 }
 
 /* ================= MEMPOOL LISTENER ================= */
 console.log("🎧 Starting mempool listener...");
+const routerAddrs = Object.values(routers).map(a => a.toLowerCase());
 
 provider.on("pending", async (txHash) => {
   try {
@@ -172,23 +152,37 @@ provider.on("pending", async (txHash) => {
     if (!tx || !tx.to) return;
 
     const to = tx.to.toLowerCase();
-
-    if (Object.values(routers).map(r => r.toLowerCase()).includes(to)) {
-      console.log(`${YELLOW}⚡ Pending DEX tx detected: ${txHash}${RESET}`);
-
+    if (routerAddrs.includes(to)) {
+      console.log(`⚡ Pending DEX tx detected: https://polygonscan.com/tx/${txHash}`);
+      // Fire small proof arb
       for (const token of TOKENS) {
-        for (const buy of Object.keys(routers)) {
-          for (const sell of Object.keys(routers)) {
-            if (buy !== sell) {
-              // fire and forget, wrapped in timeout
-              Promise.race([tryArb(buy, sell, token), new Promise(r => setTimeout(r, ARB_TIMEOUT))]);
-            }
-          }
-        }
+        await tryArb("QuickSwap", "SushiSwap", token);
       }
     }
-  } catch {}
+  } catch (err) {
+    console.error("❌ Error fetching pending tx:", err?.message || err);
+  }
 });
 
+/* ================= SCAN LOOP (failsafe) ================= */
+async function scanLoop() {
+  const jobs = [];
+  for (const token of TOKENS)
+    for (const buy of Object.keys(routers))
+      for (const sell of Object.keys(routers))
+        if (buy !== sell) jobs.push({ buy, sell, token });
+
+  console.log(`${CYAN}🚀 Continuous arbitrage scanning | Pairs loaded: ${jobs.length}${RESET}`);
+
+  while (true) {
+    for (let i = 0; i < jobs.length; i += WORKERS) {
+      const batch = jobs.slice(i, i + WORKERS);
+      console.log(`${YELLOW}🔎 Scanning pairs ${i + 1} → ${i + batch.length}${RESET}`);
+      await Promise.allSettled(batch.map(j => tryArb(j.buy, j.sell, j.token)));
+    }
+    await new Promise(r => setTimeout(r, LOOP_DELAY));
+  }
+}
+
 /* ================= START ================= */
-scanLoop(); // main persistent scanning loop
+scanLoop();
