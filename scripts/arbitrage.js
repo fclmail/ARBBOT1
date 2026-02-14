@@ -1,77 +1,53 @@
-// File: scripts/arbitrage.js
-// Drop-in replacement with reliability hardening while preserving existing logic structure.
-// Only fix applied: ethers.constants.MaxUint256 → ethers.MaxUint256
+// scripts/arbitrage-mempool.js
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-/* ================= STARTUP CHECKS (from JS1) ================= */
-
-if (!process.env.RPC_URL?.trim() || !process.env.PRIVATE_KEY?.trim()) process.exit(1);
-
-console.log("✅ RPC_URL active");
-console.log("✅ PRIVATE_KEY active");
-
 /* ================= ENV ================= */
-let RPC_POLYGON_WS = process.env.RPC_URL?.trim();
-let WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
+const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
+const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
-if (!RPC_POLYGON_WS) {
-  console.error("❌ RPC_URL is missing.");
-  process.exit(1);
-}
-
-if (!WALLET_PRIVATE_KEY) {
-  console.error("❌ PRIVATE_KEY is missing.");
-  process.exit(1);
-}
-
-if (!/^0x[a-fA-F0-9]{64}$/.test(WALLET_PRIVATE_KEY)) {
-  console.error("❌ Invalid private key format.");
-  process.exit(1);
-}
+if (!RPC_POLYGON_WS || !WALLET_PRIVATE_KEY) process.exit(1);
 
 console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
 
-/* ================= COLORS ================= */
+/* ================= SETTINGS ================= */
 const GREEN = "\x1b[92m";
-const BRIGHT_GREEN = "\x1b[1;92m";
-const RED = "\x1b[91m";
+const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 const RESET = "\x1b[0m";
 
-/* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = .10;
-const MIN_EXPECTED_PROFIT = 0.000001;
-const PROFIT_SAFETY_MULTIPLIER = 0.9;
-const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10;
-const SCAN_INTERVAL_MS = 30000;
+const MIN_TRADE_USDC = 10;           // Minimum trade size
+const MIN_EXPECTED_PROFIT = 0.000001; // Minimum expected profit in USDC
+const PROFIT_SAFETY_MULTIPLIER = 0.9; 
+const DEADLINE_SECONDS = 20;
 
-/* ================= PROVIDER ================= */
-let provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+const WORKERS = 25;
+const LOOP_DELAY = 50; // ms between scan loop cycles
 
-provider._websocket?.on("close", () =>
-  console.error("❌ WebSocket connection closed.")
-);
-provider._websocket?.on("error", (err) =>
-  console.error("❌ WebSocket error:", err?.message || err)
-);
+/* ================= PROVIDER & WALLET ================= */
+const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-let wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
-
-/* ================= FLASH VAULT ================= */
+/* ================= VAULT ================= */
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
-
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
   "function usdc() view returns(address)"
 ];
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-let vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+const USDC_ADDR = await vault.usdc();
+
+/* ================= ERC20 ================= */
+const erc20Abi = [
+  "function balanceOf(address) view returns(uint256)",
+  "function decimals() view returns(uint8)"
+];
+const usdc = new ethers.Contract(USDC_ADDR, erc20Abi, provider);
 
 /* ================= ROUTERS ================= */
 const routers = {
@@ -82,31 +58,20 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[])"
 ];
-
-let routerContracts = Object.fromEntries(
+const routerContracts = Object.fromEntries(
   Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
 );
 
 /* ================= TOKENS ================= */
-const TOKENS = {
-  USDT:   "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-WBTC:   "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
-APE:    "0x4d224452801aced8b2f0aebe155379bb5d594381",
-CRV:    "0x172370d5Cd63279eFa6d502DAB29171933a610AF",
-DAI:    "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-WETH:   "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-LINK:   "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39",
-AAVE:   "0xD6DF932A45C0f255f85145f286Ea0B292b21C90B"
-};
+const TOKENS = [
+  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
+  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", // WBTC
+  "0x4d224452801aced8b2f0aebe155379bb5d594381"  // APE
+];
 
 /* ================= HELPERS ================= */
-function timestamp() {
-  return `[${new Date().toLocaleTimeString()}]`;
-}
-
 async function quote(router, amountIn, path) {
   try {
     const amounts = await router.getAmountsOut(amountIn, path);
@@ -116,140 +81,106 @@ async function quote(router, amountIn, path) {
   }
 }
 
-/* ================= TOKEN APPROVALS ================= */
-async function approveTokens() {
-  const erc20Abi = [
-    "function approve(address spender, uint256 amount) returns (bool)",
-    "function allowance(address owner, address spender) view returns (uint256)"
-  ];
+async function logBalances(label) {
+  const matic = await provider.getBalance(wallet.address);
+  const vaultUsdc = await usdc.balanceOf(VAULT_ADDRESS);
+  console.log(
+    `${CYAN}💰 ${label} | Wallet MATIC: ${ethers.formatEther(matic)} | Vault USDC: ${ethers.formatUnits(vaultUsdc, 6)}${RESET}`
+  );
+}
 
-  for (const tokenAddress of Object.values(TOKENS)) {
-    const tokenContract = new ethers.Contract(tokenAddress, erc20Abi, wallet);
-    try {
-      const allowance = await tokenContract.allowance(wallet.address, VAULT_ADDRESS);
-      if (allowance < ethers.MaxUint256) { // <-- FIXED FOR ETHERS v6
-        try {
-          console.log(`${timestamp()} 🔑 Approving ${tokenAddress} for vault...`);
-          const tx = await tokenContract.approve(VAULT_ADDRESS, ethers.MaxUint256);
-          await tx.wait();
-          console.log(`${timestamp()} ✅ Approved ${tokenAddress} for vault`);
-        } catch (e) {
-          console.error(`${timestamp()} ❌ Approval failed for ${tokenAddress}: ${e?.message ?? e}`);
+/* ================= ARBITRAGE EXECUTION ================= */
+async function tryArb(buyName, sellName, token) {
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
+  const buyOut = await quote(routerContracts[buyName], amountIn, [USDC_ADDR, token]);
+  if (!buyOut) return;
+
+  const sellOut = await quote(routerContracts[sellName], buyOut, [token, USDC_ADDR]);
+  if (!sellOut) return;
+
+  const profit =
+    (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC) * PROFIT_SAFETY_MULTIPLIER;
+
+  if (profit < MIN_EXPECTED_PROFIT) return;
+
+  console.log(
+    `${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`
+  );
+
+  await logBalances("BEFORE");
+
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+
+  const tx = await vault.executeFlashArbitrage(
+    routers[buyName],
+    routers[sellName],
+    amountIn,
+    [USDC_ADDR, token],
+    [token, USDC_ADDR],
+    deadline,
+    { gasLimit: 2_000_000 }
+  );
+
+  console.log(`${YELLOW}⏳ TX SENT: ${tx.hash}${RESET}`);
+
+  const receipt = await tx.wait();
+
+  console.log(
+    `${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`
+  );
+
+  await logBalances("AFTER");
+}
+
+/* ================= MEMPOOL LISTENER ================= */
+console.log("🎧 Starting mempool listener...");
+
+provider.on("pending", async (txHash) => {
+  try {
+    const tx = await provider.getTransaction(txHash);
+    if (!tx || !tx.to) return;
+
+    const to = tx.to.toLowerCase();
+
+    // Filter only DEX routers
+    if (Object.values(routers).map(r => r.toLowerCase()).includes(to)) {
+      console.log(`${YELLOW}⚡ Pending DEX tx detected: ${txHash}${RESET}`);
+
+      // For simplicity, attempt arbitrage on all tokens for this router
+      for (const token of TOKENS) {
+        for (const buy of Object.keys(routers)) {
+          for (const sell of Object.keys(routers)) {
+            if (buy !== sell) {
+              tryArb(buy, sell, token);
+            }
+          }
         }
       }
-    } catch (e) {
-      console.error(`${timestamp()} ❌ Allowance check failed for ${tokenAddress}: ${e?.message ?? e}`);
     }
-  }
-}
+  } catch {}
+});
 
-/* ================= ARBITRAGE ================= */
-async function tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath) {
-  try {
-    const buyRouter = routerContracts[buyRouterName];
-    const sellRouter = routerContracts[sellRouterName];
+/* ================= SCAN LOOP (fallback) ================= */
+async function scanLoop() {
+  const jobs = [];
+  for (const token of TOKENS)
+    for (const buy of Object.keys(routers))
+      for (const sell of Object.keys(routers))
+        if (buy !== sell)
+          jobs.push({ buy, sell, token });
 
-    const buyOutput = await withRetry(() => quote(buyRouter, amountIn, path), {
-      retries: 3,
-      delayMs: 500,
-      backoff: 2
-    });
+  console.log(`${CYAN}🚀 Continuous arbitrage scanning | Pairs loaded: ${jobs.length}${RESET}`);
 
-    if (!buyOutput) return null;
-
-    const sellOutput = await withRetry(() => quote(sellRouter, buyOutput, sellPath), {
-      retries: 3,
-      delayMs: 500,
-      backoff: 2
-    });
-
-    // ✅ FIXED: BigInt-safe comparison
-    if (sellOutput && sellOutput > 0n) {
-
-      // ✅ FIXED: proper UniswapV2 deadline
-      const tx = await withRetry(
-        () =>
-          vault.executeFlashArbitrage(
-            routers[buyRouterName],
-            routers[sellRouterName],
-            amountIn,
-            path,
-            sellPath,
-            Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
-          ),
-        { retries: 3, delayMs: 1000, backoff: 2 }
-      );
-
-      console.log(`${timestamp()} ✅ Arb tx submitted: ${tx?.hash ?? "unknown"}`);
-      return tx;
-    }
-
-    return null;
-  } catch (e) {
-    console.error(`${timestamp()} ❌ tryArb failed: ${e?.message ?? e}`);
-    return null;
-  }
-}
-
-/* ================= SCAN LOOP ================= */
-async function performScanCycle() {
-  try {
-    const buyRouterName = "QuickSwap";
-    const sellRouterName = "SushiSwap";
-    const amountIn = ethers.parseUnits("1000", 6);
-   // Polygon USDC (correct address)
-   const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-   const path = [ USDC, TOKENS.WETH ];
-   const sellPath = [ TOKENS.WETH, USDC ];
-
-
-    await withRetry(
-      () => tryArb(buyRouterName, sellRouterName, amountIn, path, sellPath),
-      { retries: 2, delayMs: 500, backoff: 2 }
-    );
-  } catch (e) {
-    console.error(`${timestamp()} ❌ Scan cycle error: ${e?.message ?? e}`);
-  }
-}
-
-/* ================= MAIN LOOP ================= */
-async function mainLoop() {
   while (true) {
-    try {
-      await performScanCycle();
-    } catch (e) {
-      console.error(`${timestamp()} ❌ Main loop error: ${e?.message ?? e}`);
+    for (let i = 0; i < jobs.length; i += WORKERS) {
+      const batch = jobs.slice(i, i + WORKERS);
+      console.log(`${YELLOW}🔎 Scanning pairs ${i + 1} → ${i + batch.length}${RESET}`);
+      await Promise.allSettled(batch.map(j => tryArb(j.buy, j.sell, j.token)));
     }
-    await new Promise((r) => setTimeout(r, SCAN_INTERVAL_MS));
+    await new Promise(r => setTimeout(r, LOOP_DELAY));
   }
 }
 
 /* ================= START ================= */
-(async () => {
-  console.log(`${timestamp()} 🚀 Starting arbitrage bot with reliability hardening`);
-  try {
-    const usdcAddress = await vault.usdc();
-    console.log(`${timestamp()} 🧭 Sanity check: vault USDC=${usdcAddress}`);
-  } catch (e) {
-    console.error(`${timestamp()} ❗ Sanity check failed: ${e?.message ?? e}`);
-  }
-
-  await approveTokens(); // <-- added call to ensure approvals
-
-  await mainLoop();
-})();
-
-async function withRetry(promiseFn, opts = {}) {
-  const { retries = 5, delayMs = 1000, backoff = 1.5 } = opts;
-  let attempt = 0;
-  while (attempt <= retries) {
-    try {
-      return await promiseFn();
-    } catch (e) {
-      if (attempt === retries) throw e;
-      const wait = Math.round(delayMs * Math.pow(backoff, attempt));
-      await new Promise((r) => setTimeout(r, wait));
-      attempt++;
-    }
-  }
-}
+scanLoop(); // fallback loop
