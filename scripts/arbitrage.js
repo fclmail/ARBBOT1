@@ -1,5 +1,3 @@
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -119,7 +117,7 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= BALANCE DISPLAY (RESTORED) ================= */
+/* ================= BALANCE DISPLAY ================= */
 
 async function displayBalances() {
   try {
@@ -133,7 +131,8 @@ async function displayBalances() {
 
     const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
 
-    const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
+    // CHANGED: show contract balance (same address as VAULT_ADDRESS)
+    const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
     const decimals = await usdc.decimals();
 
     console.log(
@@ -142,8 +141,8 @@ async function displayBalances() {
     );
 
     console.log(
-      `${YELLOW}Vault USDC:${RESET}`,
-      ethers.formatUnits(vaultBalance, decimals)
+      `${YELLOW}Contract USDC:${RESET}`,
+      ethers.formatUnits(contractBalance, decimals)
     );
   } catch (err) {
     console.error("Balance display error:", err.message);
@@ -271,7 +270,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
 async function scan() {
   console.log(`🔍 Scan @ ${new Date().toISOString()}`);
-  await displayBalances(); // restored live balance display
+  await displayBalances();
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
