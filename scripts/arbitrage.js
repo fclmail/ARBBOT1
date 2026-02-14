@@ -1,11 +1,12 @@
-// scripts/arbitrage-proof.js
+// scripts/arbitrage.js
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-import fetch from "node-fetch";
 
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
+
 const RPC_POLYGON_WS = process.env.RPC_URL?.trim();
 const WALLET_PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
 
@@ -15,13 +16,15 @@ console.log("✅ RPC_URL active");
 console.log("✅ PRIVATE_KEY active");
 
 /* ================= SETTINGS ================= */
+
 const GREEN = "\x1b[92m";
 const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
+const RED = "\x1b[91m";
 const RESET = "\x1b[0m";
 
-const MIN_TRADE_USDC = 10; // very small trade for proof
-const MIN_EXPECTED_PROFIT = 0.000001; 
+const MIN_TRADE_USDC = 10; // small amount for proof tx
+const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 20;
 
@@ -31,25 +34,14 @@ const LOOP_DELAY = 50; // ms
 const WEBHOOK_URL = "https://webhook.site/a9382ae4-8773-428a-8c11-ebfabb8d65fa";
 
 /* ================= PROVIDER ================= */
-let provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
-let wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-// Auto reconnect WebSocket if disconnected
-function setupProviderListeners() {
-  provider._websocket?.on("close", () => {
-    console.warn("❌ WebSocket closed, reconnecting...");
-    provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
-    wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
-    setupProviderListeners();
-  });
-  provider._websocket?.on("error", (err) => {
-    console.error("❌ WebSocket error:", err?.message || err);
-  });
-}
-setupProviderListeners();
+const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= VAULT ================= */
+
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+
 const vault = new ethers.Contract(
   VAULT_ADDRESS,
   [
@@ -62,13 +54,16 @@ const vault = new ethers.Contract(
 const USDC_ADDR = await vault.usdc();
 
 /* ================= ERC20 ================= */
+
 const erc20Abi = [
   "function balanceOf(address) view returns(uint256)",
   "function decimals() view returns(uint8)"
 ];
+
 const usdc = new ethers.Contract(USDC_ADDR, erc20Abi, provider);
 
 /* ================= ROUTERS ================= */
+
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -81,10 +76,14 @@ const routerAbi = [
 ];
 
 const routerContracts = Object.fromEntries(
-  Object.entries(routers).map(([k, v]) => [k, new ethers.Contract(v, routerAbi, provider)])
+  Object.entries(routers).map(([k, v]) => [
+    k,
+    new ethers.Contract(v, routerAbi, provider)
+  ])
 );
 
 /* ================= TOKENS ================= */
+
 const TOKENS = [
   "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", // WBTC
@@ -92,6 +91,7 @@ const TOKENS = [
 ];
 
 /* ================= HELPERS ================= */
+
 async function quote(router, amountIn, path) {
   try {
     const r = await router.getAmountsOut(amountIn, path);
@@ -104,102 +104,137 @@ async function quote(router, amountIn, path) {
 async function logBalances(label) {
   const matic = await provider.getBalance(wallet.address);
   const vaultUsdc = await usdc.balanceOf(VAULT_ADDRESS);
+
   console.log(
     `${CYAN}💰 ${label} | Wallet MATIC: ${ethers.formatEther(matic)} | Vault USDC: ${ethers.formatUnits(vaultUsdc, 6)}${RESET}`
   );
 }
 
-// Send pending transaction info to Moralis webhook
-async function sendWebhook(tx) {
+async function sendWebhook(data) {
   try {
     await fetch(WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "pending_dex_tx",
-        hash: tx.hash,
-        from: tx.from,
-        to: tx.to,
-        value: ethers.formatEther(tx.value),
-        time: new Date().toISOString()
-      })
+      body: JSON.stringify(data)
     });
-    console.log(`📡 Webhook sent for tx ${tx.hash}`);
-  } catch (err) {
-    console.error("❌ Failed to send webhook:", err?.message ?? err);
+  } catch (e) {
+    console.error(`${RED}❌ Webhook error: ${e.message}${RESET}`);
+  }
+}
+
+/* ================= ARBITRAGE ================= */
+
+async function tryArb(buyName, sellName, token) {
+
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
+  const buyOut = await quote(
+    routerContracts[buyName],
+    amountIn,
+    [USDC_ADDR, token]
+  );
+  if (!buyOut) return;
+
+  const sellOut = await quote(
+    routerContracts[sellName],
+    buyOut,
+    [token, USDC_ADDR]
+  );
+  if (!sellOut) return;
+
+  const profit =
+    (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC)
+    * PROFIT_SAFETY_MULTIPLIER;
+
+  if (profit < MIN_EXPECTED_PROFIT) return;
+
+  console.log(
+    `${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`
+  );
+
+  await logBalances("BEFORE");
+
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+
+  const tx = await vault.executeFlashArbitrage(
+    routers[buyName],
+    routers[sellName],
+    amountIn,
+    [USDC_ADDR, token],
+    [token, USDC_ADDR],
+    deadline,
+    { gasLimit: 2_000_000 }
+  );
+
+  console.log(`${YELLOW}⚡ Pending DEX tx: ${tx.hash}${RESET}`);
+
+  // send to webhook
+  sendWebhook({ type: "pending_dex_tx", hash: tx.hash });
+
+  const receipt = await tx.wait();
+
+  console.log(
+    `${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`
+  );
+
+  await logBalances("AFTER");
+}
+
+/* ================= SAFE CONTINUOUS LOOP ================= */
+
+async function scanLoop() {
+
+  const jobs = [];
+
+  for (const token of TOKENS)
+    for (const buy of Object.keys(routers))
+      for (const sell of Object.keys(routers))
+        if (buy !== sell)
+          jobs.push({ buy, sell, token });
+
+  console.log(
+    `${CYAN}🚀 Continuous arbitrage scanning | Pairs loaded: ${jobs.length}${RESET}`
+  );
+
+  while (true) {
+
+    for (let i = 0; i < jobs.length; i += WORKERS) {
+
+      const batch = jobs.slice(i, i + WORKERS);
+
+      console.log(
+        `${YELLOW}🔎 Scanning pairs ${i + 1} → ${i + batch.length}${RESET}`
+      );
+
+      await Promise.allSettled(
+        batch.map(j => tryArb(j.buy, j.sell, j.token))
+      );
+
+      // tiny delay to avoid blocking WS
+      await new Promise(r => setTimeout(r, LOOP_DELAY));
+    }
   }
 }
 
 /* ================= MEMPOOL LISTENER ================= */
+
+console.log(`${CYAN}🎧 Starting mempool listener...${RESET}`);
+
 provider.on("pending", async (txHash) => {
   try {
     const tx = await provider.getTransaction(txHash);
-    if (!tx || !tx.to) return;
+    if (!tx) return;
 
-    const dexAddresses = Object.values(routers).map(a => a.toLowerCase());
-    if (dexAddresses.includes(tx.to.toLowerCase())) {
-      console.log(`⚡ Pending DEX tx detected: https://polygonscan.com/tx/${tx.hash}`);
-      await sendWebhook(tx);
+    // filter for swaps to any router
+    if (Object.values(routers).includes(tx.to)) {
+      console.log(`${YELLOW}⚡ Pending DEX tx detected: https://polygonscan.com/tx/${tx.hash}${RESET}`);
+      sendWebhook({ type: "pending_dex_tx", hash: tx.hash });
     }
-  } catch {}
+  } catch (e) {
+    console.error(`${RED}❌ Mempool listener error: ${e.message}${RESET}`);
+  }
 });
 
-/* ================= ARBITRAGE ================= */
-async function tryArb(buyName, sellName, token) {
-  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-
-  const buyOut = await quote(routerContracts[buyName], amountIn, [USDC_ADDR, token]);
-  if (!buyOut) return;
-
-  const sellOut = await quote(routerContracts[sellName], buyOut, [token, USDC_ADDR]);
-  if (!sellOut) return;
-
-  const profit = (Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC) * PROFIT_SAFETY_MULTIPLIER;
-  if (profit < MIN_EXPECTED_PROFIT) return;
-
-  console.log(`${GREEN}🔥 PROFIT ${profit.toFixed(6)} USDC | ${buyName} → ${sellName}${RESET}`);
-  await logBalances("BEFORE");
-
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-  try {
-    const tx = await vault.executeFlashArbitrage(
-      routers[buyName],
-      routers[sellName],
-      amountIn,
-      [USDC_ADDR, token],
-      [token, USDC_ADDR],
-      deadline,
-      { gasLimit: 2_000_000 }
-    );
-    console.log(`${YELLOW}⏳ TX SENT: ${tx.hash}${RESET}`);
-    const receipt = await tx.wait();
-    console.log(`${GREEN}✅ TX CONFIRMED | status=${receipt.status} | block=${receipt.blockNumber}${RESET}`);
-    await logBalances("AFTER");
-  } catch (err) {
-    console.error(`${RED}❌ Flash arbitrage failed: ${err?.message ?? err}${RESET}`);
-  }
-}
-
-/* ================= CONTINUOUS SCAN LOOP ================= */
-async function scanLoop() {
-  const jobs = [];
-  for (const token of TOKENS)
-    for (const buy of Object.keys(routers))
-      for (const sell of Object.keys(routers))
-        if (buy !== sell) jobs.push({ buy, sell, token });
-
-  console.log(`${CYAN}🚀 Continuous arbitrage scanning | Pairs loaded: ${jobs.length}${RESET}`);
-
-  while (true) {
-    for (let i = 0; i < jobs.length; i += WORKERS) {
-      const batch = jobs.slice(i, i + WORKERS);
-      console.log(`${YELLOW}🔎 Scanning pairs ${i + 1} → ${i + batch.length}${RESET}`);
-      await Promise.allSettled(batch.map(j => tryArb(j.buy, j.sell, j.token)));
-    }
-    await new Promise(r => setTimeout(r, LOOP_DELAY));
-  }
-}
-
 /* ================= START ================= */
-console.log(`${CYAN}🎧 Starting mempool listener + arbitrage scanning...${RESET}`);
+
 scanLoop();
