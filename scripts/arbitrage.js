@@ -39,7 +39,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 /* ================= CONTRACT ================= */
 
 const VAULT_ADDRESS =
-  "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+  "0xAB417a82C7D01cDA6177dCD72a4cC53f4D878762";
 
 const vaultAbi = [
   {
