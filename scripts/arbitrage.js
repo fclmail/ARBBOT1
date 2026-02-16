@@ -25,7 +25,7 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.09;
+const MIN_TRADE_USDC = 1.0;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -196,7 +196,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   /* ===== FIXED FLASH SIZE ===== */
 
-  const flashAmount = ethers.parseUnits("10000", 6);
+  const flashAmount = ethers.parseUnits("1.0", 6);
 
   // Liquidity pre-check buy leg
   const buyTest = await quote(
