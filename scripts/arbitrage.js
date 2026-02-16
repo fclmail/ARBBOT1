@@ -25,10 +25,10 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 1.0;
+const MIN_TRADE_USDC = 0.59;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
-const SCAN_INTERVAL_MS = 10_000;
+const SCAN_INTERVAL_MS = 5_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
@@ -39,9 +39,22 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 /* ================= CONTRACT ================= */
 
 const VAULT_ADDRESS =
-  "0x901bFCb41EacB5fB54d89676b45042fABAdb03B9";
+  "0xAB417a82C7D01cDA6177dCD72a4cC53f4D878762";
 
 const vaultAbi = [
+  {
+    name: "executeArbitrage",
+    type: "function",
+    inputs: [
+      { type: "address" },
+      { type: "address" },
+      { type: "uint256" },
+      { type: "address[]" },
+      { type: "address[]" },
+      { type: "uint256" }
+    ],
+    stateMutability: "nonpayable"
+  },
   {
     name: "executeFlashArbitrage",
     type: "function",
@@ -118,6 +131,7 @@ async function displayBalances() {
 
     const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
 
+    // CHANGED: show contract balance (same address as VAULT_ADDRESS)
     const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
     const decimals = await usdc.decimals();
 
@@ -135,7 +149,7 @@ async function displayBalances() {
   }
 }
 
-/* ================= PATH BUILDERS ================= */
+/* ================= PATHS ================= */
 
 function buildPaths(usdc, token) {
   return [
@@ -153,11 +167,42 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
+/* ================= FLASH SIZING ================= */
+
+async function findOptimalFlashAmount(
+  buyRouter,
+  sellRouter,
+  baseAmount,
+  buyPath,
+  sellPath
+) {
+  const multipliers = [1n, 2n, 4n, 8n, 12n, 14n,16n, 32n, 64n, 128n, 256n, 512n, 1024n, 2048n, 4096n, 8092n];
+  let bestAmount = baseAmount;
+  let bestProfit = 0n;
+
+  for (const m of multipliers) {
+    const amountIn = baseAmount * m;
+
+    const buyOut = await quote(buyRouter, amountIn, buyPath);
+    if (!buyOut) break;
+
+    const sellOut = await quote(sellRouter, buyOut, sellPath);
+    if (!sellOut) break;
+
+    const profit = sellOut - amountIn;
+    if (profit <= bestProfit) break;
+
+    bestProfit = profit;
+    bestAmount = amountIn;
+  }
+
+  return bestAmount;
+}
+
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
-
   const baseAmount = ethers.parseUnits(
     MIN_TRADE_USDC.toString(),
     6
@@ -194,29 +239,18 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     profit.toFixed(6)
   );
 
-  /* ===== FIXED FLASH SIZE ===== */
-
-  const flashAmount = ethers.parseUnits("1.0", 6);
-
-  // Liquidity pre-check buy leg
-  const buyTest = await quote(
+  const flashAmount = await findOptimalFlashAmount(
     buyRouter,
-    flashAmount,
-    bestBuyPath
-  );
-  if (!buyTest) return;
-
-  // Liquidity pre-check sell leg
-  const sellTest = await quote(
     sellRouter,
-    buyTest,
+    baseAmount,
+    bestBuyPath,
     bestSellPath
   );
-  if (!sellTest) return;
 
   console.log(
-    `${CYAN}⚡ Flash Executed:${RESET}`,
-    "10000"
+    `${CYAN}⚡ Flash size:${RESET}`,
+    ethers.formatUnits(flashAmount, 6),
+    "USDC"
   );
 
   const tx = await vault.executeFlashArbitrage(
@@ -229,10 +263,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   );
 
   await tx.wait();
-
-  console.log(
-    `${GREEN}✅ FLASH EXECUTED:${RESET} ${tx.hash}`
-  );
+  console.log(`${GREEN}✅ FLASH EXECUTED:${RESET} ${tx.hash}`);
 }
 
 /* ================= SCAN ================= */
@@ -252,7 +283,7 @@ async function scan() {
   }
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= MAIN ================= */
 
 (async function mainLoop() {
   console.log("🚀 Flash-enabled arbitrage bot started");
