@@ -25,7 +25,7 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const FLASH_TRADE_AMOUNT_USDC = 1; // fixed flash loan amount
+const FLASH_TRADE_AMOUNT_USDC = 0.02; // fixed flash loan amount
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
