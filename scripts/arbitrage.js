@@ -56,19 +56,6 @@ const vaultAbi = [
     stateMutability: "nonpayable"
   },
   {
-    name: "executeFlashArbitrage",
-    type: "function",
-    inputs: [
-      { type: "address" },
-      { type: "address" },
-      { type: "uint256" },
-      { type: "address[]" },
-      { type: "address[]" },
-      { type: "uint256" }
-    ],
-    stateMutability: "nonpayable"
-  },
-  {
     name: "usdc",
     type: "function",
     outputs: [{ type: "address" }],
@@ -131,7 +118,6 @@ async function displayBalances() {
 
     const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
 
-    // CHANGED: show contract balance (same address as VAULT_ADDRESS)
     const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
     const decimals = await usdc.decimals();
 
@@ -253,7 +239,8 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     "USDC"
   );
 
-  const tx = await vault.executeFlashArbitrage(
+  // ✅ FIXED: calling correct function that exists on-chain
+  const tx = await vault.executeArbitrage(
     buyRouter,
     sellRouter,
     flashAmount,
@@ -263,7 +250,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   );
 
   await tx.wait();
-  console.log(`${GREEN}✅ FLASH EXECUTED:${RESET} ${tx.hash}`);
+  console.log(`${GREEN}✅ EXECUTED:${RESET} ${tx.hash}`);
 }
 
 /* ================= SCAN ================= */
