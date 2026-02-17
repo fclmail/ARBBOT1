@@ -72,10 +72,6 @@ const routers = {
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
-];
-
 /* ================= TOKENS ================= */
 
 const TOKENS = {
@@ -91,6 +87,8 @@ const TOKENS = {
 /* ================= HELPERS ================= */
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ================= BALANCE DISPLAY ================= */
 
 async function displayBalances() {
   try {
@@ -125,26 +123,21 @@ async function displayBalances() {
 
 function buildPaths(usdc, token) {
   return [
-    [usdc, token],
-    [usdc, TOKENS.WMATIC, token],
-    [usdc, TOKENS.WETH, token]
+    [usdc, token]
   ];
 }
 
 function buildSellPaths(usdc, token) {
   return [
-    [token, usdc],
-    [token, TOKENS.WMATIC, usdc],
-    [token, TOKENS.WETH, usdc]
+    [token, usdc]
   ];
 }
 
-/* ================= ARBITRAGE ================= */
+/* ================= FLASH EXECUTION ================= */
 
 async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
 
-  // pick first path (simplified) for fixed execution
   const buyPath = buildPaths(usdc, tokenAddr)[0];
   const sellPath = buildSellPaths(usdc, tokenAddr)[0];
 
@@ -158,10 +151,17 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
       Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
     );
 
+    console.log(`${CYAN}⚡ Flash loan sent:${RESET} ${tx.hash}`);
+
     await tx.wait();
-    console.log(`${GREEN}✅ FLASH ARB EXECUTED:${RESET} ${tx.hash}`);
+
+    console.log(`${GREEN}✅ FLASH ARB CONFIRMED:${RESET} ${tx.hash}`);
+
   } catch (err) {
-    console.error(`${CYAN}⚡ Flash execution failed:${RESET}`, err.message);
+    console.error(
+      `${CYAN}⚡ Flash execution failed:${RESET}`,
+      err.shortMessage || err.message
+    );
   }
 }
 
@@ -193,6 +193,7 @@ async function scan() {
     } catch (e) {
       console.error(e);
     }
+
     await sleep(SCAN_INTERVAL_MS);
   }
 })();
