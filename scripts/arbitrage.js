@@ -1,6 +1,5 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-import chalk from "chalk";
 
 /* ================= ENV ================= */
 
@@ -19,8 +18,8 @@ const WALLET_PRIVATE_KEY =
 
 /* ================= CONSTANTS ================= */
 
-const FLASH_AMOUNT_USDC = 0.020;
-const SCAN_INTERVAL_MS = 50_000;
+const FLASH_AMOUNT_USDC = 0.12;
+const SCAN_INTERVAL_MS = 40_000;
 const DEADLINE_SECONDS = 60;
 const FLASH_PREMIUM_BPS = 9; // 0.09% Aave V3 typical
 
@@ -54,6 +53,10 @@ const vaultAbi = [
     outputs: [{ type: "address" }],
     stateMutability: "view"
   }
+];
+
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
@@ -99,21 +102,11 @@ async function displayBalances() {
   const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
   const decimals = await usdc.decimals();
 
-  console.log(
-    chalk.blue("👛 Wallet MATIC:"),
-    chalk.yellow(ethers.formatEther(maticBalance))
-  );
-  console.log(
-    chalk.green("🏦 Contract USDC:"),
-    chalk.yellow(ethers.formatUnits(contractBalance, decimals))
-  );
+  console.log("Wallet MATIC:", ethers.formatEther(maticBalance));
+  console.log("Contract USDC:", ethers.formatUnits(contractBalance, decimals));
 }
 
 /* ================= PROFIT SIMULATION ================= */
-
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"
-];
 
 async function simulateProfit(buyRouterAddr, sellRouterAddr, tokenAddr, usdcAddr) {
   try {
@@ -145,12 +138,11 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
 
   const profit = await simulateProfit(buyRouter, sellRouter, tokenAddr, usdc);
 
-  if (profit <= 0n) return;
+  if (profit <= 0n) {
+    return;
+  }
 
-  console.log(
-    chalk.green("⚡ Profitable opportunity found:"),
-    chalk.yellow(ethers.formatUnits(profit, 6) + " USDC")
-  );
+  console.log("Profitable opportunity found:", ethers.formatUnits(profit, 6), "USDC");
 
   try {
     const tx = await vault.executeFlashArbitrage(
@@ -162,18 +154,19 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
       Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
     );
 
-    console.log(chalk.cyan("🚀 Flash loan sent:"), chalk.magenta(tx.hash));
+    console.log("Flash loan sent:", tx.hash);
     await tx.wait();
-    console.log(chalk.cyan("✅ Flash arbitrage confirmed:"), chalk.magenta(tx.hash));
+    console.log("Flash arbitrage confirmed:", tx.hash);
+
   } catch (err) {
-    console.log(chalk.red("⚠ Flash execution failed:"), err.shortMessage || err.message);
+    console.log("Flash execution failed:", err.shortMessage || err.message);
   }
 }
 
 /* ================= SCAN ================= */
 
 async function scan() {
-  console.log(chalk.blue("\n🔍 Scan @"), new Date().toISOString());
+  console.log("\nScan @", new Date().toISOString());
   await displayBalances();
 
   for (const token of Object.values(TOKENS)) {
@@ -190,15 +183,18 @@ async function scan() {
 /* ================= MAIN ================= */
 
 (async function mainLoop() {
-  console.log(chalk.cyan("🚀 Flash-enabled arbitrage bot started"));
+  console.log("Flash-enabled arbitrage bot started");
 
   while (true) {
     try {
       await scan();
     } catch (e) {
-      console.error(chalk.red(e));
+      console.error(e);
     }
 
     await sleep(SCAN_INTERVAL_MS);
   }
 })();
+
+
+
