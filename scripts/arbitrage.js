@@ -18,11 +18,11 @@ const WALLET_PRIVATE_KEY =
 
 /* ================= CONFIG ================= */
 
-const FLASH_AMOUNT_USDC = .2;         // Adjust as needed
+const FLASH_AMOUNT_USDC = 10000000;         // Adjust as needed
 const SCAN_INTERVAL_MS = 30000;         // 30s
 const DEADLINE_SECONDS = 60;
 
-const FLASH_FEE_BPS = 9;                // 0.09%
+const FLASH_FEE_BPS = .09;                // 0.09%
 const GAS_LIMIT_ESTIMATE = 800000;
 
 /* ================= PROVIDER ================= */
