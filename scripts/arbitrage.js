@@ -18,11 +18,10 @@ const WALLET_PRIVATE_KEY =
 
 /* ================= CONFIG ================= */
 
-const FLASH_AMOUNT_USDC = 1000; // Increased size
+const FLASH_AMOUNT_USDC = 1000;
 const SCAN_INTERVAL_MS = 30_000;
 const DEADLINE_SECONDS = 60;
 
-// Estimated values (adjust if needed)
 const FLASH_FEE_BPS = 9; // 0.09%
 const GAS_LIMIT_ESTIMATE = 800000;
 
@@ -91,16 +90,38 @@ const HOPS = {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function estimateGasCost() {
-  const gasPrice = await provider.getFeeData();
-  return gasPrice.gasPrice * BigInt(GAS_LIMIT_ESTIMATE);
-}
-
 function flashFee(amount) {
   return (amount * BigInt(FLASH_FEE_BPS)) / 10000n;
 }
 
-/* ================= PATH BUILDER ================= */
+async function estimateGasCostInUSDC() {
+  const feeData = await provider.getFeeData();
+  const gasPrice = feeData.gasPrice;
+
+  const totalGasWei = gasPrice * BigInt(GAS_LIMIT_ESTIMATE);
+
+  // Convert MATIC -> USDC using QuickSwap
+  const usdc = await vault.usdc();
+
+  const router = new ethers.Contract(
+    routers.QuickSwap,
+    routerAbi,
+    provider
+  );
+
+  try {
+    const amounts = await router.getAmountsOut(
+      totalGasWei,
+      [HOPS.WMATIC, usdc]
+    );
+
+    return amounts[1]; // USDC (6 decimals)
+  } catch {
+    return 0n;
+  }
+}
+
+/* ================= PATH BUILDERS ================= */
 
 function buildPaths(usdc, token) {
   return [
@@ -120,7 +141,7 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
-/* ================= PROFIT CHECK ================= */
+/* ================= PROFIT SIMULATION ================= */
 
 async function simulate(buyRouterAddr, sellRouterAddr, tokenAddr) {
   const usdc = await vault.usdc();
@@ -179,13 +200,14 @@ async function executeArb(buyRouter, sellRouter, buyPath, sellPath) {
 async function scan() {
   console.log("\n🔍 Scan @", new Date().toISOString());
 
-  const gasCost = await estimateGasCost();
+  const gasCost = await estimateGasCostInUSDC();
   const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
   const fee = flashFee(amountIn);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
+
         if (buy === sell) continue;
 
         const result = await simulate(buy, sell, token);
@@ -215,7 +237,7 @@ async function scan() {
 /* ================= MAIN LOOP ================= */
 
 (async function mainLoop() {
-  console.log("🚀 Flash Arbitrage Bot Started (PROFIT FILTER ENABLED)");
+  console.log("🚀 Flash Arbitrage Bot Started (UNIT FIXED)");
 
   while (true) {
     try {
