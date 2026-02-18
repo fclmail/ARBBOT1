@@ -18,11 +18,12 @@ const WALLET_PRIVATE_KEY =
 
 /* ================= CONFIG ================== */
 
-const FLASH_AMOUNT_USDC = 10000000;         // Adjust as needed
-const SCAN_INTERVAL_MS = 30000;         // 30s
+const FLASH_AMOUNT_USDC = 10000000;
+const MIN_EXPECTED_PROFIT = 0.000001; // same logic style as js2
+const SCAN_INTERVAL_MS = 30000;
 const DEADLINE_SECONDS = 60;
 
-const FLASH_FEE_BPS = 3;                // 0.09%
+const FLASH_FEE_BPS = 3;
 const GAS_LIMIT_ESTIMATE = 800000;
 
 /* ================= PROVIDER ================= */
@@ -94,7 +95,6 @@ function flashFee(amount) {
   return (amount * BigInt(FLASH_FEE_BPS)) / 10000n;
 }
 
-/* Convert gas cost (MATIC) → USDC */
 async function estimateGasCostInUSDC() {
   const feeData = await provider.getFeeData();
   const gasPrice = feeData.gasPrice;
@@ -113,7 +113,7 @@ async function estimateGasCostInUSDC() {
       totalGasWei,
       [HOPS.WMATIC, usdc]
     );
-    return amounts[1]; // USDC (6 decimals)
+    return amounts[1];
   } catch {
     return 0n;
   }
@@ -157,18 +157,26 @@ async function simulate(buyRouterAddr, sellRouterAddr, tokenAddr) {
   for (const buyPath of buyPaths) {
     try {
       const buyOut = await buyRouter.getAmountsOut(amountIn, buyPath);
-      const tokensReceived = buyOut[buyOut.length - 1];
+      const tokensReceived = buyOut.at(-1);
 
       for (const sellPath of sellPaths) {
         try {
           const sellOut = await sellRouter.getAmountsOut(tokensReceived, sellPath);
-          const usdcBack = sellOut[sellOut.length - 1];
+          const usdcBack = sellOut.at(-1);
 
-          return {
-            profit: usdcBack - amountIn,
-            buyPath,
-            sellPath
-          };
+          // 🔥 JS2 STYLE PROFIT CALCULATION
+          const rawProfit =
+            Number(ethers.formatUnits(usdcBack, 6)) -
+            FLASH_AMOUNT_USDC;
+
+          if (rawProfit > MIN_EXPECTED_PROFIT) {
+            return {
+              rawProfit,
+              buyPath,
+              sellPath
+            };
+          }
+
         } catch {}
       }
     } catch {}
@@ -223,16 +231,19 @@ async function scan() {
         const result = await simulate(buy, sell, token);
         if (!result) continue;
 
-        const net = result.profit - fee - gasCost;
+        const net =
+          result.rawProfit -
+          Number(ethers.formatUnits(fee, 6)) -
+          Number(ethers.formatUnits(gasCost, 6));
 
         console.log(
           "Route checked | Raw:",
-          ethers.formatUnits(result.profit, 6),
+          result.rawProfit.toFixed(6),
           "| Net:",
-          ethers.formatUnits(net, 6)
+          net.toFixed(6)
         );
 
-        if (net > 0n) {
+        if (net > MIN_EXPECTED_PROFIT) {
           console.log("🔥 PROFITABLE ROUTE FOUND");
           await executeArb(
             buy,
@@ -252,7 +263,7 @@ async function scan() {
 /* ================= MAIN ================= */
 
 (async function mainLoop() {
-  console.log("🚀 Flash Arbitrage Bot Started (FINAL FIXED VERSION)");
+  console.log("🚀 Flash Arbitrage Bot Started (JS2 PROFIT METHOD)");
 
   while (true) {
     try {
