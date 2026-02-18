@@ -18,8 +18,8 @@ const WALLET_PRIVATE_KEY =
 
 /* ================= CONSTANTS ================= */
 
-const FLASH_AMOUNT_USDC = 100002.0;
-const SCAN_INTERVAL_MS = 40_000;
+const FLASH_AMOUNT_USDC = 100.0;
+const SCAN_INTERVAL_MS = 5_000;
 const DEADLINE_SECONDS = 60;
 const FLASH_PREMIUM_BPS = 9; // 0.09% Aave V3 typical
 
