@@ -16,18 +16,15 @@ const WALLET_PRIVATE_KEY =
   process.env.PRIVATE_KEY ||
   "";
 
-/* ================= COLORS ================= */
+/* ================= CONFIG ================= */
 
-const GREEN = "\x1b[92m";
-const RESET = "\x1b[0m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
-
-/* ================= CONSTANTS ================= */
-
-const FLASH_AMOUNT_USDC = 1; // fixed flash loan amount
+const FLASH_AMOUNT_USDC = 1000; // Increased size
 const SCAN_INTERVAL_MS = 30_000;
 const DEADLINE_SECONDS = 60;
+
+// Estimated values (adjust if needed)
+const FLASH_FEE_BPS = 9; // 0.09%
+const GAS_LIMIT_ESTIMATE = 800000;
 
 /* ================= PROVIDER ================= */
 
@@ -68,130 +65,163 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
+
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"
+];
 
 /* ================= TOKENS ================= */
 
 const TOKENS = {
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
+};
+
+const HOPS = {
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
+  USDT: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f"
 };
 
 /* ================= HELPERS ================= */
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* ================= BALANCE DISPLAY ================= */
-
-async function displayBalances() {
-  try {
-    const maticBalance = await provider.getBalance(wallet.address);
-    const usdcAddress = await vault.usdc();
-
-    const erc20Abi = [
-      "function balanceOf(address) view returns (uint256)",
-      "function decimals() view returns (uint8)"
-    ];
-
-    const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
-
-    const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
-    const decimals = await usdc.decimals();
-
-    console.log(
-      `${YELLOW}Wallet MATIC:${RESET}`,
-      ethers.formatEther(maticBalance)
-    );
-
-    console.log(
-      `${YELLOW}Contract USDC:${RESET}`,
-      ethers.formatUnits(contractBalance, decimals)
-    );
-  } catch (err) {
-    console.error("Balance display error:", err.message);
-  }
+async function estimateGasCost() {
+  const gasPrice = await provider.getFeeData();
+  return gasPrice.gasPrice * BigInt(GAS_LIMIT_ESTIMATE);
 }
 
-/* ================= PATHS ================= */
+function flashFee(amount) {
+  return (amount * BigInt(FLASH_FEE_BPS)) / 10000n;
+}
+
+/* ================= PATH BUILDER ================= */
 
 function buildPaths(usdc, token) {
   return [
-    [usdc, token]
+    [usdc, token],
+    [usdc, HOPS.WMATIC, token],
+    [usdc, HOPS.WETH, token],
+    [usdc, HOPS.USDT, token]
   ];
 }
 
 function buildSellPaths(usdc, token) {
   return [
-    [token, usdc]
+    [token, usdc],
+    [token, HOPS.WMATIC, usdc],
+    [token, HOPS.WETH, usdc],
+    [token, HOPS.USDT, usdc]
   ];
 }
 
-/* ================= FLASH EXECUTION ================= */
+/* ================= PROFIT CHECK ================= */
 
-async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
+async function simulate(buyRouterAddr, sellRouterAddr, tokenAddr) {
   const usdc = await vault.usdc();
+  const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
 
-  const buyPath = buildPaths(usdc, tokenAddr)[0];
-  const sellPath = buildSellPaths(usdc, tokenAddr)[0];
+  const buyRouter = new ethers.Contract(buyRouterAddr, routerAbi, provider);
+  const sellRouter = new ethers.Contract(sellRouterAddr, routerAbi, provider);
 
-  try {
-    const tx = await vault.executeFlashArbitrage(
-      buyRouter,
-      sellRouter,
-      ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6),
-      buyPath,
-      sellPath,
-      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
-    );
+  const buyPaths = buildPaths(usdc, tokenAddr);
+  const sellPaths = buildSellPaths(usdc, tokenAddr);
 
-    console.log(`${CYAN}⚡ Flash loan sent:${RESET} ${tx.hash}`);
+  for (const buyPath of buyPaths) {
+    try {
+      const buyOut = await buyRouter.getAmountsOut(amountIn, buyPath);
+      const tokensReceived = buyOut[buyOut.length - 1];
 
-    await tx.wait();
+      for (const sellPath of sellPaths) {
+        try {
+          const sellOut = await sellRouter.getAmountsOut(tokensReceived, sellPath);
+          const usdcBack = sellOut[sellOut.length - 1];
 
-    console.log(`${GREEN}✅ FLASH ARB CONFIRMED:${RESET} ${tx.hash}`);
-
-  } catch (err) {
-    console.error(
-      `${CYAN}⚡ Flash execution failed:${RESET}`,
-      err.shortMessage || err.message
-    );
+          return {
+            profit: usdcBack - amountIn,
+            buyPath,
+            sellPath
+          };
+        } catch {}
+      }
+    } catch {}
   }
+
+  return null;
+}
+
+/* ================= EXECUTION ================= */
+
+async function executeArb(buyRouter, sellRouter, buyPath, sellPath) {
+  const amount = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
+
+  const tx = await vault.executeFlashArbitrage(
+    buyRouter,
+    sellRouter,
+    amount,
+    buyPath,
+    sellPath,
+    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
+  );
+
+  console.log("⚡ Flash loan sent:", tx.hash);
+  await tx.wait();
+  console.log("✅ FLASH ARB CONFIRMED:", tx.hash);
 }
 
 /* ================= SCAN ================= */
 
 async function scan() {
-  console.log(`🔍 Scan @ ${new Date().toISOString()}`);
-  await displayBalances();
+  console.log("\n🔍 Scan @", new Date().toISOString());
+
+  const gasCost = await estimateGasCost();
+  const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
+  const fee = flashFee(amountIn);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
-        if (buy !== sell) {
-          await tryFlashArb(buy, sell, token);
+        if (buy === sell) continue;
+
+        const result = await simulate(buy, sell, token);
+        if (!result) continue;
+
+        const net = result.profit - fee - gasCost;
+
+        console.log(
+          "Route checked | Raw:",
+          ethers.formatUnits(result.profit, 6),
+          "| Net:",
+          ethers.formatUnits(net, 6)
+        );
+
+        if (net > 0n) {
+          console.log("🔥 PROFITABLE ROUTE FOUND");
+          await executeArb(buy, sell, result.buyPath, result.sellPath);
+          return;
         }
       }
     }
   }
+
+  console.log("No profitable routes this round.");
 }
 
-/* ================= MAIN ================= */
+/* ================= MAIN LOOP ================= */
 
 (async function mainLoop() {
-  console.log("🚀 Flash-enabled arbitrage bot started");
+  console.log("🚀 Flash Arbitrage Bot Started (PROFIT FILTER ENABLED)");
 
   while (true) {
     try {
       await scan();
     } catch (e) {
-      console.error(e);
+      console.error("Scan error:", e.message);
     }
 
     await sleep(SCAN_INTERVAL_MS);
