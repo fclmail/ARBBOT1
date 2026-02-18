@@ -16,7 +16,7 @@ const WALLET_PRIVATE_KEY =
   process.env.PRIVATE_KEY ||
   "";
 
-/* ================= CONFIG ================= */
+/* ================= CONFIG ================== */
 
 const FLASH_AMOUNT_USDC = 10000000;         // Adjust as needed
 const SCAN_INTERVAL_MS = 30000;         // 30s
