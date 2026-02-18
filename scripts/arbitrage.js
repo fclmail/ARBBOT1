@@ -18,7 +18,7 @@ const WALLET_PRIVATE_KEY =
 
 /* ================= CONFIG ================= */
 
-const FLASH_AMOUNT_USDC = 1000;
+const FLASH_AMOUNT_USDC = .20;
 const SCAN_INTERVAL_MS = 30_000;
 const DEADLINE_SECONDS = 60;
 
