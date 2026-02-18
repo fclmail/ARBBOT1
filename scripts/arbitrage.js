@@ -248,9 +248,4 @@ async function scan() {
   }
 })();
 
-Compose:
-New Message
-MinimizePop-outClose
-To
-Subject
 
