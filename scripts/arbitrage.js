@@ -247,3 +247,10 @@ async function scan() {
     await sleep(SCAN_INTERVAL_MS);
   }
 })();
+
+Compose:
+New Message
+MinimizePop-outClose
+To
+Subject
+
