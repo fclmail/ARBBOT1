@@ -1,4 +1,4 @@
-// 🟢 Fully functional bidirectional arbitrage script (ethers v6) - SAFER DROP-IN
+// 🟢🟢 Fully functional bidirectional arbitrage script (ethers v6) - SAFER DROP-IN
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
