@@ -7,8 +7,18 @@ dotenv.config({ override: false });
 
 /* ================= ENV ================= */
 
-const RPC_POLYGON = process.env.RPC_POLYGON?.trim();
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim();
+// ✅ RPC FIX (same method as J's #2)
+
+const RPC_POLYGON =
+  (process.env.RPC_POLYGON ||
+    process.env.POLYGON_RPC ||
+    process.env.RPC_URL ||
+    "").trim();
+
+const WALLET_PRIVATE_KEY =
+  (process.env.WALLET_PRIVATE_KEY ||
+    process.env.PRIVATE_KEY ||
+    "").trim();
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
