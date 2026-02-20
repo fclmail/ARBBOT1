@@ -27,20 +27,15 @@ const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
 const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
+const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-// SMART CONTRACT: minimum profit = 1 = 0.000001 USDCe
-const MIN_TRADE_USDC = .52;
+const MIN_TRADE_USDC = 0.45;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
-
-/* ================= WITHDRAW ================= */
-
-const WITHDRAW_THRESHOLD_USDC = .50;
-const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
 
@@ -73,10 +68,10 @@ const vaultAbi = [
     stateMutability: "view"
   },
   {
-    name: "withdrawERC20",
+    name: "approveRouters",
     type: "function",
     inputs: [
-      { name: "tokenAddr", type: "address" },
+      { name: "routers", type: "address[]" },
       { name: "amount", type: "uint256" }
     ],
     outputs: [],
@@ -96,8 +91,7 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
@@ -128,75 +122,55 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= PATHS ================= */
-
-function buildPaths(usdc, token) {
-  return [
-    [usdc, token],
-    [usdc, TOKENS.WMATIC, token],
-    [usdc, TOKENS.WETH, token],
-    [usdc, TOKENS.USDT, token],
-    [usdc, TOKENS.DAI, token]
-  ];
-}
-
-function buildSellPaths(usdc, token) {
-  return [
-    [token, usdc],
-    [token, TOKENS.WMATIC, usdc],
-    [token, TOKENS.WETH, usdc],
-    [token, TOKENS.USDT, usdc],
-    [token, TOKENS.DAI, usdc]
-  ];
-}
-
-/* ================= DISPLAY ================= */
+/* ================= DISPLAY BALANCES ================= */
 
 async function showBalances(usdcAddr) {
-  const matic = await provider.getBalance(wallet.address);
   const usdc = new ethers.Contract(
     usdcAddr,
     ["function balanceOf(address) view returns(uint256)"],
     provider
   );
-  const vaultBal = await usdc.balanceOf(VAULT_ADDRESS);
+
+  const walletMatic = await provider.getBalance(wallet.address);
+  const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
+
+  // vault() inside contract
+  const vaultAddr = await provider.call({
+    to: VAULT_ADDRESS,
+    data: ethers.id("vault()").slice(0, 10)
+  });
+
+  const decodedVault = ethers.getAddress("0x" + vaultAddr.slice(26));
+  const vaultBal = await usdc.balanceOf(decodedVault);
 
   console.log(
-    `${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(matic)} | ` +
-    `${CYAN}Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`
+    `${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(walletMatic)}`
+  );
+
+  console.log(
+    `${CYAN}🏦 Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`
+  );
+
+  console.log(
+    `${CYAN}🏛 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`
   );
 }
 
-/* ================= AUTO WITHDRAW → MATIC ================= */
+/* ================= APPROVE ROUTERS ================= */
 
-async function autoWithdraw(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)", "function approve(address,uint256)"],
-    wallet
+async function approveAllRouters() {
+  console.log(`${YELLOW}🔐 Approving routers...${RESET}`);
+
+  const routerList = Object.values(routers);
+
+  const tx = await vault.approveRouters(
+    routerList,
+    ethers.MaxUint256
   );
 
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);
-  if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC) return;
+  await tx.wait();
 
-  const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
-
-  await (await vault.withdrawERC20(usdcAddr, amount)).wait();
-  await (await usdc.approve(routers.QuickSwap, amount)).wait();
-
-  const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
-
-  await (
-    await router.swapExactTokensForTokens(
-      amount,
-      0,
-      [usdcAddr, TOKENS.WMATIC],
-      wallet.address,
-      Math.floor(Date.now() / 1000) + 120
-    )
-  ).wait();
-
-  console.log(`${GREEN}💸 PROFITS WITHDRAWN → MATIC${RESET}`);
+  console.log(`${GREEN}✅ Routers approved${RESET}`);
 }
 
 /* ================= SIMULATION ================= */
@@ -207,7 +181,8 @@ async function vaultWillExecute(args) {
     await vault.callStatic.executeArbitrage(...args);
     console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
     return true;
-  } catch {
+  } catch (err) {
+    console.log(`${RED}❌ SIMULATION FAILED:${RESET}`, err.reason || err);
     return false;
   }
 }
@@ -242,8 +217,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   console.log(
-    `${GREEN}🔥 PROFIT FOUND:${RESET} ` +
-    `${GREEN}${profit.toFixed(6)} USDCe${RESET}`
+    `${GREEN}🔥 PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDCe`
   );
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
@@ -260,19 +234,41 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (!(await vaultWillExecute(args))) return;
 
   const tx = await vault.executeArbitrage(...args);
+  console.log(`${CYAN}⛓ TX SENT:${RESET} ${tx.hash}`);
 
-  tx.wait().then(() => {
-    console.log(`${GREEN}✅ PROFITS DEPOSITED INTO VAULT${RESET} | ${tx.hash}`);
-  });
+  await tx.wait();
+
+  console.log(`${GREEN}✅ ARBITRAGE EXECUTED${RESET}`);
+}
+
+/* ================= PATH BUILDERS ================= */
+
+function buildPaths(usdc, token) {
+  return [
+    [usdc, token],
+    [usdc, TOKENS.WMATIC, token],
+    [usdc, TOKENS.WETH, token],
+    [usdc, TOKENS.USDT, token],
+    [usdc, TOKENS.DAI, token]
+  ];
+}
+
+function buildSellPaths(usdc, token) {
+  return [
+    [token, usdc],
+    [token, TOKENS.WMATIC, usdc],
+    [token, TOKENS.WETH, usdc],
+    [token, TOKENS.USDT, usdc],
+    [token, TOKENS.DAI, usdc]
+  ];
 }
 
 /* ================= SCAN ================= */
 
 async function scan() {
-  console.log(`🔍 Scan @ ${new Date().toISOString()}`);
+  console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
   const usdc = await vault.usdc();
   await showBalances(usdc);
-  await autoWithdraw(usdc);
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
@@ -286,8 +282,12 @@ async function scan() {
 
 /* ================= MAIN ================= */
 
-console.log("🚀 Arbitrage bot started");
+console.log("🚀 Arbitrage bot starting...");
 
-setInterval(() => {
-  scan().catch(console.error);
-}, SCAN_INTERVAL_MS);
+approveAllRouters().then(() => {
+  console.log("🚀 Arbitrage bot started");
+
+  setInterval(() => {
+    scan().catch(console.error);
+  }, SCAN_INTERVAL_MS);
+});
