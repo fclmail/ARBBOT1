@@ -134,42 +134,25 @@ async function showBalances(usdcAddr) {
   const walletMatic = await provider.getBalance(wallet.address);
   const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
 
-  // vault() inside contract
-  const vaultAddr = await provider.call({
+  const vaultAddrData = await provider.call({
     to: VAULT_ADDRESS,
     data: ethers.id("vault()").slice(0, 10)
   });
 
-  const decodedVault = ethers.getAddress("0x" + vaultAddr.slice(26));
+  const decodedVault = ethers.getAddress("0x" + vaultAddrData.slice(26));
   const vaultBal = await usdc.balanceOf(decodedVault);
 
-  console.log(
-    `${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(walletMatic)}`
-  );
-
-  console.log(
-    `${CYAN}🏦 Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`
-  );
-
-  console.log(
-    `${CYAN}🏛 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`
-  );
+  console.log(`${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(walletMatic)}`);
+  console.log(`${CYAN}🏦 Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
+  console.log(`${CYAN}🏛 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`);
 }
 
 /* ================= APPROVE ROUTERS ================= */
 
 async function approveAllRouters() {
   console.log(`${YELLOW}🔐 Approving routers...${RESET}`);
-
-  const routerList = Object.values(routers);
-
-  const tx = await vault.approveRouters(
-    routerList,
-    ethers.MaxUint256
-  );
-
+  const tx = await vault.approveRouters(Object.values(routers), ethers.MaxUint256);
   await tx.wait();
-
   console.log(`${GREEN}✅ Routers approved${RESET}`);
 }
 
@@ -178,13 +161,35 @@ async function approveAllRouters() {
 async function vaultWillExecute(args) {
   console.log(`${YELLOW}🧪 SIMULATION START${RESET}`);
   try {
-    await vault.callStatic.executeArbitrage(...args);
+    await vault.executeArbitrage.staticCall(...args); // ✅ FIXED HERE
     console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
     return true;
   } catch (err) {
-    console.log(`${RED}❌ SIMULATION FAILED:${RESET}`, err.reason || err);
+    console.log(`${RED}❌ SIMULATION FAILED:${RESET}`, err.shortMessage || err.reason || err);
     return false;
   }
+}
+
+/* ================= PATH BUILDERS ================= */
+
+function buildPaths(usdc, token) {
+  return [
+    [usdc, token],
+    [usdc, TOKENS.WMATIC, token],
+    [usdc, TOKENS.WETH, token],
+    [usdc, TOKENS.USDT, token],
+    [usdc, TOKENS.DAI, token]
+  ];
+}
+
+function buildSellPaths(usdc, token) {
+  return [
+    [token, usdc],
+    [token, TOKENS.WMATIC, usdc],
+    [token, TOKENS.WETH, usdc],
+    [token, TOKENS.USDT, usdc],
+    [token, TOKENS.DAI, usdc]
+  ];
 }
 
 /* ================= ARBITRAGE ================= */
@@ -216,9 +221,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(
-    `${GREEN}🔥 PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDCe`
-  );
+  console.log(`${GREEN}🔥 PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDCe`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
@@ -235,32 +238,8 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   const tx = await vault.executeArbitrage(...args);
   console.log(`${CYAN}⛓ TX SENT:${RESET} ${tx.hash}`);
-
   await tx.wait();
-
   console.log(`${GREEN}✅ ARBITRAGE EXECUTED${RESET}`);
-}
-
-/* ================= PATH BUILDERS ================= */
-
-function buildPaths(usdc, token) {
-  return [
-    [usdc, token],
-    [usdc, TOKENS.WMATIC, token],
-    [usdc, TOKENS.WETH, token],
-    [usdc, TOKENS.USDT, token],
-    [usdc, TOKENS.DAI, token]
-  ];
-}
-
-function buildSellPaths(usdc, token) {
-  return [
-    [token, usdc],
-    [token, TOKENS.WMATIC, usdc],
-    [token, TOKENS.WETH, usdc],
-    [token, TOKENS.USDT, usdc],
-    [token, TOKENS.DAI, usdc]
-  ];
 }
 
 /* ================= SCAN ================= */
@@ -286,7 +265,6 @@ console.log("🚀 Arbitrage bot starting...");
 
 approveAllRouters().then(() => {
   console.log("🚀 Arbitrage bot started");
-
   setInterval(() => {
     scan().catch(console.error);
   }, SCAN_INTERVAL_MS);
