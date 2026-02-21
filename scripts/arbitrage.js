@@ -1,3 +1,5 @@
+
+
 // scripts/arbitrage.js
 
 import dotenv from "dotenv";
@@ -44,8 +46,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-// ✅ RESTORED VAULT
-const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 
 const vaultAbi = [
   {
@@ -135,8 +136,17 @@ async function showBalances(usdcAddr) {
   const walletMatic = await provider.getBalance(wallet.address);
   const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
 
+  const vaultAddrData = await provider.call({
+    to: VAULT_ADDRESS,
+    data: ethers.id("vault()").slice(0, 10)
+  });
+
+  const decodedVault = ethers.getAddress("0x" + vaultAddrData.slice(26));
+  const vaultBal = await usdc.balanceOf(decodedVault);
+
   console.log(`${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(walletMatic)}`);
   console.log(`${CYAN}🏦 Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
+  console.log(`${CYAN}🏛 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`);
 }
 
 /* ================= APPROVE ROUTERS ================= */
@@ -153,7 +163,7 @@ async function approveAllRouters() {
 async function vaultWillExecute(args) {
   console.log(`${YELLOW}🧪 SIMULATION START${RESET}`);
   try {
-    await vault.executeArbitrage.staticCall(...args);
+    await vault.executeArbitrage.staticCall(...args); // ✅ FIXED HERE
     console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
     return true;
   } catch (err) {
@@ -226,38 +236,4 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     deadline
   ];
 
-  if (!(await vaultWillExecute(args))) return;
-
-  const tx = await vault.executeArbitrage(...args);
-  console.log(`${CYAN}⛓ TX SENT:${RESET} ${tx.hash}`);
-  await tx.wait();
-  console.log(`${GREEN}✅ ARBITRAGE EXECUTED${RESET}`);
-}
-
-/* ================= SCAN ================= */
-
-async function scan() {
-  console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
-  const usdc = await vault.usdc();
-  await showBalances(usdc);
-
-  for (const token of Object.values(TOKENS)) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-        if (buy !== sell) await tryArb(buy, sell, token);
-        await sleep(100);
-      }
-    }
-  }
-}
-
-/* ================= MAIN ================= */
-
-console.log("🚀 Arbitrage bot starting...");
-
-approveAllRouters().then(() => {
-  console.log("🚀 Arbitrage bot started");
-  setInterval(() => {
-    scan().catch(console.error);
-  }, SCAN_INTERVAL_MS);
-});
+  if (!(await vaultWillExecute
