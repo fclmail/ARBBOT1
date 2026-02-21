@@ -1,7 +1,3 @@
-
-
-// scripts/arbitrage.js
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -163,7 +159,7 @@ async function approveAllRouters() {
 async function vaultWillExecute(args) {
   console.log(`${YELLOW}🧪 SIMULATION START${RESET}`);
   try {
-    await vault.executeArbitrage.staticCall(...args); // ✅ FIXED HERE
+    await vault.executeArbitrage.staticCall(...args);
     console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
     return true;
   } catch (err) {
@@ -236,4 +232,37 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     deadline
   ];
 
-  if (!(await vaultWillExecute
+  if (!(await vaultWillExecute(args))) {
+    console.log(`${RED}❌ Arbitrage simulation failed. Skipping trade.${RESET}`);
+    return;
+  }
+
+  try {
+    const tx = await vault.executeArbitrage(...args);
+    console.log(`${GREEN}✅ Arbitrage executed. Tx hash:${RESET} ${tx.hash}`);
+    await tx.wait();
+    console.log(`${GREEN}✅ Tx confirmed${RESET}`);
+  } catch (err) {
+    console.log(`${RED}❌ Execution failed:${RESET}`, err);
+  }
+}
+
+/* ================= MAIN LOOP ================= */
+
+async function main() {
+  await approveAllRouters();
+
+  while (true) {
+    for (const buy of Object.values(routers)) {
+      for (const sell of Object.values(routers)) {
+        if (buy === sell) continue;
+        for (const token of Object.values(TOKENS)) {
+          await tryArb(buy, sell, token);
+        }
+      }
+    }
+    await sleep(SCAN_INTERVAL_MS);
+  }
+}
+
+main().catch(console.error);
