@@ -1,30 +1,20 @@
-import fs from "fs";
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 /* ================= ENV ================= */
 
-// Load .env normally
 dotenv.config({ override: false });
 
-// HARDCODED RPC (as requested earlier)
 const RPC_POLYGON = "https://polygon-rpc.com";
 
-// 🔥 JS-ONLY SECRET FIX
+// Try loading private key
 let WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
 
-// Fallback: manually read .env if running in GitHub and env not injected
-if (!WALLET_PRIVATE_KEY && fs.existsSync(".env")) {
-  const raw = fs.readFileSync(".env", "utf8");
-  const match = raw.match(/OWNER_PRIVATE_KEY\s*=\s*(.+)/);
-  if (match) {
-    WALLET_PRIVATE_KEY = match[1].trim();
-  }
-}
+// If missing, run in read-only mode instead of crashing
+const HAS_PRIVATE_KEY = WALLET_PRIVATE_KEY.length > 0;
 
-// Final check
-if (!WALLET_PRIVATE_KEY) {
-  throw new Error("OWNER_PRIVATE_KEY missing");
+if (!HAS_PRIVATE_KEY) {
+  console.log("⚠️ OWNER_PRIVATE_KEY missing — running in SCAN-ONLY mode");
 }
 
 /* ================= SETTINGS ================= */
@@ -37,7 +27,11 @@ const SCAN_INTERVAL_MS = 8000;
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
+let wallet = null;
+if (HAS_PRIVATE_KEY) {
+  wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+}
 
 /* ================= CONTRACT ================= */
 
@@ -48,7 +42,11 @@ const vaultAbi = [
   "function usdc() view returns(address)"
 ];
 
-const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+const vault = new ethers.Contract(
+  VAULT_ADDRESS,
+  vaultAbi,
+  HAS_PRIVATE_KEY ? wallet : provider
+);
 
 /* ================= ROUTERS ================= */
 
@@ -100,12 +98,7 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
   const vaultBalanceRaw = await getVaultBalance(usdcAddr);
   const vaultBalance = Number(ethers.formatUnits(vaultBalanceRaw, 6));
 
-  const totalTarget = FIXED_TOTAL_USDC;
-
-  let flashNeeded = totalTarget - vaultBalance;
-  if (flashNeeded < 0) flashNeeded = 0;
-
-  const tradeAmount = ethers.parseUnits(totalTarget.toString(), 6);
+  const tradeAmount = ethers.parseUnits(FIXED_TOTAL_USDC.toString(), 6);
 
   const pathToToken = [usdcAddr, tokenAddr];
   const pathToUSDC = [tokenAddr, usdcAddr];
@@ -117,13 +110,16 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
   if (!expectedSell) return;
 
   const finalOut = Number(ethers.formatUnits(expectedSell, 6));
-  const estimatedProfit = finalOut - totalTarget;
+  const estimatedProfit = finalOut - FIXED_TOTAL_USDC;
 
   if (estimatedProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`🔥 HYBRID PROFIT FOUND: ${estimatedProfit.toFixed(2)} USDC`);
-  console.log(`🏦 Vault Balance: ${vaultBalance.toFixed(2)} USDC`);
-  console.log(`⚡ Flash Needed: ${flashNeeded.toFixed(2)} USDC`);
+
+  if (!HAS_PRIVATE_KEY) {
+    console.log("🛑 Skipping execution (no private key)");
+    return;
+  }
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
