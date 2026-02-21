@@ -1,5 +1,3 @@
-// scripts/arbitrage.js
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -7,17 +5,18 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-// ✅ Option 1: Use owner wallet
-const RPC_POLYGON = (process.env.RPC_POLYGON || "").trim();
-const WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim(); // Must be vault owner
+// ✅ HARDCODED RPC (ONLY CHANGE)
+const RPC_POLYGON = "https://polygon-rpc.com";
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
+// keep private key from env (unchanged)
+const WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
+
 if (!WALLET_PRIVATE_KEY) throw new Error("OWNER_PRIVATE_KEY missing");
 
 /* ================= SETTINGS ================= */
 
 const FIXED_TOTAL_USDC = 10000;
-const MIN_EXPECTED_PROFIT = 5;   // safety buffer
+const MIN_EXPECTED_PROFIT = 5;
 const DEADLINE_SECONDS = 45;
 const SCAN_INTERVAL_MS = 8000;
 
@@ -149,4 +148,3 @@ console.log("🚀 Hybrid Arbitrage Bot Started");
 setInterval(() => {
   scan().catch(console.error);
 }, SCAN_INTERVAL_MS);
-
