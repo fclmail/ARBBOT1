@@ -5,7 +5,7 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-const RPC_POLYGON = "https://polygon-rpc.com";
+const RPC_POLYGON = "https://rpc-mainnet.matic.network";
 
 const WALLET_PRIVATE_KEY =
   (process.env.OWNER_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
