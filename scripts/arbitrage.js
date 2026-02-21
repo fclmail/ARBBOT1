@@ -39,8 +39,7 @@ if (HAS_PRIVATE_KEY) {
 const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
-  "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256) external",
-  "function usdc() view returns(address)"
+  "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256) external"
 ];
 
 const vault = new ethers.Contract(
@@ -95,7 +94,9 @@ async function getVaultBalance(usdcAddr) {
 
 async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
-  const usdcAddr = await vault.usdc();
+  // ✅ Hardcoded Polygon USDC
+  const usdcAddr = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+
   const vaultBalanceRaw = await getVaultBalance(usdcAddr);
   const vaultBalance = Number(ethers.formatUnits(vaultBalanceRaw, 6));
 
