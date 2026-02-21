@@ -1,17 +1,31 @@
+import fs from "fs";
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 /* ================= ENV ================= */
 
+// Load .env normally
 dotenv.config({ override: false });
 
-// ✅ HARDCODED RPC (ONLY CHANGE)
+// HARDCODED RPC (as requested earlier)
 const RPC_POLYGON = "https://polygon-rpc.com";
 
-// keep private key from env (unchanged)
-const WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
+// 🔥 JS-ONLY SECRET FIX
+let WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
 
-if (!WALLET_PRIVATE_KEY) throw new Error("OWNER_PRIVATE_KEY missing");
+// Fallback: manually read .env if running in GitHub and env not injected
+if (!WALLET_PRIVATE_KEY && fs.existsSync(".env")) {
+  const raw = fs.readFileSync(".env", "utf8");
+  const match = raw.match(/OWNER_PRIVATE_KEY\s*=\s*(.+)/);
+  if (match) {
+    WALLET_PRIVATE_KEY = match[1].trim();
+  }
+}
+
+// Final check
+if (!WALLET_PRIVATE_KEY) {
+  throw new Error("OWNER_PRIVATE_KEY missing");
+}
 
 /* ================= SETTINGS ================= */
 
