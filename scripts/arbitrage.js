@@ -5,29 +5,26 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-// ✅ Free working Polygon RPC (no API key required)
-const RPC_POLYGON = "https://1rpc.io/matic";
-
-// Try loading private key
-let WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
+// ✅ Fetch the private key from environment variables
+let WALLET_PRIVATE_KEY = (process.env.PRIVATE_KEY || "").trim();
 
 // If missing, run in read-only mode instead of crashing
 const HAS_PRIVATE_KEY = WALLET_PRIVATE_KEY.length > 0;
 
 if (!HAS_PRIVATE_KEY) {
-  console.log("⚠️ OWNER_PRIVATE_KEY missing — running in SCAN-ONLY mode");
+  console.log("⚠️ PRIVATE_KEY missing — running in SCAN-ONLY mode");
 }
 
 /* ================= SETTINGS ================= */
 
-const FIXED_TOTAL_USDC = .45;
-const MIN_EXPECTED_PROFIT = 0.00001;
+const FIXED_TOTAL_USDC = 10000;
+const MIN_EXPECTED_PROFIT = 5;
 const DEADLINE_SECONDS = 45;
 const SCAN_INTERVAL_MS = 8000;
 
 /* ================= PROVIDER ================= */
 
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+const provider = new ethers.JsonRpcProvider("https://1rpc.io/matic");
 
 let wallet = null;
 if (HAS_PRIVATE_KEY) {
@@ -71,22 +68,12 @@ const TOKENS = {
 
 /* ================= HELPERS ================= */
 
-// ✅ FIXED quote function to catch reverts safely
 async function quote(routerAddr, amountIn, path) {
   try {
-    if (path.length < 2) return null; // invalid path
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
-    if (!amounts || amounts.length === 0) return null;
-    return amounts[amounts.length - 1];
-  } catch (err) {
-    // log short and continue
-    console.log(
-      "⚠️ Quote failed for path:",
-      path.map((t) => t.slice(0, 6) + "..."),
-      "|",
-      err.shortMessage || err.message || err
-    );
+    return amounts.at(-1);
+  } catch {
     return null;
   }
 }
