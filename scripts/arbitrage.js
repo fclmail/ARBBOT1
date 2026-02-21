@@ -17,7 +17,7 @@ if (!HAS_PRIVATE_KEY) {
 
 /* ================= SETTINGS ================= */
 
-const FIXED_TOTAL_USDC = .40;
+const FIXED_TOTAL_USDC = 10;
 const MIN_EXPECTED_PROFIT = 0.00001;
 const DEADLINE_SECONDS = 45;
 const SCAN_INTERVAL_MS = 8000;
