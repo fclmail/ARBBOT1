@@ -120,29 +120,39 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= DISPLAY BALANCES ================= */
+/* ================= RESTORED BALANCE DISPLAY ================= */
 
-async function showBalances(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
+async function showBalances() {
+  try {
+    const usdcAddr = await vault.usdc();
 
-  const walletMatic = await provider.getBalance(wallet.address);
-  const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
+    const usdc = new ethers.Contract(
+      usdcAddr,
+      ["function balanceOf(address) view returns(uint256)"],
+      provider
+    );
 
-  const vaultAddrData = await provider.call({
-    to: VAULT_ADDRESS,
-    data: ethers.id("vault()").slice(0, 10)
-  });
+    const walletMatic = await provider.getBalance(wallet.address);
+    const contractUSDC = await usdc.balanceOf(VAULT_ADDRESS);
 
-  const decodedVault = ethers.getAddress("0x" + vaultAddrData.slice(26));
-  const vaultBal = await usdc.balanceOf(decodedVault);
+    // read vault() from contract storage
+    const vaultRaw = await provider.call({
+      to: VAULT_ADDRESS,
+      data: ethers.id("vault()").slice(0, 10)
+    });
 
-  console.log(`${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(walletMatic)}`);
-  console.log(`${CYAN}🏦 Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
-  console.log(`${CYAN}🏛 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`);
+    const decodedVault = ethers.getAddress("0x" + vaultRaw.slice(26));
+    const vaultUSDC = await usdc.balanceOf(decodedVault);
+
+    console.log(`\n${CYAN}================ BALANCES ================${RESET}`);
+    console.log(`${CYAN}Wallet:${RESET} ${wallet.address}`);
+    console.log(`${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(walletMatic)}`);
+    console.log(`${CYAN}🏦 Contract USDC:${RESET} ${ethers.formatUnits(contractUSDC, 6)}`);
+    console.log(`${CYAN}🏛 Vault USDC:${RESET} ${ethers.formatUnits(vaultUSDC, 6)}`);
+    console.log(`${CYAN}==========================================\n${RESET}`);
+  } catch (err) {
+    console.log(`${RED}Balance display failed:${RESET}`, err.message);
+  }
 }
 
 /* ================= APPROVE ROUTERS ================= */
@@ -250,9 +260,13 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 /* ================= MAIN LOOP ================= */
 
 async function main() {
+  console.log(`${GREEN}🚀 Bot starting...${RESET}`);
+  await showBalances();
   await approveAllRouters();
 
   while (true) {
+    await showBalances();
+
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
@@ -261,6 +275,7 @@ async function main() {
         }
       }
     }
+
     await sleep(SCAN_INTERVAL_MS);
   }
 }
