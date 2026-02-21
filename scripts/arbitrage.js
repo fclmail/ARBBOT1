@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 // ✅ Free working Polygon RPC (no API key required)
-const RPC_POLYGON = "https://rpc.ankr.com/polygon";
+const RPC_POLYGON = "https://1rpc.io/matic";
 
 // Try loading private key
 let WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
