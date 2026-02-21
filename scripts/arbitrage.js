@@ -5,48 +5,76 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-// ✅ Free working Polygon RPC (no API key required)
-const RPC_POLYGON = "https://1rpc.io/matic";
+const RPC_POLYGON =
+  (process.env.RPC_POLYGON ||
+    process.env.POLYGON_RPC ||
+    process.env.RPC_URL ||
+    "").trim();
 
-// Try loading private key
-let WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
+// ✅ Use reference JS method: require private key from secrets
+const WALLET_PRIVATE_KEY =
+  (process.env.OWNER_PRIVATE_KEY ||
+    process.env.WALLET_PRIVATE_KEY ||
+    process.env.PRIVATE_KEY ||
+    "").trim();
 
-// If missing, run in read-only mode instead of crashing
-const HAS_PRIVATE_KEY = WALLET_PRIVATE_KEY.length > 0;
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
+if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
-if (!HAS_PRIVATE_KEY) {
-  console.log("⚠️ OWNER_PRIVATE_KEY missing — running in SCAN-ONLY mode");
-}
+/* ================= COLORS ================= */
 
-/* ================= SETTINGS ================= */
+const GREEN = "\x1b[92m";
+const RESET = "\x1b[0m";
+const CYAN = "\x1b[96m";
+const YELLOW = "\x1b[93m";
+const RED = "\x1b[91m";
 
-const FIXED_TOTAL_USDC = 10000;
-const MIN_EXPECTED_PROFIT = 5;
-const DEADLINE_SECONDS = 45;
-const SCAN_INTERVAL_MS = 8000;
+/* ================= CONSTANTS ================= */
+
+const MIN_TRADE_USDC = 0.02;
+const MIN_EXPECTED_PROFIT = 0.000001;
+
+const SCAN_INTERVAL_MS = 10_000;
+const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-
-let wallet = null;
-if (HAS_PRIVATE_KEY) {
-  wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
-}
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
 
 const vaultAbi = [
-  "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256) external"
+  {
+    name: "executeArbitrage",
+    type: "function",
+    inputs: [
+      { name: "buyRouter", type: "address" },
+      { name: "sellRouter", type: "address" },
+      { name: "amountInUSDC", type: "uint256" },
+      { name: "pathToToken", type: "address[]" },
+      { name: "pathToUSDC", type: "address[]" },
+      { name: "deadline", type: "uint256" }
+    ],
+    outputs: [],
+    stateMutability: "nonpayable"
+  },
+  {
+    // ✅ removed dynamic usdc call; hardcoded instead
+    name: "approveRouters",
+    type: "function",
+    inputs: [
+      { name: "routers", type: "address[]" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: [],
+    stateMutability: "nonpayable"
+  }
 ];
 
-const vault = new ethers.Contract(
-  VAULT_ADDRESS,
-  vaultAbi,
-  HAS_PRIVATE_KEY ? wallet : provider
-);
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
 
@@ -64,12 +92,20 @@ const routerAbi = [
 /* ================= TOKENS ================= */
 
 const TOKENS = {
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
+  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
 /* ================= HELPERS ================= */
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
   try {
@@ -81,82 +117,83 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-async function getVaultBalance(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
-  return usdc.balanceOf(VAULT_ADDRESS);
-}
+/* ================= ARBITRAGE ================= */
 
-/* ================= HYBRID ARBITRAGE ================= */
-
-async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
-
+async function tryArb(buyRouter, sellRouter, tokenAddr) {
   // ✅ Hardcoded Polygon USDC
-  const usdcAddr = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+  const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const vaultBalanceRaw = await getVaultBalance(usdcAddr);
-  const vaultBalance = Number(ethers.formatUnits(vaultBalanceRaw, 6));
-
-  const tradeAmount = ethers.parseUnits(FIXED_TOTAL_USDC.toString(), 6);
-
-  const pathToToken = [usdcAddr, tokenAddr];
-  const pathToUSDC = [tokenAddr, usdcAddr];
-
-  const expectedBuy = await quote(buyRouter, tradeAmount, pathToToken);
-  if (!expectedBuy) return;
-
-  const expectedSell = await quote(sellRouter, expectedBuy, pathToUSDC);
-  if (!expectedSell) return;
-
-  const finalOut = Number(ethers.formatUnits(expectedSell, 6));
-  const estimatedProfit = finalOut - FIXED_TOTAL_USDC;
-
-  if (estimatedProfit < MIN_EXPECTED_PROFIT) return;
-
-  console.log(`🔥 HYBRID PROFIT FOUND: ${estimatedProfit.toFixed(2)} USDC`);
-
-  if (!HAS_PRIVATE_KEY) {
-    console.log("🛑 Skipping execution (no private key)");
-    return;
+  let bestBuyOut, bestBuyPath;
+  for (const p of [
+    [usdc, tokenAddr],
+    [usdc, TOKENS.WMATIC, tokenAddr],
+    [usdc, TOKENS.WETH, tokenAddr],
+    [usdc, TOKENS.USDT, tokenAddr],
+    [usdc, TOKENS.DAI, tokenAddr]
+  ]) {
+    const out = await quote(buyRouter, amountIn, p);
+    if (out && (!bestBuyOut || out > bestBuyOut)) {
+      bestBuyOut = out;
+      bestBuyPath = p;
+    }
   }
+  if (!bestBuyOut) return;
+
+  let bestSellOut, bestSellPath;
+  for (const p of [
+    [tokenAddr, usdc],
+    [tokenAddr, TOKENS.WMATIC, usdc],
+    [tokenAddr, TOKENS.WETH, usdc],
+    [tokenAddr, TOKENS.USDT, usdc],
+    [tokenAddr, TOKENS.DAI, usdc]
+  ]) {
+    const out = await quote(sellRouter, bestBuyOut, p);
+    if (out && (!bestSellOut || out > bestSellOut)) {
+      bestSellOut = out;
+      bestSellPath = p;
+    }
+  }
+  if (!bestSellOut) return;
+
+  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+  if (profit < MIN_EXPECTED_PROFIT) return;
+
+  console.log(`${GREEN}🔥 PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDCe`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  const tx = await vault.executeFlashArbitrage(
-    buyRouter,
-    sellRouter,
-    tradeAmount,
-    pathToToken,
-    pathToUSDC,
-    deadline
-  );
-
-  console.log(`⛓ TX SENT: ${tx.hash}`);
-  await tx.wait();
-  console.log(`✅ HYBRID FLASH EXECUTED`);
-}
-
-/* ================= SCAN LOOP ================= */
-
-async function scan() {
-  console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
-
-  for (const token of Object.values(TOKENS)) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-        if (buy !== sell) {
-          await tryHybridArb(buy, sell, token);
-        }
-      }
-    }
+  try {
+    const tx = await vault.executeArbitrage(
+      buyRouter,
+      sellRouter,
+      amountIn,
+      bestBuyPath,
+      bestSellPath,
+      deadline
+    );
+    console.log(`${GREEN}✅ Arbitrage executed. Tx hash:${RESET} ${tx.hash}`);
+    await tx.wait();
+    console.log(`${GREEN}✅ Tx confirmed${RESET}`);
+  } catch (err) {
+    console.log(`${RED}❌ Execution failed:${RESET}`, err);
   }
 }
 
-console.log("🚀 Hybrid Arbitrage Bot Started");
+/* ================= MAIN LOOP ================= */
 
-setInterval(() => {
-  scan().catch(console.error);
-}, SCAN_INTERVAL_MS);
+async function main() {
+  while (true) {
+    for (const buy of Object.values(routers)) {
+      for (const sell of Object.values(routers)) {
+        if (buy === sell) continue;
+        for (const token of Object.values(TOKENS)) {
+          await tryArb(buy, sell, token);
+        }
+      }
+    }
+    await sleep(SCAN_INTERVAL_MS);
+  }
+}
+
+main().catch(console.error);
