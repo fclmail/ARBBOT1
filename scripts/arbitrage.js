@@ -5,24 +5,18 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-const RPC_POLYGON = "https://rpc-mainnet.matic.network";
+// ✅ Free working Polygon RPC (no API key required)
+const RPC_POLYGON = "https://rpc.ankr.com/polygon";
 
-const WALLET_PRIVATE_KEY =
-  (process.env.OWNER_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
+// Try loading private key
+let WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
 
+// If missing, run in read-only mode instead of crashing
 const HAS_PRIVATE_KEY = WALLET_PRIVATE_KEY.length > 0;
 
 if (!HAS_PRIVATE_KEY) {
   console.log("⚠️ OWNER_PRIVATE_KEY missing — running in SCAN-ONLY mode");
 }
-
-/* ================= COLORS ================= */
-
-const GREEN = "\x1b[92m";
-const RESET = "\x1b[0m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
-const RED = "\x1b[91m";
 
 /* ================= SETTINGS ================= */
 
@@ -34,8 +28,11 @@ const SCAN_INTERVAL_MS = 8000;
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+
 let wallet = null;
-if (HAS_PRIVATE_KEY) wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+if (HAS_PRIVATE_KEY) {
+  wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+}
 
 /* ================= CONTRACT ================= */
 
@@ -43,9 +40,7 @@ const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256) external",
-  "function usdc() view returns(address)",
-  "function withdrawERC20(address,uint256)",
-  "function approveRouters(address[],uint256)"
+  "function usdc() view returns(address)"
 ];
 
 const vault = new ethers.Contract(
@@ -64,8 +59,7 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
@@ -77,8 +71,6 @@ const TOKENS = {
 };
 
 /* ================= HELPERS ================= */
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
   try {
@@ -99,67 +91,10 @@ async function getVaultBalance(usdcAddr) {
   return usdc.balanceOf(VAULT_ADDRESS);
 }
 
-async function showBalances() {
-  try {
-    const usdcAddr = await vault.usdc();
-
-    const usdc = new ethers.Contract(
-      usdcAddr,
-      ["function balanceOf(address) view returns(uint256)"],
-      provider
-    );
-
-    const walletMatic = wallet ? await provider.getBalance(wallet.address) : 0n;
-    const contractUSDC = await usdc.balanceOf(VAULT_ADDRESS);
-
-    console.log(`\n${CYAN}================ BALANCES ================${RESET}`);
-    console.log(`${CYAN}Wallet:${RESET} ${wallet ? wallet.address : "SCAN ONLY"}`);
-    console.log(`${CYAN}Wallet MATIC:${RESET} ${wallet ? ethers.formatEther(walletMatic) : 0}`);
-    console.log(`${CYAN}Contract USDC:${RESET} ${ethers.formatUnits(contractUSDC, 6)}`);
-    console.log(`${CYAN}==========================================\n${RESET}`);
-  } catch (err) {
-    console.log(`${RED}Balance display failed:${RESET}`, err.message);
-  }
-}
-
-async function autoPayInMatic(usdcAddr) {
-  if (!HAS_PRIVATE_KEY) return;
-
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    [
-      "function balanceOf(address) view returns(uint256)",
-      "function approve(address,uint256)"
-    ],
-    wallet
-  );
-
-  const bal = await usdc.balanceOf(VAULT_ADDRESS);
-  if (Number(ethers.formatUnits(bal, 6)) < 1) return;
-
-  const amount = bal;
-  console.log(`${YELLOW}Threshold reached. Converting USDC → MATIC...${RESET}`);
-
-  await (await vault.withdrawERC20(usdcAddr, amount)).wait();
-  await (await usdc.approve(routers.QuickSwap, amount)).wait();
-
-  const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
-  await (
-    await router.swapExactTokensForTokens(
-      amount,
-      0,
-      [usdcAddr, TOKENS.WMATIC],
-      wallet.address,
-      Math.floor(Date.now() / 1000) + 120
-    )
-  ).wait();
-
-  console.log(`${GREEN}PROFITS PAID IN MATIC${RESET}`);
-}
-
 /* ================= HYBRID ARBITRAGE ================= */
 
 async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
+
   const usdcAddr = await vault.usdc();
   const vaultBalanceRaw = await getVaultBalance(usdcAddr);
   const vaultBalance = Number(ethers.formatUnits(vaultBalanceRaw, 6));
@@ -180,7 +115,7 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
   if (estimatedProfit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`${GREEN}🔥 HYBRID PROFIT FOUND:${RESET} ${estimatedProfit.toFixed(2)} USDC`);
+  console.log(`🔥 HYBRID PROFIT FOUND: ${estimatedProfit.toFixed(2)} USDC`);
 
   if (!HAS_PRIVATE_KEY) {
     console.log("🛑 Skipping execution (no private key)");
@@ -200,17 +135,13 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
   console.log(`⛓ TX SENT: ${tx.hash}`);
   await tx.wait();
-  console.log(`${GREEN}✅ HYBRID FLASH EXECUTED${RESET}`);
+  console.log(`✅ HYBRID FLASH EXECUTED`);
 }
 
 /* ================= SCAN LOOP ================= */
 
 async function scan() {
   console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
-
-  const usdcAddr = await vault.usdc();
-  await autoPayInMatic(usdcAddr);
-  await showBalances();
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
