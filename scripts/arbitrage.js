@@ -35,6 +35,11 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
+/* ================= PAY IN MATIC FEATURE ================= */
+
+const WITHDRAW_THRESHOLD_USDC = .45;     // trigger threshold
+const WITHDRAW_PERCENT = 1;          // percent of vault balance to convert
+
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -74,6 +79,16 @@ const vaultAbi = [
     ],
     outputs: [],
     stateMutability: "nonpayable"
+  },
+  {
+    name: "withdrawERC20",
+    type: "function",
+    inputs: [
+      { name: "tokenAddr", type: "address" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: [],
+    stateMutability: "nonpayable"
   }
 ];
 
@@ -89,7 +104,8 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
+  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
 ];
 
 /* ================= TOKENS ================= */
@@ -120,6 +136,49 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
+/* ================= AUTO PAY PROFITS IN MATIC ================= */
+
+async function autoPayInMatic(usdcAddr) {
+  try {
+    const usdc = new ethers.Contract(
+      usdcAddr,
+      [
+        "function balanceOf(address) view returns(uint256)",
+        "function approve(address,uint256)"
+      ],
+      wallet
+    );
+
+    const bal = await usdc.balanceOf(VAULT_ADDRESS);
+
+    if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC)
+      return;
+
+    const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
+
+    console.log(`${YELLOW}💸 Threshold reached. Converting USDC → MATIC...${RESET}`);
+
+    await (await vault.withdrawERC20(usdcAddr, amount)).wait();
+    await (await usdc.approve(routers.QuickSwap, amount)).wait();
+
+    const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
+
+    await (
+      await router.swapExactTokensForTokens(
+        amount,
+        0,
+        [usdcAddr, TOKENS.WMATIC],
+        wallet.address,
+        Math.floor(Date.now() / 1000) + 120
+      )
+    ).wait();
+
+    console.log(`${GREEN}✅ PROFITS PAID IN MATIC${RESET}`);
+  } catch (err) {
+    console.log(`${RED}Auto pay failed:${RESET}`, err.message);
+  }
+}
+
 /* ================= RESTORED BALANCE DISPLAY ================= */
 
 async function showBalances() {
@@ -135,7 +194,6 @@ async function showBalances() {
     const walletMatic = await provider.getBalance(wallet.address);
     const contractUSDC = await usdc.balanceOf(VAULT_ADDRESS);
 
-    // read vault() from contract storage
     const vaultRaw = await provider.call({
       to: VAULT_ADDRESS,
       data: ethers.id("vault()").slice(0, 10)
@@ -266,6 +324,9 @@ async function main() {
 
   while (true) {
     await showBalances();
+
+    const usdc = await vault.usdc();
+    await autoPayInMatic(usdc);   // <-- PAY FEATURE ADDED
 
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
