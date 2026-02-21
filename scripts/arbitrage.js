@@ -71,30 +71,33 @@ const TOKENS = {
 
 /* ================= HELPERS ================= */
 
+// ✅ FIXED quote function to catch reverts safely
 async function quote(routerAddr, amountIn, path) {
   try {
+    if (path.length < 2) return null; // invalid path
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
     if (!amounts || amounts.length === 0) return null;
     return amounts[amounts.length - 1];
   } catch (err) {
-    console.log("⚠️ Quote failed:", err.shortMessage || err.message || err);
+    // log short and continue
+    console.log(
+      "⚠️ Quote failed for path:",
+      path.map((t) => t.slice(0, 6) + "..."),
+      "|",
+      err.shortMessage || err.message || err
+    );
     return null;
   }
 }
 
 async function getVaultBalance(usdcAddr) {
-  try {
-    const usdc = new ethers.Contract(
-      usdcAddr,
-      ["function balanceOf(address) view returns(uint256)"],
-      provider
-    );
-    return await usdc.balanceOf(VAULT_ADDRESS);
-  } catch (err) {
-    console.log("⚠️ Failed to fetch vault balance:", err.shortMessage || err.message || err);
-    return 0;
-  }
+  const usdc = new ethers.Contract(
+    usdcAddr,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  );
+  return usdc.balanceOf(VAULT_ADDRESS);
 }
 
 /* ================= HYBRID ARBITRAGE ================= */
@@ -151,21 +154,15 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 async function scan() {
   console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
 
-  await Promise.allSettled(
-    Object.values(TOKENS).map(async (token) => {
-      await Promise.allSettled(
-        Object.values(routers).map(async (buy) => {
-          await Promise.allSettled(
-            Object.values(routers).map(async (sell) => {
-              if (buy !== sell) {
-                await tryHybridArb(buy, sell, token);
-              }
-            })
-          );
-        })
-      );
-    })
-  );
+  for (const token of Object.values(TOKENS)) {
+    for (const buy of Object.values(routers)) {
+      for (const sell of Object.values(routers)) {
+        if (buy !== sell) {
+          await tryHybridArb(buy, sell, token);
+        }
+      }
+    }
+  }
 }
 
 console.log("🚀 Hybrid Arbitrage Bot Started");
