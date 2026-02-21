@@ -8,14 +8,10 @@ dotenv.config({ override: false });
 // ✅ Free working Polygon RPC (no API key required)
 const RPC_POLYGON = "https://1rpc.io/matic";
 
-// ✅ Fixed private key fetch: fallback to multiple secrets
-let WALLET_PRIVATE_KEY = (
-  process.env.OWNER_PRIVATE_KEY ||
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  ""
-).trim();
+// Try loading private key
+let WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
 
+// If missing, run in read-only mode instead of crashing
 const HAS_PRIVATE_KEY = WALLET_PRIVATE_KEY.length > 0;
 
 if (!HAS_PRIVATE_KEY) {
@@ -79,19 +75,26 @@ async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
-    return amounts.at(-1);
-  } catch {
+    if (!amounts || amounts.length === 0) return null;
+    return amounts[amounts.length - 1];
+  } catch (err) {
+    console.log("⚠️ Quote failed:", err.shortMessage || err.message || err);
     return null;
   }
 }
 
 async function getVaultBalance(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
-  return usdc.balanceOf(VAULT_ADDRESS);
+  try {
+    const usdc = new ethers.Contract(
+      usdcAddr,
+      ["function balanceOf(address) view returns(uint256)"],
+      provider
+    );
+    return await usdc.balanceOf(VAULT_ADDRESS);
+  } catch (err) {
+    console.log("⚠️ Failed to fetch vault balance:", err.shortMessage || err.message || err);
+    return 0;
+  }
 }
 
 /* ================= HYBRID ARBITRAGE ================= */
@@ -148,15 +151,21 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 async function scan() {
   console.log(`\n🔍 Scan @ ${new Date().toISOString()}`);
 
-  for (const token of Object.values(TOKENS)) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-        if (buy !== sell) {
-          await tryHybridArb(buy, sell, token);
-        }
-      }
-    }
-  }
+  await Promise.allSettled(
+    Object.values(TOKENS).map(async (token) => {
+      await Promise.allSettled(
+        Object.values(routers).map(async (buy) => {
+          await Promise.allSettled(
+            Object.values(routers).map(async (sell) => {
+              if (buy !== sell) {
+                await tryHybridArb(buy, sell, token);
+              }
+            })
+          );
+        })
+      );
+    })
+  );
 }
 
 console.log("🚀 Hybrid Arbitrage Bot Started");
