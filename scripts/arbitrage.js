@@ -24,7 +24,57 @@ const SCAN_INTERVAL_MS = 8000;
 
 /* ================= PROVIDER ================= */
 
-const provider = new ethers.JsonRpcProvider("https://1rpc.io/matic");
+// Primary and secondary RPC endpoints for resilience
+const RPC_ENDPOINTS = [
+  // Primary
+  "https://polygon-rpc.com",
+  // Secondary (backup)
+  "https://rpc-mainnet.maticvigil.com"
+];
+
+// Create a provider with a simple retryable getJsonRpcProvider
+function createProvider(endpoints) {
+  // Simple wrapper to cycle endpoints
+  let index = 0;
+
+  const provider = new ethers.JsonRpcProvider(endpoints[index], { name: "matic", chainId: 137 });
+
+  // Lightweight health check / endpoint switcher on error
+  async function rotateIfNeeded(error) {
+    console.error("RPC error detected, attempting fallback. Error:", error?.message ?? error);
+    index = (index + 1) % endpoints.length;
+  }
+
+  // Attach a proxy to the provider to automatically rotate on fetch errors
+  const proxy = new Proxy(provider, {
+    get(target, prop) {
+      if (prop === "getBlockNumber" || prop === "getNetwork" || prop === "send" || prop === "request") {
+        return async (...args) => {
+          try {
+            // Try the current endpoint
+            return await target[prop](...args);
+          } catch (e) {
+            await rotateIfNeeded(e);
+            // Retry with next endpoint
+            const nextEndpoint = endpoints[index];
+            // Re-create a provider bound to the next endpoint
+            const newProvider = new ethers.JsonRpcProvider(nextEndpoint, { name: "matic", chainId: 137 });
+            try {
+              return await newProvider[prop](...args);
+            } catch (err) {
+              throw err;
+            }
+          }
+        };
+      }
+      return target[prop];
+    }
+  });
+
+  return proxy;
+}
+
+const provider = createProvider(RPC_ENDPOINTS);
 
 let wallet = null;
 if (HAS_PRIVATE_KEY) {
@@ -73,18 +123,26 @@ async function quote(routerAddr, amountIn, path) {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts.at(-1);
-  } catch {
+  } catch (err) {
+    // Provide more context for debugging
+    console.error(`Quote error on router ${routerAddr}:`, err?.message ?? err);
     return null;
   }
 }
 
 async function getVaultBalance(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
-  return usdc.balanceOf(VAULT_ADDRESS);
+  try {
+    const usdc = new ethers.Contract(
+      usdcAddr,
+      ["function balanceOf(address) view returns(uint256)"],
+      provider
+    );
+    const bal = await usdc.balanceOf(VAULT_ADDRESS);
+    return bal;
+  } catch (err) {
+    console.error("Failed to fetch vault balance:", err?.message ?? err);
+    return null;
+  }
 }
 
 /* ================= HYBRID ARBITRAGE ================= */
@@ -95,8 +153,13 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
   const usdcAddr = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
   const vaultBalanceRaw = await getVaultBalance(usdcAddr);
+  if (vaultBalanceRaw == null) {
+    return;
+  }
+
   const vaultBalance = Number(ethers.formatUnits(vaultBalanceRaw, 6));
 
+  // Use a fixed trade amount in USDC (6 decimals)
   const tradeAmount = ethers.parseUnits(FIXED_TOTAL_USDC.toString(), 6);
 
   const pathToToken = [usdcAddr, tokenAddr];
@@ -113,7 +176,7 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
   if (estimatedProfit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`🔥 HYBRID PROFIT FOUND: ${estimatedProfit.toFixed(2)} USDC`);
+  console.log(`🔥 HYBRID PROFIT FOUND: ${estimatedProfit.toFixed(6)} USDC`);
 
   if (!HAS_PRIVATE_KEY) {
     console.log("🛑 Skipping execution (no private key)");
@@ -122,18 +185,22 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  const tx = await vault.executeFlashArbitrage(
-    buyRouter,
-    sellRouter,
-    tradeAmount,
-    pathToToken,
-    pathToUSDC,
-    deadline
-  );
+  try {
+    const tx = await vault.executeFlashArbitrage(
+      buyRouter,
+      sellRouter,
+      tradeAmount,
+      pathToToken,
+      pathToUSDC,
+      deadline
+    );
 
-  console.log(`⛓ TX SENT: ${tx.hash}`);
-  await tx.wait();
-  console.log(`✅ HYBRID FLASH EXECUTED`);
+    console.log(`⛓ TX SENT: ${tx.hash}`);
+    await tx.wait();
+    console.log(`✅ HYBRID FLASH EXECUTED`);
+  } catch (err) {
+    console.error("Failed to execute arbitrage transaction:", err?.message ?? err);
+  }
 }
 
 /* ================= SCAN LOOP ================= */
