@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 // ✅ HARDCODED RPC (UNCHANGED)
-const RPC_POLYGON = "https://polygon-rpc.com";
+const RPC_POLYGON = "https://rpc.ankr.com/polygon";
 
 // ✅ FIXED: use PRIVATE_KEY (matches GitHub secret)
 const WALLET_PRIVATE_KEY =
