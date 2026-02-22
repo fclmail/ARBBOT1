@@ -1,15 +1,3 @@
-Conversation opened. 1 read message. 
-
-Skip to content
-Using Gmail with screen readers
-3 of 1,317
-NFJS
-Inbox
-
-CASHCOIN <cashcoinmail@gmail.com>
-11:45 AM (4 hours ago)
-to scimax7.7, me
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
