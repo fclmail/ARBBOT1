@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 // ✅ HARDCODED RPC (UNCHANGED)
-const RPC_POLYGON = "https://polygon-mainnet.endpoint.rpc.rivet.cloud";
+const RPC_POLYGON = "https://rpc.polygon.community";
 
 // ✅ FIXED: use PRIVATE_KEY (matches GitHub secret)
 const WALLET_PRIVATE_KEY =
