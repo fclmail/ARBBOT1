@@ -37,7 +37,7 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= THRESHOLD UNWRAP WMATIC → POL ================= */
 
-const WITHDRAW_THRESHOLD_USDC = 0.45;
+const WITHDRAW_THRESHOLD_USDC = 70000;
 const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
