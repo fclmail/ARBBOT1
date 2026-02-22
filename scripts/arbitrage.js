@@ -16,8 +16,8 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= SETTINGS ================= */
 
-const FIXED_TOTAL_USDC = 10000;
-const MIN_EXPECTED_PROFIT = 5;
+const FIXED_TOTAL_USDC = .4;
+const MIN_EXPECTED_PROFIT = 0.00001;
 const DEADLINE_SECONDS = 45;
 const SCAN_INTERVAL_MS = 18000;
 
