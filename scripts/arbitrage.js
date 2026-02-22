@@ -30,9 +30,9 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
+
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
@@ -50,8 +50,7 @@ async function quote(routerAddr, amountIn, path) {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts.at(-1);
-  } catch (err) {
-    console.warn(`❌ Quote failed for router ${routerAddr}:`, err.message || err);
+  } catch {
     return null;
   }
 }
@@ -65,23 +64,43 @@ async function getVaultBalance(usdcAddr) {
   return usdc.balanceOf(VAULT_ADDRESS);
 }
 
+/* ================= PATH VALIDATION ================= */
+function isValidPath(path) {
+  if (!path || path.length < 2) return false;
+
+  for (let i = 0; i < path.length - 1; i++) {
+    if (path[i].toLowerCase() === path[i + 1].toLowerCase()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /* ================= PATH BUILDERS ================= */
 function buildBuyPaths(usdcAddr, tokenAddr) {
-  return [
-    [usdcAddr, tokenAddr],
-    [usdcAddr, TOKENS.WMATIC, tokenAddr],
-    [usdcAddr, TOKENS.WETH, tokenAddr],
-    [usdcAddr, TOKENS.USDT, tokenAddr]
-  ];
+  const mids = [TOKENS.WMATIC, TOKENS.WETH, TOKENS.USDT];
+  const paths = [[usdcAddr, tokenAddr]];
+
+  for (const mid of mids) {
+    if (mid.toLowerCase() !== tokenAddr.toLowerCase()) {
+      paths.push([usdcAddr, mid, tokenAddr]);
+    }
+  }
+
+  return paths;
 }
 
 function buildSellPaths(usdcAddr, tokenAddr) {
-  return [
-    [tokenAddr, usdcAddr],
-    [tokenAddr, TOKENS.WMATIC, usdcAddr],
-    [tokenAddr, TOKENS.WETH, usdcAddr],
-    [tokenAddr, TOKENS.USDT, usdcAddr]
-  ];
+  const mids = [TOKENS.WMATIC, TOKENS.WETH, TOKENS.USDT];
+  const paths = [[tokenAddr, usdcAddr]];
+
+  for (const mid of mids) {
+    if (mid.toLowerCase() !== tokenAddr.toLowerCase()) {
+      paths.push([tokenAddr, mid, usdcAddr]);
+    }
+  }
+
+  return paths;
 }
 
 /* ================= HYBRID ARBITRAGE ================= */
@@ -94,7 +113,6 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
   let flashNeeded = totalTarget - vaultBalance;
   if (flashNeeded < 0) flashNeeded = 0;
 
-  // Flash optional: use flash if needed, else vault balance
   const flashAmount = ethers.parseUnits(flashNeeded.toFixed(6), 6);
   const amountToUse = flashAmount > 0n
     ? flashAmount
@@ -105,8 +123,9 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
   let bestBuyOut, bestBuyPath, bestSellOut, bestSellPath;
 
-  // Find best buy path
+  /* Find best buy path */
   for (const p of buyPaths) {
+    if (!isValidPath(p)) continue;
     const out = await quote(buyRouter, amountToUse, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
@@ -115,8 +134,9 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestBuyOut) return;
 
-  // Find best sell path
+  /* Find best sell path */
   for (const p of sellPaths) {
+    if (!isValidPath(p)) continue;
     const out = await quote(sellRouter, bestBuyOut, p);
     if (out && (!bestSellOut || out > bestSellOut)) {
       bestSellOut = out;
@@ -137,7 +157,6 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  // Simulation
   try {
     await vault.executeFlashArbitrage.staticCall(
       buyRouter,
@@ -153,7 +172,6 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
     return;
   }
 
-  // Execute trade
   try {
     const tx = await vault.executeFlashArbitrage(
       buyRouter,
