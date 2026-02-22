@@ -26,7 +26,7 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = .20;
+const MIN_TRADE_USDC = 1000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -35,12 +35,14 @@ const DEADLINE_SECONDS = 60;
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-/* ================= VAULT CONTRACT ================= */
-const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E"; // Flash-enabled vault
+/* ================= VAULT ================= */
+const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256) external",
   "function usdc() view returns(address)"
 ];
+
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
@@ -50,6 +52,7 @@ const routers = {
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
+
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
@@ -96,6 +99,7 @@ async function showBalances(usdcAddr) {
     ["function balanceOf(address) view returns(uint256)"],
     provider
   );
+
   const walletMatic = await provider.getBalance(wallet.address);
   const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
 
@@ -126,18 +130,27 @@ function buildSellPaths(usdc, token) {
 
 /* ================= HYBRID FLASH ================= */
 async function tryHybridFlash(buyRouter, sellRouter, tokenAddr) {
+  console.log(`${YELLOW}Checking:${RESET}`, tokenAddr);
+
   const usdc = await vault.usdc();
-  const usdcContract = new ethers.Contract(usdc, ["function balanceOf(address) view returns(uint256)"], provider);
+  const usdcContract = new ethers.Contract(
+    usdc,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  );
 
   const contractBalanceRaw = await usdcContract.balanceOf(VAULT_ADDRESS);
   const contractBalance = Number(ethers.formatUnits(contractBalanceRaw, 6));
 
   const targetAmount = MIN_TRADE_USDC;
-  const flashNeeded = targetAmount > contractBalance ? targetAmount - contractBalance : 0;
+  const flashNeeded = targetAmount > contractBalance
+    ? targetAmount - contractBalance
+    : 0;
 
   const amountToUse = ethers.parseUnits(targetAmount.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
+
   for (const p of buildBuyPaths(usdc, tokenAddr)) {
     const out = await quote(buyRouter, amountToUse, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
@@ -148,6 +161,7 @@ async function tryHybridFlash(buyRouter, sellRouter, tokenAddr) {
   if (!bestBuyOut) return;
 
   let bestSellOut, bestSellPath;
+
   for (const p of buildSellPaths(usdc, tokenAddr)) {
     const out = await quote(sellRouter, bestBuyOut, p);
     if (out && (!bestSellOut || out > bestSellOut)) {
@@ -164,40 +178,6 @@ async function tryHybridFlash(buyRouter, sellRouter, tokenAddr) {
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDC`);
-  console.log(`${CYAN}Flash Needed:${RESET} ${flashNeeded.toFixed(6)} USDC`);
-
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-
-  try {
-    await vault.executeFlashArbitrage.staticCall(
-      buyRouter,
-      sellRouter,
-      amountToUse,
-      bestBuyPath,
-      bestSellPath,
-      deadline
-    );
-    console.log(`${GREEN}SIMULATION PASSED${RESET}`);
-  } catch (err) {
-    console.log(`${RED}SIMULATION FAILED:${RESET}`, err.shortMessage || err.reason || err);
-    return;
-  }
-
-  try {
-    const tx = await vault.executeFlashArbitrage(
-      buyRouter,
-      sellRouter,
-      amountToUse,
-      bestBuyPath,
-      bestSellPath,
-      deadline
-    );
-    console.log(`${GREEN}TX SENT:${RESET} ${tx.hash}`);
-    await tx.wait();
-    console.log(`${GREEN}TX CONFIRMED${RESET}`);
-  } catch (err) {
-    console.log(`${RED}Execution failed:${RESET}`, err);
-  }
 }
 
 /* ================= MAIN LOOP ================= */
@@ -206,6 +186,8 @@ async function main() {
   await showBalances(usdc);
 
   while (true) {
+    console.log(`\n${YELLOW}--- SCANNING ---${RESET}`);
+
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
@@ -214,6 +196,7 @@ async function main() {
         }
       }
     }
+
     await sleep(SCAN_INTERVAL_MS);
   }
 }
