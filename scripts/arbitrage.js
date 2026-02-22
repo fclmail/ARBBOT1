@@ -5,13 +5,14 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-// ✅ HARDCODED RPC (ONLY CHANGE)
+// ✅ HARDCODED RPC (UNCHANGED)
 const RPC_POLYGON = "https://polygon-rpc.com";
 
-// keep private key from env (unchanged)
-const WALLET_PRIVATE_KEY = (process.env.OWNER_PRIVATE_KEY || "").trim();
+// ✅ FIXED: use PRIVATE_KEY (matches GitHub secret)
+const WALLET_PRIVATE_KEY =
+  (process.env.PRIVATE_KEY || "").trim();
 
-if (!WALLET_PRIVATE_KEY) throw new Error("OWNER_PRIVATE_KEY missing");
+if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= SETTINGS ================= */
 
@@ -91,6 +92,17 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
   let flashNeeded = totalTarget - vaultBalance;
   if (flashNeeded < 0) flashNeeded = 0;
 
+  // ✅ FIX: true flash amount
+  const flashAmount = ethers.parseUnits(
+    flashNeeded.toFixed(6),
+    6
+  );
+
+  if (flashAmount === 0n) {
+    console.log("⚠ Vault has enough capital. No flash needed.");
+    return;
+  }
+
   const tradeAmount = ethers.parseUnits(totalTarget.toString(), 6);
 
   const pathToToken = [usdcAddr, tokenAddr];
@@ -103,7 +115,10 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
   if (!expectedSell) return;
 
   const finalOut = Number(ethers.formatUnits(expectedSell, 6));
-  const estimatedProfit = finalOut - totalTarget;
+
+  // ✅ FIX: account for Aave premium (0.09%)
+  const premium = flashNeeded * 0.0009;
+  const estimatedProfit = finalOut - totalTarget - premium;
 
   if (estimatedProfit < MIN_EXPECTED_PROFIT) return;
 
@@ -113,10 +128,26 @@ async function tryHybridArb(buyRouter, sellRouter, tokenAddr) {
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
+  // ✅ FIX: simulation before sending tx
+  try {
+    await vault.executeFlashArbitrage.staticCall(
+      buyRouter,
+      sellRouter,
+      flashAmount,
+      pathToToken,
+      pathToUSDC,
+      deadline
+    );
+    console.log("🧪 Flash simulation passed");
+  } catch (err) {
+    console.log("❌ Flash simulation failed:", err.shortMessage || err.reason || err);
+    return;
+  }
+
   const tx = await vault.executeFlashArbitrage(
     buyRouter,
     sellRouter,
-    tradeAmount,
+    flashAmount,
     pathToToken,
     pathToUSDC,
     deadline
