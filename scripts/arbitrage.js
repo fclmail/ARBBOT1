@@ -32,9 +32,8 @@ const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256) external",
-  "function usdc() view returns(address)",
-  "function approveRouters(address[] calldata,uint256) external",
-  "function owner() view returns(address)"
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external",
+  "function usdc() view returns(address)"
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
@@ -65,15 +64,6 @@ const TOKENS = {
   LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
-
-/* ================= APPROVE ROUTERS ================= */
-
-async function approveAllRouters() {
-  console.log(`🔐 Approving routers...`);
-  const tx = await vault.approveRouters(Object.values(routers), ethers.MaxUint256);
-  await tx.wait();
-  console.log(`✅ Routers approved`);
-}
 
 /* ================= SIMULATION ================= */
 
@@ -245,7 +235,9 @@ async function scan() {
 console.log("🚀 Hybrid Arbitrage Bot Started");
 
 showSystemStatus().catch(console.error);
-approveAllRouters().catch(console.error);
+
+// ✅ Router approval removed — not needed, handled on-chain
+// approveAllRouters().catch(console.error);
 
 setInterval(() => {
   scan().catch(console.error);
