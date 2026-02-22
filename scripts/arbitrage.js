@@ -35,6 +35,11 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
+/* ================= PAY IN MATIC FEATURE ================= */
+
+const WITHDRAW_THRESHOLD_USDC = 77745;
+const WITHDRAW_PERCENT = 1;
+
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -74,6 +79,16 @@ const vaultAbi = [
     ],
     outputs: [],
     stateMutability: "nonpayable"
+  },
+  {
+    name: "withdrawERC20",
+    type: "function",
+    inputs: [
+      { name: "tokenAddr", type: "address" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: [],
+    stateMutability: "nonpayable"
   }
 ];
 
@@ -89,7 +104,8 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
+  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
 ];
 
 /* ================= TOKENS ================= */
@@ -120,150 +136,65 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= DISPLAY BALANCES ================= */
+/* ================= AUTO PAY PROFITS IN MATIC ================= */
 
-async function showBalances(usdcAddr) {
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
-
-  const walletMatic = await provider.getBalance(wallet.address);
-  const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
-
-  const vaultAddrData = await provider.call({
-    to: VAULT_ADDRESS,
-    data: ethers.id("vault()").slice(0, 10)
-  });
-
-  const decodedVault = ethers.getAddress("0x" + vaultAddrData.slice(26));
-  const vaultBal = await usdc.balanceOf(decodedVault);
-
-  console.log(`${CYAN}💰 Wallet MATIC:${RESET} ${ethers.formatEther(walletMatic)}`);
-  console.log(`${CYAN}🏦 Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
-  console.log(`${CYAN}🏛 Vault USDC:${RESET} ${ethers.formatUnits(vaultBal, 6)}`);
-}
-
-/* ================= APPROVE ROUTERS ================= */
-
-async function approveAllRouters() {
-  console.log(`${YELLOW}🔐 Approving routers...${RESET}`);
-  const tx = await vault.approveRouters(Object.values(routers), ethers.MaxUint256);
-  await tx.wait();
-  console.log(`${GREEN}✅ Routers approved${RESET}`);
-}
-
-/* ================= SIMULATION ================= */
-
-async function vaultWillExecute(args) {
-  console.log(`${YELLOW}🧪 SIMULATION START${RESET}`);
+async function autoPayInMatic(usdcAddr) {
   try {
-    await vault.executeArbitrage.staticCall(...args);
-    console.log(`${GREEN}🧪 SIMULATION PASSED${RESET}`);
-    return true;
+    const usdc = new ethers.Contract(
+      usdcAddr,
+      [
+        "function balanceOf(address) view returns(uint256)",
+        "function approve(address,uint256)"
+      ],
+      wallet
+    );
+
+    const bal = await usdc.balanceOf(VAULT_ADDRESS);
+
+    if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC)
+      return;
+
+    const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
+
+    console.log(`${YELLOW}💸 Threshold reached. Converting USDC → WMATIC → POL...${RESET}`);
+
+    await (await vault.withdrawERC20(usdcAddr, amount)).wait();
+    await (await usdc.approve(routers.QuickSwap, amount)).wait();
+
+    const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
+
+    // Swap USDC → WMATIC
+    await (
+      await router.swapExactTokensForTokens(
+        amount,
+        0,
+        [usdcAddr, TOKENS.WMATIC],
+        wallet.address,
+        Math.floor(Date.now() / 1000) + 120
+      )
+    ).wait();
+
+    console.log(`${CYAN}🔄 Swapped USDC → WMATIC${RESET}`);
+
+    // UNWRAP WMATIC → POL (native gas)
+    const wmatic = new ethers.Contract(
+      TOKENS.WMATIC,
+      [
+        "function withdraw(uint256) public",
+        "function balanceOf(address) view returns(uint256)"
+      ],
+      wallet
+    );
+
+    const wmaticBalance = await wmatic.balanceOf(wallet.address);
+
+    if (wmaticBalance > 0n) {
+      await (await wmatic.withdraw(wmaticBalance)).wait();
+      console.log(`${GREEN}🔥 WMATIC unwrapped → POL (Gas Ready)${RESET}`);
+    }
+
   } catch (err) {
-    console.log(`${RED}❌ SIMULATION FAILED:${RESET}`, err.shortMessage || err.reason || err);
-    return false;
+    console.log(`${RED}Auto pay failed:${RESET}`, err.message);
   }
 }
-
-/* ================= PATH BUILDERS ================= */
-
-function buildPaths(usdc, token) {
-  return [
-    [usdc, token],
-    [usdc, TOKENS.WMATIC, token],
-    [usdc, TOKENS.WETH, token],
-    [usdc, TOKENS.USDT, token],
-    [usdc, TOKENS.DAI, token]
-  ];
-}
-
-function buildSellPaths(usdc, token) {
-  return [
-    [token, usdc],
-    [token, TOKENS.WMATIC, usdc],
-    [token, TOKENS.WETH, usdc],
-    [token, TOKENS.USDT, usdc],
-    [token, TOKENS.DAI, usdc]
-  ];
-}
-
-/* ================= ARBITRAGE ================= */
-
-async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = await vault.usdc();
-  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-
-  let bestBuyOut, bestBuyPath;
-  for (const p of buildPaths(usdc, tokenAddr)) {
-    const out = await quote(buyRouter, amountIn, p);
-    if (out && (!bestBuyOut || out > bestBuyOut)) {
-      bestBuyOut = out;
-      bestBuyPath = p;
-    }
-  }
-  if (!bestBuyOut) return;
-
-  let bestSellOut, bestSellPath;
-  for (const p of buildSellPaths(usdc, tokenAddr)) {
-    const out = await quote(sellRouter, bestBuyOut, p);
-    if (out && (!bestSellOut || out > bestSellOut)) {
-      bestSellOut = out;
-      bestSellPath = p;
-    }
-  }
-  if (!bestSellOut) return;
-
-  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
-  if (profit < MIN_EXPECTED_PROFIT) return;
-
-  console.log(`${GREEN}🔥 PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDCe`);
-
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-
-  const args = [
-    buyRouter,
-    sellRouter,
-    amountIn,
-    bestBuyPath,
-    bestSellPath,
-    deadline
-  ];
-
-  if (!(await vaultWillExecute(args))) {
-    console.log(`${RED}❌ Arbitrage simulation failed. Skipping trade.${RESET}`);
-    return;
-  }
-
-  try {
-    const tx = await vault.executeArbitrage(...args);
-    console.log(`${GREEN}✅ Arbitrage executed. Tx hash:${RESET} ${tx.hash}`);
-    await tx.wait();
-    console.log(`${GREEN}✅ Tx confirmed${RESET}`);
-  } catch (err) {
-    console.log(`${RED}❌ Execution failed:${RESET}`, err);
-  }
-}
-
-/* ================= MAIN LOOP ================= */
-
-async function main() {
-  await approveAllRouters();
-
-  while (true) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-        if (buy === sell) continue;
-        for (const token of Object.values(TOKENS)) {
-          await tryArb(buy, sell, token);
-        }
-      }
-    }
-    await sleep(SCAN_INTERVAL_MS);
-  }
-}
-
-main().catch(console.error);
 
