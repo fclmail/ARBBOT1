@@ -21,8 +21,8 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 
-const SCAN_AMOUNT_USDC = 0.22;
-const FLASH_AMOUNT_USDC = 200;
+const SCAN_AMOUNT_USDC = .2;
+const FLASH_AMOUNT_USDC = 10000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
