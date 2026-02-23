@@ -21,7 +21,7 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02;
+const MIN_TRADE_USDC = 0.08;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
