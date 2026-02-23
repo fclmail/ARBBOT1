@@ -134,25 +134,29 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= BALANCES ================= */
+/* ================= UPDATED BALANCES ================= */
 
 async function showBalances(usdcAddr) {
   // 1. Wallet MATIC
   const walletMatic = await provider.getBalance(wallet.address);
 
-  // 2. Contract balance (raw USDC in vault)
+  // 2. Contract balance (live USDC in vault)
   const usdc = new ethers.Contract(
     usdcAddr,
     ["function balanceOf(address) view returns(uint256)"],
     provider
   );
-  const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
 
-  // 3. Vault balance (updating display, simulated)
-  const vaultBal = 78754 + Math.floor(Math.random() * 20); // simulate updating vault
+  const vaultBalanceBN = await usdc.balanceOf(VAULT_ADDRESS); // BigNumber
 
-  console.log(`${CYAN}Vault Balance:${RESET} ${vaultBal}`);
-  console.log(`${CYAN}Contract Balance:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
+  // Raw units (smallest USDC unit)
+  const vaultBalanceRaw = vaultBalanceBN.toString();
+
+  // Human-readable with full decimals (USDC has 6 decimals)
+  const vaultBalanceHuman = ethers.formatUnits(vaultBalanceBN, 6);
+
+  console.log(`${CYAN}Vault Balance (raw units):${RESET} ${vaultBalanceRaw}`);
+  console.log(`${CYAN}Vault Balance (full decimals):${RESET} ${vaultBalanceHuman}`);
   console.log(`${CYAN}Wallet POL:${RESET} ${ethers.formatEther(walletMatic)}`);
 }
 
