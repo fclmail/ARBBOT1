@@ -1,3 +1,6 @@
+SIMULATION INCLUDED
+
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -21,11 +24,14 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.08;
-const MIN_EXPECTED_PROFIT = 0.000001;
-
-const SCAN_INTERVAL_MS = 10_000;
+const FLASH_AMOUNT_USDC = 10000;       // FIXED 10,000 USDC
+const MIN_EXPECTED_PROFIT = 0.000001;  // 1 micro USDC
 const DEADLINE_SECONDS = 60;
+
+/* ================= COLORS ================= */
+
+const GREEN = "\x1b[32m";
+const RESET = "\x1b[0m";
 
 /* ================= PROVIDER ================= */
 
@@ -65,8 +71,7 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function factory() view returns (address)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
@@ -86,8 +91,6 @@ const TOKENS = {
 
 /* ================= HELPERS ================= */
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -98,207 +101,86 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= RESERVE + LIQUIDITY HELPERS ================= */
-
-const pairAbi = [
-  "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32)"
-];
-
-async function getPair(routerAddr, tokenA, tokenB) {
-  try {
-    const router = new ethers.Contract(routerAddr, routerAbi, provider);
-    const factoryAddr = await router.factory();
-
-    const factory = new ethers.Contract(
-      factoryAddr,
-      ["function getPair(address,address) view returns (address)"],
-      provider
-    );
-
-    return await factory.getPair(tokenA, tokenB);
-  } catch {
-    return null;
-  }
-}
-
-async function getReserves(routerAddr, tokenA, tokenB) {
-  try {
-    const pairAddr = await getPair(routerAddr, tokenA, tokenB);
-    if (!pairAddr || pairAddr === ethers.ZeroAddress) return null;
-
-    const pair = new ethers.Contract(pairAddr, pairAbi, provider);
-    const [r0, r1] = await pair.getReserves();
-
-    return { reserve0: r0, reserve1: r1 };
-  } catch {
-    return null;
-  }
-}
-
-function calculateSafeCeiling(reserveIn) {
-  const reserve = Number(ethers.formatUnits(reserveIn, 6));
-  const maxImpact = 0.003; // 0.3%
-  const ceiling = reserve * maxImpact;
-  return Math.min(Math.floor(ceiling), 10000);
-}
-
-async function testFlashSizes(buyRouter, sellRouter, buyPath, sellPath, ceiling) {
-  const sizes = [
-    Math.floor(ceiling * 0.6),
-    Math.floor(ceiling * 0.8),
-    Math.floor(ceiling * 1.0)
-  ].filter((s) => s > 10);
-
-  let bestSize = 0;
-  let bestNet = 0;
-
-  for (const size of sizes) {
-    const amount = ethers.parseUnits(size.toString(), 6);
-
-    const buyOut = await quote(buyRouter, amount, buyPath);
-    if (!buyOut) continue;
-
-    const sellOut = await quote(sellRouter, buyOut, sellPath);
-    if (!sellOut) continue;
-
-    const gross = Number(ethers.formatUnits(sellOut, 6)) - size;
-    const flashFee = size * 0.0009;
-    const gas = 3;
-
-    const net = gross - flashFee - gas;
-
-    if (net > bestNet) {
-      bestNet = net;
-      bestSize = size;
-    }
-  }
-
-  return bestSize;
-}
-
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = TOKENS.USDC;
-  const microAmount = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+  const testAmount = ethers.parseUnits("1", 6); // 1 USDC micro test
 
-  let bestBuyOut, bestBuyPath;
+  const buyPath = [usdc, tokenAddr];
+  const sellPath = [tokenAddr, usdc];
 
-  for (const p of [
-    [usdc, tokenAddr],
-    [usdc, TOKENS.WMATIC, tokenAddr],
-    [usdc, TOKENS.WETH, tokenAddr],
-    [usdc, TOKENS.USDT, tokenAddr],
-    [usdc, TOKENS.DAI, tokenAddr]
-  ]) {
-    const out = await quote(buyRouter, microAmount, p);
-    if (out && (!bestBuyOut || out > bestBuyOut)) {
-      bestBuyOut = out;
-      bestBuyPath = p;
-    }
-  }
+  const buyOut = await quote(buyRouter, testAmount, buyPath);
+  if (!buyOut) return;
 
-  if (!bestBuyOut) return;
-
-  let bestSellOut, bestSellPath;
-
-  for (const p of [
-    [tokenAddr, usdc],
-    [tokenAddr, TOKENS.WMATIC, usdc],
-    [tokenAddr, TOKENS.WETH, usdc],
-    [tokenAddr, TOKENS.USDT, usdc],
-    [tokenAddr, TOKENS.DAI, usdc]
-  ]) {
-    const out = await quote(sellRouter, bestBuyOut, p);
-    if (out && (!bestSellOut || out > bestSellOut)) {
-      bestSellOut = out;
-      bestSellPath = p;
-    }
-  }
-
-  if (!bestSellOut) return;
+  const sellOut = await quote(sellRouter, buyOut, sellPath);
+  if (!sellOut) return;
 
   const microProfit =
-    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+    Number(ethers.formatUnits(sellOut, 6)) - 1;
 
   if (microProfit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`\nMICRO OPPORTUNITY FOUND: +${microProfit.toFixed(6)} USDC`);
-
-  /* ========= FLASH LIQUIDITY-AWARE SCALING ========= */
+  console.log(
+    `${GREEN}MICRO PROFIT FOUND: +${microProfit.toFixed(6)} USDC${RESET}`
+  );
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-
-  const reserves = await getReserves(
-    buyRouter,
-    bestBuyPath[0],
-    bestBuyPath[1]
+  const flashAmount = ethers.parseUnits(
+    FLASH_AMOUNT_USDC.toString(),
+    6
   );
 
-  if (!reserves) return;
-
-  const reserveIn =
-    bestBuyPath[0] === TOKENS.USDC
-      ? reserves.reserve0
-      : reserves.reserve1;
-
-  const ceiling = calculateSafeCeiling(reserveIn);
-  if (ceiling <= 0) return;
-
-  const bestSize = await testFlashSizes(
-    buyRouter,
-    sellRouter,
-    bestBuyPath,
-    bestSellPath,
-    ceiling
-  );
-
-  if (bestSize <= 0) return;
-
-  const flashAmount = ethers.parseUnits(bestSize.toString(), 6);
+  console.log("Starting simulation...");
 
   try {
+    await flash.callStatic.executeFlashArbitrage(
+      buyRouter,
+      sellRouter,
+      flashAmount,
+      buyPath,
+      sellPath,
+      deadline
+    );
+
+    console.log(`${GREEN}Simulation passed ✅${RESET}`);
+    console.log(`${GREEN}Executing transaction...${RESET}`);
+
     const tx = await flash.executeFlashArbitrage(
       buyRouter,
       sellRouter,
       flashAmount,
-      bestBuyPath,
-      bestSellPath,
+      buyPath,
+      sellPath,
       deadline
     );
 
-    console.log(`FLASH EXECUTED: ${tx.hash}`);
+    console.log(
+      `${GREEN}Transaction Hash: ${tx.hash}${RESET}`
+    );
+
+    process.exit(0);
+
   } catch (error) {
-    console.error("Flash Loan Execution Failed:", error);
+    console.log("Simulation failed");
   }
 }
 
 /* ================= MAIN ================= */
 
 async function main() {
-  while (true) {
-    try {
-      for (const [buyName, buyAddr] of Object.entries(routers)) {
-        for (const [sellName, sellAddr] of Object.entries(routers)) {
-          if (buyAddr !== sellAddr) {
-            console.log(`Checking: ${buyName} -> ${sellName}`);
-            for (const tokenAddr of Object.values(TOKENS)) {
-              await tryArb(buyAddr, sellAddr, tokenAddr);
-            }
-          }
+  for (const [buyName, buyAddr] of Object.entries(routers)) {
+    for (const [sellName, sellAddr] of Object.entries(routers)) {
+      if (buyAddr !== sellAddr) {
+        console.log(`Checking: ${buyName} -> ${sellName}`);
+        for (const tokenAddr of Object.values(TOKENS)) {
+          await tryArb(buyAddr, sellAddr, tokenAddr);
         }
       }
-    } catch (error) {
-      console.error("Error in main loop:", error);
     }
-
-    console.log(`Waiting ${SCAN_INTERVAL_MS / 1000}s...`);
-    await sleep(SCAN_INTERVAL_MS);
   }
+
+  console.log("Scan complete. No execution.");
 }
 
-/* ================= EXECUTION ================= */
-
-main()
-  .then(() => console.log("Arbitrage bot running..."))
-  .catch((err) => console.error("Startup error:", err));
+main().catch(console.error);
