@@ -29,7 +29,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02;
+const MIN_TRADE_USDC = .02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -134,7 +134,7 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= BALANCE DISPLAY ================= */
+/* ================= BALANCES ================= */
 
 async function showBalances(usdcAddr) {
   const usdc = new ethers.Contract(
@@ -150,7 +150,7 @@ async function showBalances(usdcAddr) {
   console.log(`${CYAN}Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
 }
 
-/* ================= AUTO PAY PROFITS IN POL ================= */
+/* ================= AUTO POL CONVERT ================= */
 
 async function autoPayInPol(usdcAddr) {
   try {
@@ -202,6 +202,8 @@ async function autoPayInPol(usdcAddr) {
       await (await wmatic.withdraw(wmaticBalance)).wait();
       console.log(`${GREEN}WMATIC → POL accumulated${RESET}`);
     }
+
+    await showBalances(usdcAddr);
 
   } catch (err) {
     console.log(`${RED}Auto POL convert failed:${RESET}`, err.message);
