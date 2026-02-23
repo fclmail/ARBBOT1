@@ -21,8 +21,8 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 
-const SCAN_AMOUNT_USDC = 0.08;
-const FLASH_AMOUNT_USDC = 10;
+const SCAN_AMOUNT_USDC = 0.02;
+const FLASH_AMOUNT_USDC = 10000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -119,9 +119,7 @@ async function showBalances() {
   const vaultBalance = await usdc.balanceOf(FLASH_ADDRESS);
   const maticBalance = await provider.getBalance(wallet.address);
 
-  console.log(
-    `${GREEN}Vault Contract:${RESET} ${FLASH_ADDRESS}`
-  );
+  console.log(`${GREEN}Vault Contract:${RESET} ${FLASH_ADDRESS}`);
   console.log(
     `${GREEN}Vault USDC Balance:${RESET} ${ethers.formatUnits(
       vaultBalance,
@@ -169,20 +167,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     6
   );
 
-  console.log(`SIMULATING 10000 FLASH LOAN`);
-
   try {
-    await flash.callStatic.executeFlashArbitrage(
-      buyRouter,
-      sellRouter,
-      flashAmount,
-      buyPath,
-      sellPath,
-      deadline
-    );
-
-    console.log(`${GREEN}SIMULATION PASS${RESET}`);
-
     const tx = await flash.executeFlashArbitrage(
       buyRouter,
       sellRouter,
@@ -193,11 +178,11 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     );
 
     console.log(
-      `${GREEN}ARBITRAGE EXECUTED ${tx.hash}${RESET}`
+      `${GREEN}EXECUTING ARBITRAGE ${tx.hash}${RESET}`
     );
 
   } catch {
-    console.log(`${RED}SIMULATION FAILED${RESET}`);
+    console.log(`${RED}ARBITRAGE FAILED${RESET}`);
   }
 }
 
