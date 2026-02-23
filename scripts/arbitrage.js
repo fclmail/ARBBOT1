@@ -21,8 +21,8 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 
-const SCAN_AMOUNT_USDC = 0.02;          // SCAN AT 0.02
-const FLASH_AMOUNT_USDC = 10000;        // SIMULATE 10,000
+const SCAN_AMOUNT_USDC = 0.02;
+const FLASH_AMOUNT_USDC = 10000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -60,6 +60,18 @@ const flashAbi = [
 ];
 
 const flash = new ethers.Contract(FLASH_ADDRESS, flashAbi, wallet);
+
+/* ================= ERC20 ABI ================= */
+
+const erc20Abi = [
+  "function balanceOf(address) view returns (uint256)"
+];
+
+const usdc = new ethers.Contract(
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  erc20Abi,
+  provider
+);
 
 /* ================= ROUTERS ================= */
 
@@ -103,18 +115,36 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
+async function showBalances() {
+  const vaultBalance = await usdc.balanceOf(FLASH_ADDRESS);
+  const maticBalance = await provider.getBalance(wallet.address);
+
+  console.log(
+    `${GREEN}Vault Contract:${RESET} ${FLASH_ADDRESS}`
+  );
+  console.log(
+    `${GREEN}Vault USDC Balance:${RESET} ${ethers.formatUnits(
+      vaultBalance,
+      6
+    )}`
+  );
+  console.log(
+    `${GREEN}Wallet MATIC Balance:${RESET} ${ethers.formatEther(
+      maticBalance
+    )}`
+  );
+}
+
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = TOKENS.USDC;
-
   const scanAmount = ethers.parseUnits(
     SCAN_AMOUNT_USDC.toString(),
     6
   );
 
-  const buyPath = [usdc, tokenAddr];
-  const sellPath = [tokenAddr, usdc];
+  const buyPath = [TOKENS.USDC, tokenAddr];
+  const sellPath = [tokenAddr, TOKENS.USDC];
 
   const buyOut = await quote(buyRouter, scanAmount, buyPath);
   if (!buyOut) return;
@@ -128,8 +158,10 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   console.log(
-    `\n${profit.toFixed(7)} PROFIT FOUND`
+    `\n${GREEN}${profit.toFixed(7)} PROFIT FOUND${RESET}`
   );
+
+  await showBalances();
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
   const flashAmount = ethers.parseUnits(
