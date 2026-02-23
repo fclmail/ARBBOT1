@@ -1,5 +1,3 @@
-J's v c m🔃📶💰
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
