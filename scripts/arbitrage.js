@@ -37,8 +37,8 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= AUTO POL WITHDRAW ================= */
 
-const WITHDRAW_THRESHOLD_USDC = 0.45;
-const WITHDRAW_PERCENT = 100;
+const WITHDRAW_THRESHOLD_USDC = 757559;
+const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
 
