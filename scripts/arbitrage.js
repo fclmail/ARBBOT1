@@ -21,13 +21,16 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 
-const FLASH_AMOUNT_USDC = 10000;       // FIXED 10,000 USDC
-const MIN_EXPECTED_PROFIT = 0.000001;  // 1 micro USDC
+const FLASH_AMOUNT_USDC = 10000;
+const MIN_EXPECTED_PROFIT = 0.000001;
+const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= COLORS ================= */
 
 const GREEN = "\x1b[32m";
+const RED = "\x1b[31m";
+const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
 /* ================= PROVIDER ================= */
@@ -88,6 +91,8 @@ const TOKENS = {
 
 /* ================= HELPERS ================= */
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -102,7 +107,7 @@ async function quote(routerAddr, amountIn, path) {
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = TOKENS.USDC;
-  const testAmount = ethers.parseUnits("1", 6); // 1 USDC micro test
+  const testAmount = ethers.parseUnits("1", 6);
 
   const buyPath = [usdc, tokenAddr];
   const sellPath = [tokenAddr, usdc];
@@ -119,7 +124,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (microProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(
-    `${GREEN}MICRO PROFIT FOUND: +${microProfit.toFixed(6)} USDC${RESET}`
+    `\nMICRO OPPORTUNITY FOUND: +${microProfit.toFixed(6)} USDC`
   );
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
@@ -128,7 +133,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     6
   );
 
-  console.log("Starting simulation...");
+  console.log(`${YELLOW}Simulation start...${RESET}`);
 
   try {
     await flash.callStatic.executeFlashArbitrage(
@@ -153,31 +158,35 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     );
 
     console.log(
+      `${GREEN}EXECUTED SUCCESSFULLY${RESET}`
+    );
+    console.log(
       `${GREEN}Transaction Hash: ${tx.hash}${RESET}`
     );
 
-    process.exit(0);
-
   } catch (error) {
-    console.log("Simulation failed");
+    console.log(`${RED}Simulation failed ❌${RESET}`);
   }
 }
 
-/* ================= MAIN ================= */
+/* ================= MAIN LOOP ================= */
 
 async function main() {
-  for (const [buyName, buyAddr] of Object.entries(routers)) {
-    for (const [sellName, sellAddr] of Object.entries(routers)) {
-      if (buyAddr !== sellAddr) {
-        console.log(`Checking: ${buyName} -> ${sellName}`);
-        for (const tokenAddr of Object.values(TOKENS)) {
-          await tryArb(buyAddr, sellAddr, tokenAddr);
+  while (true) {
+    for (const [buyName, buyAddr] of Object.entries(routers)) {
+      for (const [sellName, sellAddr] of Object.entries(routers)) {
+        if (buyAddr !== sellAddr) {
+          console.log(`Checking: ${buyName} -> ${sellName}`);
+          for (const tokenAddr of Object.values(TOKENS)) {
+            await tryArb(buyAddr, sellAddr, tokenAddr);
+          }
         }
       }
     }
-  }
 
-  console.log("Scan complete. No execution.");
+    console.log(`Waiting ${SCAN_INTERVAL_MS / 1000}s...\n`);
+    await sleep(SCAN_INTERVAL_MS);
+  }
 }
 
 main().catch(console.error);
