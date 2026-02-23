@@ -1,6 +1,3 @@
-Js. ✅Code🟢✅
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
