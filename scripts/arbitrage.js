@@ -36,7 +36,7 @@ const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 const WITHDRAW_THRESHOLD_USDC = 7875554;
-const WITHDRAW_PERCENT = 1;
+const WITHDRAW_PERCENT = 2;
 
 /* ================= PROVIDER ================= */
 
