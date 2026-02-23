@@ -27,8 +27,8 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
-// Flash loan dynamic sizes
-const FLASH_SIZES = [1000, 999, 800, 500, 100];
+// Flash loan dynamic sizes (removed fixed sizes)
+const FLASH_SIZES = [5, 10, 20, 30, 40, 50, 100, 200, 500, 1000];
 
 /* ================= PROVIDER ================= */
 
@@ -100,6 +100,63 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
+/* ================= BINARY SEARCH FUNCTION ================= */
+
+async function binarySearchFlashSize(buyRouter, sellRouter, bestBuyPath, bestSellPath, maxSize, minSize) {
+  let low = minSize;
+  let high = maxSize;
+  let bestNetProfit = 0;
+  let bestSize = 0;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const flashAmount = ethers.parseUnits(mid.toString(), 6);
+
+    // Get the buy amount
+    const buyOut = await quote(buyRouter, flashAmount, bestBuyPath);
+    if (!buyOut) {
+      high = mid - 1;
+      continue;
+    }
+
+    // Get the sell amount
+    const sellOut = await quote(sellRouter, buyOut, bestSellPath);
+    if (!sellOut) {
+      high = mid - 1;
+      continue;
+    }
+
+    const gross = Number(ethers.formatUnits(sellOut, 6)) - mid;
+
+    const flashFee = mid * 0.0009; // Aave 0.09%
+    const estimatedGas = 3; // adjust if needed
+
+    const net = gross - flashFee - estimatedGas;
+
+    console.log(`
+[SIZE ${mid}]
+Gross: ${gross.toFixed(4)}
+Flash Fee: ${flashFee.toFixed(4)}
+Gas: ${estimatedGas}
+Net: ${net.toFixed(4)}
+`);
+
+    if (net > bestNetProfit) {
+      bestNetProfit = net;
+      bestSize = mid;
+    }
+
+    // Binary search: Adjust the low or high bounds
+    if (net > 0) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return bestSize;
+}
+
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
@@ -152,36 +209,15 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   console.log(`\nMICRO OPPORTUNITY FOUND: +${microProfit.toFixed(6)} USDC`);
 
-  /* ========= STAGE 2: FLASH SCALING ========= */
+  /* ========= STAGE 2: FLASH SCALING WITH BINARY SEARCH ========= */
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  for (const size of FLASH_SIZES) {
+  // Apply binary search to find optimal flash size
+  const bestSize = await binarySearchFlashSize(buyRouter, sellRouter, bestBuyPath, bestSellPath, 1000, 100);
 
-    const flashAmount = ethers.parseUnits(size.toString(), 6);
-
-    const buyOut = await quote(buyRouter, flashAmount, bestBuyPath);
-    if (!buyOut) continue;
-
-    const sellOut = await quote(sellRouter, buyOut, bestSellPath);
-    if (!sellOut) continue;
-
-    const gross = Number(ethers.formatUnits(sellOut, 6)) - size;
-
-    const flashFee = size * 0.0009; // Aave 0.09%
-    const estimatedGas = 3; // adjust if needed
-
-    const net = gross - flashFee - estimatedGas;
-
-    console.log(`
-[SIZE ${size}]
-Gross: ${gross.toFixed(4)}
-Flash Fee: ${flashFee.toFixed(4)}
-Gas: ${estimatedGas}
-Net: ${net.toFixed(4)}
-`);
-
-    if (net <= 0) continue;
+  if (bestSize > 0) {
+    const flashAmount = ethers.parseUnits(bestSize.toString(), 6);
 
     try {
       const tx = await flash.executeFlashArbitrage(
@@ -193,37 +229,4 @@ Net: ${net.toFixed(4)}
         deadline
       );
 
-      console.log(`FLASH EXECUTED: ${size} USDC`);
-      console.log(`Tx: ${tx.hash}`);
-
-      await tx.wait();
-
-      console.log("FLASH CONFIRMED\n");
-
-      break; // stop after first profitable size
-
-    } catch (err) {
-      console.log(`Flash failed at ${size}:`, err.message);
-    }
-  }
-}
-
-/* ================= MAIN LOOP ================= */
-
-async function main() {
-
-  while (true) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-        if (buy === sell) continue;
-        for (const token of Object.values(TOKENS)) {
-          if (token === TOKENS.USDC) continue;
-          await tryArb(buy, sell, token);
-        }
-      }
-    }
-    await sleep(SCAN_INTERVAL_MS);
-  }
-}
-
-main().catch(console.error);
+      console.log(`FLASH EXECUT
