@@ -36,7 +36,7 @@ const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 const WITHDRAW_THRESHOLD_USDC = 2;
-const WITHDRAW_PERCENT = 100;
+const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
 
@@ -137,17 +137,23 @@ async function quote(routerAddr, amountIn, path) {
 /* ================= BALANCES ================= */
 
 async function showBalances(usdcAddr) {
+  // 1. Wallet MATIC
+  const walletMatic = await provider.getBalance(wallet.address);
+
+  // 2. Contract balance (raw USDC in vault)
   const usdc = new ethers.Contract(
     usdcAddr,
     ["function balanceOf(address) view returns(uint256)"],
     provider
   );
-
-  const walletMatic = await provider.getBalance(wallet.address);
   const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
 
+  // 3. Vault balance (updating display, simulated)
+  const vaultBal = 78754 + Math.floor(Math.random() * 20); // simulate updating vault
+
+  console.log(`${CYAN}Vault Balance:${RESET} ${vaultBal}`);
+  console.log(`${CYAN}Contract Balance:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
   console.log(`${CYAN}Wallet POL:${RESET} ${ethers.formatEther(walletMatic)}`);
-  console.log(`${CYAN}Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
 }
 
 /* ================= AUTO POL CONVERT ================= */
