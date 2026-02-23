@@ -160,7 +160,6 @@ Net: ${net.toFixed(4)}
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-
   const usdc = TOKENS.USDC;
   const microAmount = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
@@ -229,4 +228,41 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
         deadline
       );
 
-      console.log(`FLASH EXECUT
+      console.log(`FLASH EXECUTED: ${tx.hash}`);
+    } catch (error) {
+      console.error("Flash Loan Execution Failed:", error);
+    }
+  }
+}
+
+/* ================= MAIN ================= */
+
+async function main() {
+  while (true) {
+    try {
+      // Scan each router pair for arbitrage opportunities
+      for (const [buyRouterName, buyRouterAddr] of Object.entries(routers)) {
+        for (const [sellRouterName, sellRouterAddr] of Object.entries(routers)) {
+          if (buyRouterAddr !== sellRouterAddr) {
+            console.log(`Checking arbitrage: ${buyRouterName} -> ${sellRouterName}`);
+            for (const tokenAddr of Object.values(TOKENS)) {
+              await tryArb(buyRouterAddr, sellRouterAddr, tokenAddr);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error in main loop:", error);
+    }
+
+    // Wait for the next scan interval
+    console.log(`Waiting for ${SCAN_INTERVAL_MS / 1000} seconds before next scan...`);
+    await sleep(SCAN_INTERVAL_MS);
+  }
+}
+
+/* ================= EXECUTION ================= */
+
+main()
+  .then(() => console.log("Arbitrage bot is running..."))
+  .catch((err) => console.error("Error starting the bot:", err));
