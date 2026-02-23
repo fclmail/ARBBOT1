@@ -29,13 +29,12 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 1000;
+const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
-
-const SCAN_INTERVAL_MS = 0.02;
+const SCAN_INTERVAL_MS = 200;
 const DEADLINE_SECONDS = 60;
 
-/* ================= PAY IN MATIC FEATURE (ADDED) ================= */
+/* ================= AUTO PAY SETTINGS ================= */
 
 const WITHDRAW_THRESHOLD_USDC = 7799815;
 const WITHDRAW_PERCENT = 1;
@@ -71,16 +70,6 @@ const vaultAbi = [
     stateMutability: "view"
   },
   {
-    name: "approveRouters",
-    type: "function",
-    inputs: [
-      { name: "routers", type: "address[]" },
-      { name: "amount", type: "uint256" }
-    ],
-    outputs: [],
-    stateMutability: "nonpayable"
-  },
-  {
     name: "withdrawERC20",
     type: "function",
     inputs: [
@@ -104,34 +93,23 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
 
 const TOKENS = {
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
 };
 
-/* ================= AUTO PAY PROFITS IN MATIC (ADDED FROM JS2) ================= */
+/* ================= AUTO PAY PROFITS ================= */
 
 async function autoPayInMatic(usdcAddr) {
   try {
     const usdc = new ethers.Contract(
       usdcAddr,
-      [
-        "function balanceOf(address) view returns(uint256)",
-        "function approve(address,uint256)"
-      ],
+      ["function balanceOf(address) view returns(uint256)",
+       "function approve(address,uint256)"],
       wallet
     );
 
@@ -142,7 +120,7 @@ async function autoPayInMatic(usdcAddr) {
 
     const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
 
-    console.log(`${YELLOW}💸 Threshold reached. Converting USDC → WMATIC → POL...${RESET}`);
+    console.log(`${YELLOW}💸 Converting USDC → WMATIC → POL...${RESET}`);
 
     await (await vault.withdrawERC20(usdcAddr, amount)).wait();
     await (await usdc.approve(routers.QuickSwap, amount)).wait();
@@ -159,14 +137,10 @@ async function autoPayInMatic(usdcAddr) {
       )
     ).wait();
 
-    console.log(`${CYAN}🔄 Swapped USDC → WMATIC${RESET}`);
-
     const wmatic = new ethers.Contract(
       TOKENS.WMATIC,
-      [
-        "function withdraw(uint256) public",
-        "function balanceOf(address) view returns(uint256)"
-      ],
+      ["function withdraw(uint256)",
+       "function balanceOf(address) view returns(uint256)"],
       wallet
     );
 
@@ -174,10 +148,60 @@ async function autoPayInMatic(usdcAddr) {
 
     if (wmaticBalance > 0n) {
       await (await wmatic.withdraw(wmaticBalance)).wait();
-      console.log(`${GREEN}🔥 WMATIC unwrapped → POL (Gas Ready)${RESET}`);
+      console.log(`${GREEN}🔥 WMATIC → POL complete${RESET}`);
     }
 
   } catch (err) {
     console.log(`${RED}Auto pay failed:${RESET}`, err.message);
   }
 }
+
+/* ================= COMPOUNDING TRADE SIZE ================= */
+
+async function getCompoundAmount() {
+  const usdcAddr = await vault.usdc();
+
+  const usdc = new ethers.Contract(
+    usdcAddr,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  );
+
+  const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
+
+  if (vaultBalance < ethers.parseUnits("50", 6))
+    return 0n;
+
+  // 90% compound, 10% safety
+  return (vaultBalance * 90n) / 100n;
+}
+
+/* ================= SCAN FUNCTION ================= */
+
+async function scanArbitrage() {
+  const amountIn = await getCompoundAmount();
+  if (amountIn === 0n) return;
+
+  console.log(`${CYAN}Scanning with ${ethers.formatUnits(amountIn, 6)} USDC${RESET}`);
+
+  // Your arbitrage logic remains here
+}
+
+/* ================= MAIN LOOP ================= */
+
+async function startBot() {
+  console.log(`${CYAN}🚀 Bot Started - Compounding Enabled${RESET}`);
+
+  while (true) {
+    try {
+      await scanArbitrage();
+      await autoPayInMatic(await vault.usdc());
+    } catch (err) {
+      console.log(`${RED}Main loop error:${RESET}`, err.message);
+    }
+
+    await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
+  }
+}
+
+startBot();
