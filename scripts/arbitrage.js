@@ -28,7 +28,7 @@ const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 // Flash loan dynamic sizes
-const FLASH_SIZES = [10000, 9995, 8000, 5000, 1000];
+const FLASH_SIZES = [1000, 999, 800, 500, 100];
 
 /* ================= PROVIDER ================= */
 
