@@ -19,37 +19,29 @@ const WALLET_PRIVATE_KEY =
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
-/* ================= COLORS ================= */
-
-const GREEN = "\x1b[92m";
-const RESET = "\x1b[0m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
-const RED = "\x1b[91m";
-
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 1.2;
+const MIN_TRADE_USDC = 0.02; // micro scan amount
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
-const WITHDRAW_THRESHOLD_USDC = 7875554;
-const WITHDRAW_PERCENT = 2;
+// Flash loan dynamic sizes
+const FLASH_SIZES = [10000, 9995, 8000, 5000, 1000];
 
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-/* ================= CONTRACT ================= */
+/* ================= FLASH CONTRACT ================= */
 
-const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+const FLASH_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
-const vaultAbi = [
+const flashAbi = [
   {
-    name: "executeArbitrage",
+    name: "executeFlashArbitrage",
     type: "function",
     inputs: [
       { name: "buyRouter", type: "address" },
@@ -61,36 +53,10 @@ const vaultAbi = [
     ],
     outputs: [],
     stateMutability: "nonpayable"
-  },
-  {
-    name: "usdc",
-    type: "function",
-    outputs: [{ type: "address" }],
-    stateMutability: "view"
-  },
-  {
-    name: "approveRouters",
-    type: "function",
-    inputs: [
-      { name: "routers", type: "address[]" },
-      { name: "amount", type: "uint256" }
-    ],
-    outputs: [],
-    stateMutability: "nonpayable"
-  },
-  {
-    name: "withdrawERC20",
-    type: "function",
-    inputs: [
-      { name: "tokenAddr", type: "address" },
-      { name: "amount", type: "uint256" }
-    ],
-    outputs: [],
-    stateMutability: "nonpayable"
   }
 ];
 
-const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+const flash = new ethers.Contract(FLASH_ADDRESS, flashAbi, wallet);
 
 /* ================= ROUTERS ================= */
 
@@ -102,13 +68,13 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
 
 const TOKENS = {
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
@@ -134,99 +100,17 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= UPDATED BALANCES ================= */
-
-async function showBalances(usdcAddr) {
-  // 1. Wallet MATIC
-  const walletMatic = await provider.getBalance(wallet.address);
-
-  // 2. Contract balance (live USDC in vault)
-  const usdc = new ethers.Contract(
-    usdcAddr,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
-
-  const vaultBalanceBN = await usdc.balanceOf(VAULT_ADDRESS); // BigNumber
-
-  // Raw units (smallest USDC unit)
-  const vaultBalanceRaw = vaultBalanceBN.toString();
-
-  // Human-readable with full decimals (USDC has 6 decimals)
-  const vaultBalanceHuman = ethers.formatUnits(vaultBalanceBN, 6);
-
-  console.log(`${CYAN}Vault Balance (raw units):${RESET} ${vaultBalanceRaw}`);
-  console.log(`${CYAN}Vault Balance (full decimals):${RESET} ${vaultBalanceHuman}`);
-  console.log(`${CYAN}Wallet POL:${RESET} ${ethers.formatEther(walletMatic)}`);
-}
-
-/* ================= AUTO POL CONVERT ================= */
-
-async function autoPayInPol(usdcAddr) {
-  try {
-    const usdc = new ethers.Contract(
-      usdcAddr,
-      [
-        "function balanceOf(address) view returns(uint256)",
-        "function approve(address,uint256)"
-      ],
-      wallet
-    );
-
-    const bal = await usdc.balanceOf(VAULT_ADDRESS);
-
-    if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC)
-      return;
-
-    const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
-
-    console.log(`${YELLOW}Converting USDC → WMATIC → POL...${RESET}`);
-
-    await (await vault.withdrawERC20(usdcAddr, amount)).wait();
-    await (await usdc.approve(routers.QuickSwap, amount)).wait();
-
-    const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
-
-    await (
-      await router.swapExactTokensForTokens(
-        amount,
-        0,
-        [usdcAddr, TOKENS.WMATIC],
-        wallet.address,
-        Math.floor(Date.now() / 1000) + 120
-      )
-    ).wait();
-
-    const wmatic = new ethers.Contract(
-      TOKENS.WMATIC,
-      [
-        "function withdraw(uint256)",
-        "function balanceOf(address) view returns(uint256)"
-      ],
-      wallet
-    );
-
-    const wmaticBalance = await wmatic.balanceOf(wallet.address);
-
-    if (wmaticBalance > 0n) {
-      await (await wmatic.withdraw(wmaticBalance)).wait();
-      console.log(`${GREEN}WMATIC → POL accumulated${RESET}`);
-    }
-
-    await showBalances(usdcAddr);
-
-  } catch (err) {
-    console.log(`${RED}Auto POL convert failed:${RESET}`, err.message);
-  }
-}
-
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = await vault.usdc();
-  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
+  const usdc = TOKENS.USDC;
+  const microAmount = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
+  /* ========= STAGE 1: MICRO SCAN (UNCHANGED LOGIC) ========= */
 
   let bestBuyOut, bestBuyPath;
+
   for (const p of [
     [usdc, tokenAddr],
     [usdc, TOKENS.WMATIC, tokenAddr],
@@ -234,15 +118,17 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     [usdc, TOKENS.USDT, tokenAddr],
     [usdc, TOKENS.DAI, tokenAddr]
   ]) {
-    const out = await quote(buyRouter, amountIn, p);
+    const out = await quote(buyRouter, microAmount, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
       bestBuyPath = p;
     }
   }
+
   if (!bestBuyOut) return;
 
   let bestSellOut, bestSellPath;
+
   for (const p of [
     [tokenAddr, usdc],
     [tokenAddr, TOKENS.WMATIC, usdc],
@@ -256,49 +142,82 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
       bestSellPath = p;
     }
   }
+
   if (!bestSellOut) return;
 
-  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
-  if (profit < MIN_EXPECTED_PROFIT) return;
+  const microProfit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
-  console.log(`${GREEN}PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDC`);
+  if (microProfit < MIN_EXPECTED_PROFIT) return;
+
+  console.log(`\nMICRO OPPORTUNITY FOUND: +${microProfit.toFixed(6)} USDC`);
+
+  /* ========= STAGE 2: FLASH SCALING ========= */
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  try {
-    const tx = await vault.executeArbitrage(
-      buyRouter,
-      sellRouter,
-      amountIn,
-      bestBuyPath,
-      bestSellPath,
-      deadline
-    );
+  for (const size of FLASH_SIZES) {
 
-    console.log(`${GREEN}Arbitrage executed. Tx hash:${RESET} ${tx.hash}`);
+    const flashAmount = ethers.parseUnits(size.toString(), 6);
 
-    await tx.wait();
+    const buyOut = await quote(buyRouter, flashAmount, bestBuyPath);
+    if (!buyOut) continue;
 
-    console.log(`${GREEN}Tx confirmed${RESET}`);
+    const sellOut = await quote(sellRouter, buyOut, bestSellPath);
+    if (!sellOut) continue;
 
-    await showBalances(usdc);
-    await autoPayInPol(usdc);
+    const gross = Number(ethers.formatUnits(sellOut, 6)) - size;
 
-  } catch (err) {
-    console.log(`${RED}Execution failed:${RESET}`, err.message);
+    const flashFee = size * 0.0009; // Aave 0.09%
+    const estimatedGas = 3; // adjust if needed
+
+    const net = gross - flashFee - estimatedGas;
+
+    console.log(`
+[SIZE ${size}]
+Gross: ${gross.toFixed(4)}
+Flash Fee: ${flashFee.toFixed(4)}
+Gas: ${estimatedGas}
+Net: ${net.toFixed(4)}
+`);
+
+    if (net <= 0) continue;
+
+    try {
+      const tx = await flash.executeFlashArbitrage(
+        buyRouter,
+        sellRouter,
+        flashAmount,
+        bestBuyPath,
+        bestSellPath,
+        deadline
+      );
+
+      console.log(`FLASH EXECUTED: ${size} USDC`);
+      console.log(`Tx: ${tx.hash}`);
+
+      await tx.wait();
+
+      console.log("FLASH CONFIRMED\n");
+
+      break; // stop after first profitable size
+
+    } catch (err) {
+      console.log(`Flash failed at ${size}:`, err.message);
+    }
   }
 }
 
 /* ================= MAIN LOOP ================= */
 
 async function main() {
-  await vault.approveRouters(Object.values(routers), ethers.MaxUint256);
 
   while (true) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
         for (const token of Object.values(TOKENS)) {
+          if (token === TOKENS.USDC) continue;
           await tryArb(buy, sell, token);
         }
       }
