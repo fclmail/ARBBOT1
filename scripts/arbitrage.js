@@ -1,3 +1,6 @@
+Js. ✅Code🟢✅
+
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -21,14 +24,11 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02; // micro scan amount
+const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
-
-// Flash loan dynamic sizes (removed fixed sizes)
-const FLASH_SIZES = [5, 10, 20, 30, 40, 50, 100, 200, 500, 1000];
 
 /* ================= PROVIDER ================= */
 
@@ -68,7 +68,8 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
+  "function factory() view returns (address)"
 ];
 
 /* ================= TOKENS ================= */
@@ -100,57 +101,78 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= BINARY SEARCH FUNCTION ================= */
+/* ================= RESERVE + LIQUIDITY HELPERS ================= */
 
-async function binarySearchFlashSize(buyRouter, sellRouter, bestBuyPath, bestSellPath, maxSize, minSize) {
-  let low = minSize;
-  let high = maxSize;
-  let bestNetProfit = 0;
+const pairAbi = [
+  "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32)"
+];
+
+async function getPair(routerAddr, tokenA, tokenB) {
+  try {
+    const router = new ethers.Contract(routerAddr, routerAbi, provider);
+    const factoryAddr = await router.factory();
+
+    const factory = new ethers.Contract(
+      factoryAddr,
+      ["function getPair(address,address) view returns (address)"],
+      provider
+    );
+
+    return await factory.getPair(tokenA, tokenB);
+  } catch {
+    return null;
+  }
+}
+
+async function getReserves(routerAddr, tokenA, tokenB) {
+  try {
+    const pairAddr = await getPair(routerAddr, tokenA, tokenB);
+    if (!pairAddr || pairAddr === ethers.ZeroAddress) return null;
+
+    const pair = new ethers.Contract(pairAddr, pairAbi, provider);
+    const [r0, r1] = await pair.getReserves();
+
+    return { reserve0: r0, reserve1: r1 };
+  } catch {
+    return null;
+  }
+}
+
+function calculateSafeCeiling(reserveIn) {
+  const reserve = Number(ethers.formatUnits(reserveIn, 6));
+  const maxImpact = 0.003; // 0.3%
+  const ceiling = reserve * maxImpact;
+  return Math.min(Math.floor(ceiling), 10000);
+}
+
+async function testFlashSizes(buyRouter, sellRouter, buyPath, sellPath, ceiling) {
+  const sizes = [
+    Math.floor(ceiling * 0.6),
+    Math.floor(ceiling * 0.8),
+    Math.floor(ceiling * 1.0)
+  ].filter((s) => s > 10);
+
   let bestSize = 0;
+  let bestNet = 0;
 
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    const flashAmount = ethers.parseUnits(mid.toString(), 6);
+  for (const size of sizes) {
+    const amount = ethers.parseUnits(size.toString(), 6);
 
-    // Get the buy amount
-    const buyOut = await quote(buyRouter, flashAmount, bestBuyPath);
-    if (!buyOut) {
-      high = mid - 1;
-      continue;
-    }
+    const buyOut = await quote(buyRouter, amount, buyPath);
+    if (!buyOut) continue;
 
-    // Get the sell amount
-    const sellOut = await quote(sellRouter, buyOut, bestSellPath);
-    if (!sellOut) {
-      high = mid - 1;
-      continue;
-    }
+    const sellOut = await quote(sellRouter, buyOut, sellPath);
+    if (!sellOut) continue;
 
-    const gross = Number(ethers.formatUnits(sellOut, 6)) - mid;
+    const gross = Number(ethers.formatUnits(sellOut, 6)) - size;
+    const flashFee = size * 0.0009;
+    const gas = 3;
 
-    const flashFee = mid * 0.0009; // Aave 0.09%
-    const estimatedGas = 3; // adjust if needed
+    const net = gross - flashFee - gas;
 
-    const net = gross - flashFee - estimatedGas;
-
-    console.log(`
-[SIZE ${mid}]
-Gross: ${gross.toFixed(4)}
-Flash Fee: ${flashFee.toFixed(4)}
-Gas: ${estimatedGas}
-Net: ${net.toFixed(4)}
-`);
-
-    if (net > bestNetProfit) {
-      bestNetProfit = net;
-      bestSize = mid;
-    }
-
-    // Binary search: Adjust the low or high bounds
-    if (net > 0) {
-      low = mid + 1;
-    } else {
-      high = mid - 1;
+    if (net > bestNet) {
+      bestNet = net;
+      bestSize = size;
     }
   }
 
@@ -162,8 +184,6 @@ Net: ${net.toFixed(4)}
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = TOKENS.USDC;
   const microAmount = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-
-  /* ========= STAGE 1: MICRO SCAN (UNCHANGED LOGIC) ========= */
 
   let bestBuyOut, bestBuyPath;
 
@@ -208,30 +228,51 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   console.log(`\nMICRO OPPORTUNITY FOUND: +${microProfit.toFixed(6)} USDC`);
 
-  /* ========= STAGE 2: FLASH SCALING WITH BINARY SEARCH ========= */
+  /* ========= FLASH LIQUIDITY-AWARE SCALING ========= */
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  // Apply binary search to find optimal flash size
-  const bestSize = await binarySearchFlashSize(buyRouter, sellRouter, bestBuyPath, bestSellPath, 1000, 100);
+  const reserves = await getReserves(
+    buyRouter,
+    bestBuyPath[0],
+    bestBuyPath[1]
+  );
 
-  if (bestSize > 0) {
-    const flashAmount = ethers.parseUnits(bestSize.toString(), 6);
+  if (!reserves) return;
 
-    try {
-      const tx = await flash.executeFlashArbitrage(
-        buyRouter,
-        sellRouter,
-        flashAmount,
-        bestBuyPath,
-        bestSellPath,
-        deadline
-      );
+  const reserveIn =
+    bestBuyPath[0] === TOKENS.USDC
+      ? reserves.reserve0
+      : reserves.reserve1;
 
-      console.log(`FLASH EXECUTED: ${tx.hash}`);
-    } catch (error) {
-      console.error("Flash Loan Execution Failed:", error);
-    }
+  const ceiling = calculateSafeCeiling(reserveIn);
+  if (ceiling <= 0) return;
+
+  const bestSize = await testFlashSizes(
+    buyRouter,
+    sellRouter,
+    bestBuyPath,
+    bestSellPath,
+    ceiling
+  );
+
+  if (bestSize <= 0) return;
+
+  const flashAmount = ethers.parseUnits(bestSize.toString(), 6);
+
+  try {
+    const tx = await flash.executeFlashArbitrage(
+      buyRouter,
+      sellRouter,
+      flashAmount,
+      bestBuyPath,
+      bestSellPath,
+      deadline
+    );
+
+    console.log(`FLASH EXECUTED: ${tx.hash}`);
+  } catch (error) {
+    console.error("Flash Loan Execution Failed:", error);
   }
 }
 
@@ -240,13 +281,12 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 async function main() {
   while (true) {
     try {
-      // Scan each router pair for arbitrage opportunities
-      for (const [buyRouterName, buyRouterAddr] of Object.entries(routers)) {
-        for (const [sellRouterName, sellRouterAddr] of Object.entries(routers)) {
-          if (buyRouterAddr !== sellRouterAddr) {
-            console.log(`Checking arbitrage: ${buyRouterName} -> ${sellRouterName}`);
+      for (const [buyName, buyAddr] of Object.entries(routers)) {
+        for (const [sellName, sellAddr] of Object.entries(routers)) {
+          if (buyAddr !== sellAddr) {
+            console.log(`Checking: ${buyName} -> ${sellName}`);
             for (const tokenAddr of Object.values(TOKENS)) {
-              await tryArb(buyRouterAddr, sellRouterAddr, tokenAddr);
+              await tryArb(buyAddr, sellAddr, tokenAddr);
             }
           }
         }
@@ -255,8 +295,7 @@ async function main() {
       console.error("Error in main loop:", error);
     }
 
-    // Wait for the next scan interval
-    console.log(`Waiting for ${SCAN_INTERVAL_MS / 1000} seconds before next scan...`);
+    console.log(`Waiting ${SCAN_INTERVAL_MS / 1000}s...`);
     await sleep(SCAN_INTERVAL_MS);
   }
 }
@@ -264,5 +303,5 @@ async function main() {
 /* ================= EXECUTION ================= */
 
 main()
-  .then(() => console.log("Arbitrage bot is running..."))
-  .catch((err) => console.error("Error starting the bot:", err));
+  .then(() => console.log("Arbitrage bot running..."))
+  .catch((err) => console.error("Startup error:", err));
