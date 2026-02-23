@@ -29,7 +29,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02;
+const MIN_TRADE_USDC = .02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -37,8 +37,8 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= AUTO POL WITHDRAW ================= */
 
-const WITHDRAW_THRESHOLD_USDC = 75744;
-const WITHDRAW_PERCENT = 1;
+const WITHDRAW_THRESHOLD_USDC = 0.45;
+const WITHDRAW_PERCENT = 100;
 
 /* ================= PROVIDER ================= */
 
@@ -173,6 +173,8 @@ async function autoPayInPol(usdcAddr) {
       )
     ).wait();
 
+    console.log(`${CYAN}🔄 Swapped USDC → WMATIC${RESET}`);
+
     const wmatic = new ethers.Contract(
       TOKENS.WMATIC,
       [
@@ -195,7 +197,6 @@ async function autoPayInPol(usdcAddr) {
 }
 
 /* ================= ARBITRAGE ================= */
-/* (UNCHANGED — EXACT SAME LOGIC AS YOUR JS1) */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
@@ -249,10 +250,14 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
       bestSellPath,
       deadline
     );
-    await tx.wait();
-    console.log(`${GREEN}Arbitrage executed${RESET}`);
 
-    await autoPayInPol(usdc); // 🔥 continues forever
+    console.log(`${GREEN}Arbitrage executed. Tx hash:${RESET} ${tx.hash}`);
+
+    await tx.wait();
+
+    console.log(`${GREEN}Tx confirmed${RESET}`);
+
+    await autoPayInPol(usdc);
 
   } catch (err) {
     console.log(`${RED}Execution failed:${RESET}`, err.message);
