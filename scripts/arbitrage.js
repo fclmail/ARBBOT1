@@ -32,12 +32,12 @@ const RED = "\x1b[91m";
 const MIN_TRADE_USDC = 1000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
-const SCAN_INTERVAL_MS = 10_000;
+const SCAN_INTERVAL_MS = 0.02;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PAY IN MATIC FEATURE (ADDED) ================= */
 
-const WITHDRAW_THRESHOLD_USDC = 0.45;
+const WITHDRAW_THRESHOLD_USDC = 7799815;
 const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
