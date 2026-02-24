@@ -25,10 +25,11 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const FLASH_AMOUNT_USDC = .20; // 10k flash loan
-const MIN_EXPECTED_PROFIT = 0.000001;
+const FLASH_AMOUNT_USDC = 0.2; // 10k flash loan
+const MIN_EXPECTED_PROFIT = 0.000001; // matches contract minimumProfitUSDC = 1 (6 decimals)
+const FLASH_PREMIUM_BPS = 5; // Aave V3 = 0.05%
 
-const SCAN_INTERVAL_MS = 20_000; // 20 seconds
+const SCAN_INTERVAL_MS = 20_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
@@ -184,9 +185,14 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
+  /* ===== PREMIUM-AWARE PROFIT CALC ===== */
+
+  const premium = FLASH_AMOUNT_USDC * FLASH_PREMIUM_BPS / 10000;
+
   const profit =
     Number(ethers.formatUnits(bestSellOut, 6)) -
-    FLASH_AMOUNT_USDC;
+    FLASH_AMOUNT_USDC -
+    premium;
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
