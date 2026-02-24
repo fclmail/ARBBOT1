@@ -2,15 +2,18 @@
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
+import axios from "axios";
 
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
 const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "").trim();
 const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+const WEBHOOK_URL = "https://webhook.site/a9382ae4-8773-428a-8c11-ebfabb8d65fa";
 
 if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+if (!WEBHOOK_URL) throw new Error("WEBHOOK_URL missing");
 
 /* ================= COLORS ================= */
 const GREEN = "\x1b[92m";
@@ -99,6 +102,15 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
+/* ================= WEBHOOK ================= */
+async function sendWebhook(message) {
+  try {
+    await axios.post(WEBHOOK_URL, { content: message });
+  } catch (err) {
+    console.error(RED, "Webhook error:", err.message, RESET);
+  }
+}
+
 /* ================= SIMULATION ================= */
 async function vaultWillExecute(args) {
   try {
@@ -141,6 +153,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
+  await sendWebhook(`🔥 Flash profit: ${safeProfit.toFixed(6)} USDC | Token: ${tokenAddr}`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
   const args = [
@@ -158,6 +171,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
   await tx.wait();
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
+  await sendWebhook(`⚡ Flash executed | Tx: ${tx.hash}`);
 }
 
 /* ================= MEMPOOL SCANNER ================= */
