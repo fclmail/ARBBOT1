@@ -25,7 +25,7 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const FLASH_AMOUNT_USDC = 10000; // 10k flash loan
+const FLASH_AMOUNT_USDC = .20; // 10k flash loan
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 20_000; // 20 seconds
