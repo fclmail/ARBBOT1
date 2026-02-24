@@ -16,20 +16,12 @@ const WALLET_PRIVATE_KEY =
   process.env.PRIVATE_KEY ||
   "";
 
-/* ================= COLORS ================= */
-
-const GREEN = "\x1b[92m";
-const RESET = "\x1b[0m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
-
 /* ================= CONSTANTS ================= */
 
-const FLASH_AMOUNT_USDC = 0.2; // 10k flash loan
-const MIN_EXPECTED_PROFIT = 0.000001; // matches contract minimumProfitUSDC = 1 (6 decimals)
-const FLASH_PREMIUM_BPS = 5; // Aave V3 = 0.05%
-
-const SCAN_INTERVAL_MS = 20_000;
+const FLASH_AMOUNT_USDC = 0.20;
+const MIN_EXPECTED_PROFIT = 0.000001;
+const FLASH_PREMIUM_BPS = 5; // 0.05%
+const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
@@ -95,16 +87,6 @@ const TOKENS = {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function decodeError(err) {
-  return (
-    err?.reason ||
-    err?.shortMessage ||
-    err?.info?.error?.message ||
-    err?.message ||
-    "Unknown error"
-  );
-}
-
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -114,8 +96,6 @@ async function quote(routerAddr, amountIn, path) {
     return null;
   }
 }
-
-/* ================= PATHS ================= */
 
 function buildPaths(usdc, token) {
   return [
@@ -136,32 +116,25 @@ function buildSellPaths(usdc, token) {
 /* ================= BALANCES ================= */
 
 async function displayBalances() {
-  try {
-    const maticBalance = await provider.getBalance(wallet.address);
-    const usdcAddress = await vault.usdc();
+  const maticBalance = await provider.getBalance(wallet.address);
+  const usdcAddress = await vault.usdc();
 
-    const erc20Abi = [
-      "function balanceOf(address) view returns (uint256)",
-      "function decimals() view returns (uint8)"
-    ];
+  const erc20Abi = [
+    "function balanceOf(address) view returns (uint256)",
+    "function decimals() view returns (uint8)"
+  ];
 
-    const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
-    const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
-    const decimals = await usdc.decimals();
+  const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
+  const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
+  const decimals = await usdc.decimals();
 
-    console.log(`${YELLOW}Wallet MATIC:${RESET}`, ethers.formatEther(maticBalance));
-    console.log(
-      `${YELLOW}Contract USDC:${RESET}`,
-      ethers.formatUnits(contractBalance, decimals)
-    );
-  } catch (err) {
-    console.error("Balance display error:", err.message);
-  }
+  console.log("Wallet MATIC:", ethers.formatEther(maticBalance));
+  console.log("Contract USDC:", ethers.formatUnits(contractBalance, decimals));
 }
 
 /* ================= ARBITRAGE ================= */
 
-async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
+async function tryFlashArb(buyRouterName, buyRouter, sellRouterName, sellRouter, tokenName, tokenAddr) {
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
 
@@ -185,21 +158,22 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
-  /* ===== PREMIUM-AWARE PROFIT CALC ===== */
-
   const premium = FLASH_AMOUNT_USDC * FLASH_PREMIUM_BPS / 10000;
 
-  const profit =
-    Number(ethers.formatUnits(bestSellOut, 6)) -
-    FLASH_AMOUNT_USDC -
-    premium;
+  const gross =
+    Number(ethers.formatUnits(bestSellOut, 6)) - FLASH_AMOUNT_USDC;
 
-  if (profit < MIN_EXPECTED_PROFIT) return;
+  const net = gross - premium;
 
-  console.log(`💰 PROFIT FOUND: ${profit.toFixed(6)} USDC`);
+  console.log(
+    `[${tokenName}] ${buyRouterName} → ${sellRouterName} | Gross: ${gross.toFixed(6)} | Premium: ${premium.toFixed(6)} | Net: ${net.toFixed(6)}`
+  );
 
-  const deadline =
-    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  if (net < MIN_EXPECTED_PROFIT) return;
+
+  console.log(`💰 PROFIT FOUND: ${net.toFixed(6)} USDC`);
+
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   try {
     await vault
@@ -240,24 +214,21 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
     );
 
     console.log(`🚀 Arbitrage sent: ${tx.hash}`);
-
     await tx.wait();
-
     console.log(`🎉 Tx confirmed`);
-
   } catch (err) {
-    console.log(`⚡ Simulation / Execution failed:`, decodeError(err));
+    console.log(`⚡ Execution failed`);
   }
 }
 
 /* ================= SCAN ================= */
 
 async function scan() {
-  for (const token of Object.values(TOKENS)) {
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
+  for (const [tokenName, token] of Object.entries(TOKENS)) {
+    for (const [buyName, buy] of Object.entries(routers)) {
+      for (const [sellName, sell] of Object.entries(routers)) {
         if (buy !== sell) {
-          await tryFlashArb(buy, sell, token);
+          await tryFlashArb(buyName, buy, sellName, sell, tokenName, token);
         }
       }
     }
@@ -273,13 +244,9 @@ async function scan() {
     console.log(`\n🧪 Simulation started @ ${new Date().toISOString()}`);
     await displayBalances();
 
-    try {
-      await scan();
-    } catch (e) {
-      console.error(e);
-    }
+    await scan();
 
-    console.log(`⏳ Waiting 20 seconds for next simulation...\n`);
+    console.log(`⏳ Waiting 10 seconds for next simulation...\n`);
     await sleep(SCAN_INTERVAL_MS);
   }
 })();
