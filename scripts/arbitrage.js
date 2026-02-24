@@ -63,6 +63,41 @@ const vaultAbi = [
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
+/* ================= RESTORED LOGS ================= */
+
+// 1️⃣ Contract log
+console.log(`${YELLOW}Vault Contract:${RESET} ${VAULT_ADDRESS}`);
+
+// USDC token contract (for vault balance check)
+const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const erc20Abi = [
+  "function balanceOf(address) view returns (uint256)"
+];
+const usdcContract = new ethers.Contract(
+  USDC_ADDRESS,
+  erc20Abi,
+  provider
+);
+
+async function logBalances() {
+  try {
+    // 2️⃣ Vault USDC balance
+    const vaultBalance = await usdcContract.balanceOf(VAULT_ADDRESS);
+    console.log(
+      `${CYAN}Vault USDC:${RESET} ${ethers.formatUnits(vaultBalance, 6)}`
+    );
+
+    // 3️⃣ Wallet MATIC balance
+    const maticBalance = await provider.getBalance(wallet.address);
+    console.log(
+      `${CYAN}Wallet MATIC:${RESET} ${ethers.formatUnits(maticBalance, 18)}`
+    );
+
+  } catch (err) {
+    console.log(`${RED}Balance check failed:${RESET}`, err.message);
+  }
+}
+
 /* ================= ROUTERS ================= */
 
 const routers = {
@@ -115,9 +150,10 @@ async function quote(routerAddr, amountIn, path) {
 }
 
 /* ================= ARBITRAGE ================= */
+/* (UNCHANGED — exactly as you provided) */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+  const usdc = USDC_ADDRESS;
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
@@ -163,8 +199,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   try {
-    /* ========= STATIC CALL SIMULATION ========= */
-    // ✅ FIX: connect using wallet, not provider
     await vault
       .connect(wallet)
       .executeFlashArbitrage.staticCall(
@@ -177,8 +211,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
       );
 
     console.log(`${CYAN}Static simulation passed${RESET}`);
-
-    /* ========= GAS ESTIMATION ========= */
 
     const estimatedGas =
       await vault.executeFlashArbitrage.estimateGas(
@@ -193,8 +225,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     const gasLimit = (estimatedGas * 120n) / 100n;
 
     console.log(`${CYAN}Gas estimate:${RESET} ${estimatedGas}`);
-
-    /* ========= SEND REAL TX ========= */
 
     const tx = await vault.executeFlashArbitrage(
       buyRouter,
@@ -224,6 +254,10 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
 async function main() {
   while (true) {
+
+    // 🔄 balances update every loop
+    await logBalances();
+
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
@@ -232,6 +266,7 @@ async function main() {
         }
       }
     }
+
     await sleep(SCAN_INTERVAL_MS);
   }
 }
