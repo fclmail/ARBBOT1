@@ -38,9 +38,6 @@ const DEADLINE_SECONDS = 60;
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-
-// ================= FIXED OWNER WALLET ================= //
-// Using the private key from secrets, ensures wallet is the owner
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
@@ -167,9 +164,9 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   try {
     /* ========= STATIC CALL SIMULATION ========= */
-
+    // ✅ FIX: connect using wallet, not provider
     await vault
-      .connect(provider)
+      .connect(wallet)
       .executeFlashArbitrage.staticCall(
         buyRouter,
         sellRouter,
