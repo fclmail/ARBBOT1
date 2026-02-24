@@ -25,7 +25,9 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const FLASH_AMOUNT_USDC = 1000; // fixed flash loan amount
+const FLASH_AMOUNT_USDC = 10000; // 10k flash loan
+const MIN_EXPECTED_PROFIT = 0.000001;
+
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
@@ -92,32 +94,23 @@ const TOKENS = {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function displayBalances() {
+function decodeError(err) {
+  return (
+    err?.reason ||
+    err?.shortMessage ||
+    err?.info?.error?.message ||
+    err?.message ||
+    "Unknown error"
+  );
+}
+
+async function quote(routerAddr, amountIn, path) {
   try {
-    const maticBalance = await provider.getBalance(wallet.address);
-    const usdcAddress = await vault.usdc();
-
-    const erc20Abi = [
-      "function balanceOf(address) view returns (uint256)",
-      "function decimals() view returns (uint8)"
-    ];
-
-    const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
-
-    const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
-    const decimals = await usdc.decimals();
-
-    console.log(
-      `${YELLOW}Wallet MATIC:${RESET}`,
-      ethers.formatEther(maticBalance)
-    );
-
-    console.log(
-      `${YELLOW}Contract USDC:${RESET}`,
-      ethers.formatUnits(contractBalance, decimals)
-    );
-  } catch (err) {
-    console.error("Balance display error:", err.message);
+    const router = new ethers.Contract(routerAddr, routerAbi, provider);
+    const amounts = await router.getAmountsOut(amountIn, path);
+    return amounts.at(-1);
+  } catch {
+    return null;
   }
 }
 
@@ -139,29 +132,115 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
+/* ================= BALANCES ================= */
+
+async function displayBalances() {
+  try {
+    const maticBalance = await provider.getBalance(wallet.address);
+    const usdcAddress = await vault.usdc();
+
+    const erc20Abi = [
+      "function balanceOf(address) view returns (uint256)",
+      "function decimals() view returns (uint8)"
+    ];
+
+    const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
+    const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
+    const decimals = await usdc.decimals();
+
+    console.log(`${YELLOW}Wallet MATIC:${RESET}`, ethers.formatEther(maticBalance));
+    console.log(
+      `${YELLOW}Contract USDC:${RESET}`,
+      ethers.formatUnits(contractBalance, decimals)
+    );
+  } catch (err) {
+    console.error("Balance display error:", err.message);
+  }
+}
+
 /* ================= ARBITRAGE ================= */
 
 async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
+  const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
 
-  // pick first path (simplified) for fixed execution
-  const buyPath = buildPaths(usdc, tokenAddr)[0];
-  const sellPath = buildSellPaths(usdc, tokenAddr)[0];
+  let bestBuyOut, bestBuyPath;
+  for (const p of buildPaths(usdc, tokenAddr)) {
+    const out = await quote(buyRouter, amountIn, p);
+    if (out && (!bestBuyOut || out > bestBuyOut)) {
+      bestBuyOut = out;
+      bestBuyPath = p;
+    }
+  }
+  if (!bestBuyOut) return;
+
+  let bestSellOut, bestSellPath;
+  for (const p of buildSellPaths(usdc, tokenAddr)) {
+    const out = await quote(sellRouter, bestBuyOut, p);
+    if (out && (!bestSellOut || out > bestSellOut)) {
+      bestSellOut = out;
+      bestSellPath = p;
+    }
+  }
+  if (!bestSellOut) return;
+
+  const profit =
+    Number(ethers.formatUnits(bestSellOut, 6)) -
+    FLASH_AMOUNT_USDC;
+
+  if (profit < MIN_EXPECTED_PROFIT) return;
+
+  console.log(`💰 PROFIT FOUND: ${profit.toFixed(6)} USDC`);
+
+  const deadline =
+    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   try {
+    await vault
+      .connect(wallet)
+      .executeFlashArbitrage.staticCall(
+        buyRouter,
+        sellRouter,
+        amountIn,
+        bestBuyPath,
+        bestSellPath,
+        deadline
+      );
+
+    console.log(`✅ Static simulation passed`);
+
+    const estimatedGas =
+      await vault.executeFlashArbitrage.estimateGas(
+        buyRouter,
+        sellRouter,
+        amountIn,
+        bestBuyPath,
+        bestSellPath,
+        deadline
+      );
+
+    const gasLimit = (estimatedGas * 120n) / 100n;
+
+    console.log(`⛽ Gas estimate: ${estimatedGas}`);
+
     const tx = await vault.executeFlashArbitrage(
       buyRouter,
       sellRouter,
-      ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6),
-      buyPath,
-      sellPath,
-      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
+      amountIn,
+      bestBuyPath,
+      bestSellPath,
+      deadline,
+      { gasLimit }
     );
 
+    console.log(`🚀 Arbitrage sent: ${tx.hash}`);
+
     await tx.wait();
-    console.log(`${GREEN}✅ FLASH ARB EXECUTED:${RESET} ${tx.hash}`);
+
+    console.log(`🎉 Tx confirmed`);
+
   } catch (err) {
-    console.error(`${CYAN}⚡ Flash execution failed:${RESET}`, err.message);
+    console.log(`⚡ Simulation / Execution failed:`, decodeError(err));
   }
 }
 
