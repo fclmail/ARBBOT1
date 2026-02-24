@@ -31,7 +31,7 @@ const RED = "\x1b[91m";
 
 const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
-const SCALE_MULTIPLIER = 10n; // 0.2 → 200
+const SCALE_MULTIPLIER = 1000000n; // 0.2 → 200
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
