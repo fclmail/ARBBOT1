@@ -19,9 +19,8 @@ const WALLET_PRIVATE_KEY =
 /* ================= CONSTANTS ================= */
 
 const FLASH_AMOUNT_USDC = 0.20;
-const MIN_EXPECTED_PROFIT = 0.000001;
-const FLASH_PREMIUM_BPS = 5; // 0.05%
-const SCAN_INTERVAL_MS = 10_000;
+const MIN_EXPECTED_PROFIT = 0.000001; // minimum profit
+const SCAN_INTERVAL_MS = 10_000; // 10 seconds
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
@@ -158,20 +157,16 @@ async function tryFlashArb(buyRouterName, buyRouter, sellRouterName, sellRouter,
   }
   if (!bestSellOut) return;
 
-  const premium = FLASH_AMOUNT_USDC * FLASH_PREMIUM_BPS / 10000;
-
   const gross =
     Number(ethers.formatUnits(bestSellOut, 6)) - FLASH_AMOUNT_USDC;
 
-  const net = gross - premium;
-
   console.log(
-    `[${tokenName}] ${buyRouterName} → ${sellRouterName} | Gross: ${gross.toFixed(6)} | Premium: ${premium.toFixed(6)} | Net: ${net.toFixed(6)}`
+    `[${tokenName}] ${buyRouterName} → ${sellRouterName} | Gross: ${gross.toFixed(6)}`
   );
 
-  if (net < MIN_EXPECTED_PROFIT) return;
+  if (gross < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`💰 PROFIT FOUND: ${net.toFixed(6)} USDC`);
+  console.log(`💰 PROFIT FOUND: ${gross.toFixed(6)} USDC`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
@@ -188,36 +183,8 @@ async function tryFlashArb(buyRouterName, buyRouter, sellRouterName, sellRouter,
       );
 
     console.log(`✅ Static simulation passed`);
-
-    const estimatedGas =
-      await vault.executeFlashArbitrage.estimateGas(
-        buyRouter,
-        sellRouter,
-        amountIn,
-        bestBuyPath,
-        bestSellPath,
-        deadline
-      );
-
-    const gasLimit = (estimatedGas * 120n) / 100n;
-
-    console.log(`⛽ Gas estimate: ${estimatedGas}`);
-
-    const tx = await vault.executeFlashArbitrage(
-      buyRouter,
-      sellRouter,
-      amountIn,
-      bestBuyPath,
-      bestSellPath,
-      deadline,
-      { gasLimit }
-    );
-
-    console.log(`🚀 Arbitrage sent: ${tx.hash}`);
-    await tx.wait();
-    console.log(`🎉 Tx confirmed`);
   } catch (err) {
-    console.log(`⚡ Execution failed`);
+    console.log(`⚡ Simulation failed`);
   }
 }
 
