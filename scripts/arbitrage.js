@@ -121,8 +121,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  console.log("\nStarting simulation at 0.2 USDC");
-
   let bestBuyOut, bestBuyPath;
   for (const p of [
     [usdc, tokenAddr],
@@ -160,14 +158,13 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
+  console.log("\nStarting simulation at 0.2 USDC");
   console.log(`PROFIT FOUND: ${profit.toFixed(6)} USDC`);
 
   const deadline =
     Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   try {
-
-    /* ========= SMALL STATIC CALL ========= */
 
     await vault.executeFlashArbitrage.staticCall(
       buyRouter,
@@ -209,8 +206,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     await tx.wait();
 
     console.log("Tx confirmed");
-
-    /* ========= SCALE TO LARGE ========= */
 
     const largeAmountIn = amountIn * SCALE_MULTIPLIER;
 
