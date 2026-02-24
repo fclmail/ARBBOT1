@@ -29,7 +29,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.20;
+const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SCALE_MULTIPLIER = 1000n; // 0.2 → 200
 
