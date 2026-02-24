@@ -2,7 +2,6 @@ import dotenv from "dotenv";
 import { ethers } from "ethers";
 
 /* ================= ENV ================= */
-
 dotenv.config({ override: false });
 
 const RPC_POLYGON =
@@ -17,21 +16,17 @@ const WALLET_PRIVATE_KEY =
   "";
 
 /* ================= CONSTANTS ================= */
-
-const FLASH_AMOUNT_USDC = 0.20;
-const MIN_EXPECTED_PROFIT = 0.000001; // minimum profit
+const FLASH_AMOUNT_USDC = 10000; // flash loan size
+const MIN_EXPECTED_PROFIT = 0.000001; // minimum profitable amount
 const SCAN_INTERVAL_MS = 10_000; // 10 seconds
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
-
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
-
-const VAULT_ADDRESS =
-  "0x901bFCb41EacB5fB54d89676b45042fABAdb03B9";
+const VAULT_ADDRESS = "0x901bFCb41EacB5fB54d89676b45042fABAdb03B9";
 
 const vaultAbi = [
   {
@@ -58,7 +53,6 @@ const vaultAbi = [
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
-
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -71,7 +65,6 @@ const routerAbi = [
 ];
 
 /* ================= TOKENS ================= */
-
 const TOKENS = {
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
@@ -83,7 +76,6 @@ const TOKENS = {
 };
 
 /* ================= HELPERS ================= */
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function quote(routerAddr, amountIn, path) {
@@ -113,7 +105,6 @@ function buildSellPaths(usdc, token) {
 }
 
 /* ================= BALANCES ================= */
-
 async function displayBalances() {
   const maticBalance = await provider.getBalance(wallet.address);
   const usdcAddress = await vault.usdc();
@@ -132,7 +123,6 @@ async function displayBalances() {
 }
 
 /* ================= ARBITRAGE ================= */
-
 async function tryFlashArb(buyRouterName, buyRouter, sellRouterName, sellRouter, tokenName, tokenAddr) {
   const usdc = await vault.usdc();
   const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
@@ -183,13 +173,12 @@ async function tryFlashArb(buyRouterName, buyRouter, sellRouterName, sellRouter,
       );
 
     console.log(`✅ Static simulation passed`);
-  } catch (err) {
+  } catch {
     console.log(`⚡ Simulation failed`);
   }
 }
 
 /* ================= SCAN ================= */
-
 async function scan() {
   for (const [tokenName, token] of Object.entries(TOKENS)) {
     for (const [buyName, buy] of Object.entries(routers)) {
@@ -203,16 +192,13 @@ async function scan() {
 }
 
 /* ================= MAIN ================= */
-
 (async function mainLoop() {
   console.log("🚀 Flash-enabled arbitrage bot started");
 
   while (true) {
     console.log(`\n🧪 Simulation started @ ${new Date().toISOString()}`);
     await displayBalances();
-
     await scan();
-
     console.log(`⏳ Waiting 10 seconds for next simulation...\n`);
     await sleep(SCAN_INTERVAL_MS);
   }
