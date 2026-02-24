@@ -22,16 +22,15 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 /* ================= COLORS ================= */
 
 const GREEN = "\x1b[92m";
-const RESET = "\x1b[0m";
 const CYAN = "\x1b[96m";
 const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
+const RESET = "\x1b[0m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02;
+const MIN_TRADE_USDC = 0.20;
 const MIN_EXPECTED_PROFIT = 0.000001;
-const SCALE_MULTIPLIER = 1000000n; // 0.2 → 200
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -119,7 +118,7 @@ async function quote(routerAddr, amountIn, path) {
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+  const baseAmount = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
   for (const p of [
@@ -129,7 +128,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     [usdc, TOKENS.USDT, tokenAddr],
     [usdc, TOKENS.DAI, tokenAddr]
   ]) {
-    const out = await quote(buyRouter, amountIn, p);
+    const out = await quote(buyRouter, baseAmount, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
       bestBuyPath = p;
@@ -158,7 +157,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log("\nStarting simulation at 0.2 USDC");
+  console.log(`\n${CYAN}Starting simulation at 0.2 USDC${RESET}`);
   console.log(`${GREEN}PROFIT FOUND: ${profit.toFixed(6)} USDC${RESET}`);
 
   const deadline =
@@ -169,19 +168,19 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     await vault.executeFlashArbitrage.staticCall(
       buyRouter,
       sellRouter,
-      amountIn,
+      baseAmount,
       bestBuyPath,
       bestSellPath,
       deadline
     );
 
-    console.log("Static simulation passed");
+    console.log(`${CYAN}Static simulation passed${RESET}`);
 
     const estimatedGas =
       await vault.executeFlashArbitrage.estimateGas(
         buyRouter,
         sellRouter,
-        amountIn,
+        baseAmount,
         bestBuyPath,
         bestSellPath,
         deadline
@@ -189,74 +188,85 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
     const gasLimit = (estimatedGas * 120n) / 100n;
 
-    console.log(`Gas estimate: ${estimatedGas}`);
+    console.log(`${YELLOW}Gas estimate: ${estimatedGas}${RESET}`);
 
     const tx = await vault.executeFlashArbitrage(
       buyRouter,
       sellRouter,
-      amountIn,
+      baseAmount,
       bestBuyPath,
       bestSellPath,
       deadline,
       { gasLimit }
     );
 
-    console.log(`Arbitrage sent: ${tx.hash}`);
-
+    console.log(`${GREEN}Arbitrage sent: ${tx.hash}${RESET}`);
     await tx.wait();
+    console.log(`${GREEN}Tx confirmed${RESET}`);
 
-    console.log("Tx confirmed");
+    /* ================= LADDER SCALING ================= */
 
-    const largeAmountIn = amountIn * SCALE_MULTIPLIER;
+    const ladder = [10n, 25n, 50n, 100n, 1000n];
 
-    console.log(`\nScaling to ${ethers.formatUnits(largeAmountIn, 6)} USDC...`);
+    for (const scale of ladder) {
 
-    await vault.executeFlashArbitrage.staticCall(
-      buyRouter,
-      sellRouter,
-      largeAmountIn,
-      bestBuyPath,
-      bestSellPath,
-      deadline
-    );
+      const largeAmount = baseAmount * scale;
+      const displayAmount = ethers.formatUnits(largeAmount, 6);
 
-    console.log("Large simulation passed");
+      console.log(`\n${YELLOW}Scaling to ${displayAmount} USDC...${RESET}`);
 
-    const estimatedGasLarge =
-      await vault.executeFlashArbitrage.estimateGas(
-        buyRouter,
-        sellRouter,
-        largeAmountIn,
-        bestBuyPath,
-        bestSellPath,
-        deadline
-      );
+      try {
 
-    const gasLimitLarge = (estimatedGasLarge * 120n) / 100n;
+        await vault.executeFlashArbitrage.staticCall(
+          buyRouter,
+          sellRouter,
+          largeAmount,
+          bestBuyPath,
+          bestSellPath,
+          deadline
+        );
 
-    console.log(`Gas estimate (large): ${estimatedGasLarge}`);
+        console.log(`${CYAN}Large simulation passed${RESET}`);
 
-    const txLarge = await vault.executeFlashArbitrage(
-      buyRouter,
-      sellRouter,
-      largeAmountIn,
-      bestBuyPath,
-      bestSellPath,
-      deadline,
-      { gasLimit: gasLimitLarge }
-    );
+        const estimatedGasLarge =
+          await vault.executeFlashArbitrage.estimateGas(
+            buyRouter,
+            sellRouter,
+            largeAmount,
+            bestBuyPath,
+            bestSellPath,
+            deadline
+          );
 
-    console.log(`Arbitrage sent (large): ${txLarge.hash}`);
+        const gasLimitLarge = (estimatedGasLarge * 120n) / 100n;
 
-    await txLarge.wait();
+        console.log(`${YELLOW}Gas estimate (large): ${estimatedGasLarge}${RESET}`);
 
-    console.log("Tx confirmed");
+        const txLarge = await vault.executeFlashArbitrage(
+          buyRouter,
+          sellRouter,
+          largeAmount,
+          bestBuyPath,
+          bestSellPath,
+          deadline,
+          { gasLimit: gasLimitLarge }
+        );
+
+        console.log(`${GREEN}Arbitrage sent (large): ${txLarge.hash}${RESET}`);
+
+        await txLarge.wait();
+
+        console.log(`${GREEN}Tx confirmed${RESET}`);
+
+        break;
+
+      } catch (err) {
+        console.log(`${RED}Large simulation failed${RESET}`);
+      }
+    }
 
   } catch (err) {
-    console.log(
-      `Simulation / Execution failed:`,
-      decodeError(err)
-    );
+    console.log(`${RED}Simulation / Execution failed: ${decodeError(err)}${RESET}`);
   }
 }
 
@@ -264,7 +274,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
 async function main() {
 
-  console.log("⚡🛠️⚡J's 2026 2 24 430am");
+  console.log(`${CYAN}⚡🛠️⚡J's 2026 2 24 430am${RESET}`);
 
   while (true) {
     for (const buy of Object.values(routers)) {
