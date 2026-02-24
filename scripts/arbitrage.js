@@ -159,7 +159,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   console.log("\nStarting simulation at 0.2 USDC");
-  console.log(`PROFIT FOUND: ${profit.toFixed(6)} USDC`);
+  console.log(`${GREEN}PROFIT FOUND: ${profit.toFixed(6)} USDC${RESET}`);
 
   const deadline =
     Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
