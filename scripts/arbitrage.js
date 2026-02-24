@@ -1,6 +1,3 @@
-⚡🛠️⚡J's 2026 2 24 430am
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
