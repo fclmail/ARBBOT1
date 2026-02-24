@@ -1,3 +1,4 @@
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -29,7 +30,7 @@ const RESET = "\x1b[0m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02;
+const MIN_TRADE_USDC = 0.03;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -157,7 +158,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
   if (profit < MIN_EXPECTED_PROFIT) return;
 
-  console.log(`\n${CYAN}Starting base detection at 0.2 USDC${RESET}`);
+  console.log(`\n${CYAN}Starting simulation at 0.2 USDC${RESET}`);
   console.log(`${GREEN}PROFIT FOUND: ${profit.toFixed(6)} USDC${RESET}`);
 
   const deadline =
@@ -204,16 +205,16 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     await tx.wait();
     console.log(`${GREEN}Tx confirmed${RESET}`);
 
-    /* ================= DESCENDING LADDER SCALING ================= */
+    /* ================= LADDER SCALING ================= */
 
-    const descendingLadder = [200n, 100n, 50n, 20n, 10n, 5n, 2n, 1n];
+    const ladder = [10n, 25n, 50n, 100n, 1000n];
 
-    for (const scale of descendingLadder) {
+    for (const scale of ladder) {
 
       const largeAmount = baseAmount * scale;
       const displayAmount = ethers.formatUnits(largeAmount, 6);
 
-      console.log(`\n${YELLOW}Testing ${displayAmount} USDC...${RESET}`);
+      console.log(`\n${YELLOW}Scaling to ${displayAmount} USDC...${RESET}`);
 
       try {
 
@@ -258,10 +259,10 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
         console.log(`${GREEN}Tx confirmed${RESET}`);
 
-        break; // stop at first passing large amount
+        break;
 
-      } catch {
-        console.log(`${RED}Failed${RESET}`);
+      } catch (err) {
+        console.log(`${RED}Large simulation failed${RESET}`);
       }
     }
 
