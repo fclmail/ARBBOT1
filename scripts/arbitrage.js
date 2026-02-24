@@ -38,6 +38,9 @@ const DEADLINE_SECONDS = 60;
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+
+// ================= FIXED OWNER WALLET ================= //
+// Using the private key from secrets, ensures wallet is the owner
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
