@@ -28,7 +28,7 @@ const YELLOW = "\x1b[93m";
 const FLASH_AMOUNT_USDC = 10000; // 10k flash loan
 const MIN_EXPECTED_PROFIT = 0.000001;
 
-const SCAN_INTERVAL_MS = 10_000;
+const SCAN_INTERVAL_MS = 20_000; // 20 seconds
 const DEADLINE_SECONDS = 60;
 
 /* ================= PROVIDER ================= */
@@ -247,9 +247,6 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
 /* ================= SCAN ================= */
 
 async function scan() {
-  console.log(`🔍 Scan @ ${new Date().toISOString()}`);
-  await displayBalances();
-
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
@@ -267,11 +264,16 @@ async function scan() {
   console.log("🚀 Flash-enabled arbitrage bot started");
 
   while (true) {
+    console.log(`\n🧪 Simulation started @ ${new Date().toISOString()}`);
+    await displayBalances();
+
     try {
       await scan();
     } catch (e) {
       console.error(e);
     }
+
+    console.log(`⏳ Waiting 20 seconds for next simulation...\n`);
     await sleep(SCAN_INTERVAL_MS);
   }
 })();
