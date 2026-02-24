@@ -35,9 +35,6 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
-const WITHDRAW_THRESHOLD_USDC = 777555;
-const WITHDRAW_PERCENT = 1;
-
 /* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -45,11 +42,11 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
 
 const vaultAbi = [
   {
-    name: "executeArbitrage",
+    name: "executeFlashArbitrage",
     type: "function",
     inputs: [
       { name: "buyRouter", type: "address" },
@@ -58,32 +55,6 @@ const vaultAbi = [
       { name: "pathToToken", type: "address[]" },
       { name: "pathToUSDC", type: "address[]" },
       { name: "deadline", type: "uint256" }
-    ],
-    outputs: [],
-    stateMutability: "nonpayable"
-  },
-  {
-    name: "usdc",
-    type: "function",
-    outputs: [{ type: "address" }],
-    stateMutability: "view"
-  },
-  {
-    name: "approveRouters",
-    type: "function",
-    inputs: [
-      { name: "routers", type: "address[]" },
-      { name: "amount", type: "uint256" }
-    ],
-    outputs: [],
-    stateMutability: "nonpayable"
-  },
-  {
-    name: "withdrawERC20",
-    type: "function",
-    inputs: [
-      { name: "tokenAddr", type: "address" },
-      { name: "amount", type: "uint256" }
     ],
     outputs: [],
     stateMutability: "nonpayable"
@@ -102,8 +73,7 @@ const routers = {
 };
 
 const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
@@ -147,7 +117,7 @@ async function quote(routerAddr, amountIn, path) {
 /* ================= ARBITRAGE ================= */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
-  const usdc = await vault.usdc();
+  const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
@@ -193,13 +163,11 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
     Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   try {
-    /* ===============================
-       1️⃣ STATIC CALL SIMULATION
-    =============================== */
+    /* ========= STATIC CALL SIMULATION ========= */
 
     await vault
       .connect(provider)
-      .executeArbitrage.staticCall(
+      .executeFlashArbitrage.staticCall(
         buyRouter,
         sellRouter,
         amountIn,
@@ -210,12 +178,10 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
     console.log(`${CYAN}Static simulation passed${RESET}`);
 
-    /* ===============================
-       2️⃣ GAS ESTIMATION
-    =============================== */
+    /* ========= GAS ESTIMATION ========= */
 
     const estimatedGas =
-      await vault.executeArbitrage.estimateGas(
+      await vault.executeFlashArbitrage.estimateGas(
         buyRouter,
         sellRouter,
         amountIn,
@@ -226,11 +192,11 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 
     const gasLimit = (estimatedGas * 120n) / 100n;
 
-    /* ===============================
-       3️⃣ SEND REAL TX
-    =============================== */
+    console.log(`${CYAN}Gas estimate:${RESET} ${estimatedGas}`);
 
-    const tx = await vault.executeArbitrage(
+    /* ========= SEND REAL TX ========= */
+
+    const tx = await vault.executeFlashArbitrage(
       buyRouter,
       sellRouter,
       amountIn,
@@ -257,11 +223,6 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
 /* ================= MAIN LOOP ================= */
 
 async function main() {
-  await vault.approveRouters(
-    Object.values(routers),
-    ethers.MaxUint256
-  );
-
   while (true) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
