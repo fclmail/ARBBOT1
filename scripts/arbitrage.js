@@ -1,5 +1,3 @@
-Vault balance displayed 
-
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
