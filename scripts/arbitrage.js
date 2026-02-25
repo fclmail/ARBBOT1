@@ -1,5 +1,6 @@
 import { config } from 'dotenv'
 import { ethers } from 'ethers'
+import abi from './abi.json' assert { type: 'json' }
 
 // Load environment variables from .env
 config()
@@ -15,15 +16,15 @@ const wallet = new ethers.Wallet(PRIVATE_KEY, provider)
 
 const contract = new ethers.Contract(
   CONTRACT_ADDRESS,
-  require('./abi.json'), // ABI file path
+  abi,
   wallet
 )
 
 /* ================= BATCH SETTINGS ================= */
 const MIN_BATCH_SIZE = 3
 const MAX_WAIT_MS = 1200
-const GAS_BUFFER = 1.3 // Threshold for gas optimization (profit > gas buffer)
-const PROFIT_THRESHOLD = 0.0001 // Minimum profit to include in batch (USDC)
+const GAS_BUFFER = 1.3
+const PROFIT_THRESHOLD = 0.0001
 
 let pendingBatch = []
 let lastFlushTime = Date.now()
@@ -39,7 +40,6 @@ async function scanningLoop() {
       if (route && route.profitable) {
         console.log("Profit found:", route.expectedProfit)
 
-        // Check if profit exceeds the threshold before pushing to batch
         if (parseFloat(route.expectedProfit) >= PROFIT_THRESHOLD) {
           pendingBatch.push({
             buyRouter: route.buyRouter,
@@ -54,7 +54,6 @@ async function scanningLoop() {
 
       const timeExpired = Date.now() - lastFlushTime > MAX_WAIT_MS
 
-      // Batch execute if we hit the minimum size or time window expired
       if (
         pendingBatch.length >= MIN_BATCH_SIZE ||
         (timeExpired && pendingBatch.length > 0)
@@ -75,13 +74,11 @@ async function executeFlashBatch(batch) {
   try {
     console.log(`Executing flash batch of ${batch.length} trades...`)
 
-    // Calculate total flash loan amount required for the batch
     const totalFlashAmount = batch.reduce(
       (sum, arb) => sum + BigInt(arb.amountInUSDC),
       0n
     )
 
-    // Simulate the batch execution to ensure it's profitable and can succeed
     const simulated = await simulateFlashExecution(batch, totalFlashAmount)
 
     if (!simulated.success) {
@@ -103,12 +100,12 @@ async function executeFlashBatch(batch) {
 
     console.log("Flash Batch Confirmed")
 
-    // Log each arbitrage executed
     for (const log of receipt.logs) {
       try {
         const parsed = contract.interface.parseLog(log)
         if (parsed.name === "ArbitrageExecuted") {
-          console.log("Arb Profit:",
+          console.log(
+            "Arb Profit:",
             ethers.formatUnits(parsed.args.profitUSDC, 6),
             "USDC"
           )
@@ -123,7 +120,6 @@ async function executeFlashBatch(batch) {
 /* ================= SIMULATE FLASH EXECUTION ================= */
 async function simulateFlashExecution(batch, totalFlashAmount) {
   try {
-    // Use callStatic to simulate the execution
     const result = await contract.callStatic.executeFlashUnlimitedBatch(
       batch,
       totalFlashAmount
@@ -137,12 +133,10 @@ async function simulateFlashExecution(batch, totalFlashAmount) {
 }
 
 /* ================= MOCK FIND OPPORTUNITY ================= */
-/* Replace with your real scanning logic */
 async function findOpportunity() {
-  // Simulate scanning for arbitrage opportunities
   return {
     profitable: Math.random() > 0.7,
-    expectedProfit: (Math.random() * 0.001).toFixed(6),  // Simulated profit
+    expectedProfit: (Math.random() * 0.001).toFixed(6),
     buyRouter: "0xRouterA",
     sellRouter: "0xRouterB",
     amountInUSDC: ethers.parseUnits("100", 6),
