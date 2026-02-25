@@ -1,6 +1,6 @@
 import { config } from 'dotenv'
 import { ethers } from 'ethers'
-import abi from './abi.json' assert { type: 'json' }
+import abi from '../abi.json' assert { type: 'json' }
 
 // Load environment variables from .env
 config()
