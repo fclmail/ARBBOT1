@@ -27,7 +27,7 @@ const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
 
 /* ===== BINARY RANGE (EDITABLE) ===== */
-const MIN_BINARY = .1;       // lower bound USDC
+const MIN_BINARY = 1;       // lower bound USDC
 const MAX_BINARY = 25000;     // upper bound USDC
 
 /* ================= PROVIDER ================= */
