@@ -34,7 +34,7 @@ const MAX_BATCH_SIZE = 3;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
 
-const MIN_BINARY = 0;
+const MIN_BINARY = 0.03;
 const MAX_BINARY = 250;
 
 /* ================= PROVIDER ================= */
