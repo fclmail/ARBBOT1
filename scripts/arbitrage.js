@@ -170,16 +170,16 @@ async function detectMicro(buyRouter, sellRouter, tokenAddr) {
   };
 }
 
-/* ================= FULL SIMULATION WITH PROFIT LOG ================= */
+/* ================= FULL SIMULATION WITH DECIMAL FIX ================= */
 async function simulateFullTrade(trade) {
   log(`--- Full Trade Simulation Started ---\n`);
   const results = [];
 
   for (let amt = MIN_BINARY; amt <= MAX_BINARY; amt += 1) {
-    const amount = ethers.parseUnits(amt.toString(), 6);
+    const safeAmt = Number(amt.toFixed(6)); // Fix decimals
+    const amount = ethers.parseUnits(safeAmt.toString(), 6);
 
     try {
-      // staticCall to check if trade would revert
       await vault.executeFlashBatchArbitrage.staticCall(
         [trade.buyRouter],
         [trade.sellRouter],
@@ -191,13 +191,13 @@ async function simulateFullTrade(trade) {
 
       const out1 = await quote(trade.buyRouter, amount, trade.path1);
       const out2 = await quote(trade.sellRouter, out1, trade.path2);
-      const profit = Number(ethers.formatUnits(out2, 6)) - amt;
+      const profit = Number(ethers.formatUnits(out2, 6)) - safeAmt;
 
-      results.push({ amount: amt, profit });
-      log(`Simulated ${amt} USDC → Profit: ${profit.toFixed(6)} USDC`);
+      results.push({ amount: safeAmt, profit });
+      log(`Simulated ${safeAmt} USDC → Profit: ${profit.toFixed(6)} USDC`);
     } catch {
-      results.push({ amount: amt, profit: null });
-      log(`Simulated ${amt} USDC → FAIL (would revert)`);
+      results.push({ amount: safeAmt, profit: null });
+      log(`Simulated ${safeAmt} USDC → FAIL (would revert)`);
     }
   }
 
