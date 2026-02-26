@@ -1,5 +1,3 @@
-Binary 2
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -30,14 +28,14 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 /* ================= CONSTANTS ================= */
 
 /* Slightly higher than contract minimum */
-const MIN_EXPECTED_PROFIT = 0.00005;
+const MIN_EXPECTED_PROFIT = 0.000001;
 
 const MIN_TRADE_USDC = 0.02;
 const MAX_BATCH_SIZE = 3;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
 
-const MIN_BINARY = 1;
+const MIN_BINARY = 0;
 const MAX_BINARY = 25000;
 
 /* ================= PROVIDER ================= */
