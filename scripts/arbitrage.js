@@ -27,8 +27,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 const MIN_TRADE_USDC = 0.02;
-const MIN_EXPECTED_PROFIT = 0.00001; 
-// 10x contract minimum to safely cover flash premium
+const MIN_EXPECTED_PROFIT = 0.00001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -59,6 +58,17 @@ const vaultAbi = [
 ];
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+
+/* ================= USDC ABI (FOR VAULT BALANCE) ================= */
+const usdcAbi = [
+  "function balanceOf(address owner) view returns (uint256)"
+];
+
+const usdc = new ethers.Contract(
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  usdcAbi,
+  provider
+);
 
 /* ================= ROUTERS ================= */
 const routers = {
@@ -97,6 +107,17 @@ function decodeError(err) {
     err?.message ||
     "Unknown error"
   );
+}
+
+async function logBalances() {
+  const vaultUSDC = await usdc.balanceOf(VAULT_ADDRESS);
+  const formattedVaultUSDC = ethers.formatUnits(vaultUSDC, 6);
+
+  const maticBalance = await provider.getBalance(wallet.address);
+  const formattedMatic = ethers.formatEther(maticBalance);
+
+  console.log(`${CYAN}Vault USDC Balance:${RESET} ${formattedVaultUSDC}`);
+  console.log(`${CYAN}Wallet MATIC Balance:${RESET} ${formattedMatic}`);
 }
 
 async function quote(routerAddr, amountIn, path) {
@@ -160,6 +181,8 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
 
 /* ================= ATOMIC BATCH FLASH ================= */
 async function batchArb() {
+  await logBalances();
+
   const profitableTrades = [];
 
   for (const buy of Object.values(routers)) {
@@ -244,6 +267,8 @@ async function batchArb() {
     console.log(
       `${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`
     );
+
+    await logBalances();
 
   } catch (err) {
     console.log(
