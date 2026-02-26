@@ -1,3 +1,6 @@
+Binary+ Hops
+
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -26,17 +29,15 @@ if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
-
-/* Slightly higher than contract minimum */
+const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
-const MIN_TRADE_USDC = 0.02;
 const MAX_BATCH_SIZE = 3;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
 
 const MIN_BINARY = 0;
-const MAX_BINARY = 25000;
+const MAX_BINARY = 250;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -65,10 +66,10 @@ const vaultAbi = [
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= USDC ================= */
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 const usdcContract = new ethers.Contract(
-  USDC,
+  usdc,
   ["function balanceOf(address owner) view returns (uint256)"],
   provider
 );
@@ -87,7 +88,7 @@ const routerAbi = [
 
 /* ================= TOKENS ================= */
 const TOKENS = {
-  USDC,
+  USDC: usdc,
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
@@ -122,48 +123,65 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= MICRO DETECTION ================= */
+/* ================= MICRO DETECTION WITH FULL HOPS ================= */
 async function detectMicro(buyRouter, sellRouter, tokenAddr) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const buyPath = [USDC, tokenAddr];
-  const sellPath = [tokenAddr, USDC];
-
-  const buyOut = await quote(buyRouter, amountIn, buyPath);
-  if (!buyOut) return null;
-
-  const sellOut = await quote(sellRouter, buyOut, sellPath);
-  if (!sellOut) return null;
-
-  const microProfit =
-    Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC;
-
-  if (microProfit < MIN_EXPECTED_PROFIT) return null;
-
-  /* ===== 1 USDC DEPTH PRE-CHECK ===== */
-  const oneUSDC = ethers.parseUnits("1", 6);
-  const buyOut1 = await quote(buyRouter, oneUSDC, buyPath);
-  if (!buyOut1) return null;
-
-  const sellOut1 = await quote(sellRouter, buyOut1, sellPath);
-  if (!sellOut1) return null;
-
-  const profit1 =
-    Number(ethers.formatUnits(sellOut1, 6)) - 1;
-
-  if (profit1 <= 0) {
-    log(`Skipped — not scalable past 1 USDC\n`);
-    return null;
+  /* ===== BUY SIDE MULTI-HOP ===== */
+  let bestBuyOut, bestBuyPath;
+  for (const p of [
+    [usdc, tokenAddr],
+    [usdc, TOKENS.WMATIC, tokenAddr],
+    [usdc, TOKENS.WETH, tokenAddr],
+    [usdc, TOKENS.USDT, tokenAddr],
+    [usdc, TOKENS.DAI, tokenAddr]
+  ]) {
+    const out = await quote(buyRouter, amountIn, p);
+    if (out && (!bestBuyOut || out > bestBuyOut)) {
+      bestBuyOut = out;
+      bestBuyPath = p;
+    }
   }
+  if (!bestBuyOut) return null;
+
+  /* ===== SELL SIDE (RESTORED EXACT SNIPPET STYLE) ===== */
+  let bestSellOut, bestSellPath;
+  for (const p of [
+    [tokenAddr, usdc],
+    [tokenAddr, TOKENS.WMATIC, usdc],
+    [tokenAddr, TOKENS.WETH, usdc],
+    [tokenAddr, TOKENS.USDT, usdc],
+    [tokenAddr, TOKENS.DAI, usdc]
+  ]) {
+    const out = await quote(sellRouter, bestBuyOut, p);
+    if (out && (!bestSellOut || out > bestSellOut)) {
+      bestSellOut = out;
+      bestSellPath = p;
+    }
+  }
+  if (!bestSellOut) return null;
+
+  const profit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+
+  if (profit < MIN_EXPECTED_PROFIT) return null;
 
   log(`Micro detection hit at 0.02 USDC`);
-  log(`Initial gross profit (micro): ${microProfit.toFixed(6)} USDC`);
-  log(`Estimated profit at 1 USDC: ${profit1.toFixed(6)} USDC\n`);
+  log(`Initial gross profit (micro): ${profit.toFixed(6)} USDC`);
+  log(`Buy Router: ${buyRouter}`);
+  log(`Sell Router: ${sellRouter}`);
+  log(`Hop Path Buy: ${bestBuyPath.join(" → ")}`);
+  log(`Hop Path Sell: ${bestSellPath.join(" → ")}\n`);
 
-  return { buyRouter, sellRouter, path1: buyPath, path2: sellPath };
+  return {
+    buyRouter,
+    sellRouter,
+    path1: bestBuyPath,
+    path2: bestSellPath
+  };
 }
 
-/* ================= BINARY OPTIMIZER ================= */
+/* ================= BINARY OPTIMIZER (UNCHANGED) ================= */
 async function binaryOptimize(trade) {
   log(`--- Binary Size Optimization Started ---\n`);
 
@@ -199,7 +217,6 @@ async function binaryOptimize(trade) {
   const amount = ethers.parseUnits(best.toString(), 6);
   const out1 = await quote(trade.buyRouter, amount, trade.path1);
   const out2 = await quote(trade.sellRouter, out1, trade.path2);
-
   const profit =
     Number(ethers.formatUnits(out2, 6)) - best;
 
@@ -210,7 +227,7 @@ async function binaryOptimize(trade) {
   return { ...trade, amountIn: amount };
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= MAIN LOOP (UNCHANGED) ================= */
 async function main() {
   log("================= ARB BOT STARTED =================\n");
 
@@ -263,4 +280,6 @@ async function main() {
   }
 }
 
-main().catch(err => log(`FATAL ERROR: ${err.message}`));
+main().catch(err => {
+  log(`FATAL ERROR: ${err.message}`);
+});
