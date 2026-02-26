@@ -30,24 +30,25 @@ const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
+const MAX_BATCH_SIZE = 3; // change to 5 if desired
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
-const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
 
 const vaultAbi = [
   {
-    name: "executeFlashArbitrage",
+    name: "executeFlashBatchArbitrage",
     type: "function",
     inputs: [
-      { name: "buyRouter", type: "address" },
-      { name: "sellRouter", type: "address" },
-      { name: "amountInUSDC", type: "uint256" },
-      { name: "pathToToken", type: "address[]" },
-      { name: "pathToUSDC", type: "address[]" },
+      { name: "buyRouters", type: "address[]" },
+      { name: "sellRouters", type: "address[]" },
+      { name: "amountsInUSDC", type: "uint256[]" },
+      { name: "pathsToToken", type: "address[][]" },
+      { name: "pathsToUSDC", type: "address[][]" },
       { name: "deadline", type: "uint256" }
     ],
     outputs: [],
@@ -151,7 +152,7 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath };
 }
 
-/* ================= FIXED BATCH (SEQUENTIAL FLASH) ================= */
+/* ================= ATOMIC BATCH FLASH ================= */
 async function batchArb() {
   const profitableTrades = [];
 
@@ -161,66 +162,70 @@ async function batchArb() {
       for (const token of Object.values(TOKENS)) {
         const trade = await findProfitableTrade(buy, sell, token);
         if (trade) profitableTrades.push(trade);
-        if (profitableTrades.length === 3) break;
+        if (profitableTrades.length === MAX_BATCH_SIZE) break;
       }
-      if (profitableTrades.length === 3) break;
+      if (profitableTrades.length === MAX_BATCH_SIZE) break;
     }
-    if (profitableTrades.length === 3) break;
+    if (profitableTrades.length === MAX_BATCH_SIZE) break;
   }
 
   if (profitableTrades.length === 0)
     return console.log("No profitable trades found");
 
+  console.log(`${YELLOW}Collected ${profitableTrades.length} profitable trades${RESET}`);
+
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  for (let i = 0; i < profitableTrades.length; i++) {
-    const t = profitableTrades[i];
+  const buyRouters = profitableTrades.map(t => t.buyRouter);
+  const sellRouters = profitableTrades.map(t => t.sellRouter);
+  const amountsInUSDC = profitableTrades.map(t => t.amountIn);
+  const pathsToToken = profitableTrades.map(t => t.bestBuyPath);
+  const pathsToUSDC = profitableTrades.map(t => t.bestSellPath);
 
-    try {
-      await vault.connect(wallet).executeFlashArbitrage.staticCall(
-        t.buyRouter,
-        t.sellRouter,
-        t.amountIn,
-        t.bestBuyPath,
-        t.bestSellPath,
+  try {
+    await vault.executeFlashBatchArbitrage.staticCall(
+      buyRouters,
+      sellRouters,
+      amountsInUSDC,
+      pathsToToken,
+      pathsToUSDC,
+      deadline
+    );
+
+    console.log(`${CYAN}Batch static simulation passed${RESET}`);
+
+    const estimatedGas =
+      await vault.executeFlashBatchArbitrage.estimateGas(
+        buyRouters,
+        sellRouters,
+        amountsInUSDC,
+        pathsToToken,
+        pathsToUSDC,
         deadline
       );
 
-      console.log(`${CYAN}Static simulation passed${RESET}`);
+    const gasLimit = (estimatedGas * 120n) / 100n;
 
-      const estimatedGas =
-        await vault.executeFlashArbitrage.estimateGas(
-          t.buyRouter,
-          t.sellRouter,
-          t.amountIn,
-          t.bestBuyPath,
-          t.bestSellPath,
-          deadline
-        );
+    console.log(`${CYAN}Batch gas estimate:${RESET} ${estimatedGas}`);
 
-      const gasLimit = (estimatedGas * 120n) / 100n;
+    const tx = await vault.executeFlashBatchArbitrage(
+      buyRouters,
+      sellRouters,
+      amountsInUSDC,
+      pathsToToken,
+      pathsToUSDC,
+      deadline,
+      { gasLimit }
+    );
 
-      console.log(`${CYAN}Gas estimate:${RESET} ${estimatedGas}`);
+    console.log(`${GREEN}Batch flash sent:${RESET} ${tx.hash}`);
 
-      const tx = await vault.executeFlashArbitrage(
-        t.buyRouter,
-        t.sellRouter,
-        t.amountIn,
-        t.bestBuyPath,
-        t.bestSellPath,
-        deadline,
-        { gasLimit }
-      );
+    await tx.wait();
 
-      console.log(`${GREEN}Flash arbitrage sent:${RESET} ${tx.hash}`);
+    console.log(`${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`);
 
-      await tx.wait();
-
-      console.log(`${GREEN}Flash confirmed${RESET}`);
-
-    } catch (err) {
-      console.log(`${RED}Trade failed:${RESET}`, decodeError(err));
-    }
+  } catch (err) {
+    console.log(`${RED}Batch trade failed:${RESET}`, decodeError(err));
   }
 }
 
