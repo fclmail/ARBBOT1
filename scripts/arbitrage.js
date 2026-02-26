@@ -1,6 +1,13 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
+/* ================= FORCE REAL-TIME LOG FLUSH ================= */
+process.stdout._handle?.setBlocking?.(true);
+
+function log(msg = "") {
+  console.log(`[${new Date().toISOString()}] ${msg}`);
+}
+
 /* ================= ENV ================= */
 dotenv.config({ override: false });
 
@@ -26,9 +33,8 @@ const MAX_BATCH_SIZE = 3;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
 
-/* ===== BINARY RANGE (EDITABLE) ===== */
-const MIN_BINARY = 1;       // lower bound USDC
-const MAX_BINARY = 25000;     // upper bound USDC
+const MIN_BINARY = 1;
+const MAX_BINARY = 25000;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -57,13 +63,11 @@ const vaultAbi = [
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= USDC ================= */
-const usdcAbi = [
-  "function balanceOf(address owner) view returns (uint256)"
-];
+const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const usdc = new ethers.Contract(
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  usdcAbi,
+const usdcContract = new ethers.Contract(
+  usdc,
+  ["function balanceOf(address owner) view returns (uint256)"],
   provider
 );
 
@@ -81,7 +85,7 @@ const routerAbi = [
 
 /* ================= TOKENS ================= */
 const TOKENS = {
-  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  USDC: usdc,
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
@@ -97,13 +101,13 @@ const TOKENS = {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function logBalances() {
-  const vaultUSDC = await usdc.balanceOf(VAULT_ADDRESS);
+  const vaultUSDC = await usdcContract.balanceOf(VAULT_ADDRESS);
   const formattedVaultUSDC = ethers.formatUnits(vaultUSDC, 6);
   const maticBalance = await provider.getBalance(wallet.address);
   const formattedMatic = ethers.formatEther(maticBalance);
 
-  console.log(`Vault USDC Balance: ${formattedVaultUSDC}`);
-  console.log(`Wallet MATIC Balance: ${formattedMatic}\n`);
+  log(`Vault USDC Balance: ${formattedVaultUSDC}`);
+  log(`Wallet MATIC Balance: ${formattedMatic}\n`);
 }
 
 async function quote(routerAddr, amountIn, path) {
@@ -116,32 +120,67 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= MICRO DETECTION ================= */
+/* ================= MICRO DETECTION WITH FULL HOPS ================= */
 async function detectMicro(buyRouter, sellRouter, tokenAddr) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-  const path1 = [TOKENS.USDC, tokenAddr];
-  const path2 = [tokenAddr, TOKENS.USDC];
 
-  const out1 = await quote(buyRouter, amountIn, path1);
-  if (!out1) return null;
+  /* ===== BUY SIDE MULTI-HOP ===== */
+  let bestBuyOut, bestBuyPath;
+  for (const p of [
+    [usdc, tokenAddr],
+    [usdc, TOKENS.WMATIC, tokenAddr],
+    [usdc, TOKENS.WETH, tokenAddr],
+    [usdc, TOKENS.USDT, tokenAddr],
+    [usdc, TOKENS.DAI, tokenAddr]
+  ]) {
+    const out = await quote(buyRouter, amountIn, p);
+    if (out && (!bestBuyOut || out > bestBuyOut)) {
+      bestBuyOut = out;
+      bestBuyPath = p;
+    }
+  }
+  if (!bestBuyOut) return null;
 
-  const out2 = await quote(sellRouter, out1, path2);
-  if (!out2) return null;
+  /* ===== SELL SIDE (RESTORED EXACT SNIPPET STYLE) ===== */
+  let bestSellOut, bestSellPath;
+  for (const p of [
+    [tokenAddr, usdc],
+    [tokenAddr, TOKENS.WMATIC, usdc],
+    [tokenAddr, TOKENS.WETH, usdc],
+    [tokenAddr, TOKENS.USDT, usdc],
+    [tokenAddr, TOKENS.DAI, usdc]
+  ]) {
+    const out = await quote(sellRouter, bestBuyOut, p);
+    if (out && (!bestSellOut || out > bestSellOut)) {
+      bestSellOut = out;
+      bestSellPath = p;
+    }
+  }
+  if (!bestSellOut) return null;
 
   const profit =
-    Number(ethers.formatUnits(out2, 6)) - MIN_TRADE_USDC;
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
   if (profit < MIN_EXPECTED_PROFIT) return null;
 
-  console.log(`Micro detection hit at 0.02 USDC`);
-  console.log(`Initial gross profit (micro): ${profit.toFixed(6)} USDC\n`);
+  log(`Micro detection hit at 0.02 USDC`);
+  log(`Initial gross profit (micro): ${profit.toFixed(6)} USDC`);
+  log(`Buy Router: ${buyRouter}`);
+  log(`Sell Router: ${sellRouter}`);
+  log(`Hop Path Buy: ${bestBuyPath.join(" → ")}`);
+  log(`Hop Path Sell: ${bestSellPath.join(" → ")}\n`);
 
-  return { buyRouter, sellRouter, path1, path2 };
+  return {
+    buyRouter,
+    sellRouter,
+    path1: bestBuyPath,
+    path2: bestSellPath
+  };
 }
 
-/* ================= BINARY OPTIMIZER ================= */
+/* ================= BINARY OPTIMIZER (UNCHANGED) ================= */
 async function binaryOptimize(trade) {
-  console.log(`--- Binary Size Optimization Started ---\n`);
+  log(`--- Binary Size Optimization Started ---\n`);
 
   let low = MIN_BINARY;
   let high = MAX_BINARY;
@@ -161,11 +200,11 @@ async function binaryOptimize(trade) {
         Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
       );
 
-      console.log(`Testing size: ${mid} USDC → PASS`);
+      log(`Testing size: ${mid} USDC → PASS`);
       best = mid;
       low = mid + 1;
     } catch {
-      console.log(`Testing size: ${mid} USDC → FAIL (minProfit revert)`);
+      log(`Testing size: ${mid} USDC → FAIL (minProfit revert)`);
       high = mid - 1;
     }
   }
@@ -178,19 +217,20 @@ async function binaryOptimize(trade) {
   const profit =
     Number(ethers.formatUnits(out2, 6)) - best;
 
-  console.log(`\nOptimal size found: ${best} USDC`);
-  console.log(`Expected net profit: ${profit.toFixed(6)} USDC\n`);
-  console.log(`-----------------------------------------\n`);
+  log(`\nOptimal size found: ${best} USDC`);
+  log(`Expected net profit: ${profit.toFixed(6)} USDC`);
+  log(`-----------------------------------------\n`);
 
-  return {
-    ...trade,
-    amountIn: amount
-  };
+  return { ...trade, amountIn: amount };
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= MAIN LOOP (UNCHANGED) ================= */
 async function main() {
+  log("================= ARB BOT STARTED =================\n");
+
   while (true) {
+    log("================= NEW SCAN =================\n");
+
     await logBalances();
 
     const optimizedTrades = [];
@@ -214,7 +254,7 @@ async function main() {
     }
 
     if (optimizedTrades.length === 0) {
-      console.log("No profitable trades found\n");
+      log("No profitable trades found\n");
       await sleep(SCAN_INTERVAL_MS);
       continue;
     }
@@ -222,25 +262,21 @@ async function main() {
     const deadline =
       Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-    const buyRouters = optimizedTrades.map((t) => t.buyRouter);
-    const sellRouters = optimizedTrades.map((t) => t.sellRouter);
-    const amountsInUSDC = optimizedTrades.map((t) => t.amountIn);
-    const pathsToToken = optimizedTrades.map((t) => t.path1);
-    const pathsToUSDC = optimizedTrades.map((t) => t.path2);
-
     const tx = await vault.executeFlashBatchArbitrage(
-      buyRouters,
-      sellRouters,
-      amountsInUSDC,
-      pathsToToken,
-      pathsToUSDC,
+      optimizedTrades.map(t => t.buyRouter),
+      optimizedTrades.map(t => t.sellRouter),
+      optimizedTrades.map(t => t.amountIn),
+      optimizedTrades.map(t => t.path1),
+      optimizedTrades.map(t => t.path2),
       deadline
     );
 
-    console.log(`Batch flash sent: ${tx.hash}`);
+    log(`Batch flash sent: ${tx.hash}`);
     await tx.wait();
-    console.log(`Batch flash confirmed — profits deposited to vault\n`);
+    log(`Batch flash confirmed — profits deposited to vault\n`);
   }
 }
 
-main().catch(console.error);
+main().catch(err => {
+  log(`FATAL ERROR: ${err.message}`);
+});
