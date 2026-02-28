@@ -1,12 +1,10 @@
 // aavePoolArbOptimizer.js
-// Drop-in JS module to display pool liquidity, simulate flash-loan arbitrage with gas costs,
-// choose optimal amount, execute, and optionally deposit profits to a vault.
-//
-// Prerequisites: Node.js, ethers.js installed (`npm i ethers`)
+// ES module version for Node.js ("type": "module")
+// Drop-in: simulate AAVE flash-loan arbitrage with liquidity display, optimization, and execution
 
-const { ethers } = require("ethers");
+import { ethers } from "ethers";
 
-class ProfitOptimizer {
+export class ProfitOptimizer {
   constructor(options) {
     this.fetchMarketData = options.fetchMarketData;
     this.simulateFlashLoan = options.simulateFlashLoan;
@@ -18,7 +16,6 @@ class ProfitOptimizer {
     this.provider = options.provider ?? null;
   }
 
-  // Format USDC/Token amounts
   formatUSDC(bn) {
     const factor = ethers.BigNumber.from(10).pow(this.displayDecimals);
     const whole = bn.div(factor).toString();
@@ -31,7 +28,6 @@ class ProfitOptimizer {
     console.log(new Date().toISOString(), ...args);
   }
 
-  // Evaluate a candidate flash-loan amount
   async evaluate(seed, amount) {
     const data = await this.simulateFlashLoan(seed, amount);
     const {
@@ -62,7 +58,6 @@ class ProfitOptimizer {
     };
   }
 
-  // Display available liquidity
   async displayLiquidity(seed) {
     const market = await this.fetchMarketData(seed);
     const availableLiquidity = market?.availableLiquidity ?? ethers.BigNumber.from(0);
@@ -70,7 +65,6 @@ class ProfitOptimizer {
     return availableLiquidity;
   }
 
-  // Run optimization and execute best candidate
   async run(seed) {
     try {
       const availableLiquidity = await this.displayLiquidity(seed);
@@ -114,41 +108,36 @@ class ProfitOptimizer {
 
 // ===== Example adapters =====
 
-// 1) Fetch market data
-async function fetchMarketData(seed) {
-  // Placeholder: 10,000 USDC in smallest unit (6 decimals)
+export async function fetchMarketData(seed) {
   const availableLiquidity = ethers.BigNumber.from("10000000000"); // 10k USDC
   return { availableLiquidity };
 }
 
-// 2) Simulate flash loan
-async function simulateFlashLoan(seed, amount) {
-  const revenue = amount.mul(8).div(10000); // 0.08%
-  const borrowCost = amount.mul(1).div(1000); // 0.1%
-  const flashLoanFee = amount.mul(3).div(10000); // 0.03%
-  const swapFees = amount.mul(5).div(100000); // 0.005%
+export async function simulateFlashLoan(seed, amount) {
+  const revenue = amount.mul(8).div(10000);       // 0.08%
+  const borrowCost = amount.mul(1).div(1000);     // 0.1%
+  const flashLoanFee = amount.mul(3).div(10000);  // 0.03%
+  const swapFees = amount.mul(5).div(100000);     // 0.005%
   const slippageLoss = amount.mul(2).div(100000); // 0.002%
-  const gasCost = ethers.BigNumber.from("15000"); // placeholder gas in USDC
+  const gasCost = ethers.BigNumber.from("15000");
   const otherFees = ethers.BigNumber.from(0);
   const healthFactor = 1.0;
 
   return { revenue, borrowCost, flashLoanFee, swapFees, slippageLoss, gasCost, otherFees, healthFactor };
 }
 
-// 3) Execute flash loan (on-chain placeholder)
-async function executeFlashLoan(seed, amount) {
+export async function executeFlashLoan(seed, amount) {
   console.log("Executing on-chain flash loan for amount:", amount.toString(), "seed:", seed);
   // Example: await yourContract.executeFlashArbitrage(...)
 }
 
-// Optional deterministic seed factory
-function seedFactory(seed, idx, amt) {
+export function seedFactory(seed, idx, amt) {
   const input = `${seed}:${idx}:${amt.toString()}`;
   return ethers.utils.keccak256(ethers.utils.toUtf8Bytes(input));
 }
 
 // ===== Example run =====
-async function runExample() {
+export async function runExample() {
   const optimizer = new ProfitOptimizer({
     fetchMarketData,
     simulateFlashLoan,
@@ -172,9 +161,7 @@ async function runExample() {
   });
 }
 
-// Run if called directly
-if (require.main === module) {
-  runExample().catch(e => console.error("Error in runExample:", e));
+// Run automatically if executed directly
+if (process.argv[1].endsWith("aavePoolArbOptimizer.js")) {
+  await runExample().catch(e => console.error("Error in runExample:", e));
 }
-
-module.exports = { ProfitOptimizer };
