@@ -69,8 +69,8 @@ async function fetchLiquidity() {
 
 // Helper: Fetch vault balance (with error handling so scan continues)
 async function fetchVaultBalance() {
-  if (!VAULT_ADDRESS) {
-    console.warn('Vault address not set, skipping balance fetch');
+  if (!VAULT_ADDRESS || ethers.utils.isAddress(VAULT_ADDRESS) === false) {
+    console.warn('Vault address not set or invalid, skipping balance fetch');
     return;
   }
 
