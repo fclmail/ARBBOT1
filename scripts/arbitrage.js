@@ -9,7 +9,7 @@ const SELL_ROUTER = process.env.SELL_ROUTER;
 const TOKEN = process.env.TOKEN;
 const AMOUNT_IN_HUMAN = process.env.AMOUNT_IN_HUMAN;
 const USDC_ADDRESS = process.env.USDC_ADDRESS;
-const VAULT_ADDRESS = process.env.VAULT_ADDRESS;
+const VAULT_ADDRESS = '0xAB046582A36D00f4921C447db9b77644b5e43c95'; // Vault address (contract address)
 const MIN_PROFIT_USDC = ethers.parseUnits("0.000001", 6); // 1 = 0.000001 USDC
 
 // Provider and wallet
@@ -54,7 +54,7 @@ const contractABI = [
   }
 ];
 
-const contractAddress = '0xAB046582A36D00f4921C447db9b77644b5e43c95';
+const contractAddress = '0xAB046582A36D00f4921C447db9b77644b5e43c95'; // Contract address (Vault address)
 const contract = new ethers.Contract(contractAddress, contractABI, wallet);
 
 // Helper: Fetch AAVE liquidity
@@ -67,13 +67,8 @@ async function fetchLiquidity() {
   }
 }
 
-// Helper: Fetch vault balance (with error handling so scan continues)
+// Helper: Fetch vault balance (using the contract address)
 async function fetchVaultBalance() {
-  if (!VAULT_ADDRESS || ethers.utils.isAddress(VAULT_ADDRESS) === false) {
-    console.warn('Vault address not set or invalid, skipping balance fetch');
-    return;
-  }
-
   try {
     const vaultContract = new ethers.Contract(
       VAULT_ADDRESS,
