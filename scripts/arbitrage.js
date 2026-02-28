@@ -136,7 +136,7 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
 
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  // ✅ DEBUG LINE ADDED (ONLY CHANGE)
+  //🟢1 DEBUG: log actual amount being used
   console.log("DEBUG amountIn:", ethers.formatUnits(amountIn, 6));
 
   let bestBuyOut, bestBuyPath;
@@ -183,4 +183,5 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath };
 }
 
-/* ================= REMAINDER UNCHANGED ================= */
+/* ================= REMAINDER OF SCRIPT UNCHANGED ================= */
+//🟢2 All loops, batch execution, flash calls, main() function remain exactly as before
