@@ -1,209 +1,233 @@
-import dotenv from "dotenv";
-import { ethers } from "ethers";
+// aavePoolArbOptimizer.js  
+// Drop-in JS module to display pool liquidity, simulate a flash-loan arb with gas costs,  
+// choose optimal amount, execute, and deposit profits to a vault.  
+// Prereqs: Node.js, ethers.js installed (npm i ethers)  
 
-/* ================= CONFIG ================= */
-dotenv.config({ override: false });
+const { ethers } = require("ethers");  
 
-const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || "").trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
-const AAVE_POOL = (process.env.AAVE_POOL || "0x794a61358D6845594F94dc1DB02A252b5b4814aD").trim(); // Default pool
-const VAULT_ADDRESS = (process.env.VAULT_ADDRESS || "0xAB046582A36D00f4921C447db9b77644b5e43c95").trim(); // Vault
+/**  
+ * ProfitOptimizer  
+ * - fetchMarketData(seed): async -> { availableLiquidity: BigNumber, ... }  
+ * - simulateFlashLoan(seed, amount): async -> {  
+ *      revenue: BigNumber,  
+ *      borrowCost: BigNumber,  
+ *      flashLoanFee: BigNumber,  
+ *      swapFees: BigNumber,  
+ *      slippageLoss: BigNumber,  
+ *      gasCost: BigNumber,  
+ *      otherFees: BigNumber,  
+ *      healthFactor?: number  
+ *   }  
+ * - executeFlashLoan(seed, amount): async -> void  
+ * - displayDecimals: number (6 for USDC)  
+ * - seedFactory(seed, idx, amount): optional deterministic seed for per-candidate isolation  
+ */  
+class ProfitOptimizer {  
+  constructor(options) {  
+    this.fetchMarketData = options.fetchMarketData; // async seed => market data  
+    this.simulateFlashLoan = options.simulateFlashLoan; // async (seed, amount) => breakdown  
+    this.executeFlashLoan = options.executeFlashLoan; // async (seed, amount) => void  
+    this.displayDecimals = options.displayDecimals ?? 6;  
+    this.maxTrials = options.maxTrials ?? 60;  
+    this.healthFactorThreshold = options.healthFactorThreshold ?? 0; // optional  
+    this.seedFactory = options.seedFactory ?? null;  
+    this.provider = options.provider ?? null; // ethers provider, optional for extra data display  
+  }  
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
-if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
-if (!AAVE_POOL) throw new Error("AAVE_POOL missing");
+  // Helpers  
+  formatUSDC(bn) {  
+    const factor = ethers.BigNumber.from(10).pow(this.displayDecimals);  
+    const whole = bn.div(factor).toString();  
+    const frac = bn.mod(factor).toString().padStart(this.displayDecimals, "0");  
+    const trimmed = frac.replace(/0+$/, "");  
+    return trimmed.length ? `${whole}.${trimmed}` : `${whole}`;  
+  }  
 
-/* ================= CONSTANTS / SAFEGUARDS ================= */
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.002);
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
-const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 4000);
-const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
-const DRY_RUN = (process.env.DRY_RUN || "false").toLowerCase() === "true";
-const GAS_PRICE_GWEI = process.env.GAS_PRICE_GWEI ? Number(process.env.GAS_PRICE_GWEI) : undefined;
-const GAS_LIMIT = process.env.GAS_LIMIT ? Number(process.env.GAS_LIMIT) : undefined;
-const TX_RETRY_ATTEMPTS = Number(process.env.TX_RETRY_ATTEMPTS || 1);
+  log(...args) {  
+    // Simple timestamped log  
+    console.log(new Date().toISOString(), ...args);  
+  }  
 
-/* ================= PROVIDER & WALLET ================= */
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+  // Evaluate a candidate amount for a seed  
+  async evaluate(seed, amount) {  
+    const data = await this.simulateFlashLoan(seed, amount);  
 
-/* ================= CONTRACT ================= */
-const vaultAbi = [
-  {
-    inputs: [
-      { internalType: "address", name: "buyRouter", type: "address" },
-      { internalType: "address", name: "sellRouter", type: "address" },
-      { internalType: "uint256", name: "amountInUSDC", type: "uint256" },
-      { internalType: "address[]", name: "pathToToken", type: "address[]" },
-      { internalType: "address[]", name: "pathToUSDC", type: "address[]" },
-      { internalType: "uint256", name: "deadline", type: "uint256" }
-    ],
-    name: "executeArbitrage",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function"
-  },
-  { inputs: [], name: "usdc", outputs: [{ type: "address" }], stateMutability: "view", type: "function" }
-];
-const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+    const {  
+      revenue = ethers.BigNumber.from(0),  
+      borrowCost = ethers.BigNumber.from(0),  
+      flashLoanFee = ethers.BigNumber.from(0),  
+      swapFees = ethers.BigNumber.from(0),  
+      slippageLoss = ethers.BigNumber.from(0),  
+      gasCost = ethers.BigNumber.from(0),  
+      otherFees = ethers.BigNumber.from(0),  
+      healthFactor = null  
+    } = data;  
 
-/* ================= ROUTERS ================= */
-const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
-};
-const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"];
-const swapRouterAbi = ["function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline)"];
+    const totalCosts = borrowCost  
+      .add(flashLoanFee)  
+      .add(swapFees)  
+      .add(slippageLoss)  
+      .add(gasCost)  
+      .add(otherFees);  
 
-/* ================= TOKENS ================= */
-const TOKENS = {
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  USDC: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
-  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
-};
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+    const NetProfit = revenue.sub(totalCosts);  
 
-/* ================= ANSI COLORS ================= */
-const GREEN = "\x1b[32m";
-const RED = "\x1b[31m";
-const YELLOW = "\x1b[33m";
-const RESET = "\x1b[0m";
+    return {  
+      NetProfit,  
+      breakdown: {  
+        revenue,  
+        borrowCost,  
+        flashLoanFee,  
+        swapFees,  
+        slippageLoss,  
+        gasCost,  
+        otherFees,  
+        totalCosts  
+      },  
+      healthFactor,  
+      dataSnapshot: data  
+    };  
+  }  
 
-/* ================= HELPERS ================= */
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-function formatUSDC(n) { return Number(ethers.formatUnits(n, 6)).toFixed(6); }
+  // Display available liquidity for pool  
+  async displayLiquidity(seed) {  
+    const market = await this.fetchMarketData(seed);  
+    const availableLiquidity = market?.availableLiquidity ??
 
-/* ================= AAVE FLASH SIMULATION ================= */
-async function getAaveLiquidity() {
-  try {
-    const pool = new ethers.Contract(AAVE_POOL, [
-      "function getReserveData(address asset) view returns (uint256 configuration,uint128 liquidityIndex,uint128 variableBorrowIndex,uint128 currentLiquidityRate,uint128 currentVariableBorrowRate,uint128 currentStableBorrowRate,uint40 lastUpdateTimestamp,address aTokenAddress,uint8 id,uint16 reserveFlags)"
-    ], provider);
-    const reserve = await pool.getReserveData(TOKENS.USDC);
-    const availableLiquidity = BigInt(reserve[1]); // use safe placeholder
-    return availableLiquidity;
-  } catch (err) {
-    console.log("⚠️ Aave liquidity fetch error:", err.message ?? err);
-    return 0n;
+
+
+      // If we reach here, we have a profitable opportunity  
+      this.log(  
+        `Best candidate: amount ${this.formatUSDC(best.amount)} | NetProfit ${this.formatUSDC(best.NetProfit)}`  
+      );  
+
+      // Step: execute the flash loan at the best amount  
+      this.log("Submitting executeFlashLoan with optimal amount...");  
+      const execSeed = this.seedFactory ? this.seedFactory(seed, "execute", best.amount) : seed;  
+      await this.executeFlashLoan(execSeed, best.amount);  
+
+      // After execution, you may want to verify vault deposit or fetch final balance  
+      // Since on-chain deposit to vault is part of your executeOperation, you can optionally  
+      // call a helper to verify vault balance or emit an event.  
+
+      this.log(  
+        `Execution completed for amount ${this.formatUSDC(best.amount)} with expected NetProfit ${this.formatUSDC(best.NetProfit)}`  
+      );  
+
+      return {  
+        executed: true,  
+        amount: best.amount,  
+        NetProfit: best.NetProfit,  
+        details: best.details  
+      };  
+    } catch (err) {  
+      this.log("Error in run:", err?.message ?? err);  
+      throw err;  
+    }  
+  }  
+}  
+
+// Example wiring (replace adapters with real implementations)  
+async function main() {  
+  // Provider and signer setup (adjust to your environment)  
+  const provider = new ethers.providers.JsonRpcProvider("https://mainnet.infura.io/v3/YOUR-PROJECT-ID");  
+  const signer = new ethers.Wallet("YOUR_PRIVATE_KEY", provider);  
+
+  // Adapters (replace with real implementations)  
+  // 1) fetchMarketData(seed): returns { availableLiquidity: BigNumber, ... }  
+  async function fetchMarketData(seed) {  
+    // TODO: fetch pool liquidity from the AAVE pool or your own source  
+    // Placeholder: 10,000 USDC in smallest unit (assuming 6 decimals)  
+    const availableLiquidity = ethers.BigNumber.from("10000000000"); // 10k * 1e6  
+    // You can add more fields if needed  
+    return { availableLiquidity };  
+  }  
+
+  // 2) simulateFlashLoan(seed, amount): returns breakdown  
+  async function simulateFlashLoan(seed, amount) {  
+    // Placeholder simulation:  
+    // Simple model: revenue is a fraction of amount, costs scale with amount  
+    // Let revenue = amount * 0.0008 (80 bps), but capped by randomness if desired  
+    const revenue = amount.mul( ethers.BigNumber.from(8) ).div(ethers.BigNumber.from(10000)); // 0.0008 * amount  
+
+    const borrowCost = amount.mul(ethers.BigNumber.from(1)).div(ethers.BigNumber.from(1000)); // 0.1%  
+    const flashLoanFee = amount.mul(ethers.BigNumber.from(3)).div(ethers.BigNumber.from(10000)); // 0.03%  
+    const swapFees = amount.mul(ethers.BigNumber.from(5)).div(ethers.BigNumber.from(100000)); // 0.005%  
+    const slippageLoss = amount.mul(ethers.BigNumber.from(2)).div(ethers.BigNumber.from(100000)); // 0.002%  
+    const gasCost = ethers.BigNumber.from("15000"); // example gas cost in USDC (small)  
+    const otherFees = ethers.BigNumber.from(0);  
+
+    // Optional healthFactor for filtering (if you have a model)  
+    const healthFactor = 1.0;  
+
+    return {  
+      revenue,  
+      borrowCost,  
+      flashLoanFee,  
+      swapFees,  
+      slippageLoss,  
+      gasCost,  
+      otherFees,  
+      healthFactor  
+    };  
+  }  
+
+  // 3) executeFlashLoan(seed, amount): performs the on-chain action  
+  async function executeFlashLoan(seed, amount) {  
+    // Implement your on-chain call to VaultArbitrageEnforcer.executeFlashArbitrage  
+    // or VaultArbitrageEnforcer.executeFlashBatchArbitrage as appropriate.  
+    // This is a placeholder to show integration points.  
+    console.log("Executing on-chain flash loan for amount:", amount.toString(), "seed:", seed);  
+    // Example: await yourContract.executeFlashArbitrage(...params)  
+  }  
+
+  // Optional: deterministic seed factory
+  function seedFactory(seed, idx, amt) {
+    const input = `${seed}:${idx}:${amt.toString()}`;
+    // Keccak256 to produce a hex seed
+    return ethers.utils.keccak256(ethers.utils.toUtf8Bytes(input));
+  }
+
+  // Example usage wiring (replace adapters with real implementations)
+  async function runExample() {
+    // 1) Setup provider & signer (adjust to your environment)
+    // const provider = new ethers.providers.JsonRpcProvider("https://mainnet.infura.io/v3/YOUR-PROJECT-ID");
+    // const signer = new ethers.Wallet("YOUR_PRIVATE_KEY", provider);
+
+    // If you already have a deployed contract, connect to it
+    // const contractAddress = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
+    // const abi = [ /* your contract ABI for executeFlashArbitrage / executeOperation */ ];
+    // const vaultContract = new ethers.Contract(contractAddress, abi, signer);
+
+    // For this drop-in, adapters are provided to ProfitOptimizer constructor:
+    const optimizer = new ProfitOptimizer({
+      fetchMarketData: fetchMarketData,           // adapter 1
+      simulateFlashLoan: simulateFlashLoan,       // adapter 2
+      executeFlashLoan: executeFlashLoan,         // adapter 3
+      displayDecimals: 6,                           // USDC decimals
+      maxTrials: 60,
+      healthFactorThreshold: 0 // adjust if you have a health model
+      // seedFactory can be provided if you want deterministic per-call seeds
+    });
+
+    const seed = "demo-seed-001";
+
+    // Step 1: display liquidity
+    await optimizer.displayLiquidity(seed);
+
+    // Step 2: optimize and run
+    const result = await optimizer.run(seed);
+
+    console.log("Optimization result:", result);
+  }
+
+  // Run the example if this file is executed directly (Node.js)
+  if (require.main === module) {
+    runExample().catch((e) => {
+      console.error("Error in runExample:", e);
+    });
   }
 }
 
-/* ================= QUOTE HELPER ================= */
-async function quote(routerAddr, amountIn, path) {
-  try {
-    const router = new ethers.Contract(routerAddr, routerAbi, provider);
-    const amounts = await router.getAmountsOut(amountIn, path);
-    return amounts[amounts.length - 1];
-  } catch {
-    return null;
-  }
-}
-
-/* ================= PATH GENERATION ================= */
-const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
-function generatePaths(base, token) {
-  let paths = [];
-  paths.push([base, token]);
-  for (let hop of FALLBACK_HOPS) if (hop !== token) paths.push([base, hop, token]);
-  return paths;
-}
-
-/* ================= ARBITRAGE WITH DYNAMIC FLASH AMOUNT ================= */
-async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath = null) {
-  const usdcAddress = await vault.usdc();
-  const directPathBuy = buyPath || [usdcAddress, tokenAddr];
-  const directPathSell = sellPath || [tokenAddr, usdcAddress];
-
-  const availableLiquidity = await getAaveLiquidity();
-  if (availableLiquidity === 0n) return { profit: 0, success: false };
-
-  // Choose a "safe fraction" to avoid log overflows or negative profit
-  const safeFlash = availableLiquidity / 1000n; // 0.1% of total liquidity
-  const flashAmount = safeFlash > 0n ? safeFlash : 1_000_000n; // minimum trade
-
-  console.log(`🏦 Aave Available USDC Liquidity: ${formatUSDC(availableLiquidity)}`);
-  console.log(`⚙️ Optimal Flash Amount: ${formatUSDC(flashAmount)}`);
-  console.log("🧪 Running Flash Simulation...");
-
-  const buyOut = await quote(buyRouter, flashAmount, directPathBuy);
-  const sellOut = await quote(sellRouter, buyOut ?? 0, directPathSell);
-  const profit = Number(ethers.formatUnits(sellOut ?? 0, 6)) - Number(ethers.formatUnits(flashAmount, 6));
-
-  console.log(`💰 Expected Profit: ${profit.toFixed(6)} USDC`);
-  if (profit < MIN_EXPECTED_PROFIT) return { profit, success: false };
-
-  console.log("🔥 EXECUTING ARBITRAGE WITH FLASH LOAN");
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-
-  if (DRY_RUN) {
-    console.log("🔎 DRY RUN: Flash would execute with vault.executeArbitrage");
-    return { profit, success: true, dryRun: true };
-  }
-
-  let tx;
-  for (let attempt = 0; attempt < TX_RETRY_ATTEMPTS; attempt++) {
-    try {
-      const txOpts = {};
-      if (GAS_PRICE_GWEI) txOpts.gasPrice = ethers.parseUnits(GAS_PRICE_GWEI.toString(), "gwei");
-      if (GAS_LIMIT) txOpts.gasLimit = GAS_LIMIT;
-
-      tx = await vault.executeArbitrage(
-        buyRouter, sellRouter, flashAmount, directPathBuy, directPathSell, deadline, txOpts
-      );
-      console.log(`⛓ TX SENT: ${tx.hash}`);
-      await tx.wait();
-      console.log("✅ PROFIT DEPOSITED TO VAULT");
-      break;
-    } catch (err) {
-      console.log(`⚠️ Arb tx attempt ${attempt + 1} failed:`, err?.message ?? err);
-      if (attempt < TX_RETRY_ATTEMPTS - 1) await sleep(1000);
-      else throw err;
-    }
-  }
-
-  return { profit, success: true, txHash: tx?.hash ?? null };
-}
-
-/* ================= MAIN LOOP ================= */
-(async () => {
-  console.log(`✅ Connected to RPC: ${RPC_POLYGON}`);
-  console.log("🚀 Arbitrage bot started");
-
-  while (true) {
-    try {
-      const usdcAddress = await vault.usdc();
-      const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
-      const vaultUSDC = Number(ethers.formatUnits(
-        await new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider)
-          .balanceOf(VAULT_ADDRESS), 6));
-
-      console.log(`💎 Wallet MATIC balance: ${walletMatic.toFixed(6)}`);
-      console.log(`💰 Vault USDC balance: ${vaultUSDC.toFixed(6)}`);
-
-      for (const token of Object.values(TOKENS)) {
-        const buyPaths = generatePaths(usdcAddress, token);
-        const sellPaths = generatePaths(token, usdcAddress);
-
-        for (const buy of Object.values(routers)) {
-          for (const sell of Object.values(routers)) {
-            if (buy === sell) continue;
-            for (let bPath of buyPaths) for (let sPath of sellPaths) {
-              try {
-                await tryArb(buy, sell, token, bPath, sPath);
-                await sleep(1200);
-              } catch (e) { console.log(`⚠️ ${e?.message ?? e}`); }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.log("⚠️ Scan error:", err?.message ?? err);
-    }
-    await sleep(SCAN_DELAY_MS);
-  }
-})();
+// End of module
+module.exports = { ProfitOptimizer };
