@@ -4,8 +4,19 @@ import { ethers } from "ethers";
 /* ================= CONFIG ================= */
 dotenv.config({ override: false });
 
-const RPC_POLYGON = (process.env.RPC_POLYGON || "").trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+/* ✅ RESTORED WORKING RPC FALLBACK METHOD */
+const RPC_POLYGON = (
+  process.env.RPC_POLYGON ||
+  process.env.POLYGON_RPC ||
+  process.env.RPC_URL ||
+  ""
+).trim();
+
+const WALLET_PRIVATE_KEY = (
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY ||
+  ""
+).trim();
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
@@ -60,7 +71,6 @@ function formatUSDC(n) {
   return Number(ethers.formatUnits(n, 6)).toFixed(6);
 }
 
-/* ✅ FIXED — CORRECT LIQUIDITY SOURCE */
 async function getAvailableFlashLiquidity() {
   const usdcContract = new ethers.Contract(
     USDC,
