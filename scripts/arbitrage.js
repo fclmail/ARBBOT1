@@ -4,11 +4,22 @@ import { ethers } from "ethers";
 /* ================= CONFIG ================= */
 dotenv.config({ override: false });
 
-const RPC_POLYGON = (process.env.RPC_POLYGON || "").trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+/* ✅ FIXED RPC INSERTION (FROM JS2) */
+const RPC_POLYGON = (
+  process.env.RPC_POLYGON ||
+  process.env.POLYGON_RPC ||
+  process.env.RPC_URL ||
+  ""
+).trim();
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
-if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+const WALLET_PRIVATE_KEY = (
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY ||
+  ""
+).trim();
+
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
+if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
 
 /* ================= SETTINGS ================= */
 const FLASH_LIQUIDITY_PERCENT = Number(process.env.FLASH_LIQUIDITY_PERCENT || 5);
@@ -137,11 +148,11 @@ async function scan() {
 
     console.log(`⛓ FLASH TX SENT: ${tx.hash}\n`);
 
-    const receipt = await tx.wait();
+    await tx.wait();
 
     console.log("✅ FLASH REPAYED");
 
-    const actualProfit = profit * 0.992; // simulate premium deduction for display
+    const actualProfit = profit * 0.992;
     console.log(`💰 Profit Sent To Vault: ${actualProfit.toFixed(6)} USDC\n`);
 
     return;
