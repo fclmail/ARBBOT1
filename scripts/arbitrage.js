@@ -152,8 +152,8 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   //🟢2: Base trade amount in USDC
   let amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  //🟢2: Apply multiplier
-  amountIn = amountIn * MULTIPLIER;
+  //🟢2: Apply multiplier safely (supports fractional values)
+  amountIn = (amountIn * BigInt(Math.floor(MULTIPLIER * 1_000_000))) / 1_000_000n;
 
   //🟢3: Debug log for multiplied trade size
   console.log("DEBUG amountIn:", ethers.formatUnits(amountIn, 6));
