@@ -1,41 +1,63 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
+/* ================= CONFIG ================= */
 dotenv.config({ override: false });
 
-/* ================= CONFIG ================= */
+/* ===== RPC FAILOVER (CI SAFE) ===== */
+const RPC_CANDIDATES = [
+  process.env.RPC_POLYGON,
+  process.env.POLYGON_RPC,
+  process.env.RPC_URL,
+  "https://polygon-rpc.com",
+  "https://rpc.ankr.com/polygon"
+].filter(Boolean);
 
-const RPC_POLYGON = process.env.RPC_POLYGON;
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
+if (RPC_CANDIDATES.length === 0)
+  throw new Error("No RPC endpoints available");
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
-if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
+async function createHealthyProvider() {
+  for (const rpc of RPC_CANDIDATES) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpc);
+      await provider.getBlockNumber(); // health test
+      console.log(`✅ Connected to RPC: ${rpc}`);
+      return provider;
+    } catch {
+      console.log(`⚠️ RPC failed: ${rpc}`);
+    }
+  }
+  throw new Error("All RPC endpoints failed");
+}
 
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+const provider = await createHealthyProvider();
+
+const WALLET_PRIVATE_KEY =
+  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+
+if (!WALLET_PRIVATE_KEY)
+  throw new Error("WALLET_PRIVATE_KEY missing");
+
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONSTANTS ================= */
 
-const MIN_PROFIT = 0.000001; // contract minimum
+const MIN_PROFIT = 0.000001;
 const DEADLINE_SECONDS = 60;
 const DRY_RUN = (process.env.DRY_RUN || "false").toLowerCase() === "true";
 
-const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
-
-/* ================= AAVE V3 POLYGON ================= */
+/* ================= AAVE V3 ================= */
 
 const AAVE_POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD";
 const USDC = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
-const aavePoolAbi = [
-  "function getReserveData(address asset) view returns (tuple(uint256 configuration,uint128 liquidityIndex,uint128 currentLiquidityRate,uint128 variableBorrowIndex,uint128 currentVariableBorrowRate,uint128 currentStableBorrowRate,uint40 lastUpdateTimestamp,address aTokenAddress,address stableDebtTokenAddress,address variableDebtTokenAddress,address interestRateStrategyAddress,uint8 id))"
+const poolAbi = [
+  "function getReserveData(address asset) view returns (tuple(uint256,uint128,uint128,uint128,uint128,uint128,uint40,address,address,address,address,uint8))"
 ];
 
-const erc20Abi = [
-  "function balanceOf(address) view returns(uint256)"
-];
+const erc20Abi = ["function balanceOf(address) view returns(uint256)"];
 
-const pool = new ethers.Contract(AAVE_POOL, aavePoolAbi, provider);
+const pool = new ethers.Contract(AAVE_POOL, poolAbi, provider);
 
 /* ================= ROUTERS ================= */
 
@@ -59,13 +81,11 @@ const TOKENS = {
 };
 
 const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
-
 const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
 
 /* ================= HELPERS ================= */
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
-
 function format(n){ return Number(n).toFixed(6); }
 
 function generatePaths(base, token){
@@ -89,35 +109,26 @@ async function quote(routerAddr, amountIn, path){
 /* ================= AAVE LIQUIDITY ================= */
 
 async function getAaveLiquidity(){
-
   const reserve = await pool.getReserveData(USDC);
-  const aTokenAddress = reserve.aTokenAddress;
-
+  const aTokenAddress = reserve[7];
   const aToken = new ethers.Contract(aTokenAddress, erc20Abi, provider);
   const liquidity = await aToken.balanceOf(AAVE_POOL);
-
   const readable = Number(ethers.formatUnits(liquidity,6));
-
   console.log(`🏦 Aave Available USDC Liquidity: ${format(readable)}`);
-
   return readable;
 }
 
-/* ================= OPTIMAL FLASH SIZE ================= */
+/* ================= OPTIMIZATION ================= */
 
-function optimizeFlashAmount(maxLiquidity){
-
-  // Use 70% of pool liquidity for safety
-  const optimal = maxLiquidity * 0.7;
-
-  console.log(`⚙️ Optimal Flash Amount Selected: ${format(optimal)} USDC`);
-
+function optimizeFlashAmount(liquidity){
+  const optimal = liquidity * 0.7;
+  console.log(`⚙️ Optimal Flash Amount: ${format(optimal)} USDC`);
   return optimal;
 }
 
 /* ================= SIMULATION ================= */
 
-async function simulateArb(flashAmount){
+async function simulate(flashAmount){
 
   const amountIn = ethers.parseUnits(flashAmount.toString(),6);
 
@@ -138,11 +149,11 @@ async function simulateArb(flashAmount){
         const received = Number(ethers.formatUnits(sellOut,6));
         const profit = received - flashAmount;
 
-        console.log(`🔹 SIMULATION | Token: ${token}`);
+        console.log(`🔹 SIMULATION | ${token}`);
         console.log(`Expected Profit: ${profit>=0?"+":""}${format(profit)} USDC`);
 
         if(profit > MIN_PROFIT){
-          return { profit, buy, sell, token };
+          return { profit, token, buy, sell };
         }
 
         await sleep(200);
@@ -155,12 +166,12 @@ async function simulateArb(flashAmount){
 
 /* ================= EXECUTION ================= */
 
-async function executeFlashArb(sim){
+async function execute(sim){
 
   console.log("🔥 EXECUTING FLASH ARBITRAGE");
 
   if(DRY_RUN){
-    console.log("🔎 DRY RUN MODE - Simulation Passed");
+    console.log("🔎 DRY RUN MODE — Simulation Only");
     return;
   }
 
@@ -171,8 +182,7 @@ async function executeFlashArb(sim){
 
   console.log(`⛓ TX SENT: ${tx.hash}`);
   await tx.wait();
-
-  console.log("✅ FLASH LOAN REPAID + PROFIT SENT TO VAULT");
+  console.log("✅ Flash Loan Repaid + Profit Captured");
 }
 
 /* ================= MAIN ================= */
@@ -182,19 +192,19 @@ async function executeFlashArb(sim){
   console.log("🚀 Arbitrage bot started");
 
   const liquidity = await getAaveLiquidity();
-  const optimalFlash = optimizeFlashAmount(liquidity);
+  const optimal = optimizeFlashAmount(liquidity);
 
-  console.log("🧪 Running full simulation pass...\n");
+  console.log("\n🧪 Running Simulation Pass...\n");
 
-  const sim = await simulateArb(optimalFlash);
+  const sim = await simulate(optimal);
 
   if(!sim){
-    console.log("❌ No profitable flash opportunity found");
+    console.log("❌ No profitable opportunity found");
     return;
   }
 
   console.log(`\n✅ Simulation Passed | Profit: ${format(sim.profit)} USDC\n`);
 
-  await executeFlashArb(sim);
+  await execute(sim);
 
 })();
