@@ -4,7 +4,8 @@ import { ethers } from "ethers";
 /* ================= CONFIG ================= */
 dotenv.config({ override: false });
 
-const RPC_POLYGON = (process.env.RPC_POLYGON || "").trim();
+// Use the more flexible method for loading RPC variable
+const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || "").trim();
 const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
@@ -21,8 +22,8 @@ const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= ADDRESSES ================= */
-const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E"; // Correct vault address
-const AAVE_POOL = "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"; // Correct pool address (deployment pool)
+const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+const AAVE_POOL = "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb";
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -57,16 +58,13 @@ function formatUSDC(n) {
 
 async function getAvailableFlashLiquidity() {
   const reserveData = await pool.getReserveData(USDC);
-
-  // Ensure liquidity is returned in the expected value and format
-  const liquidity = reserveData.liquidityIndex; // Ensure we're using the correct field
+  const liquidity = reserveData.liquidityIndex; // Adjusted for correct liquidity field
   console.log(`🏦 AAVE USDC Liquidity: ${formatUSDC(liquidity)}`);
   return liquidity;
 }
 
 async function calculateScaledFlashAmount() {
   const liquidity = await getAvailableFlashLiquidity();
-
   const scaled = liquidity * BigInt(FLASH_LIQUIDITY_PERCENT) / 100n;
 
   console.log(`📊 Flash Loan Size (${FLASH_LIQUIDITY_PERCENT}%): ${formatUSDC(scaled)}\n`);
