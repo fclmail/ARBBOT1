@@ -1,166 +1,208 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
+dotenv.config();
+
 /* ================= CONFIG ================= */
-dotenv.config({ override: false });
 
-const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || "").trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
+const RPC = process.env.RPC_POLYGON;
+const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
-if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
+if (!RPC) throw new Error("Missing RPC_POLYGON");
+if (!PRIVATE_KEY) throw new Error("Missing WALLET_PRIVATE_KEY");
 
-/* ================= CONSTANTS / SAFEGUARDS ================= */
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || .0020); // input USDC
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001); // USDC
-const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 4000);
-const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
-let MIN_SWEEP_AMOUNT = Number(process.env.MIN_SWEEP_AMOUNT || 0.000001);
-const DRY_RUN = (process.env.DRY_RUN || "false").toLowerCase() === "true";
+const provider = new ethers.JsonRpcProvider(RPC);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Gas controls (optional)
-const GAS_PRICE_GWEI = process.env.GAS_PRICE_GWEI ? Number(process.env.GAS_PRICE_GWEI) : undefined;
-const GAS_LIMIT = process.env.GAS_LIMIT ? Number(process.env.GAS_LIMIT) : undefined;
-const TX_RETRY_ATTEMPTS = Number(process.env.TX_RETRY_ATTEMPTS || 1);
+/* ================= CONSTANTS ================= */
 
-/* ================= PROVIDER & WALLET ================= */
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
 
-/* ================= CONTRACT ================= */
-const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";  // Vault Contract Address
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WBTC = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6";
+
+const ROUTERS = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+};
+
+const TRADE_AMOUNT_USDC = process.env.TRADE_AMOUNT_USDC || "50";
+const SLIPPAGE_BPS = 30; // 0.30%
+const SCAN_DELAY = 5000;
+const DEADLINE_SECONDS = 60;
+
+/* ================= ABIs ================= */
+
 const vaultAbi = [
-  {
-    inputs: [
-      { internalType: "address", name: "buyRouter", type: "address" },
-      { internalType: "address", name: "sellRouter", type: "address" },
-      { internalType: "uint256", name: "amountInUSDC", type: "uint256" },
-      { internalType: "address[]", name: "pathToToken", type: "address[]" },
-      { internalType: "address[]", name: "pathToUSDC", type: "address[]" },
-      { internalType: "uint256", name: "deadline", type: "uint256" }
-    ],
-    name: "executeArbitrage",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function"
-  },
-  {
-    inputs: [],
-    name: "usdc",
-    outputs: [{ type: "address" }],
-    stateMutability: "view",
-    type: "function"
-  }
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256)",
+  "function POOL() view returns (address)",
+  "function minimumProfitUSDC() view returns (uint256)",
+  "function usdc() view returns (address)"
 ];
+
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+];
+
+const poolAbi = [
+  "function getReserveData(address asset) view returns (tuple(uint256,uint128,uint128,uint128,uint128,uint128,uint40,address,address,address,address,uint8))"
+];
+
+/* ================= CONTRACT INSTANCES ================= */
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= ROUTERS ================= */
 const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  QuickSwap: new ethers.Contract(ROUTERS.QuickSwap, routerAbi, provider),
+  SushiSwap: new ethers.Contract(ROUTERS.SushiSwap, routerAbi, provider)
 };
-
-const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"];
-const swapRouterAbi = ["function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline)"];
-
-/* ================= TOKENS ================= */
-const TOKENS = {
-  USDT:  "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC:  "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  LINK:  "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE:  "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  USDC:  "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
-  DAI:   "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  WETH:  "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  UNI:   "0xb33eaad8d922b1083446dc23f610c2567fb5180f",
-  FRAX:  "0x45c32fa6df82ead1e2ef74d17b76547eddfaff89",
-  BUSD:  "0x9c9e5fd8bbc25984b178fdce6117defa39d2db39",
-  APE:   "0xb7b31a6bc18e48888545ce79e83e06003be70930",
-  CRV:   "0x172370d5cd63279efa6d502dab29171933a610af",
-  SRM:   "0x6bf2eb299e51fc5df30dec81d9445dde70e3f185",
-  SAND:  "0xbbba073c31bf03b8acf7c28ef0738decf3695683",
-  TUSD:  "0x2e1ad108ff1d8c782fcbbb89aad783ac49586756",
-  WOO:   "0x1b815d120b3ef02039ee11dc2d33de7aa4a8c603",
-  XSGD:  "0xdc3326e71d45186f113a2f448984ca0e8d201995",
-  MV:    "0xA3c322Ad15218fBFAEd26bA7f616249f7705D945",
-  VCNT:  "0x8a16d4bf8a0a716017e8d2262c4ac32927797a2f"
-};
-
-const WMATIC = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
 /* ================= HELPERS ================= */
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function formatUSDC(n) {
-  try {
-    return Number(ethers.formatUnits(n, 6)).toFixed(6);
-  } catch { 
-    return String(n); 
-  }
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+function formatUSDC(amount) {
+  return Number(ethers.formatUnits(amount, 6)).toFixed(6);
 }
 
-async function fetchVaultBalance() {
-  try {
-    const usdcAddress = await vault.usdc();
-    const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
-    const balance = await usdcContract.balanceOf(VAULT_ADDRESS);
-    console.log(`🔹 Vault Balance: ${formatUSDC(balance)} USDC`);
-    return balance;
-  } catch (error) {
-    console.log('Error fetching vault balance:', error);
-    return ethers.parseUnits('0', 6);
-  }
+function applySlippage(amount) {
+  return amount - (amount * BigInt(SLIPPAGE_BPS)) / 10000n;
 }
 
-// Fetch AAVE pool address (liquidity)
-async function fetchLiquidity() {
-  try {
-    const poolAddress = await vault.POOL();
-    console.log(`🏦 AAVE USDC Liquidity Pool Address: ${poolAddress}`);
-  } catch (err) {
-    console.error('Error fetching liquidity:', err);
-  }
+async function getGasCost(txRequest) {
+  const gasEstimate = await provider.estimateGas(txRequest);
+  const feeData = await provider.getFeeData();
+  const gasPrice = feeData.gasPrice;
+  return gasEstimate * gasPrice;
 }
 
-async function executeArbitrage() {
-  console.log('🚀 Arbitrage bot started');
+/* ================= AAVE LIQUIDITY ================= */
 
-  await fetchVaultBalance();
-  await fetchLiquidity();
+async function showAaveLiquidity() {
+  const poolAddress = await vault.POOL();
+  const pool = new ethers.Contract(poolAddress, poolAbi, provider);
 
-  const amountInUSDC = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+  const reserve = await pool.getReserveData(USDC);
+  const availableLiquidity = reserve[0];
+
+  console.log(`🏦 AAVE Pool: ${poolAddress}`);
+  console.log(`💰 Available USDC Liquidity: ${formatUSDC(availableLiquidity)} USDC`);
+}
+
+/* ================= PROFIT SCANNER ================= */
+
+async function scanOpportunity(amountIn) {
+
+  const pathForward = [USDC, WBTC];
+  const pathBack = [WBTC, USDC];
+
   try {
-    // Arbitrage execution logic
-    const tx = await vault.executeArbitrage(
-      routers.QuickSwap, 
-      routers.SushiSwap, 
-      amountInUSDC, 
-      [TOKENS.USDC, TOKENS.WBTC], 
-      [TOKENS.WBTC, TOKENS.USDC], 
+
+    // Buy on QuickSwap
+    const buyQuote = await routers.QuickSwap.getAmountsOut(amountIn, pathForward);
+    const tokenOut = buyQuote[1];
+
+    // Sell on SushiSwap
+    const sellQuote = await routers.SushiSwap.getAmountsOut(tokenOut, pathBack);
+    const finalUSDC = sellQuote[1];
+
+    const rawProfit = finalUSDC - amountIn;
+
+    if (rawProfit <= 0n) return null;
+
+    const txData = await vault.executeArbitrage.populateTransaction(
+      ROUTERS.QuickSwap,
+      ROUTERS.SushiSwap,
+      amountIn,
+      pathForward,
+      pathBack,
       Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
     );
+
+    const gasCost = await getGasCost({ ...txData, from: wallet.address });
+
+    // Convert gas cost from wei to USDC rough estimate
+    const gasCostUSDC = gasCost / 1_000_000_000_000n;
+
+    const netProfit = rawProfit - gasCostUSDC;
+
+    return {
+      rawProfit,
+      netProfit,
+      pathForward,
+      pathBack
+    };
+
+  } catch {
+    return null;
+  }
+}
+
+/* ================= EXECUTION ================= */
+
+async function execute() {
+
+  console.log("\n🚀 Scanning...");
+
+  const amountIn = ethers.parseUnits(TRADE_AMOUNT_USDC, 6);
+
+  const contractMin = await vault.minimumProfitUSDC();
+
+  const opportunity = await scanOpportunity(amountIn);
+
+  if (!opportunity) {
+    console.log("No opportunity found");
+    return;
+  }
+
+  console.log(`💵 Raw Profit: ${formatUSDC(opportunity.rawProfit)} USDC`);
+  console.log(`💰 Net Profit (after gas): ${formatUSDC(opportunity.netProfit)} USDC`);
+
+  if (opportunity.netProfit < contractMin) {
+    console.log("⚠️ Below contract minimum");
+    return;
+  }
+
+  if (opportunity.netProfit <= 0n) {
+    console.log("⚠️ Not profitable after gas");
+    return;
+  }
+
+  try {
+
+    const tx = await vault.executeArbitrage(
+      ROUTERS.QuickSwap,
+      ROUTERS.SushiSwap,
+      amountIn,
+      opportunity.pathForward,
+      opportunity.pathBack,
+      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS,
+      { gasLimit: 600000 }
+    );
+
+    console.log(`⛓ TX Sent: ${tx.hash}`);
+
     await tx.wait();
 
-    console.log(`✅ Transaction successful: ${tx.hash}`);
-    await fetchVaultBalance();  // Re-fetch balance after transaction
+    console.log("✅ Arbitrage executed successfully");
 
   } catch (err) {
-    console.error('Arbitrage failed, continuing scan:', err);
+    console.log("❌ Execution failed:", err.reason || err.shortMessage || err);
   }
-
-  // Re-scan after processing
-  await fetchLiquidity();
-  await fetchVaultBalance();
 }
 
-// Main loop: repeat every 30s
-async function mainLoop() {
+/* ================= MAIN LOOP ================= */
+
+async function main() {
+
+  console.log("🤖 Professional Arbitrage Bot Started\n");
+
+  await showAaveLiquidity();
+
   while (true) {
-    await executeArbitrage();
-    await sleep(SCAN_DELAY_MS);
+    await execute();
+    await sleep(SCAN_DELAY);
   }
 }
 
-mainLoop();
+main();
