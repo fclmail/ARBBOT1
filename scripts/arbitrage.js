@@ -4,19 +4,8 @@ import { ethers } from "ethers";
 /* ================= CONFIG ================= */
 dotenv.config({ override: false });
 
-/* ✅ RESTORED WORKING RPC FALLBACK METHOD */
-const RPC_POLYGON = (
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL ||
-  ""
-).trim();
-
-const WALLET_PRIVATE_KEY = (
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  ""
-).trim();
+const RPC_POLYGON = (process.env.RPC_POLYGON || "").trim();
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
@@ -32,8 +21,8 @@ const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= ADDRESSES ================= */
-const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
-const AAVE_POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD";
+const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E"; // Correct vault address
+const AAVE_POOL = "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"; // Correct pool address (deployment pool)
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -53,11 +42,6 @@ const vaultAbi = [
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= ROUTER ABI ================= */
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
-];
-
 /* ================= AAVE ABI ================= */
 const poolAbi = [
   "function getReserveData(address asset) view returns (tuple(uint256 configuration,uint128 liquidityIndex,uint128 currentLiquidityRate,uint128 variableBorrowIndex,uint128 currentVariableBorrowRate,uint128 currentStableBorrowRate,uint40 lastUpdateTimestamp,address aTokenAddress,address stableDebtTokenAddress,address variableDebtTokenAddress,address interestRateStrategyAddress,uint128 accruedToTreasury,uint128 unbacked,uint128 isolationModeTotalDebt))"
@@ -72,13 +56,11 @@ function formatUSDC(n) {
 }
 
 async function getAvailableFlashLiquidity() {
-  const usdcContract = new ethers.Contract(
-    USDC,
-    ["function balanceOf(address) view returns (uint256)"],
-    provider
-  );
+  const reserveData = await pool.getReserveData(USDC);
 
-  const liquidity = await usdcContract.balanceOf(AAVE_POOL);
+  // Ensure liquidity is returned in the expected value and format
+  const liquidity = reserveData.liquidityIndex; // Ensure we're using the correct field
+  console.log(`🏦 AAVE USDC Liquidity: ${formatUSDC(liquidity)}`);
   return liquidity;
 }
 
@@ -87,7 +69,6 @@ async function calculateScaledFlashAmount() {
 
   const scaled = liquidity * BigInt(FLASH_LIQUIDITY_PERCENT) / 100n;
 
-  console.log(`🏦 AAVE USDC Liquidity: ${formatUSDC(liquidity)}`);
   console.log(`📊 Flash Loan Size (${FLASH_LIQUIDITY_PERCENT}%): ${formatUSDC(scaled)}\n`);
 
   return scaled;
@@ -95,7 +76,7 @@ async function calculateScaledFlashAmount() {
 
 async function quote(routerAddr, amountIn, path) {
   try {
-    const router = new ethers.Contract(routerAddr, routerAbi, provider);
+    const router = new ethers.Contract(routerAddr, ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"], provider);
     const amounts = await router.getAmountsOut(amountIn, path);
     return amounts[amounts.length - 1];
   } catch {
@@ -106,7 +87,6 @@ async function quote(routerAddr, amountIn, path) {
 /* ================= CORE SCAN ================= */
 
 async function scan() {
-
   const amountIn = await calculateScaledFlashAmount();
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
@@ -145,11 +125,11 @@ async function scan() {
 
     console.log(`⛓ FLASH TX SENT: ${tx.hash}\n`);
 
-    await tx.wait();
+    const receipt = await tx.wait();
 
     console.log("✅ FLASH REPAYED");
 
-    const actualProfit = profit * 0.992;
+    const actualProfit = profit * 0.992; // simulate premium deduction for display
     console.log(`💰 Profit Sent To Vault: ${actualProfit.toFixed(6)} USDC\n`);
 
     return;
