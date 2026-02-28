@@ -16,7 +16,7 @@ const MIN_PROFIT_USDC = ethers.parseUnits("0.000001", 6); // 1 = 0.000001 USDC
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Contract ABI and address
+// Contract ABI and address (full including executeArbitrage)
 const contractABI = [
   {
     "inputs": [],
@@ -37,27 +37,50 @@ const contractABI = [
     "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
     "stateMutability": "nonpayable",
     "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "buyRouter", "type": "address" },
+      { "internalType": "address", "name": "sellRouter", "type": "address" },
+      { "internalType": "uint256", "name": "amountInUSDC", "type": "uint256" },
+      { "internalType": "address[]", "name": "pathToToken", "type": "address[]" },
+      { "internalType": "address[]", "name": "pathToUSDC", "type": "address[]" },
+      { "internalType": "uint256", "name": "deadline", "type": "uint256" }
+    ],
+    "name": "executeArbitrage",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
   }
 ];
 
 const contractAddress = '0xAB046582A36D00f4921C447db9b77644b5e43c95';
 const contract = new ethers.Contract(contractAddress, contractABI, wallet);
 
-// Helper: Fetch AAVE liquidity (example placeholder)
+// Helper: Fetch AAVE liquidity
 async function fetchLiquidity() {
   try {
-    const liquidity = await contract.POOL();
-    console.log(`🏦 AAVE USDC Liquidity: ${ethers.formatUnits(liquidity, 18)}`);
+    const poolAddress = await contract.POOL();
+    console.log(`🏦 AAVE USDC Liquidity Pool Address: ${poolAddress}`);
   } catch (err) {
     console.error('Error fetching liquidity:', err);
   }
 }
 
-// Helper: Fetch vault balance
+// Helper: Fetch vault balance (with error handling so scan continues)
 async function fetchVaultBalance() {
+  if (!VAULT_ADDRESS) {
+    console.warn('Vault address not set, skipping balance fetch');
+    return;
+  }
+
   try {
-    const vault = new ethers.Contract(VAULT_ADDRESS, ['function balanceOf(address) view returns (uint256)'], provider);
-    const balance = await vault.balanceOf(VAULT_ADDRESS);
+    const vaultContract = new ethers.Contract(
+      VAULT_ADDRESS,
+      ['function balanceOf(address) view returns (uint256)'],
+      provider
+    );
+    const balance = await vaultContract.balanceOf(VAULT_ADDRESS);
     console.log(`🔹 Vault Balance: ${ethers.formatUnits(balance, 6)} USDC`);
   } catch (err) {
     console.error('Error fetching vault balance:', err);
@@ -66,14 +89,14 @@ async function fetchVaultBalance() {
 
 // Main arbitrage execution
 async function executeArbitrage() {
+  console.log('🚀 Arbitrage bot started');
+
+  await fetchLiquidity();
+  await fetchVaultBalance();
+
+  const amountInUSDC = ethers.parseUnits(AMOUNT_IN_HUMAN, 6);
+
   try {
-    console.log('🚀 Arbitrage bot started');
-
-    await fetchLiquidity();
-    await fetchVaultBalance();
-
-    const amountInUSDC = ethers.parseUnits(AMOUNT_IN_HUMAN, 6);
-
     const tx = await contract.executeArbitrage(
       BUY_ROUTER,
       SELL_ROUTER,
@@ -84,13 +107,22 @@ async function executeArbitrage() {
     );
 
     await tx.wait();
-    console.log(`Transaction successful: ${tx.hash}`);
-
-    await fetchLiquidity();
-    await fetchVaultBalance();
+    console.log(`✅ Transaction successful: ${tx.hash}`);
   } catch (err) {
-    console.error('Arbitrage failed:', err);
+    console.error('Arbitrage failed, continuing scan:', err);
+  }
+
+  // Continue scan regardless
+  await fetchLiquidity();
+  await fetchVaultBalance();
+}
+
+// Loop for scanning (example: repeat every 30 seconds)
+async function mainLoop() {
+  while (true) {
+    await executeArbitrage();
+    await new Promise(r => setTimeout(r, 30000));
   }
 }
 
-executeArbitrage();
+mainLoop();
