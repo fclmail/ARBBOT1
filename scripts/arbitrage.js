@@ -9,18 +9,16 @@ const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVAT
 const AAVE_POOL = (process.env.AAVE_POOL || "0x794a61358D6845594F94dc1DB02A252b5b4814aD").trim(); // Default pool
 const VAULT_ADDRESS = (process.env.VAULT_ADDRESS || "0xAB046582A36D00f4921C447db9b77644b5e43c95").trim(); // Vault
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing");
-if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing");
-if (!AAVE_POOL) throw new Error("AAVE_POOL env variable missing");
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
+if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
+if (!AAVE_POOL) throw new Error("AAVE_POOL missing");
 
 /* ================= CONSTANTS / SAFEGUARDS ================= */
 const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.002);
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.000001);
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 4000);
 const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
-let MIN_SWEEP_AMOUNT = Number(process.env.MIN_SWEEP_AMOUNT || 0.000001);
 const DRY_RUN = (process.env.DRY_RUN || "false").toLowerCase() === "true";
-
 const GAS_PRICE_GWEI = process.env.GAS_PRICE_GWEI ? Number(process.env.GAS_PRICE_GWEI) : undefined;
 const GAS_LIMIT = process.env.GAS_LIMIT ? Number(process.env.GAS_LIMIT) : undefined;
 const TX_RETRY_ATTEMPTS = Number(process.env.TX_RETRY_ATTEMPTS || 1);
@@ -78,24 +76,16 @@ const RESET = "\x1b[0m";
 
 /* ================= HELPERS ================= */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function formatUSDC(n) { return Number(ethers.formatUnits(n, 6)).toFixed(6); }
 
-function formatUSDC(n) {
-  try {
-    return Number(ethers.formatUnits(n, 6)).toFixed(6);
-  } catch {
-    return String(n);
-  }
-}
-
-/* ===== AAVE FLASH SIMULATION ===== */
+/* ================= AAVE FLASH SIMULATION ================= */
 async function getAaveLiquidity() {
   try {
     const pool = new ethers.Contract(AAVE_POOL, [
-      "function getReserveData(address asset) view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, address aTokenAddress, uint8 id, uint16 reserveFlags)"
+      "function getReserveData(address asset) view returns (uint256 configuration,uint128 liquidityIndex,uint128 variableBorrowIndex,uint128 currentLiquidityRate,uint128 currentVariableBorrowRate,uint128 currentStableBorrowRate,uint40 lastUpdateTimestamp,address aTokenAddress,uint8 id,uint16 reserveFlags)"
     ], provider);
-
     const reserve = await pool.getReserveData(TOKENS.USDC);
-    const availableLiquidity = BigInt(reserve[1]); // variableBorrowIndex as placeholder
+    const availableLiquidity = BigInt(reserve[1]); // use safe placeholder
     return availableLiquidity;
   } catch (err) {
     console.log("⚠️ Aave liquidity fetch error:", err.message ?? err);
@@ -103,7 +93,7 @@ async function getAaveLiquidity() {
   }
 }
 
-/* ===== QUOTE HELPER ===== */
+/* ================= QUOTE HELPER ================= */
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -114,7 +104,7 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ===== PATH GENERATION ===== */
+/* ================= PATH GENERATION ================= */
 const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
 function generatePaths(base, token) {
   let paths = [];
@@ -123,24 +113,26 @@ function generatePaths(base, token) {
   return paths;
 }
 
-/* ===== CORE ARBITRAGE LOGIC WITH FLASH SIMULATION ===== */
+/* ================= ARBITRAGE WITH DYNAMIC FLASH AMOUNT ================= */
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath = null) {
   const usdcAddress = await vault.usdc();
   const directPathBuy = buyPath || [usdcAddress, tokenAddr];
   const directPathSell = sellPath || [tokenAddr, usdcAddress];
 
   const availableLiquidity = await getAaveLiquidity();
-  const optimalFlashAmount = availableLiquidity / 10n; // safe 10%
+  if (availableLiquidity === 0n) return { profit: 0, success: false };
 
-  const amountIn = ethers.parseUnits("1", 6); // fallback minimal trade
+  // Choose a "safe fraction" to avoid log overflows or negative profit
+  const safeFlash = availableLiquidity / 1000n; // 0.1% of total liquidity
+  const flashAmount = safeFlash > 0n ? safeFlash : 1_000_000n; // minimum trade
 
-  console.log(`🏦 Aave Available USDC Liquidity: ${ethers.formatUnits(availableLiquidity, 6)}`);
-  console.log(`⚙️ Optimal Flash Amount: ${ethers.formatUnits(optimalFlashAmount, 6)} USDC`);
+  console.log(`🏦 Aave Available USDC Liquidity: ${formatUSDC(availableLiquidity)}`);
+  console.log(`⚙️ Optimal Flash Amount: ${formatUSDC(flashAmount)}`);
   console.log("🧪 Running Flash Simulation...");
 
-  const buyOut = await quote(buyRouter, amountIn, directPathBuy);
+  const buyOut = await quote(buyRouter, flashAmount, directPathBuy);
   const sellOut = await quote(sellRouter, buyOut ?? 0, directPathSell);
-  const profit = Number(ethers.formatUnits(sellOut ?? 0, 6)) - Number(ethers.formatUnits(amountIn, 6));
+  const profit = Number(ethers.formatUnits(sellOut ?? 0, 6)) - Number(ethers.formatUnits(flashAmount, 6));
 
   console.log(`💰 Expected Profit: ${profit.toFixed(6)} USDC`);
   if (profit < MIN_EXPECTED_PROFIT) return { profit, success: false };
@@ -161,13 +153,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath
       if (GAS_LIMIT) txOpts.gasLimit = GAS_LIMIT;
 
       tx = await vault.executeArbitrage(
-        buyRouter,
-        sellRouter,
-        amountIn,
-        directPathBuy,
-        directPathSell,
-        deadline,
-        txOpts
+        buyRouter, sellRouter, flashAmount, directPathBuy, directPathSell, deadline, txOpts
       );
       console.log(`⛓ TX SENT: ${tx.hash}`);
       await tx.wait();
@@ -183,7 +169,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath = null, sellPath
   return { profit, success: true, txHash: tx?.hash ?? null };
 }
 
-/* ===== MAIN LOOP ===== */
+/* ================= MAIN LOOP ================= */
 (async () => {
   console.log(`✅ Connected to RPC: ${RPC_POLYGON}`);
   console.log("🚀 Arbitrage bot started");
