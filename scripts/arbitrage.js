@@ -1,17 +1,7 @@
+
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-
-/* ================= 🟢1 GLOBAL PROMISE SAFETY ================= */
-//🟢1 Prevent silent exit on unhandled promise rejection
-process.on("unhandledRejection", (reason) => {
-  console.log("UNHANDLED REJECTION:", reason);
-});
-
-/* ================= 🟢2 GLOBAL EXCEPTION SAFETY ================= */
-//🟢2 Prevent silent exit on uncaught exception
-process.on("uncaughtException", (err) => {
-  console.log("UNCAUGHT EXCEPTION:", err);
-});
 
 /* ================= ENV ================= */
 dotenv.config({ override: false });
@@ -71,7 +61,7 @@ const vaultAbi = [
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= USDC ABI ================= */
+/* ================= USDC ABI (FOR VAULT BALANCE) ================= */
 const usdcAbi = [
   "function balanceOf(address owner) view returns (uint256)"
 ];
@@ -145,23 +135,7 @@ async function quote(routerAddr, amountIn, path) {
 /* ================= ARBITRAGE ================= */
 async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   const usdc = TOKENS.USDC;
-
-  //🟢1: Use multiplier from env, default 1
-  const MULTIPLIER_STR = process.env.TRADE_MULTIPLIER || "1";
-  const MULTIPLIER = parseFloat(MULTIPLIER_STR);
-  if (!Number.isFinite(MULTIPLIER) || MULTIPLIER <= 0) {
-    throw new Error(`Invalid TRADE_MULTIPLIER: ${MULTIPLIER_STR}`);
-  }
-
-  //🟢2: Base trade amount in USDC (6 decimals)
-  let amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6); // BigNumber
-
-  //🟢2: Apply multiplier safely using integer math
-  const multiplierScaled = Math.floor(MULTIPLIER * 1_000_000); 
-  const amountInFinal = amountIn.mul(multiplierScaled).div(1_000_000n);
-
-  //🟢3: Debug log for verification
-  console.log("DEBUG amountInFinal after multiplier:", ethers.formatUnits(amountInFinal, 6));
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   let bestBuyOut, bestBuyPath;
   for (const p of [
@@ -171,7 +145,7 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
     [usdc, TOKENS.USDT, tokenAddr],
     [usdc, TOKENS.DAI, tokenAddr]
   ]) {
-    const out = await quote(buyRouter, amountInFinal, p);
+    const out = await quote(buyRouter, amountIn, p);
     if (out && (!bestBuyOut || out > bestBuyOut)) {
       bestBuyOut = out;
       bestBuyPath = p;
@@ -195,12 +169,16 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return null;
 
-  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+  const profit =
+    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+
   if (profit < MIN_EXPECTED_PROFIT) return null;
 
-  console.log(`${GREEN}PROFIT FOUND:${RESET} Gross: ${profit.toFixed(6)} USDC`);
+  console.log(
+    `${GREEN}PROFIT FOUND:${RESET} Gross: ${profit.toFixed(6)} USDC`
+  );
 
-  return { buyRouter, sellRouter, amountIn: amountInFinal, bestBuyPath, bestSellPath };
+  return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath };
 }
 
 /* ================= ATOMIC BATCH FLASH ================= */
@@ -225,9 +203,12 @@ async function batchArb() {
   if (profitableTrades.length === 0)
     return console.log("No profitable trades found");
 
-  console.log(`${YELLOW}Collected ${profitableTrades.length} profitable trades${RESET}`);
+  console.log(
+    `${YELLOW}Collected ${profitableTrades.length} profitable trades${RESET}`
+  );
 
-  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  const deadline =
+    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   const buyRouters = profitableTrades.map((t) => t.buyRouter);
   const sellRouters = profitableTrades.map((t) => t.sellRouter);
@@ -236,7 +217,10 @@ async function batchArb() {
   const pathsToUSDC = profitableTrades.map((t) => t.bestSellPath);
 
   try {
-    console.log(`${CYAN}Executing batch (min contract profit: 0.000001 USDC)${RESET}`);
+
+    console.log(
+      `${CYAN}Executing batch (min contract profit: 0.000001 USDC)${RESET}`
+    );
 
     await vault.executeFlashBatchArbitrage.staticCall(
       buyRouters,
@@ -249,54 +233,60 @@ async function batchArb() {
 
     console.log(`${CYAN}Batch static simulation passed${RESET}`);
 
-    const estimatedGas = await vault.executeFlashBatchArbitrage.estimateGas(
-      buyRouters,
-      sellRouters,
-      amountsInUSDC,
-      pathsToToken,
-      pathsToUSDC,
-      deadline
-    );
+    const estimatedGas =
+      await vault.executeFlashBatchArbitrage.estimateGas(
+        buyRouters,
+        sellRouters,
+        amountsInUSDC,
+        pathsToToken,
+        pathsToUSDC,
+        deadline
+      );
 
     const gasLimit = (estimatedGas * 120n) / 100n;
 
-    console.log(`${CYAN}Batch gas estimate:${RESET} ${estimatedGas}`);
-
-    const tx = await vault.executeFlashBatchArbitrage(
-      buyRouters,
-      sellRouters,
-      amountsInUSDC,
-      pathsToToken,
-      pathsToUSDC,
-      deadline,
-      { gasLimit }
+    console.log(
+      `${CYAN}Batch gas estimate:${RESET} ${estimatedGas}`
     );
 
-    console.log(`${GREEN}Batch flash sent:${RESET} ${tx.hash}`);
+    const tx =
+      await vault.executeFlashBatchArbitrage(
+        buyRouters,
+        sellRouters,
+        amountsInUSDC,
+        pathsToToken,
+        pathsToUSDC,
+        deadline,
+        { gasLimit }
+      );
+
+    console.log(
+      `${GREEN}Batch flash sent:${RESET} ${tx.hash}`
+    );
 
     await tx.wait();
 
-    console.log(`${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`);
+    console.log(
+      `${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`
+    );
 
     await logBalances();
 
   } catch (err) {
-    console.log(`${RED}Batch trade failed:${RESET}`, decodeError(err));
+    console.log(
+      `${RED}Batch trade failed:${RESET}`,
+      decodeError(err)
+    );
   }
 }
 
 /* ================= MAIN LOOP ================= */
 async function main() {
   while (true) {
-    try {
-      //🟢3 Wrap each loop iteration to prevent exit
-      await batchArb();
-    } catch (err) {
-      console.log("Loop error:", decodeError(err));
-    }
-
+    await batchArb();
     await sleep(SCAN_INTERVAL_MS);
   }
 }
 
 main().catch(console.error);
+
