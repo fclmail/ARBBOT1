@@ -4,12 +4,12 @@ import { ethers } from "ethers";
 /* ================= CONFIG ================= */
 dotenv.config({ override: false });
 
-// Use the more flexible method for loading RPC variable
+// Use the flexible method for loading the PRIVATE_KEY variable
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
 const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || "").trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 
 /* ================= SETTINGS ================= */
 const FLASH_LIQUIDITY_PERCENT = Number(process.env.FLASH_LIQUIDITY_PERCENT || 5);
