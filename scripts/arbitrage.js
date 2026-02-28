@@ -4,22 +4,11 @@ import { ethers } from "ethers";
 /* ================= CONFIG ================= */
 dotenv.config({ override: false });
 
-/* ✅ FIXED RPC INSERTION (FROM JS2) */
-const RPC_POLYGON = (
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL ||
-  ""
-).trim();
+const RPC_POLYGON = (process.env.RPC_POLYGON || "").trim();
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
 
-const WALLET_PRIVATE_KEY = (
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  ""
-).trim();
-
-if (!RPC_POLYGON) throw new Error("RPC_POLYGON is missing or empty");
-if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY is missing or empty");
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
+if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= SETTINGS ================= */
 const FLASH_LIQUIDITY_PERCENT = Number(process.env.FLASH_LIQUIDITY_PERCENT || 5);
@@ -71,17 +60,15 @@ function formatUSDC(n) {
   return Number(ethers.formatUnits(n, 6)).toFixed(6);
 }
 
+/* ✅ FIXED — CORRECT LIQUIDITY SOURCE */
 async function getAvailableFlashLiquidity() {
-  const reserveData = await pool.getReserveData(USDC);
-  const aTokenAddress = reserveData.aTokenAddress;
-
-  const aToken = new ethers.Contract(
-    aTokenAddress,
+  const usdcContract = new ethers.Contract(
+    USDC,
     ["function balanceOf(address) view returns (uint256)"],
     provider
   );
 
-  const liquidity = await aToken.balanceOf(AAVE_POOL);
+  const liquidity = await usdcContract.balanceOf(AAVE_POOL);
   return liquidity;
 }
 
