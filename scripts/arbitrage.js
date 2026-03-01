@@ -30,7 +30,7 @@ const MIN_EXPECTED_PROFIT = 0.0001; // min contract profit
 const SCAN_INTERVAL_MS = 1000; // scan every 1 second
 const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 8;
-const MIN_TRADE_USDC = 0.04; // restored missing trade amount
+const MIN_TRADE_USDC = 0.02; // restored missing trade amount
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
