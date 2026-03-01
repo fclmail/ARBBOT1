@@ -30,6 +30,7 @@ const MIN_EXPECTED_PROFIT = 0.000001; // min contract profit
 const SCAN_INTERVAL_MS = 1000; // scan every 1 second
 const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 8;
+const MIN_TRADE_USDC = 0.02; // restored missing trade amount
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -132,17 +133,8 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   const vaultUSDCBalance = await usdc.balanceOf(VAULT_ADDRESS);
   const vaultUSDCFloat = Number(ethers.formatUnits(vaultUSDCBalance, 6));
 
-  // dynamic scaling (largest first)
-  const SCALE_FACTORS = [8, 6, 4, 2, 1];
-  let amountIn;
-  for (const n of SCALE_FACTORS) {
-    const proposedTrade = vaultUSDCFloat * n;
-    if (proposedTrade > 0 && proposedTrade <= vaultUSDCFloat + 1) {
-      amountIn = ethers.parseUnits(proposedTrade.toFixed(6), 6);
-      break;
-    }
-  }
-  if (!amountIn) amountIn = ethers.parseUnits("0.04", 6);
+  // Use MIN_TRADE_USDC as default trade amount (restored to 0.02)
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
   const USDC_ADDRESS = TOKENS.USDC;
 
@@ -222,7 +214,7 @@ async function batchArb() {
   const pathsToUSDC = profitableTrades.map((t) => t.bestSellPath);
 
   try {
-    console.log(`${CYAN}Executing batch (scaled max flash, min profit: ${MIN_EXPECTED_PROFIT} USDC)${RESET}`);
+    console.log(`${CYAN}Executing batch (min profit: ${MIN_EXPECTED_PROFIT} USDC)${RESET}`);
 
     await vault.executeFlashBatchArbitrage.staticCall(
       buyRouters,
