@@ -34,7 +34,7 @@ const MAX_BATCH_SIZE = 3;
 
 /* 🟢 Optimization Controls */
 const MAX_LIQUIDITY_PERCENT = 0.00015; // 0.5% pool
-const OPTIMIZATION_STEPS = 2;
+const OPTIMIZATION_STEPS = 1;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
