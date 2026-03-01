@@ -27,7 +27,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 const MIN_TRADE_USDC = 0.02;
-const MIN_EXPECTED_PROFIT = 0.00001;
+const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 3;
@@ -38,8 +38,6 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
-const AAVE_POOL_ADDRESS = "0x8dff5e27ea6b7ac08ebfdf9eb090f32ee9a30fcf"; // USDC aToken on Polygon
-
 const vaultAbi = [
   {
     name: "executeFlashBatchArbitrage",
@@ -59,9 +57,10 @@ const vaultAbi = [
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= USDC ABI ================= */
+/* ================= USDC ABI (FOR VAULT & AAVE) ================= */
 const usdcAbi = [
-  "function balanceOf(address owner) view returns (uint256)"
+  "function balanceOf(address owner) view returns (uint256)",
+  "function totalSupply() view returns (uint256)" //🟢1 added for AAVE total supply
 ];
 
 const usdc = new ethers.Contract(
@@ -70,7 +69,9 @@ const usdc = new ethers.Contract(
   provider
 );
 
-const aavePool = new ethers.Contract(AAVE_POOL_ADDRESS, usdcAbi, provider);
+/* ================= AAVE POOL ================= */
+const AAVE_POOL_ADDRESS = "0x8dFf5E27EA6b7AC08EbFdf9eB090F32ee9a30fcf"; // aUSDC token on Polygon
+const aUSDC = new ethers.Contract(AAVE_POOL_ADDRESS, usdcAbi, provider); //🟢2 AAVE fixed
 
 /* ================= ROUTERS ================= */
 const routers = {
@@ -111,20 +112,18 @@ function decodeError(err) {
   );
 }
 
-//🟢2. Enhanced balance logging including AAVE pool
 async function logBalances() {
+  // Vault USDC
   const vaultUSDC = await usdc.balanceOf(VAULT_ADDRESS);
-  const vaultFormatted = ethers.formatUnits(vaultUSDC, 6);
+  console.log(`${CYAN}Vault USDC Balance:${RESET} ${ethers.formatUnits(vaultUSDC, 6)}`);
 
+  // Wallet MATIC
   const maticBalance = await provider.getBalance(wallet.address);
-  const maticFormatted = ethers.formatEther(maticBalance);
+  console.log(`${CYAN}Wallet MATIC Balance:${RESET} ${ethers.formatEther(maticBalance)}`);
 
-  const aavePoolUSDC = await aavePool.balanceOf(TOKENS.USDC);
-  const aaveFormatted = ethers.formatUnits(aavePoolUSDC, 6);
-
-  console.log(`${CYAN}Vault USDC Balance:${RESET} ${vaultFormatted}`);
-  console.log(`${CYAN}Wallet MATIC Balance:${RESET} ${maticFormatted}`);
-  console.log(`${CYAN}AAVE USDC Pool Balance:${RESET} ${aaveFormatted}`); //🟢2.
+  //🟢3 Display AAVE Pool total liquidity
+  const aavePoolUSDC = await aUSDC.totalSupply();
+  console.log(`${CYAN}AAVE USDC Pool Balance:${RESET} ${ethers.formatUnits(aavePoolUSDC,6)}`);
 }
 
 async function quote(routerAddr, amountIn, path) {
@@ -174,16 +173,12 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return null;
 
-  const profitRaw = bestSellOut - amountIn;
-  const profit = ethers.formatUnits(profitRaw, 6);
+  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
-  if (Number(profit) < MIN_EXPECTED_PROFIT) return null;
+  if (profit < MIN_EXPECTED_PROFIT) return null;
 
-  console.log(
-    `${GREEN}PROFIT FOUND:${RESET} Gross: ${profit} USDC`
-  );
-
-  return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath, profit: profitRaw };
+  console.log(`${GREEN}PROFIT FOUND:${RESET} Gross: ${profit.toFixed(6)} USDC`);
+  return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath };
 }
 
 /* ================= ATOMIC BATCH FLASH ================= */
@@ -208,12 +203,9 @@ async function batchArb() {
   if (profitableTrades.length === 0)
     return console.log("No profitable trades found");
 
-  console.log(
-    `${YELLOW}Collected ${profitableTrades.length} profitable trades${RESET}`
-  );
+  console.log(`${YELLOW}Collected ${profitableTrades.length} profitable trades${RESET}`);
 
-  const deadline =
-    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   const buyRouters = profitableTrades.map((t) => t.buyRouter);
   const sellRouters = profitableTrades.map((t) => t.sellRouter);
@@ -222,9 +214,7 @@ async function batchArb() {
   const pathsToUSDC = profitableTrades.map((t) => t.bestSellPath);
 
   try {
-    console.log(
-      `${CYAN}Executing batch (min contract profit: 0.000001 USDC)${RESET}`
-    );
+    console.log(`${CYAN}Executing batch (min contract profit: 0.000001 USDC)${RESET}`);
 
     await vault.executeFlashBatchArbitrage.staticCall(
       buyRouters,
@@ -237,50 +227,36 @@ async function batchArb() {
 
     console.log(`${CYAN}Batch static simulation passed${RESET}`);
 
-    const estimatedGas =
-      await vault.executeFlashBatchArbitrage.estimateGas(
-        buyRouters,
-        sellRouters,
-        amountsInUSDC,
-        pathsToToken,
-        pathsToUSDC,
-        deadline
-      );
+    const estimatedGas = await vault.executeFlashBatchArbitrage.estimateGas(
+      buyRouters,
+      sellRouters,
+      amountsInUSDC,
+      pathsToToken,
+      pathsToUSDC,
+      deadline
+    );
 
     const gasLimit = (estimatedGas * 120n) / 100n;
 
-    console.log(
-      `${CYAN}Batch gas estimate:${RESET} ${estimatedGas}`
+    console.log(`${CYAN}Batch gas estimate:${RESET} ${estimatedGas}`);
+
+    const tx = await vault.executeFlashBatchArbitrage(
+      buyRouters,
+      sellRouters,
+      amountsInUSDC,
+      pathsToToken,
+      pathsToUSDC,
+      deadline,
+      { gasLimit }
     );
 
-    const tx =
-      await vault.executeFlashBatchArbitrage(
-        buyRouters,
-        sellRouters,
-        amountsInUSDC,
-        pathsToToken,
-        pathsToUSDC,
-        deadline,
-        { gasLimit }
-      );
-
-    console.log(
-      `${GREEN}Batch flash sent:${RESET} ${tx.hash}`
-    );
-
+    console.log(`${GREEN}Batch flash sent:${RESET} ${tx.hash}`);
     await tx.wait();
-
-    console.log(
-      `${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`
-    );
+    console.log(`${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`);
 
     await logBalances();
-
   } catch (err) {
-    console.log(
-      `${RED}Batch trade failed:${RESET}`,
-      decodeError(err)
-    );
+    console.log(`${RED}Batch trade failed:${RESET}`, decodeError(err));
   }
 }
 
