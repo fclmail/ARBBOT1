@@ -33,7 +33,7 @@ const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 3;
 
 /* 🟢2 OPTIMAL SIZE SETTINGS */
-const MAX_LIQUIDITY_PERCENT = 0.005; // 0.5% of pool
+const MAX_LIQUIDITY_PERCENT = 0.005; // 0.5% pool cap
 const OPTIMIZATION_STEPS = 6;
 
 /* ================= PROVIDER ================= */
@@ -62,15 +62,6 @@ const vaultAbi = [
 
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= USDC ================= */
-const usdcAbi = ["function balanceOf(address owner) view returns (uint256)"];
-
-const usdc = new ethers.Contract(
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  usdcAbi,
-  provider
-);
-
 /* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -84,7 +75,6 @@ const routerAbi = [
   "function factory() view returns (address)"
 ];
 
-/* ================= PAIR ABI ================= */
 const factoryAbi = [
   "function getPair(address tokenA, address tokenB) view returns (address)"
 ];
@@ -115,7 +105,17 @@ function decodeError(err) {
   return err?.reason || err?.message || "Unknown error";
 }
 
-/* 🟢1 DETECT LIVE LIQUIDITY */
+async function quote(routerAddr, amountIn, path) {
+  try {
+    const router = new ethers.Contract(routerAddr, routerAbi, provider);
+    const amounts = await router.getAmountsOut(amountIn, path);
+    return amounts.at(-1);
+  } catch {
+    return null;
+  }
+}
+
+/* 🟢1 LIVE LIQUIDITY */
 async function getLiquidity(routerAddr, tokenA, tokenB) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -136,92 +136,74 @@ async function getLiquidity(routerAddr, tokenA, tokenB) {
   }
 }
 
-async function quote(routerAddr, amountIn, path) {
-  try {
-    const router = new ethers.Contract(routerAddr, routerAbi, provider);
-    const amounts = await router.getAmountsOut(amountIn, path);
-    return amounts.at(-1);
-  } catch {
-    return null;
-  }
-}
-
-/* 🟢2 & 🟢3 OPTIMAL SIZE SEARCH */
+/* 🟢2 + 🟢3 PROFIT-FIRST + OPTIMIZATION */
 async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   const usdc = TOKENS.USDC;
 
+  /* --- PROFIT FIRST SMALL TEST --- */
+  const smallAmount = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
+  const smallBuyOut = await quote(buyRouter, smallAmount, [usdc, tokenAddr]);
+  if (!smallBuyOut) return null;
+
+  const smallSellOut = await quote(sellRouter, smallBuyOut, [tokenAddr, usdc]);
+  if (!smallSellOut) return null;
+
+  const smallProfit =
+    Number(ethers.formatUnits(smallSellOut, 6)) - MIN_TRADE_USDC;
+
+  if (smallProfit < MIN_EXPECTED_PROFIT) return null;
+
+  console.log(`${CYAN}Small profit detected. Optimizing size...${RESET}`);
+
+  /* --- OPTIMIZE ONLY IF SMALL PROFIT EXISTS --- */
   const liquidity = await getLiquidity(buyRouter, usdc, tokenAddr);
   if (!liquidity) return null;
 
   const maxSize =
-    (Number(ethers.formatUnits(liquidity, 6)) *
-      MAX_LIQUIDITY_PERCENT);
-
-  if (maxSize < MIN_TRADE_USDC) return null;
+    Number(ethers.formatUnits(liquidity, 6)) *
+    MAX_LIQUIDITY_PERCENT;
 
   let bestProfit = 0;
-  let bestAmount = null;
-  let bestBuyPath = null;
-  let bestSellPath = null;
+  let bestAmount = smallAmount;
 
   for (let i = 1; i <= OPTIMIZATION_STEPS; i++) {
-    const size =
-      (maxSize / OPTIMIZATION_STEPS) * i;
+    const size = (maxSize / OPTIMIZATION_STEPS) * i;
+    if (size <= MIN_TRADE_USDC) continue;
 
-    const amountIn =
-      ethers.parseUnits(size.toFixed(6), 6);
+    const amountIn = ethers.parseUnits(size.toFixed(6), 6);
 
-    for (const buyPath of [
-      [usdc, tokenAddr],
-      [usdc, TOKENS.WMATIC, tokenAddr],
-      [usdc, TOKENS.WETH, tokenAddr]
-    ]) {
-      const buyOut =
-        await quote(buyRouter, amountIn, buyPath);
-      if (!buyOut) continue;
+    const buyOut = await quote(buyRouter, amountIn, [usdc, tokenAddr]);
+    if (!buyOut) continue;
 
-      for (const sellPath of [
-        [tokenAddr, usdc],
-        [tokenAddr, TOKENS.WMATIC, usdc],
-        [tokenAddr, TOKENS.WETH, usdc]
-      ]) {
-        const sellOut =
-          await quote(sellRouter, buyOut, sellPath);
-        if (!sellOut) continue;
+    const sellOut = await quote(sellRouter, buyOut, [tokenAddr, usdc]);
+    if (!sellOut) continue;
 
-        const profit =
-          Number(ethers.formatUnits(sellOut, 6)) -
-          size;
+    const profit =
+      Number(ethers.formatUnits(sellOut, 6)) - size;
 
-        if (profit > bestProfit) {
-          bestProfit = profit;
-          bestAmount = amountIn;
-          bestBuyPath = buyPath;
-          bestSellPath = sellPath;
-        }
-      }
+    if (profit > bestProfit) {
+      bestProfit = profit;
+      bestAmount = amountIn;
     }
   }
 
-  if (bestProfit < MIN_EXPECTED_PROFIT)
-    return null;
+  if (bestProfit < MIN_EXPECTED_PROFIT) return null;
 
   console.log(
-    `${GREEN}PROFIT FOUND:${RESET} Gross: ${bestProfit.toFixed(
-      2
-    )} USDC`
+    `${GREEN}PROFIT FOUND:${RESET} Gross: ${bestProfit.toFixed(2)} USDC`
   );
 
   return {
     buyRouter,
     sellRouter,
     amountIn: bestAmount,
-    bestBuyPath,
-    bestSellPath
+    bestBuyPath: [usdc, tokenAddr],
+    bestSellPath: [tokenAddr, usdc]
   };
 }
 
-/* ================= BATCH EXECUTION ================= */
+/* ================= BATCH ================= */
 async function batchArb() {
   const profitableTrades = [];
 
@@ -229,21 +211,13 @@ async function batchArb() {
     for (const sell of Object.values(routers)) {
       if (buy === sell) continue;
       for (const token of Object.values(TOKENS)) {
-        const trade =
-          await findProfitableTrade(
-            buy,
-            sell,
-            token
-          );
+        const trade = await findProfitableTrade(buy, sell, token);
         if (trade) profitableTrades.push(trade);
-        if (profitableTrades.length === MAX_BATCH_SIZE)
-          break;
+        if (profitableTrades.length === MAX_BATCH_SIZE) break;
       }
-      if (profitableTrades.length === MAX_BATCH_SIZE)
-        break;
+      if (profitableTrades.length === MAX_BATCH_SIZE) break;
     }
-    if (profitableTrades.length === MAX_BATCH_SIZE)
-      break;
+    if (profitableTrades.length === MAX_BATCH_SIZE) break;
   }
 
   if (!profitableTrades.length)
@@ -254,19 +228,9 @@ async function batchArb() {
   );
 
   const deadline =
-    Math.floor(Date.now() / 1000) +
-    DEADLINE_SECONDS;
+    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   try {
-    await vault.executeFlashBatchArbitrage.staticCall(
-      profitableTrades.map((t) => t.buyRouter),
-      profitableTrades.map((t) => t.sellRouter),
-      profitableTrades.map((t) => t.amountIn),
-      profitableTrades.map((t) => t.bestBuyPath),
-      profitableTrades.map((t) => t.bestSellPath),
-      deadline
-    );
-
     const tx =
       await vault.executeFlashBatchArbitrage(
         profitableTrades.map((t) => t.buyRouter),
@@ -277,20 +241,11 @@ async function batchArb() {
         deadline
       );
 
-    console.log(
-      `${GREEN}Batch flash sent:${RESET} ${tx.hash}`
-    );
-
+    console.log(`${GREEN}Batch flash sent:${RESET} ${tx.hash}`);
     await tx.wait();
-
-    console.log(
-      `${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`
-    );
+    console.log(`${GREEN}Batch confirmed — profits deposited${RESET}`);
   } catch (err) {
-    console.log(
-      `${RED}Batch failed:${RESET}`,
-      decodeError(err)
-    );
+    console.log(`${RED}Batch failed:${RESET}`, decodeError(err));
   }
 }
 
