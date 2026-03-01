@@ -38,6 +38,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
+const AAVE_POOL_ADDRESS = "0x8dff5e27ea6b7ac08ebfdf9eb090f32ee9a30fcf"; // USDC aToken on Polygon
 
 const vaultAbi = [
   {
@@ -68,6 +69,8 @@ const usdc = new ethers.Contract(
   usdcAbi,
   provider
 );
+
+const aavePool = new ethers.Contract(AAVE_POOL_ADDRESS, usdcAbi, provider);
 
 /* ================= ROUTERS ================= */
 const routers = {
@@ -108,15 +111,20 @@ function decodeError(err) {
   );
 }
 
+//🟢2. Enhanced balance logging including AAVE pool
 async function logBalances() {
   const vaultUSDC = await usdc.balanceOf(VAULT_ADDRESS);
-  const formattedVaultUSDC = ethers.formatUnits(vaultUSDC, 6); //🟢1. Full 6-decimal precision
+  const vaultFormatted = ethers.formatUnits(vaultUSDC, 6);
 
   const maticBalance = await provider.getBalance(wallet.address);
-  const formattedMatic = ethers.formatEther(maticBalance); //🟢1.
+  const maticFormatted = ethers.formatEther(maticBalance);
 
-  console.log(`${CYAN}Vault USDC Balance:${RESET} ${formattedVaultUSDC}`);
-  console.log(`${CYAN}Wallet MATIC Balance:${RESET} ${formattedMatic}`);
+  const aavePoolUSDC = await aavePool.balanceOf(TOKENS.USDC);
+  const aaveFormatted = ethers.formatUnits(aavePoolUSDC, 6);
+
+  console.log(`${CYAN}Vault USDC Balance:${RESET} ${vaultFormatted}`);
+  console.log(`${CYAN}Wallet MATIC Balance:${RESET} ${maticFormatted}`);
+  console.log(`${CYAN}AAVE USDC Pool Balance:${RESET} ${aaveFormatted}`); //🟢2.
 }
 
 async function quote(routerAddr, amountIn, path) {
@@ -166,13 +174,13 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return null;
 
-  const profitRaw = bestSellOut - amountIn; //🟢1. Full BigInt, no rounding
-  const profit = ethers.formatUnits(profitRaw, 6); //🟢1. Display full 6-decimals
+  const profitRaw = bestSellOut - amountIn;
+  const profit = ethers.formatUnits(profitRaw, 6);
 
   if (Number(profit) < MIN_EXPECTED_PROFIT) return null;
 
   console.log(
-    `${GREEN}PROFIT FOUND:${RESET} Gross: ${profit} USDC` //🟢1.
+    `${GREEN}PROFIT FOUND:${RESET} Gross: ${profit} USDC`
   );
 
   return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath, profit: profitRaw };
@@ -214,7 +222,6 @@ async function batchArb() {
   const pathsToUSDC = profitableTrades.map((t) => t.bestSellPath);
 
   try {
-
     console.log(
       `${CYAN}Executing batch (min contract profit: 0.000001 USDC)${RESET}`
     );
