@@ -1,6 +1,3 @@
-🎯🧿Js 0.00123 v 0.0000123 10:33 pm⬆️
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
