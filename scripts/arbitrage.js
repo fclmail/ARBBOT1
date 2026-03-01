@@ -32,8 +32,8 @@ const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 3;
 
-/* 🟢2 OPTIMAL SIZE SETTINGS */
-const MAX_LIQUIDITY_PERCENT = 0.005; // 0.5% pool cap
+/* 🟢 Optimization Controls */
+const MAX_LIQUIDITY_PERCENT = 0.005; // 0.5% pool
 const OPTIMIZATION_STEPS = 6;
 
 /* ================= PROVIDER ================= */
@@ -115,7 +115,7 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* 🟢1 LIVE LIQUIDITY */
+/* 🟢 LIVE LIQUIDITY */
 async function getLiquidity(routerAddr, tokenA, tokenB) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -136,71 +136,93 @@ async function getLiquidity(routerAddr, tokenA, tokenB) {
   }
 }
 
-/* 🟢2 + 🟢3 PROFIT-FIRST + OPTIMIZATION */
+/* 🟢 PROFIT-FIRST + FULL HOP PATHS + OPTIMIZE */
 async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   const usdc = TOKENS.USDC;
-
-  /* --- PROFIT FIRST SMALL TEST --- */
   const smallAmount = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  const smallBuyOut = await quote(buyRouter, smallAmount, [usdc, tokenAddr]);
-  if (!smallBuyOut) return null;
+  let smallProfitDetected = false;
 
-  const smallSellOut = await quote(sellRouter, smallBuyOut, [tokenAddr, usdc]);
-  if (!smallSellOut) return null;
+  const buyPaths = [
+    [usdc, tokenAddr],
+    [usdc, TOKENS.WMATIC, tokenAddr],
+    [usdc, TOKENS.WETH, tokenAddr],
+    [usdc, TOKENS.USDT, tokenAddr],
+    [usdc, TOKENS.DAI, tokenAddr]
+  ];
 
-  const smallProfit =
-    Number(ethers.formatUnits(smallSellOut, 6)) - MIN_TRADE_USDC;
+  const sellPaths = [
+    [tokenAddr, usdc],
+    [tokenAddr, TOKENS.WMATIC, usdc],
+    [tokenAddr, TOKENS.WETH, usdc],
+    [tokenAddr, TOKENS.USDT, usdc],
+    [tokenAddr, TOKENS.DAI, usdc]
+  ];
 
-  if (smallProfit < MIN_EXPECTED_PROFIT) return null;
+  for (const buyPath of buyPaths) {
+    const smallBuyOut = await quote(buyRouter, smallAmount, buyPath);
+    if (!smallBuyOut) continue;
 
-  console.log(`${CYAN}Small profit detected. Optimizing size...${RESET}`);
+    for (const sellPath of sellPaths) {
+      const smallSellOut = await quote(sellRouter, smallBuyOut, sellPath);
+      if (!smallSellOut) continue;
 
-  /* --- OPTIMIZE ONLY IF SMALL PROFIT EXISTS --- */
-  const liquidity = await getLiquidity(buyRouter, usdc, tokenAddr);
-  if (!liquidity) return null;
+      const smallProfit =
+        Number(ethers.formatUnits(smallSellOut, 6)) - MIN_TRADE_USDC;
 
-  const maxSize =
-    Number(ethers.formatUnits(liquidity, 6)) *
-    MAX_LIQUIDITY_PERCENT;
+      if (smallProfit >= MIN_EXPECTED_PROFIT) {
+        smallProfitDetected = true;
+        console.log(`${CYAN}Small profit detected. Optimizing size...${RESET}`);
 
-  let bestProfit = 0;
-  let bestAmount = smallAmount;
+        const liquidity = await getLiquidity(buyRouter, usdc, tokenAddr);
+        if (!liquidity) return null;
 
-  for (let i = 1; i <= OPTIMIZATION_STEPS; i++) {
-    const size = (maxSize / OPTIMIZATION_STEPS) * i;
-    if (size <= MIN_TRADE_USDC) continue;
+        const maxSize =
+          Number(ethers.formatUnits(liquidity, 6)) *
+          MAX_LIQUIDITY_PERCENT;
 
-    const amountIn = ethers.parseUnits(size.toFixed(6), 6);
+        let bestProfit = 0;
+        let bestAmount = smallAmount;
 
-    const buyOut = await quote(buyRouter, amountIn, [usdc, tokenAddr]);
-    if (!buyOut) continue;
+        for (let i = 1; i <= OPTIMIZATION_STEPS; i++) {
+          const size = (maxSize / OPTIMIZATION_STEPS) * i;
+          if (size <= MIN_TRADE_USDC) continue;
 
-    const sellOut = await quote(sellRouter, buyOut, [tokenAddr, usdc]);
-    if (!sellOut) continue;
+          const amountIn = ethers.parseUnits(size.toFixed(6), 6);
 
-    const profit =
-      Number(ethers.formatUnits(sellOut, 6)) - size;
+          const buyOut = await quote(buyRouter, amountIn, buyPath);
+          if (!buyOut) continue;
 
-    if (profit > bestProfit) {
-      bestProfit = profit;
-      bestAmount = amountIn;
+          const sellOut = await quote(sellRouter, buyOut, sellPath);
+          if (!sellOut) continue;
+
+          const profit =
+            Number(ethers.formatUnits(sellOut, 6)) - size;
+
+          if (profit > bestProfit) {
+            bestProfit = profit;
+            bestAmount = amountIn;
+          }
+        }
+
+        if (bestProfit >= MIN_EXPECTED_PROFIT) {
+          console.log(
+            `${GREEN}PROFIT FOUND:${RESET} Gross: ${bestProfit.toFixed(2)} USDC`
+          );
+
+          return {
+            buyRouter,
+            sellRouter,
+            amountIn: bestAmount,
+            bestBuyPath: buyPath,
+            bestSellPath: sellPath
+          };
+        }
+      }
     }
   }
 
-  if (bestProfit < MIN_EXPECTED_PROFIT) return null;
-
-  console.log(
-    `${GREEN}PROFIT FOUND:${RESET} Gross: ${bestProfit.toFixed(2)} USDC`
-  );
-
-  return {
-    buyRouter,
-    sellRouter,
-    amountIn: bestAmount,
-    bestBuyPath: [usdc, tokenAddr],
-    bestSellPath: [tokenAddr, usdc]
-  };
+  return null;
 }
 
 /* ================= BATCH ================= */
@@ -249,8 +271,9 @@ async function batchArb() {
   }
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= MAIN ================= */
 async function main() {
+  console.log("Run node scripts/arbitrage.js\n");
   while (true) {
     await batchArb();
     await sleep(SCAN_INTERVAL_MS);
