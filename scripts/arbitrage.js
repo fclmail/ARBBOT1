@@ -26,7 +26,7 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = 1000;
+const MIN_TRADE_USDC = 0.0002;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
@@ -34,7 +34,7 @@ const MAX_BATCH_SIZE = 3;
 
 /* 🟢 Optimization Controls */
 const MAX_LIQUIDITY_PERCENT = 0.00015; // 0.5% pool
-const OPTIMIZATION_STEPS = 8;
+const OPTIMIZATION_STEPS = 280;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
