@@ -33,7 +33,7 @@ const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 3;
 
 /* 🟢 Optimization Controls */
-const MAX_LIQUIDITY_PERCENT = 90; // 0.5% pool
+const MAX_LIQUIDITY_PERCENT = 0.0000010; // 0.5% pool
 const OPTIMIZATION_STEPS = 3;
 
 /* ================= PROVIDER ================= */
