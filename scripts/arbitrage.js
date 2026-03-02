@@ -1,135 +1,108 @@
-// scripts/arbitrage.js
-import dotenv from "dotenv";
-dotenv.config();
+// arbitrage.js
+const { ethers } = require("ethers");
 
-import { ethers } from "ethers";
+// --- CONFIGURATION ---
+const provider = new ethers.providers.JsonRpcProvider("https://polygon-rpc.com/");
+const walletPrivateKey = "YOUR_PRIVATE_KEY"; // replace with your wallet
+const wallet = new ethers.Wallet(walletPrivateKey, provider);
 
-// ------------------ CONFIG ------------------
-const DRY_RUN = false; // real execution
-const MIN_EXPECTED_PROFIT = parseFloat(process.env.MIN_EXPECTED_PROFIT || "0.00001"); // USDC
-const SCAN_DELAY_MS = parseInt(process.env.SCAN_DELAY_MS || "4000");
+// Routers
+const routers = [
+  "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506", // SushiSwap / SushiswapV2Router
+  "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"  // QuickSwap
+];
 
-// ------------------ PROVIDER & WALLET ------------------
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+// Tokens
+const USDC  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const WMATIC= "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+const WETH  = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
-// ------------------ TOKENS ------------------
-const TOKENS = {
-  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-};
+// Hop paths (example)
+const paths = [
+  [USDC, WMATIC, WETH],
+  [WETH, WMATIC, USDC]
+];
 
-// ------------------ ROUTERS ------------------
-const ROUTERS = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-};
-
-// ------------------ ERC20 ABI ------------------
+// ERC20 ABI (minimal)
 const ERC20_ABI = [
-  "function balanceOf(address account) view returns (uint256)",
-  "function approve(address spender, uint256 amount) returns (bool)",
+  "function balanceOf(address) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)"
 ];
 
-// ------------------ ROUTER ABI ------------------
+// UniswapV2 Router ABI (minimal)
 const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)",
-  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) returns (uint[] memory)"
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory amounts)",
+  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) returns (uint[] memory amounts)"
 ];
 
-// ------------------ ROUTER SUPPORT MAP ------------------
-const SUPPORTED_TOKENS = {
-  [ROUTERS.QuickSwap]: [TOKENS.USDC, TOKENS.USDT, TOKENS.WMATIC, TOKENS.WETH],
-  [ROUTERS.SushiSwap]: [TOKENS.USDC, TOKENS.USDT, TOKENS.WMATIC, TOKENS.WETH],
-  [ROUTERS.ApeSwap]: [TOKENS.USDC, TOKENS.USDT, TOKENS.WMATIC, TOKENS.WETH],
-};
-
-// ------------------ UTILS ------------------
-function isPathSupported(router, path) {
-  const supported = SUPPORTED_TOKENS[router];
-  return path.every(token => supported.includes(token)) && new Set(path).size === path.length;
-}
-
-async function approveToken(tokenAddress, routerAddress) {
+// --- HELPERS ---
+async function approveToken(tokenAddress, spender, amount) {
   const token = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
-  const allowance = await token.balanceOf(routerAddress);
-  if (allowance.isZero()) {
-    const max = ethers.parseUnits("1000000", 18); // large approval
-    const tx = await token.approve(routerAddress, max);
-    await tx.wait();
-    console.log(`✅ Approved ${tokenAddress} for router ${routerAddress}`);
+  const allowance = await token.allowance(wallet.address, spender);
+  if (allowance.lt(amount)) {
+    console.log(`Approving ${tokenAddress} for ${spender}...`);
+    await token.approve(spender, amount);
   }
 }
 
-async function getQuote(routerAddress, path, amountIn) {
-  const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
-  try {
-    if (!isPathSupported(routerAddress, path)) return null;
-    const amounts = await router.getAmountsOut(amountIn, path);
-    // Convert to BigNumbers
-    const amountsBN = amounts.map(a => ethers.BigNumber.from(a.toString()));
-    return amountsBN[amountsBN.length - 1];
-  } catch (err) {
-    console.warn(`⚠️ Quote failed | Router: ${routerAddress} | Path: ${path.join("->")} | Error: ${err.message}`);
-    return null;
-  }
+async function getWalletBalance(tokenAddress) {
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
+  const balance = await token.balanceOf(wallet.address);
+  return balance;
 }
 
-async function performSwap(routerAddress, path, amountIn) {
-  const router = new ethers.Contract(routerAddress, ROUTER_ABI, wallet);
-  const deadline = Math.floor(Date.now() / 1000) + 60; // 1 min expiry
+// --- ARBITRAGE LOOP ---
+async function runArbitrage() {
+  for (const routerAddress of routers) {
+    const router = new ethers.Contract(routerAddress, ROUTER_ABI, wallet);
 
-  // Approve token
-  await approveToken(path[0], routerAddress);
-
-  try {
-    const amounts = await router.getAmountsOut(amountIn, path);
-    const amountsBN = amounts.map(a => ethers.BigNumber.from(a.toString()));
-    const minOut = amountsBN[amountsBN.length - 1].mul(995).div(1000); // 0.5% slippage
-
-    const tx = await router.swapExactTokensForTokens(amountIn, minOut, path, wallet.address, deadline);
-    const receipt = await tx.wait();
-    console.log(`✅ Swap executed | Router: ${routerAddress} | Path: ${path.join("->")} | TxHash: ${receipt.transactionHash}`);
-  } catch (err) {
-    console.warn(`⚠️ Swap failed | Router: ${routerAddress} | Path: ${path.join("->")} | Error: ${err.message}`);
-  }
-}
-
-// ------------------ ARBITRAGE LOGIC ------------------
-async function scanAndTrade() {
-  console.log("💰 Checking wallet balances...");
-
-  // Set trade amount in smallest units
-  const tradeAmount = ethers.parseUnits("0.01", 6); // 0.01 USDC
-
-  const paths = [
-    [TOKENS.USDC, TOKENS.USDT],
-    [TOKENS.USDC, TOKENS.WMATIC, TOKENS.USDT],
-    [TOKENS.USDT, TOKENS.WETH, TOKENS.USDC]
-  ];
-
-  for (const router of Object.values(ROUTERS)) {
     for (const path of paths) {
-      const quote = await getQuote(router, path, tradeAmount);
-      if (quote && parseFloat(ethers.formatUnits(quote, 6)) > MIN_EXPECTED_PROFIT) {
-        await performSwap(router, path, tradeAmount);
+      try {
+        const amountIn = ethers.utils.parseUnits("10", 6); // 10 USDC
+
+        // Get quote
+        const amountsOut = await router.getAmountsOut(amountIn, path);
+        if (!amountsOut || amountsOut.length === 0) throw new Error("Invalid quote");
+        const estimatedOut = ethers.BigNumber.from(amountsOut[amountsOut.length - 1]);
+
+        console.log(`Quote on router ${routerAddress} | Path: ${path.join("->")} | Out: ${ethers.utils.formatUnits(estimatedOut, 18)}`);
+
+        // Approve token for router
+        await approveToken(path[0], routerAddress, amountIn);
+
+        // Swap
+        const tx = await router.swapExactTokensForTokens(
+          amountIn,
+          estimatedOut.mul(995).div(1000), // slippage 0.5%
+          path,
+          wallet.address, // profits back to wallet
+          Math.floor(Date.now() / 1000) + 60 * 10 // 10 min deadline
+        );
+
+        console.log(`Swap submitted | Tx hash: ${tx.hash}`);
+        await tx.wait();
+        console.log(`Swap confirmed!`);
+
+        // Check balances after swap
+        const finalBalance = await getWalletBalance(path[path.length - 1]);
+        console.log(`Wallet balance after swap: ${ethers.utils.formatUnits(finalBalance, 18)}`);
+      } catch (err) {
+        console.warn(`⚠️ Error | Router: ${routerAddress} | Path: ${path.join("->")} | ${err.message}`);
+        continue;
       }
     }
   }
 }
 
-// ------------------ MAIN LOOP ------------------
-async function main() {
-  console.log("🚀 Arbitrage bot started");
-  console.log(`DRY_RUN=${DRY_RUN} | MIN_EXPECTED_PROFIT=${MIN_EXPECTED_PROFIT} USDC | SCAN_DELAY_MS=${SCAN_DELAY_MS}`);
-
+// --- MAIN ---
+(async () => {
+  console.log("Starting arbitrage bot...");
   while (true) {
-    await scanAndTrade();
-    await new Promise(r => setTimeout(r, SCAN_DELAY_MS));
+    try {
+      await runArbitrage();
+      await new Promise(r => setTimeout(r, 5000)); // 5 sec delay
+    } catch (err) {
+      console.error(`Fatal error: ${err.message}`);
+    }
   }
-}
-
-main().catch(err => console.error(err));
+})();
