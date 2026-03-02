@@ -28,9 +28,9 @@ const RED = "\x1b[91m";
 /* ================= CONSTANTS ================= */
 const MIN_EXPECTED_PROFIT = 0.0000001; // min contract profit
 const SCAN_INTERVAL_MS = 1000; // scan every 1 second
-const DEADLINE_SECONDS = 60;
+const DEADLINE_SECONDS = 200;
 const MAX_BATCH_SIZE = 8;
-const MIN_TRADE_USDC = .10; // restored missing trade amount
+const MIN_TRADE_USDC = .2; // restored missing trade amount
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
