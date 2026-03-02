@@ -16,7 +16,7 @@ if (!RPC_POLYGON) throw new Error('RPC_POLYGON is missing');
 if (!WALLET_PRIVATE_KEY) throw new Error('WALLET_PRIVATE_KEY is missing');
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.2);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.002);
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.00001);
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 4000);
 const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
@@ -44,20 +44,14 @@ const vaultAbi = [
     stateMutability: 'nonpayable',
     type: 'function',
   },
-  {
-    inputs: [],
-    name: 'usdc',
-    outputs: [{ type: 'address' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
+  { inputs: [], name: 'usdc', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
 ];
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: '0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff',
-  SushiSwap: '0x1b02da8cb0d097eb8d57a175b88c7d47997506',
+  SushiSwap: '0x1b02da8cb0d097eb8d57a175b88c7d8b47997506',
   ApeSwap: '0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607',
 };
 const routerAbi = ['function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)'];
@@ -98,14 +92,17 @@ async function quote(routerAddr, amountIn, path) {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
     const amountOut = amounts[amounts.length - 1];
-
-    if (!amountOut || BigInt(amountOut) <= 0n) {
-      console.log(`${RED}⚠️ Quote returned non-positive amount | Router: ${routerAddr} | Path: ${path.join('->')}${RESET}`);
+    if (!amountOut || Number(amountOut) <= 0) {
+      console.log(
+        `${RED}⚠️ Quote returned non-positive amount | Router: ${routerAddr} | Path: ${path.join('->')}${RESET}`
+      );
       return { amountOut: null, ok: false, path, router: routerAddr };
     }
     return { amountOut, ok: true, path, router: routerAddr };
   } catch (e) {
-    console.log(`${RED}⚠️ Quote failed | Router: ${routerAddr} | Path: ${path.join('->')} | Error: ${e?.message || e}${RESET}`);
+    console.log(
+      `${RED}⚠️ Quote failed | Router: ${routerAddr} | Path: ${path.join('->')} | Error: ${e?.message || e}${RESET}`
+    );
     return { amountOut: null, ok: false, path, router: routerAddr };
   }
 }
@@ -115,17 +112,21 @@ const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
 
 function generatePaths(base, token) {
   const paths = [];
+
   if (base !== token) paths.push([base, token]);
   for (const hop of FALLBACK_HOPS) {
-    if (hop !== token && hop !== base) paths.push([base, hop, token]);
+    if (hop !== base && hop !== token) {
+      paths.push([base, hop, token]);
+    }
   }
-  return paths;
+
+  return paths.filter(path => path.every((addr, i, arr) => i === 0 || addr !== arr[i - 1]));
 }
 
 /* ================= BINARY SEARCH FOR OPTIMAL SIZE ================= */
 async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   let low = MIN_TRADE_USDC;
-  let high = 50; // max USDC per trade
+  let high = 50;
   let bestSize = low;
   let bestProfit = -Infinity;
 
@@ -135,13 +136,13 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
   while (high - low > 0.001 && it < maxIterations) {
     it++;
     const mid = (low + high) / 2;
-    const amountIn = ethers.parseUnits(mid.toFixed(6), 6); // ✅ fix decimal precision
+    const amountIn = ethers.parseUnits(mid.toFixed(6), 6);
 
     const buyRes = await quote(buyRouter, amountIn, buyPath);
-    if (!buyRes.ok || !buyRes.amountOut) continue;
+    if (!buyRes.ok || buyRes.amountOut == null) continue;
 
     const sellRes = await quote(sellRouter, buyRes.amountOut, sellPath);
-    if (!sellRes.ok || !sellRes.amountOut) continue;
+    if (!sellRes.ok || sellRes.amountOut == null) continue;
 
     const buyAmountUsdc = mid;
     const sellAmountUsdc = Number(ethers.formatUnits(sellRes.amountOut, 6));
@@ -163,7 +164,6 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
 /* ================= ARBITRAGE EXECUTION ================= */
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   const usdcAddress = await vault.usdc();
-
   const { optimalSize, expectedProfit } = await findOptimalTradeSize(
     buyRouter,
     sellRouter,
@@ -179,10 +179,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   console.log(`  Expected Profit: ${expectedProfit >= 0 ? GREEN : RED}${expectedProfit.toFixed(6)} USDC${RESET}`);
 
   if (!Number.isFinite(optimalSize) || Number.isNaN(optimalSize)) return;
-  if (expectedProfit < MIN_EXPECTED_PROFIT) {
-    console.log(`${YELLOW}⚠️ Profit below threshold, skipping...${RESET}`);
-    return;
-  }
+  if (expectedProfit < MIN_EXPECTED_PROFIT) return;
   if (DRY_RUN) {
     console.log('🔎 DRY RUN: would execute trade in vault');
     return;
@@ -193,14 +190,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
 
   for (let attempt = 0; attempt < TX_RETRY_ATTEMPTS; attempt++) {
     try {
-      const tx = await vault.executeArbitrage(
-        buyRouter,
-        sellRouter,
-        amountIn,
-        buyPath,
-        sellPath,
-        deadline
-      );
+      const tx = await vault.executeArbitrage(buyRouter, sellRouter, amountIn, buyPath, sellPath, deadline);
       console.log(`⛓ TX SENT: ${tx.hash}`);
       await tx.wait();
       console.log(`${GREEN}✅ ARB TRADE EXECUTED: profits now in vault${RESET}`);
@@ -212,10 +202,11 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   }
 }
 
-/* ================= PATH VALIDATION ================= */
+/* ================= PATH SANITY CHECK ================= */
 function isPathValid(path) {
   if (!path || !Array.isArray(path) || path.length < 2) return false;
   for (const addr of path) if (typeof addr !== 'string' || addr.length < 42) return false;
+  for (let i = 1; i < path.length; i++) if (path[i] === path[i - 1]) return false;
   return true;
 }
 
@@ -227,7 +218,6 @@ async function scan() {
   console.log(`💰 Vault USDC balance: ${formatUSDC(vaultUSDC)} USDC`);
 
   const tokenList = Object.values(TOKENS);
-
   for (const token of tokenList) {
     const buyPaths = generatePaths(usdcAddress, token);
     const sellPaths = generatePaths(token, usdcAddress);
@@ -244,7 +234,6 @@ async function scan() {
         }
       }
     }
-
     await Promise.all(arbPromises);
     await sleep(500);
   }
@@ -254,7 +243,6 @@ async function scan() {
 (async () => {
   console.log('🚀 Arbitrage bot started');
   console.log(`DRY_RUN=${DRY_RUN} | MIN_EXPECTED_PROFIT=${MIN_EXPECTED_PROFIT} USDC | SCAN_DELAY_MS=${SCAN_DELAY_MS}`);
-
   while (true) {
     try {
       await scan();
