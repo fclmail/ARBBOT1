@@ -1,144 +1,146 @@
 // scripts/arbitrage.js
 import { ethers } from "ethers";
+import dotenv from "dotenv";
+dotenv.config();
 
-const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-const provider = new ethers.JsonRpcProvider(RPC_URL);
+// =============================
+// CONFIG
+// =============================
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY?.trim();
-if (!PRIVATE_KEY || !PRIVATE_KEY.startsWith("0x") || PRIVATE_KEY.length !== 66) {
-    throw new Error("Invalid PRIVATE_KEY secret.");
-}
+const RPC = process.env.RPC_URL;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
+const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-console.log("🚀 Starting arbitrage bot (ES module)");
-console.log("💰 Wallet address:", wallet.address);
-
-// ---------------- CONFIG ---------------- //
-
-const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
-
-// Polygon USDC.e
+// Tokens (Polygon)
 const TOKENS = {
-    USDC: {
-        address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-        decimals: 6
-    },
-    WMATIC: {
-        address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-        decimals: 18
-    },
-    WETH: {
-        address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-        decimals: 18
-    }
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
 };
 
-const ROUTERS = [
-    "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
-    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+// Routers
+const ROUTERS = {
+  SUSHI: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
+  QUICK: "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff"
+};
+
+// Your vault
+const VAULT = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
+
+// Trade amount (10 USDC example)
+const TRADE_AMOUNT = ethers.parseUnits("10", 6);
+const SCAN_INTERVAL = 10000;
+
+// =============================
+// ABIs
+// =============================
+
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"
 ];
 
-const ERC20_ABI = [
-    "function balanceOf(address) view returns (uint256)",
-    "function transfer(address to, uint256 amount) returns (bool)"
+const erc20Abi = [
+  "function balanceOf(address owner) view returns (uint)"
 ];
 
-// ---------------- MAIN LOOP ---------------- //
+// =============================
+// CONTRACTS
+// =============================
 
-async function runBot() {
-    while (true) {
-        try {
-            await scan();
-        } catch (err) {
-            console.log("❌ Scan error:", err.message);
-        }
+const sushiRouter = new ethers.Contract(ROUTERS.SUSHI, routerAbi, provider);
+const quickRouter = new ethers.Contract(ROUTERS.QUICK, routerAbi, provider);
 
-        console.log("\n🔄 Next scan in 10 seconds...\n");
-        await new Promise(res => setTimeout(res, 10000));
+const usdc = new ethers.Contract(TOKENS.USDC, erc20Abi, provider);
+
+// =============================
+// HELPERS
+// =============================
+
+function formatUSDC(amount) {
+  return Number(ethers.formatUnits(amount, 6)).toFixed(6);
+}
+
+async function getBalances() {
+  const walletBal = await usdc.balanceOf(wallet.address);
+  const vaultBal = await usdc.balanceOf(VAULT);
+
+  console.log("\n💰 Balances:");
+  console.log("Wallet USDC:", formatUSDC(walletBal));
+  console.log("Vault  USDC:", formatUSDC(vaultBal));
+}
+
+async function getQuote(router, path, amountIn) {
+  try {
+    const amounts = await router.getAmountsOut(amountIn, path);
+    return amounts[amounts.length - 1];
+  } catch (err) {
+    console.log("❌ Quote error:", err.reason || err.message);
+    return 0n;
+  }
+}
+
+// =============================
+// ARB CHECK
+// =============================
+
+async function checkArbitrage() {
+  console.log("\n🔄 Scanning for arbitrage...");
+
+  const path = [
+    TOKENS.USDC,
+    TOKENS.WMATIC,
+    TOKENS.WETH,
+    TOKENS.USDC
+  ];
+
+  try {
+    const sushiOut = await getQuote(sushiRouter, path, TRADE_AMOUNT);
+    const quickOut = await getQuote(quickRouter, path, TRADE_AMOUNT);
+
+    console.log("Sushi final:", formatUSDC(sushiOut));
+    console.log("Quick final:", formatUSDC(quickOut));
+
+    const sushiProfit = sushiOut - TRADE_AMOUNT;
+    const quickProfit = quickOut - TRADE_AMOUNT;
+
+    console.log("Sushi profit:", formatUSDC(sushiProfit));
+    console.log("Quick profit:", formatUSDC(quickProfit));
+
+    if (sushiProfit > 0n) {
+      console.log("⚡ Theoretical Sushi opportunity detected");
     }
-}
 
-async function scan() {
-
-    const walletBalances = await getAllBalances(wallet.address);
-    const vaultBalances = await getAllBalances(VAULT_ADDRESS);
-
-    console.log("💰 Wallet balances:");
-    printBalances(walletBalances);
-
-    console.log("🏦 Vault balances:");
-    printBalances(vaultBalances);
-
-    console.log("\n🔄 Scanning routers for profitable swaps...");
-
-    for (const routerAddress of ROUTERS) {
-        console.log(`🧮 Checking path: USDC -> WMATIC -> WETH -> USDC on Router: ${routerAddress}`);
-
-        try {
-            const profit = await simulateArb();
-
-            if (profit > 0n) {
-                console.log(`⚡ Profit opportunity detected: ${ethers.formatUnits(profit, 6)} USDC`);
-                console.log("⏳ Executing swap...");
-                await executeSwap();
-                console.log("✅ Swap completed");
-
-                console.log("💸 Sending profit to vault...");
-                await sendProfitToVault(profit);
-                console.log("✅ Profit deposited to vault");
-            } else {
-                console.log("⚠️ No profitable arbitrage opportunity found");
-            }
-
-        } catch (err) {
-            console.log("❌ Error:", err.message);
-        }
+    if (quickProfit > 0n) {
+      console.log("⚡ Theoretical Quick opportunity detected");
     }
-}
 
-// ---------------- HELPERS ---------------- //
-
-async function getAllBalances(address) {
-    const balances = {};
-    for (const [symbol, token] of Object.entries(TOKENS)) {
-        const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
-        const balance = await contract.balanceOf(address);
-        balances[symbol] = ethers.formatUnits(balance, token.decimals);
+    if (sushiProfit <= 0n && quickProfit <= 0n) {
+      console.log("No profitable spread found.");
     }
-    return balances;
+
+  } catch (err) {
+    console.log("❌ Arb check error:", err.message);
+  }
 }
 
-function printBalances(balances) {
-    for (const [symbol, amount] of Object.entries(balances)) {
-        console.log(`   ${symbol}: ${amount}`);
-    }
+// =============================
+// MAIN LOOP
+// =============================
+
+async function start() {
+  console.log("🚀 Real Quote Arbitrage Scanner Started");
+  console.log("Wallet:", wallet.address);
+
+  await getBalances();
+
+  while (true) {
+    await checkArbitrage();
+    await getBalances();
+    console.log(`⏳ Next scan in ${SCAN_INTERVAL / 1000}s...\n`);
+    await new Promise(res => setTimeout(res, SCAN_INTERVAL));
+  }
 }
 
-async function sendProfitToVault(amount) {
-    const usdc = new ethers.Contract(TOKENS.USDC.address, ERC20_ABI, wallet);
-
-    const walletBalance = await usdc.balanceOf(wallet.address);
-
-    if (walletBalance >= amount) {
-        const tx = await usdc.transfer(VAULT_ADDRESS, amount);
-        await tx.wait();
-        console.log("Transaction hash:", tx.hash);
-    } else {
-        console.log("⚠️ Not enough USDC in wallet to transfer profit.");
-    }
-}
-
-// ----------- MOCK PROFIT (SAFE) ----------- //
-
-async function simulateArb() {
-    return Math.random() > 0.8
-        ? ethers.parseUnits("0.01", 6)
-        : 0n;
-}
-
-async function executeSwap() {
-    await new Promise(res => setTimeout(res, 1000));
-}
-
-runBot();
+start();
