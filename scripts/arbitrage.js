@@ -57,7 +57,7 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 /* ================= ROUTERS ================= */
 const routers = {
   QuickSwap: '0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff',
-  SushiSwap: '0x1b02da8cb0d097eb8d57a175b88c7d8b47997506',
+  SushiSwap: '0x1b02da8cb0d097eb8d57a175b88c7d47997506',
   ApeSwap: '0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607',
 };
 const routerAbi = ['function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)'];
@@ -91,15 +91,15 @@ const RESET = '\x1b[0m';
 
 /* ================= HELPERS ================= */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const formatUSDC = (n) => Number(ethers.formatUnits(n.toString(), 6)).toFixed(6);
+const formatUSDC = (n) => Number(ethers.formatUnits(n, 6)).toFixed(6);
 
-/* ================= SAFE QUOTE ================= */
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
-    const amountOut = BigInt(amounts[amounts.length - 1]);
-    if (!amountOut || amountOut <= 0n) {
+    const amountOut = amounts[amounts.length - 1];
+
+    if (!amountOut || BigInt(amountOut) <= 0n) {
       console.log(`${RED}⚠️ Quote returned non-positive amount | Router: ${routerAddr} | Path: ${path.join('->')}${RESET}`);
       return { amountOut: null, ok: false, path, router: routerAddr };
     }
@@ -117,45 +117,34 @@ function generatePaths(base, token) {
   const paths = [];
   if (base !== token) paths.push([base, token]);
   for (const hop of FALLBACK_HOPS) {
-    if (hop === token || hop === base) continue;
-    paths.push([base, hop, token]);
+    if (hop !== token && hop !== base) paths.push([base, hop, token]);
   }
   return paths;
 }
 
-/* ================= PATH VALIDATION ================= */
-function isPathValid(path) {
-  if (!path || !Array.isArray(path) || path.length < 2) return false;
-  for (let i = 0; i < path.length; i++) {
-    const addr = path[i];
-    if (typeof addr !== 'string' || addr.length < 42) return false;
-    if (i > 0 && addr === path[i - 1]) return false;
-  }
-  return true;
-}
-
-/* ================= BINARY SEARCH ================= */
+/* ================= BINARY SEARCH FOR OPTIMAL SIZE ================= */
 async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   let low = MIN_TRADE_USDC;
-  let high = 50;
+  let high = 50; // max USDC per trade
   let bestSize = low;
   let bestProfit = -Infinity;
+
   const maxIterations = 20;
   let it = 0;
 
   while (high - low > 0.001 && it < maxIterations) {
     it++;
     const mid = (low + high) / 2;
-    const amountIn = ethers.parseUnits(mid.toString(), 6);
+    const amountIn = ethers.parseUnits(mid.toFixed(6), 6); // ✅ fix decimal precision
 
     const buyRes = await quote(buyRouter, amountIn, buyPath);
-    if (!buyRes.ok || buyRes.amountOut == null) continue;
+    if (!buyRes.ok || !buyRes.amountOut) continue;
 
     const sellRes = await quote(sellRouter, buyRes.amountOut, sellPath);
-    if (!sellRes.ok || sellRes.amountOut == null) continue;
+    if (!sellRes.ok || !sellRes.amountOut) continue;
 
     const buyAmountUsdc = mid;
-    const sellAmountUsdc = Number(ethers.formatUnits(sellRes.amountOut.toString(), 6));
+    const sellAmountUsdc = Number(ethers.formatUnits(sellRes.amountOut, 6));
     const profit = sellAmountUsdc - buyAmountUsdc;
 
     if (profit > bestProfit) {
@@ -171,9 +160,17 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
   return { optimalSize: bestSize, expectedProfit: bestProfit };
 }
 
-/* ================= ARBITRAGE ================= */
+/* ================= ARBITRAGE EXECUTION ================= */
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
-  const { optimalSize, expectedProfit } = await findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, sellPath);
+  const usdcAddress = await vault.usdc();
+
+  const { optimalSize, expectedProfit } = await findOptimalTradeSize(
+    buyRouter,
+    sellRouter,
+    tokenAddr,
+    buyPath,
+    sellPath
+  );
 
   console.log(`${YELLOW}🔹 ARB SCAN | Token: ${tokenAddr}${RESET}`);
   console.log(`  Buy on: ${buyRouter}`);
@@ -182,18 +179,28 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   console.log(`  Expected Profit: ${expectedProfit >= 0 ? GREEN : RED}${expectedProfit.toFixed(6)} USDC${RESET}`);
 
   if (!Number.isFinite(optimalSize) || Number.isNaN(optimalSize)) return;
-  if (expectedProfit < MIN_EXPECTED_PROFIT) return;
+  if (expectedProfit < MIN_EXPECTED_PROFIT) {
+    console.log(`${YELLOW}⚠️ Profit below threshold, skipping...${RESET}`);
+    return;
+  }
   if (DRY_RUN) {
     console.log('🔎 DRY RUN: would execute trade in vault');
     return;
   }
 
-  const amountIn = ethers.parseUnits(optimalSize.toString(), 6);
+  const amountIn = ethers.parseUnits(optimalSize.toFixed(6), 6);
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   for (let attempt = 0; attempt < TX_RETRY_ATTEMPTS; attempt++) {
     try {
-      const tx = await vault.executeArbitrage(buyRouter, sellRouter, amountIn, buyPath, sellPath, deadline);
+      const tx = await vault.executeArbitrage(
+        buyRouter,
+        sellRouter,
+        amountIn,
+        buyPath,
+        sellPath,
+        deadline
+      );
       console.log(`⛓ TX SENT: ${tx.hash}`);
       await tx.wait();
       console.log(`${GREEN}✅ ARB TRADE EXECUTED: profits now in vault${RESET}`);
@@ -205,7 +212,14 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   }
 }
 
-/* ================= SCAN ================= */
+/* ================= PATH VALIDATION ================= */
+function isPathValid(path) {
+  if (!path || !Array.isArray(path) || path.length < 2) return false;
+  for (const addr of path) if (typeof addr !== 'string' || addr.length < 42) return false;
+  return true;
+}
+
+/* ================= MAIN SCAN LOOP ================= */
 async function scan() {
   const usdcAddress = await vault.usdc();
   const vaultUSDCContract = new ethers.Contract(usdcAddress, ['function balanceOf(address) view returns(uint256)'], provider);
@@ -217,7 +231,6 @@ async function scan() {
   for (const token of tokenList) {
     const buyPaths = generatePaths(usdcAddress, token);
     const sellPaths = generatePaths(token, usdcAddress);
-
     const arbPromises = [];
 
     for (const buy of Object.values(routers)) {
