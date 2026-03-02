@@ -1,69 +1,9 @@
 // drop-in arb bot with enhanced safety, diagnostic logging, and profit deposit hook
-// Requires: Node.js with ESModule/runtime support compatible with ethers v7
+// Requires: Node.js compatible with ethers v7 (CommonJS version)
 
-import 'dotenv/config';
-import { ethers } from 'ethers';
-
-/* ================= CONFIG ================= */
-const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || '')
-  .toString()
-  .trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || '')
-  .toString()
-  .trim();
-
-if (!RPC_POLYGON) throw new Error('RPC_POLYGON is missing');
-if (!WALLET_PRIVATE_KEY) throw new Error('WALLET_PRIVATE_KEY is missing');
-
-/* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.002);
-const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.00001);
-const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 4000);
-const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
-const TX_RETRY_ATTEMPTS = Number(process.env.TX_RETRY_ATTEMPTS || 1);
-const DRY_RUN = (process.env.DRY_RUN || 'false').toLowerCase() === 'true';
-
-/* ================= PROVIDER & WALLET ================= */
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
-
-/* ================= VAULT CONTRACT ================= */
-const VAULT_ADDRESS = '0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1';
-/* Vault ABI includes:
-   - executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, pathToUSDC, uint256 deadline)
-   - usdc() -> address
-*/
-const vaultAbi = [
-  {
-    inputs: [
-      { internalType: 'address', name: 'buyRouter', type: 'address' },
-      { internalType: 'address', name: 'sellRouter', type: 'address' },
-      { internalType: 'uint256', name: 'amountInUSDC', type: 'uint256' },
-      { internalType: 'address[]', name: 'pathToToken', type: 'address[]' },
-      { internalType: 'address[]', name: 'pathToUSDC', type: 'address[]' },
-      { internalType: 'uint256', name: 'deadline', type: 'uint256' },
-    ],
-    name: 'executeArbitrage',
-    outputs: [],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-  {
-    inputs: [],
-    name: 'usdc',
-    outputs: [{ type: 'address' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-  // Optional: if your vault supports depositing profits back into itself, add an ABI here
-  // {
-  //   inputs: [{ internalType: 'uint256', name: 'amount', type: 'uint256' }],
-  //   name: 'deposit',
-// drop-in arb bot with enhanced safety, diagnostic logging, and profit deposit hook
-// Requires: Node.js with ESModule/runtime support compatible with ethers v7
-
-import 'dotenv/config';
-import { ethers } from 'ethers';
+/* ================= IMPORTS ================= */
+require('dotenv').config();
+const { ethers } = require('ethers');
 
 /* ================= CONFIG ================= */
 const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || '')
@@ -90,10 +30,6 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= VAULT CONTRACT ================= */
 const VAULT_ADDRESS = '0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1';
-/* Vault ABI includes:
-   - executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, pathToUSDC, uint256 deadline)
-   - usdc() -> address
-*/
 const vaultAbi = [
   {
     inputs: [
@@ -116,14 +52,6 @@ const vaultAbi = [
     stateMutability: 'view',
     type: 'function',
   },
-  // Optional: if your vault supports depositing profits back into itself, add an ABI here
-  // {
-  //   inputs: [{ internalType: 'uint256', name: 'amount', type: 'uint256' }],
-  //   name: 'deposit',
-  //   outputs: [],
-  //   stateMutability: 'nonpayable',
-  //   type: 'function',
-  // },
 ];
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
@@ -171,18 +99,13 @@ async function quote(routerAddr, amountIn, path) {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
     const amountOut = amounts[amounts.length - 1];
-    // Basic sanity: amountOut must be > 0
     if (!amountOut || amountOut.lte(0)) {
-      console.log(
-        `${RED}⚠️ Quote returned non-positive amount| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->')}${RESET}`
-      );
+      console.log(`${RED}⚠️ Quote returned non-positive amount| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->')}${RESET}`);
       return { amountOut: null, ok: false, path, router: routerAddr };
     }
     return { amountOut, ok: true, path, router: routerAddr };
   } catch (e) {
-    console.log(
-      `${RED}⚠️ Quote failed| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->') || 'unknown'} | Error: ${e?.message || e}${RESET}`
-    );
+    console.log(`${RED}⚠️ Quote failed| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->') || 'unknown'} | Error: ${e?.message || e}${RESET}`);
     return { amountOut: null, ok: false, path, router: routerAddr };
   }
 }
@@ -192,9 +115,7 @@ const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
 
 function generatePaths(base, token) {
   const paths = [];
-  // direct
   paths.push([base, token]);
-  // with hops
   for (const hop of FALLBACK_HOPS) {
     if (hop === token) continue;
     paths.push([base, hop, token]);
@@ -205,10 +126,9 @@ function generatePaths(base, token) {
 /* ================= BINARY SEARCH FOR OPTIMAL SIZE ================= */
 async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   let low = MIN_TRADE_USDC;
-  let high = 50; // maximum trade size in USDC
+  let high = 50;
   let bestSize = low;
   let bestProfit = -Infinity;
-
   const maxIterations = 20;
   let it = 0;
 
@@ -218,23 +138,11 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
     const amountIn = ethers.parseUnits(mid.toString(), 6);
 
     const buyRes = await quote(buyRouter, amountIn, buyPath);
-    if (!buyRes.ok || buyRes.amountOut == null) {
-      console.log(
-        `${RED}⚠️ Buy quote failed for path ${buyPath} on router ${buyRouter}${RESET}`
-      );
-      // If buy quote fails, skip further evaluation for this iteration
-      continue;
-    }
+    if (!buyRes.ok || buyRes.amountOut == null) continue;
 
     const sellRes = await quote(sellRouter, buyRes.amountOut, sellPath);
-    if (!sellRes.ok || sellRes.amountOut == null) {
-      console.log(
-        `${RED}⚠️ Sell quote failed for path ${sellPath} on router ${sellRouter}${RESET}`
-      );
-      continue;
-    }
+    if (!sellRes.ok || sellRes.amountOut == null) continue;
 
-    // All amounts are in base units; assume USDC with 6 decimals
     const buyAmountUsdc = mid;
     const sellAmountUsdc = Number(ethers.formatUnits(sellRes.amountOut, 6));
     const profit = sellAmountUsdc - buyAmountUsdc;
@@ -244,52 +152,27 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
       bestSize = mid;
     }
 
-    if (profit > 0) {
-      low = mid;
-    } else {
-      high = mid;
-    }
+    if (profit > 0) low = mid;
+    else high = mid;
   }
 
-  // Guard against non-finite results
-  if (!Number.isFinite(bestSize) || Number.isNaN(bestSize)) {
-    bestSize = MIN_TRADE_USDC;
-  }
+  if (!Number.isFinite(bestSize) || Number.isNaN(bestSize)) bestSize = MIN_TRADE_USDC;
   return { optimalSize: bestSize, expectedProfit: bestProfit };
 }
 
 /* ================= ARBITRAGE EXECUTION ================= */
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   const usdcAddress = await vault.usdc();
+  const { optimalSize, expectedProfit } = await findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, sellPath);
 
-  // Compute best size and profit for this path pair
-  const { optimalSize, expectedProfit } = await findOptimalTradeSize(
-    buyRouter,
-    sellRouter,
-    tokenAddr,
-    buyPath,
-    sellPath
-  );
-
-  // Rich, contextual logs
   console.log(`${YELLOW}🔹 ARB SCAN | Token: ${tokenAddr}${RESET}`);
   console.log(`  Buy on: ${buyRouter}`);
   console.log(`  Sell on: ${sellRouter}`);
   console.log(`  Trade size: ${Number(optimalSize).toFixed(6)} USDC`);
-  console.log(
-    `  Expected Profit: ${expectedProfit >= 0 ? GREEN : RED}${expectedProfit.toFixed(6)} USDC${RESET}`
-  );
+  console.log(`  Expected Profit: ${expectedProfit >= 0 ? GREEN : RED}${expectedProfit.toFixed(6)} USDC${RESET}`);
 
-  if (!Number.isFinite(optimalSize) || Number.isNaN(optimalSize)) {
-    console.log(`${RED}⚠️ Invalid optimal size, skipping...${RESET}`);
-      return;
-  }
-
-  if (expectedProfit < MIN_EXPECTED_PROFIT) {
-    console.log(`${YELLOW}⚠️ Profit below threshold, skipping...${RESET}`);
-    return;
-  }
-
+  if (!Number.isFinite(optimalSize) || Number.isNaN(optimalSize)) return;
+  if (expectedProfit < MIN_EXPECTED_PROFIT) return;
   if (DRY_RUN) {
     console.log('🔎 DRY RUN: would execute trade in vault');
     return;
@@ -298,23 +181,12 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   const amountIn = ethers.parseUnits(optimalSize.toString(), 6);
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  let tx;
   for (let attempt = 0; attempt < TX_RETRY_ATTEMPTS; attempt++) {
     try {
-      tx = await vault.executeArbitrage(
-        buyRouter,
-        sellRouter,
-        amountIn,
-        buyPath,
-        sellPath,
-        deadline
-      );
+      const tx = await vault.executeArbitrage(buyRouter, sellRouter, amountIn, buyPath, sellPath, deadline);
       console.log(`⛓ TX SENT: ${tx.hash}`);
       await tx.wait();
       console.log(`${GREEN}✅ ARB TRADE EXECUTED: profits now in vault${RESET}`);
-
-      // Optional: deposit profits back to vault if you have a deposit function
-      // await depositProfitsBackToVaultIfNeeded(profitAmountWei);
       break;
     } catch (err) {
       console.log(`⚠️ Arb attempt ${attempt + 1} failed: ${err?.message || err}`);
@@ -323,62 +195,20 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   }
 }
 
-/* ================= DEPOSIT PROFITS HOOK (optional) ================= */
-/**
- * If your vault contract exposes a deposit function to pool profits back, enable this.
- * Example signature: function deposit(uint256 amount) -> deposits into vault.
- * Uncomment and implement according to your vault's actual API.
- */
-
-// async function depositProfitsBackToVaultIfNeeded() {
-//   // const tx = await vault.deposit(profitAmountWei);
-//   // await tx.wait();
-// }
-
-/* ================= PATH UTILITIES ================= */
-
-/* Ensure we only consider valid paths (sanity-check) */
+/* ================= PATH SANITY CHECK ================= */
 function isPathValid(path) {
   if (!path || !Array.isArray(path) || path.length < 2) return false;
-  // Basic check: ensure each entry is an address-like string
   for (const addr of path) {
     if (typeof addr !== 'string' || addr.length < 42) return false;
   }
   return true;
 }
 
-/* ================= PATH GENERATION (continuation) ================= */
-const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
-
-function generatePaths(base, token) {
-  const paths = [];
-  // direct path
-  paths.push([base, token]);
-  // with hops
-  for (const hop of FALLBACK_HOPS) {
-    if (hop === token) continue;
-    paths.push([base, hop, token]);
-  }
-  return paths;
-}
-
-/* ================= TOKENS ENDPOINT UTILITIES (for completeness) ================= */
-// (Any additional helpers can be added here)
-
-/* ================= ROUTER PATH DIAGNOSTICS (optional) ================= */
-// You can log path validity per combination if you want deeper debugging
-
 /* ================= MAIN SCAN LOOP ================= */
 async function scan() {
   const usdcAddress = await vault.usdc();
-  // vault USDC balance
-  const vaultUSDCContract = new ethers.Contract(
-    usdcAddress,
-    ['function balanceOf(address) view returns(uint256)'],
-    provider
-  );
+  const vaultUSDCContract = new ethers.Contract(usdcAddress, ['function balanceOf(address) view returns(uint256)'], provider);
   const vaultUSDC = await vaultUSDCContract.balanceOf(VAULT_ADDRESS);
-
   console.log(`💰 Vault USDC balance: ${formatUSDC(vaultUSDC)} USDC`);
 
   const tokenList = Object.values(TOKENS);
@@ -394,7 +224,6 @@ async function scan() {
         if (buy === sell) continue;
         for (const bPath of buyPaths) {
           for (const sPath of sellPaths) {
-            // Simple path sanity checks
             if (!isPathValid(bPath) || !isPathValid(sPath)) continue;
             arbPromises.push(tryArb(buy, sell, token, bPath, sPath));
           }
@@ -402,9 +231,8 @@ async function scan() {
       }
     }
 
-    // Run the arb combinations in parallel for this token
     await Promise.all(arbPromises);
-    await sleep(500); // small delay between token scans
+    await sleep(500);
   }
 }
 
