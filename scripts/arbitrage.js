@@ -92,17 +92,20 @@ const RESET = '\x1b[0m';
 
 /* ================= HELPERS ================= */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const formatUSDC = (n) => Number(ethers.formatUnits(n, 6)).toFixed(6);
+const formatUSDC = (n) => Number(ethers.formatUnits(n.toString(), 6)).toFixed(6);
 
+/* ================= QUOTE FIXED FOR BIGINT ================= */
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
-    const amountOut = amounts[amounts.length - 1];
-    if (!amountOut || amountOut.lte(0)) {
+
+    const amountOut = BigInt(amounts[amounts.length - 1]);
+    if (!amountOut || amountOut <= 0n) {
       console.log(`${RED}⚠️ Quote returned non-positive amount| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->')}${RESET}`);
       return { amountOut: null, ok: false, path, router: routerAddr };
     }
+
     return { amountOut, ok: true, path, router: routerAddr };
   } catch (e) {
     console.log(`${RED}⚠️ Quote failed| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->') || 'unknown'} | Error: ${e?.message || e}${RESET}`);
@@ -123,7 +126,7 @@ function generatePaths(base, token) {
   return paths;
 }
 
-/* ================= BINARY SEARCH FOR OPTIMAL SIZE ================= */
+/* ================= BINARY SEARCH ================= */
 async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   let low = MIN_TRADE_USDC;
   let high = 50;
@@ -144,7 +147,7 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
     if (!sellRes.ok || sellRes.amountOut == null) continue;
 
     const buyAmountUsdc = mid;
-    const sellAmountUsdc = Number(ethers.formatUnits(sellRes.amountOut, 6));
+    const sellAmountUsdc = Number(ethers.formatUnits(sellRes.amountOut.toString(), 6));
     const profit = sellAmountUsdc - buyAmountUsdc;
 
     if (profit > bestProfit) {
@@ -195,7 +198,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   }
 }
 
-/* ================= PATH SANITY CHECK ================= */
+/* ================= PATH CHECK ================= */
 function isPathValid(path) {
   if (!path || !Array.isArray(path) || path.length < 2) return false;
   for (const addr of path) {
@@ -204,7 +207,7 @@ function isPathValid(path) {
   return true;
 }
 
-/* ================= MAIN SCAN LOOP ================= */
+/* ================= MAIN SCAN ================= */
 async function scan() {
   const usdcAddress = await vault.usdc();
   const vaultUSDCContract = new ethers.Contract(usdcAddress, ['function balanceOf(address) view returns(uint256)'], provider);
