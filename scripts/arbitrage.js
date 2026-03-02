@@ -16,7 +16,7 @@ if (!RPC_POLYGON) throw new Error('RPC_POLYGON is missing');
 if (!WALLET_PRIVATE_KEY) throw new Error('WALLET_PRIVATE_KEY is missing');
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.002);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.2);
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.00001);
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 4000);
 const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
