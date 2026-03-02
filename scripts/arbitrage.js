@@ -1,10 +1,16 @@
-// arbitrage.js
+// drop-in arb bot with enhanced safety, diagnostic logging, and profit deposit hook
+// Requires: Node.js with ESModule/runtime support compatible with ethers v7
+
 import 'dotenv/config';
 import { ethers } from 'ethers';
 
 /* ================= CONFIG ================= */
-const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || '').trim();
-const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || '').trim();
+const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || '')
+  .toString()
+  .trim();
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || '')
+  .toString()
+  .trim();
 
 if (!RPC_POLYGON) throw new Error('RPC_POLYGON is missing');
 if (!WALLET_PRIVATE_KEY) throw new Error('WALLET_PRIVATE_KEY is missing');
@@ -45,6 +51,14 @@ const vaultAbi = [
     stateMutability: 'view',
     type: 'function',
   },
+  // Optional: if your vault supports depositing profits back into itself, add an ABI here
+  // {
+  //   inputs: [{ internalType: 'uint256', name: 'amount', type: 'uint256' }],
+  //   name: 'deposit',
+  //   outputs: [],
+  //   stateMutability: 'nonpayable',
+  //   type: 'function',
+  // },
 ];
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
@@ -94,9 +108,13 @@ async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
-    return amounts[amounts.length - 1];
-  } catch {
-    return null;
+    // Return a structured result for richer logging
+    const amountOut = amounts[amounts.length - 1];
+    return { amountOut, ok: true, path, router: routerAddr };
+  } catch (e) {
+    // Provide actionable log
+    console.log(`${RED}⚠️ Quote failed| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->') || 'unknown'} | Error: ${e?.message || e}${RESET}`);
+    return { amountOut: null, ok: false, path, router: routerAddr };
   }
 }
 
@@ -120,25 +138,42 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
   let bestSize = low;
   let bestProfit = -Infinity;
 
-  while (high - low > 0.001) {
+  // Optional: cap iterations to avoid long loops
+  const maxIterations = 20;
+  let it = 0;
+
+  while (high - low > 0.001 && it < maxIterations) {
+    it++;
     const mid = (low + high) / 2;
     const amountIn = ethers.parseUnits(mid.toString(), 6);
 
-    const buyOut = await quote(buyRouter, amountIn, buyPath);
-    if (!buyOut) break;
+    const buyRes = await quote(buyRouter, amountIn, buyPath);
+    if (!buyRes.ok || buyRes.amountOut == null) {
+      // If quote fails, break and return best so far
+      console.log(`${RED}⚠️ Buy quote failed for path ${buyPath} on router ${buyRouter}${RESET}`);
+      break;
+    }
 
-    const sellOut = await quote(sellRouter, buyOut, sellPath);
-    if (!sellOut) break;
+    const sellRes = await quote(sellRouter, buyRes.amountOut, sellPath);
+    if (!sellRes.ok || sellRes.amountOut == null) {
+      console.log(`${RED}⚠️ Sell quote failed for path ${sellPath} on router ${sellRouter}${RESET}`);
+      break;
+    }
 
-    const profit = Number(ethers.formatUnits(sellOut, 6)) - mid;
+    // All amounts are in base units of the tokens; paths mix USDC -> token -> USDC etc.
+    // We assume USDC has 6 decimals; the sellRes.amountOut is in USDC units.
+    const profit = Number(ethers.formatUnits(sellRes.amountOut, 6)) - mid;
 
     if (profit > bestProfit) {
       bestProfit = profit;
       bestSize = mid;
     }
 
-    if (profit > 0) low = mid;
-    else high = mid;
+    if (profit > 0) {
+      low = mid;
+    } else {
+      high = mid;
+    }
   }
 
   return { optimalSize: bestSize, expectedProfit: bestProfit };
@@ -155,15 +190,24 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
     sellPath
   );
 
+  // Rich, contextual logs
   console.log(`${YELLOW}🔹 ARB SCAN | Token: ${tokenAddr}${RESET}`);
   console.log(`  Buy on: ${buyRouter}`);
   console.log(`  Sell on: ${sellRouter}`);
-  console.log(`  Trade size: ${optimalSize.toFixed(6)} USDC`);
+  console.log(`  Trade size: ${Number(optimalSize).toFixed(6)} USDC`);
   console.log(
     `  Expected Profit: ${expectedProfit >= 0 ? GREEN : RED}${expectedProfit.toFixed(6)} USDC${RESET}`
   );
 
-  if (expectedProfit < MIN_EXPECTED_PROFIT) return;
+  if (!Number.isFinite(optimalSize) || Number.isNaN(optimalSize)) {
+    console.log(`${RED}⚠️ Invalid optimal size, skipping...${RESET}`);
+    return;
+  }
+
+  if (expectedProfit < MIN_EXPECTED_PROFIT) {
+    // Not worth it
+    return;
+  }
 
   if (DRY_RUN) {
     console.log('🔎 DRY RUN: would execute trade in vault');
@@ -187,22 +231,38 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
       console.log(`⛓ TX SENT: ${tx.hash}`);
       await tx.wait();
       console.log('✅ PROFIT REMAINS IN VAULT');
+      // Optional: deposit profits back into vault if you have a deposit function
+      // await depositProfitsBackToVaultIfNeeded(profitAmountInWei);
       break;
     } catch (err) {
-      console.log(`⚠️ Arb attempt ${attempt + 1} failed: ${err.message}`);
+      console.log(`⚠️ Arb attempt ${attempt + 1} failed: ${err?.message || err}`);
       await sleep(1000);
     }
   }
 }
 
+/* ================= DEPOSIT PROFITS HOOK (optional) ================= */
+/**
+ * If your vault contract exposes a deposit function for profits, you can enable this.
+ * Uncomment and implement according to your vault's actual API.
+ */
+
+// async function depositProfitsBackToVaultIfNeeded(profitAmountWei) {
+//   // Example stub: requires vault.deposit(uint256 amount)
+//   // const tx = await vault.deposit(profitAmountWei);
+//   // await tx.wait();
+// }
+
 /* ================= MAIN SCAN ================= */
 async function scan() {
   const usdcAddress = await vault.usdc();
-  const vaultUSDC = await new ethers.Contract(
+  // vault USDC balance
+  const vaultUSDCContract = new ethers.Contract(
     usdcAddress,
     ['function balanceOf(address) view returns(uint256)'],
     provider
-  ).balanceOf(VAULT_ADDRESS);
+  );
+  const vaultUSDC = await vaultUSDCContract.balanceOf(VAULT_ADDRESS);
 
   console.log(`💰 Vault USDC balance: ${formatUSDC(vaultUSDC)} USDC`);
 
@@ -225,6 +285,7 @@ async function scan() {
       }
     }
 
+    // Run the arb combinations in parallel for this token
     await Promise.all(arbPromises);
     await sleep(500); // small delay between token scans
   }
@@ -233,12 +294,13 @@ async function scan() {
 /* ================= MAIN LOOP ================= */
 (async () => {
   console.log('🚀 Arbitrage bot started');
+  console.log(`DRY_RUN=${DRY_RUN} | MIN_EXPECTED_PROFIT=${MIN_EXPECTED_PROFIT} USDC | SCAN_DELAY_MS=${SCAN_DELAY_MS}`);
 
   while (true) {
     try {
       await scan();
     } catch (err) {
-      console.log('⚠️ Scan error:', err.message);
+      console.log('⚠️ Scan error:', err?.message || err);
     }
     await sleep(SCAN_DELAY_MS);
   }
