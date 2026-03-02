@@ -1,5 +1,3 @@
-Si GPT 5
-
 // drop-in arb bot with enhanced safety, diagnostic logging, and profit deposit hook
 // Requires: Node.js with ESModule/runtime support compatible with ethers v7
 
