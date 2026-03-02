@@ -1,7 +1,6 @@
 // drop-in arb bot with enhanced safety, diagnostic logging, and profit deposit hook
 // Requires: Node.js with ESModule/runtime support compatible with ethers v7
 
-/* ================= IMPORTS ================= */
 import 'dotenv/config';
 import { ethers } from 'ethers';
 
@@ -94,21 +93,19 @@ const RESET = '\x1b[0m';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const formatUSDC = (n) => Number(ethers.formatUnits(n.toString(), 6)).toFixed(6);
 
-/* ================= QUOTE FIXED FOR BIGINT ================= */
+/* ================= SAFE QUOTE ================= */
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
     const amounts = await router.getAmountsOut(amountIn, path);
-
     const amountOut = BigInt(amounts[amounts.length - 1]);
     if (!amountOut || amountOut <= 0n) {
-      console.log(`${RED}⚠️ Quote returned non-positive amount| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->')}${RESET}`);
+      console.log(`${RED}⚠️ Quote returned non-positive amount | Router: ${routerAddr} | Path: ${path.join('->')}${RESET}`);
       return { amountOut: null, ok: false, path, router: routerAddr };
     }
-
     return { amountOut, ok: true, path, router: routerAddr };
   } catch (e) {
-    console.log(`${RED}⚠️ Quote failed| Router: ${routerAddr} | Path: ${path?.map((p) => p).join('->') || 'unknown'} | Error: ${e?.message || e}${RESET}`);
+    console.log(`${RED}⚠️ Quote failed | Router: ${routerAddr} | Path: ${path.join('->')} | Error: ${e?.message || e}${RESET}`);
     return { amountOut: null, ok: false, path, router: routerAddr };
   }
 }
@@ -118,12 +115,23 @@ const FALLBACK_HOPS = [WMATIC, TOKENS.WETH, TOKENS.DAI, TOKENS.USDT];
 
 function generatePaths(base, token) {
   const paths = [];
-  paths.push([base, token]);
+  if (base !== token) paths.push([base, token]);
   for (const hop of FALLBACK_HOPS) {
-    if (hop === token) continue;
+    if (hop === token || hop === base) continue;
     paths.push([base, hop, token]);
   }
   return paths;
+}
+
+/* ================= PATH VALIDATION ================= */
+function isPathValid(path) {
+  if (!path || !Array.isArray(path) || path.length < 2) return false;
+  for (let i = 0; i < path.length; i++) {
+    const addr = path[i];
+    if (typeof addr !== 'string' || addr.length < 42) return false;
+    if (i > 0 && addr === path[i - 1]) return false;
+  }
+  return true;
 }
 
 /* ================= BINARY SEARCH ================= */
@@ -163,9 +171,8 @@ async function findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, s
   return { optimalSize: bestSize, expectedProfit: bestProfit };
 }
 
-/* ================= ARBITRAGE EXECUTION ================= */
+/* ================= ARBITRAGE ================= */
 async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
-  const usdcAddress = await vault.usdc();
   const { optimalSize, expectedProfit } = await findOptimalTradeSize(buyRouter, sellRouter, tokenAddr, buyPath, sellPath);
 
   console.log(`${YELLOW}🔹 ARB SCAN | Token: ${tokenAddr}${RESET}`);
@@ -198,16 +205,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr, buyPath, sellPath) {
   }
 }
 
-/* ================= PATH CHECK ================= */
-function isPathValid(path) {
-  if (!path || !Array.isArray(path) || path.length < 2) return false;
-  for (const addr of path) {
-    if (typeof addr !== 'string' || addr.length < 42) return false;
-  }
-  return true;
-}
-
-/* ================= MAIN SCAN ================= */
+/* ================= SCAN ================= */
 async function scan() {
   const usdcAddress = await vault.usdc();
   const vaultUSDCContract = new ethers.Contract(usdcAddress, ['function balanceOf(address) view returns(uint256)'], provider);
