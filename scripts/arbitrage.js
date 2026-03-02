@@ -1,9 +1,9 @@
 // drop-in arb bot with enhanced safety, diagnostic logging, and profit deposit hook
-// Requires: Node.js compatible with ethers v7 (CommonJS version)
+// Requires: Node.js with ESModule/runtime support compatible with ethers v7
 
 /* ================= IMPORTS ================= */
-require('dotenv').config();
-const { ethers } = require('ethers');
+import 'dotenv/config';
+import { ethers } from 'ethers';
 
 /* ================= CONFIG ================= */
 const RPC_POLYGON = (process.env.RPC_POLYGON || process.env.POLYGON_RPC || process.env.RPC_URL || '')
