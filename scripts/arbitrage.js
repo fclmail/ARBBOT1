@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -27,13 +26,17 @@ if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
+
+/* Slightly higher than contract minimum */
+const MIN_EXPECTED_PROFIT = 0.00005;
+
 const MIN_TRADE_USDC = 0.02;
-const MIN_EXPECTED_PROFIT = 0.000001;
 const MAX_BATCH_SIZE = 3;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
-const MIN_BINARY = 0.03;
-const MAX_BINARY = 250;
+
+const MIN_BINARY = 1;
+const MAX_BINARY = 25000;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -41,6 +44,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
+
 const vaultAbi = [
   {
     name: "executeFlashBatchArbitrage",
@@ -57,12 +61,14 @@ const vaultAbi = [
     stateMutability: "nonpayable"
   }
 ];
+
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= USDC ================= */
-const usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+
 const usdcContract = new ethers.Contract(
-  usdc,
+  USDC,
   ["function balanceOf(address owner) view returns (uint256)"],
   provider
 );
@@ -74,13 +80,14 @@ const routers = {
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
+
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* ================= TOKENS ================= */
 const TOKENS = {
-  USDC: usdc,
+  USDC,
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
@@ -115,72 +122,60 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= MICRO DETECTION WITH FULL HOPS ================= */
+/* ================= MICRO DETECTION ================= */
 async function detectMicro(buyRouter, sellRouter, tokenAddr) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  let bestBuyOut, bestBuyPath;
-  for (const p of [
-    [usdc, tokenAddr],
-    [usdc, TOKENS.WMATIC, tokenAddr],
-    [usdc, TOKENS.WETH, tokenAddr],
-    [usdc, TOKENS.USDT, tokenAddr],
-    [usdc, TOKENS.DAI, tokenAddr]
-  ]) {
-    const out = await quote(buyRouter, amountIn, p);
-    if (out && (!bestBuyOut || out > bestBuyOut)) {
-      bestBuyOut = out;
-      bestBuyPath = p;
-    }
+  const buyPath = [USDC, tokenAddr];
+  const sellPath = [tokenAddr, USDC];
+
+  const buyOut = await quote(buyRouter, amountIn, buyPath);
+  if (!buyOut) return null;
+
+  const sellOut = await quote(sellRouter, buyOut, sellPath);
+  if (!sellOut) return null;
+
+  const microProfit =
+    Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC;
+
+  if (microProfit < MIN_EXPECTED_PROFIT) return null;
+
+  /* ===== 1 USDC DEPTH PRE-CHECK ===== */
+  const oneUSDC = ethers.parseUnits("1", 6);
+  const buyOut1 = await quote(buyRouter, oneUSDC, buyPath);
+  if (!buyOut1) return null;
+
+  const sellOut1 = await quote(sellRouter, buyOut1, sellPath);
+  if (!sellOut1) return null;
+
+  const profit1 =
+    Number(ethers.formatUnits(sellOut1, 6)) - 1;
+
+  if (profit1 <= 0) {
+    log(`Skipped — not scalable past 1 USDC\n`);
+    return null;
   }
-  if (!bestBuyOut) return null;
-
-  let bestSellOut, bestSellPath;
-  for (const p of [
-    [tokenAddr, usdc],
-    [tokenAddr, TOKENS.WMATIC, usdc],
-    [tokenAddr, TOKENS.WETH, usdc],
-    [tokenAddr, TOKENS.USDT, usdc],
-    [tokenAddr, TOKENS.DAI, usdc]
-  ]) {
-    const out = await quote(sellRouter, bestBuyOut, p);
-    if (out && (!bestSellOut || out > bestSellOut)) {
-      bestSellOut = out;
-      bestSellPath = p;
-    }
-  }
-  if (!bestSellOut) return null;
-
-  const profit =
-    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
-
-  if (profit < MIN_EXPECTED_PROFIT) return null;
 
   log(`Micro detection hit at 0.02 USDC`);
-  log(`Initial gross profit (micro): ${profit.toFixed(6)} USDC`);
-  log(`Buy Router: ${buyRouter}`);
-  log(`Sell Router: ${sellRouter}`);
-  log(`Hop Path Buy: ${bestBuyPath.join(" → ")}`);
-  log(`Hop Path Sell: ${bestSellPath.join(" → ")}\n`);
+  log(`Initial gross profit (micro): ${microProfit.toFixed(6)} USDC`);
+  log(`Estimated profit at 1 USDC: ${profit1.toFixed(6)} USDC\n`);
 
-  return {
-    buyRouter,
-    sellRouter,
-    path1: bestBuyPath,
-    path2: bestSellPath
-  };
+  return { buyRouter, sellRouter, path1: buyPath, path2: sellPath };
 }
 
-/* ================= FULL SIMULATION WITH PROFIT LOG ================= */
-async function simulateFullTrade(trade) {
-  log(`--- Full Trade Simulation Started ---\n`);
-  const results = [];
+/* ================= BINARY OPTIMIZER ================= */
+async function binaryOptimize(trade) {
+  log(`--- Binary Size Optimization Started ---\n`);
 
-  for (let amt = MIN_BINARY; amt <= MAX_BINARY; amt += 1) {
-    const amount = ethers.parseUnits(amt.toString(), 6);
+  let low = MIN_BINARY;
+  let high = MAX_BINARY;
+  let best = 0;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const amount = ethers.parseUnits(mid.toString(), 6);
 
     try {
-      // staticCall to check if trade would revert
       await vault.executeFlashBatchArbitrage.staticCall(
         [trade.buyRouter],
         [trade.sellRouter],
@@ -190,30 +185,29 @@ async function simulateFullTrade(trade) {
         Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
       );
 
-      const out1 = await quote(trade.buyRouter, amount, trade.path1);
-      const out2 = await quote(trade.sellRouter, out1, trade.path2);
-      const profit = Number(ethers.formatUnits(out2, 6)) - amt;
-
-      results.push({ amount: amt, profit });
-      log(`Simulated ${amt} USDC → Profit: ${profit.toFixed(6)} USDC`);
+      log(`Testing size: ${mid} USDC → PASS`);
+      best = mid;
+      low = mid + 1;
     } catch {
-      results.push({ amount: amt, profit: null });
-      log(`Simulated ${amt} USDC → FAIL (would revert)`);
+      log(`Testing size: ${mid} USDC → FAIL (minProfit revert)`);
+      high = mid - 1;
     }
   }
 
-  const bestTrade = results
-    .filter(r => r.profit && r.profit >= MIN_EXPECTED_PROFIT)
-    .sort((a, b) => b.profit - a.profit)[0];
+  if (!best) return null;
 
-  if (!bestTrade) return null;
+  const amount = ethers.parseUnits(best.toString(), 6);
+  const out1 = await quote(trade.buyRouter, amount, trade.path1);
+  const out2 = await quote(trade.sellRouter, out1, trade.path2);
 
-  const bestAmount = ethers.parseUnits(bestTrade.amount.toString(), 6);
-  log(`\nOptimal trade size found: ${bestTrade.amount} USDC`);
-  log(`Expected net profit: ${bestTrade.profit.toFixed(6)} USDC`);
+  const profit =
+    Number(ethers.formatUnits(out2, 6)) - best;
+
+  log(`\nOptimal size found: ${best} USDC`);
+  log(`Expected net profit: ${profit.toFixed(6)} USDC`);
   log(`-----------------------------------------\n`);
 
-  return { ...trade, amountIn: bestAmount, expectedProfit: bestTrade.profit };
+  return { ...trade, amountIn: amount };
 }
 
 /* ================= MAIN LOOP ================= */
@@ -222,6 +216,7 @@ async function main() {
 
   while (true) {
     log("================= NEW SCAN =================\n");
+
     await logBalances();
 
     const optimizedTrades = [];
@@ -234,7 +229,7 @@ async function main() {
           const micro = await detectMicro(buy, sell, token);
           if (!micro) continue;
 
-          const optimized = await simulateFullTrade(micro);
+          const optimized = await binaryOptimize(micro);
           if (optimized) optimizedTrades.push(optimized);
 
           if (optimizedTrades.length === MAX_BATCH_SIZE) break;
@@ -268,6 +263,4 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  log(`FATAL ERROR: ${err.message}`);
-});
+main().catch(err => log(`FATAL ERROR: ${err.message}`));
