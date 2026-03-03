@@ -26,9 +26,8 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = .7;
+const MIN_TRADE_USDC = 0.7;
 const MIN_EXPECTED_PROFIT = 0.000001;
-
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 3;
@@ -179,24 +178,28 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath };
 }
 
-/* ================= ATOMIC BATCH FLASH ================= */
+/* ================= ATOMIC BATCH FLASH (PARALLEL) ================= */
 async function batchArb() {
   await logBalances();
 
-  const profitableTrades = [];
+  // ================= PARALLEL SCAN =================
+  const tradePromises = [];
 
   for (const buy of Object.values(routers)) {
     for (const sell of Object.values(routers)) {
       if (buy === sell) continue;
       for (const token of Object.values(TOKENS)) {
-        const trade = await findProfitableTrade(buy, sell, token);
-        if (trade) profitableTrades.push(trade);
-        if (profitableTrades.length === MAX_BATCH_SIZE) break;
+        tradePromises.push(findProfitableTrade(buy, sell, token));
       }
-      if (profitableTrades.length === MAX_BATCH_SIZE) break;
     }
-    if (profitableTrades.length === MAX_BATCH_SIZE) break;
   }
+
+  const results = await Promise.allSettled(tradePromises);
+
+  const profitableTrades = results
+    .filter(r => r.status === "fulfilled" && r.value)
+    .map(r => r.value)
+    .slice(0, MAX_BATCH_SIZE);
 
   if (profitableTrades.length === 0)
     return console.log("No profitable trades found");
@@ -215,9 +218,8 @@ async function batchArb() {
   const pathsToUSDC = profitableTrades.map((t) => t.bestSellPath);
 
   try {
-
     console.log(
-      `${CYAN}Executing batch (min contract profit: 0.000001 USDC)${RESET}`
+      `${CYAN}Executing batch (min contract profit: ${MIN_EXPECTED_PROFIT} USDC)${RESET}`
     );
 
     await vault.executeFlashBatchArbitrage.staticCall(
@@ -242,10 +244,6 @@ async function batchArb() {
       );
 
     const gasLimit = (estimatedGas * 120n) / 100n;
-
-    console.log(
-      `${CYAN}Batch gas estimate:${RESET} ${estimatedGas}`
-    );
 
     const tx =
       await vault.executeFlashBatchArbitrage(
