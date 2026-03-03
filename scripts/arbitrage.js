@@ -27,7 +27,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 const MIN_TRADE_USDC = 0.04;
-const MIN_EXPECTED_PROFIT = 0.00001;
+const MIN_EXPECTED_PROFIT = 0.01;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 3;
