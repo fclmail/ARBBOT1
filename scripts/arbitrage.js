@@ -1,4 +1,3 @@
-Binary single scaling
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
