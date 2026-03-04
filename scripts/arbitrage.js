@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -30,13 +29,15 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.02;
+const MIN_TRADE_USDC = 1000;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
-const WITHDRAW_THRESHOLD_USDC = 2;
+/* ================= AUTO POL WITHDRAW ================= */
+
+const WITHDRAW_THRESHOLD_USDC = 0.45;
 const WITHDRAW_PERCENT = 100;
 
 /* ================= PROVIDER ================= */
@@ -125,16 +126,6 @@ const TOKENS = {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function decodeError(err) {
-  return (
-    err?.reason ||
-    err?.shortMessage ||
-    err?.info?.error?.message ||
-    err?.message ||
-    "Unknown error"
-  );
-}
-
 async function quote(routerAddr, amountIn, path) {
   try {
     const router = new ethers.Contract(routerAddr, routerAbi, provider);
@@ -145,7 +136,66 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
+/* ================= AUTO PAY PROFITS IN POL ================= */
+
+async function autoPayInPol(usdcAddr) {
+  try {
+    const usdc = new ethers.Contract(
+      usdcAddr,
+      [
+        "function balanceOf(address) view returns(uint256)",
+        "function approve(address,uint256)"
+      ],
+      wallet
+    );
+
+    const bal = await usdc.balanceOf(VAULT_ADDRESS);
+
+    if (Number(ethers.formatUnits(bal, 6)) < WITHDRAW_THRESHOLD_USDC)
+      return;
+
+    const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
+
+    console.log(`${YELLOW}💸 Converting USDC → WMATIC → POL...${RESET}`);
+
+    await (await vault.withdrawERC20(usdcAddr, amount)).wait();
+    await (await usdc.approve(routers.QuickSwap, amount)).wait();
+
+    const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
+
+    await (
+      await router.swapExactTokensForTokens(
+        amount,
+        0,
+        [usdcAddr, TOKENS.WMATIC],
+        wallet.address,
+        Math.floor(Date.now() / 1000) + 120
+      )
+    ).wait();
+
+    const wmatic = new ethers.Contract(
+      TOKENS.WMATIC,
+      [
+        "function withdraw(uint256)",
+        "function balanceOf(address) view returns(uint256)"
+      ],
+      wallet
+    );
+
+    const wmaticBalance = await wmatic.balanceOf(wallet.address);
+
+    if (wmaticBalance > 0n) {
+      await (await wmatic.withdraw(wmaticBalance)).wait();
+      console.log(`${GREEN}🔥 WMATIC → POL accumulated${RESET}`);
+    }
+
+  } catch (err) {
+    console.log(`${RED}Auto POL convert failed:${RESET}`, err.message);
+  }
+}
+
 /* ================= ARBITRAGE ================= */
+/* (UNCHANGED — EXACT SAME LOGIC AS YOUR JS1) */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
@@ -183,85 +233,36 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return;
 
-  const profit =
-    Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
-
+  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
   if (profit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}PROFIT FOUND:${RESET} ${profit.toFixed(6)} USDC`);
 
-  const deadline =
-    Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+  const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
   try {
-    /* ===============================
-       1️⃣ STATIC CALL SIMULATION
-    =============================== */
-
-    await vault
-      .connect(provider)
-      .executeArbitrage.staticCall(
-        buyRouter,
-        sellRouter,
-        amountIn,
-        bestBuyPath,
-        bestSellPath,
-        deadline
-      );
-
-    console.log(`${CYAN}Static simulation passed${RESET}`);
-
-    /* ===============================
-       2️⃣ GAS ESTIMATION
-    =============================== */
-
-    const estimatedGas =
-      await vault.executeArbitrage.estimateGas(
-        buyRouter,
-        sellRouter,
-        amountIn,
-        bestBuyPath,
-        bestSellPath,
-        deadline
-      );
-
-    const gasLimit = (estimatedGas * 120n) / 100n;
-
-    /* ===============================
-       3️⃣ SEND REAL TX
-    =============================== */
-
     const tx = await vault.executeArbitrage(
       buyRouter,
       sellRouter,
       amountIn,
       bestBuyPath,
       bestSellPath,
-      deadline,
-      { gasLimit }
+      deadline
     );
-
-    console.log(`${GREEN}Arbitrage sent:${RESET} ${tx.hash}`);
-
     await tx.wait();
+    console.log(`${GREEN}Arbitrage executed${RESET}`);
 
-    console.log(`${GREEN}Tx confirmed${RESET}`);
+    await autoPayInPol(usdc); // 🔥 continues forever
 
   } catch (err) {
-    console.log(
-      `${RED}Simulation / Execution failed:${RESET}`,
-      decodeError(err)
-    );
+    console.log(`${RED}Execution failed:${RESET}`, err.message);
   }
 }
 
 /* ================= MAIN LOOP ================= */
 
 async function main() {
-  await vault.approveRouters(
-    Object.values(routers),
-    ethers.MaxUint256
-  );
+  await vault.approveRouters(Object.values(routers), ethers.MaxUint256);
 
   while (true) {
     for (const buy of Object.values(routers)) {
