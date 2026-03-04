@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -28,7 +27,7 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
 const MIN_TRADE_USDC = 0.02;
-const MIN_EXPECTED_PROFIT = 0.00001;
+const MIN_EXPECTED_PROFIT = 0.000001; // lowered to match contract (1 = 0.000001)
 
 const MAX_BATCH_SIZE = 3;
 const SCAN_INTERVAL_MS = 10000;
@@ -121,11 +120,10 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
-/* ================= MICRO DETECTION WITH FULL HOPS ================= */
+/* ================= MICRO DETECTION ================= */
 async function detectMicro(buyRouter, sellRouter, tokenAddr) {
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-  /* ===== BUY SIDE MULTI-HOP ===== */
   let bestBuyOut, bestBuyPath;
   for (const p of [
     [usdc, tokenAddr],
@@ -142,7 +140,6 @@ async function detectMicro(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestBuyOut) return null;
 
-  /* ===== SELL SIDE (RESTORED EXACT SNIPPET STYLE) ===== */
   let bestSellOut, bestSellPath;
   for (const p of [
     [tokenAddr, usdc],
@@ -166,10 +163,6 @@ async function detectMicro(buyRouter, sellRouter, tokenAddr) {
 
   log(`Micro detection hit at 0.02 USDC`);
   log(`Initial gross profit (micro): ${profit.toFixed(6)} USDC`);
-  log(`Buy Router: ${buyRouter}`);
-  log(`Sell Router: ${sellRouter}`);
-  log(`Hop Path Buy: ${bestBuyPath.join(" → ")}`);
-  log(`Hop Path Sell: ${bestSellPath.join(" → ")}\n`);
 
   return {
     buyRouter,
@@ -179,7 +172,7 @@ async function detectMicro(buyRouter, sellRouter, tokenAddr) {
   };
 }
 
-/* ================= BINARY OPTIMIZER (UNCHANGED) ================= */
+/* ================= FIXED BINARY OPTIMIZER ================= */
 async function binaryOptimize(trade) {
   log(`--- Binary Size Optimization Started ---\n`);
 
@@ -190,6 +183,27 @@ async function binaryOptimize(trade) {
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
     const amount = ethers.parseUnits(mid.toString(), 6);
+
+    const out1 = await quote(trade.buyRouter, amount, trade.path1);
+    if (!out1) {
+      high = mid - 1;
+      continue;
+    }
+
+    const out2 = await quote(trade.sellRouter, out1, trade.path2);
+    if (!out2) {
+      high = mid - 1;
+      continue;
+    }
+
+    const flashFee = amount * 9n / 10000n;
+    const netRaw = out2 - amount - flashFee;
+
+    if (netRaw < 1n) {
+      log(`Testing size: ${mid} USDC → FAIL (below minProfit)`);
+      high = mid - 1;
+      continue;
+    }
 
     try {
       await vault.executeFlashBatchArbitrage.staticCall(
@@ -205,7 +219,7 @@ async function binaryOptimize(trade) {
       best = mid;
       low = mid + 1;
     } catch {
-      log(`Testing size: ${mid} USDC → FAIL (minProfit revert)`);
+      log(`Testing size: ${mid} USDC → FAIL (contract revert)`);
       high = mid - 1;
     }
   }
@@ -213,19 +227,43 @@ async function binaryOptimize(trade) {
   if (!best) return null;
 
   const amount = ethers.parseUnits(best.toString(), 6);
+
   const out1 = await quote(trade.buyRouter, amount, trade.path1);
   const out2 = await quote(trade.sellRouter, out1, trade.path2);
-  const profit =
-    Number(ethers.formatUnits(out2, 6)) - best;
+
+  const flashFee = amount * 9n / 10000n;
+
+  const gasEstimate =
+    await vault.executeFlashBatchArbitrage.estimateGas(
+      [trade.buyRouter],
+      [trade.sellRouter],
+      [amount],
+      [trade.path1],
+      [trade.path2],
+      Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
+    );
+
+  const gasPrice = await provider.getGasPrice();
+  const gasCostWei = gasEstimate * gasPrice;
+
+  const maticPriceUSDC = 0.75;
+  const gasCostUSDC =
+    Number(ethers.formatEther(gasCostWei)) * maticPriceUSDC;
+
+  const gross =
+    Number(ethers.formatUnits(out2 - amount - flashFee, 6));
+  const net = gross - gasCostUSDC;
 
   log(`\nOptimal size found: ${best} USDC`);
-  log(`Expected net profit: ${profit.toFixed(6)} USDC`);
+  log(`Gross after flash fee: ${gross.toFixed(6)} USDC`);
+  log(`Estimated gas cost: ${gasCostUSDC.toFixed(6)} USDC`);
+  log(`Expected NET profit: ${net.toFixed(6)} USDC`);
   log(`-----------------------------------------\n`);
 
   return { ...trade, amountIn: amount };
 }
 
-/* ================= MAIN LOOP (UNCHANGED) ================= */
+/* ================= MAIN LOOP ================= */
 async function main() {
   log("================= ARB BOT STARTED =================\n");
 
