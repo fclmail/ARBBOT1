@@ -1,3 +1,4 @@
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -25,7 +26,7 @@ const YELLOW = "\x1b[93m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.11;
+const MIN_TRADE_USDC = 0.9;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
@@ -175,7 +176,7 @@ async function findOptimalFlashAmount(
   buyPath,
   sellPath
 ) {
-  const multipliers = [1n, 2n, 4n, 8n, 12n, 14n,16n, 32n, 64n, 128n, 256n, 512n, 1024n, 2048n, 4096n, 8092n];
+  const multipliers = [1n, 2n, 4n, 8n, 12n, 16n, 32n, 64n, 128n, 256n, 512n, 1024n, 2048n, 4096n, 8092n];
   let bestAmount = baseAmount;
   let bestProfit = 0n;
 
