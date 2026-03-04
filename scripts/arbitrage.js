@@ -35,9 +35,7 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 
-/* ================= AUTO POL WITHDRAW ================= */
-
-const WITHDRAW_THRESHOLD_USDC = 0.45;
+const WITHDRAW_THRESHOLD_USDC = 2;
 const WITHDRAW_PERCENT = 100;
 
 /* ================= PROVIDER ================= */
@@ -136,6 +134,22 @@ async function quote(routerAddr, amountIn, path) {
   }
 }
 
+/* ================= BALANCE DISPLAY ================= */
+
+async function showBalances(usdcAddr) {
+  const usdc = new ethers.Contract(
+    usdcAddr,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  );
+
+  const walletMatic = await provider.getBalance(wallet.address);
+  const contractBal = await usdc.balanceOf(VAULT_ADDRESS);
+
+  console.log(`${CYAN}Wallet POL:${RESET} ${ethers.formatEther(walletMatic)}`);
+  console.log(`${CYAN}Contract USDC:${RESET} ${ethers.formatUnits(contractBal, 6)}`);
+}
+
 /* ================= AUTO PAY PROFITS IN POL ================= */
 
 async function autoPayInPol(usdcAddr) {
@@ -156,7 +170,7 @@ async function autoPayInPol(usdcAddr) {
 
     const amount = (bal * BigInt(WITHDRAW_PERCENT)) / 100n;
 
-    console.log(`${YELLOW}💸 Converting USDC → WMATIC → POL...${RESET}`);
+    console.log(`${YELLOW}Converting USDC → WMATIC → POL...${RESET}`);
 
     await (await vault.withdrawERC20(usdcAddr, amount)).wait();
     await (await usdc.approve(routers.QuickSwap, amount)).wait();
@@ -186,7 +200,7 @@ async function autoPayInPol(usdcAddr) {
 
     if (wmaticBalance > 0n) {
       await (await wmatic.withdraw(wmaticBalance)).wait();
-      console.log(`${GREEN}🔥 WMATIC → POL accumulated${RESET}`);
+      console.log(`${GREEN}WMATIC → POL accumulated${RESET}`);
     }
 
   } catch (err) {
@@ -195,7 +209,6 @@ async function autoPayInPol(usdcAddr) {
 }
 
 /* ================= ARBITRAGE ================= */
-/* (UNCHANGED — EXACT SAME LOGIC AS YOUR JS1) */
 
 async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
@@ -249,10 +262,15 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
       bestSellPath,
       deadline
     );
-    await tx.wait();
-    console.log(`${GREEN}Arbitrage executed${RESET}`);
 
-    await autoPayInPol(usdc); // 🔥 continues forever
+    console.log(`${GREEN}Arbitrage executed. Tx hash:${RESET} ${tx.hash}`);
+
+    await tx.wait();
+
+    console.log(`${GREEN}Tx confirmed${RESET}`);
+
+    await showBalances(usdc);
+    await autoPayInPol(usdc);
 
   } catch (err) {
     console.log(`${RED}Execution failed:${RESET}`, err.message);
