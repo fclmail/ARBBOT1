@@ -246,7 +246,7 @@ async function binaryOptimize(trade) {
   const gasPrice = await provider.getGasPrice();
   const gasCostWei = gasEstimate * gasPrice;
 
-  const maticPriceUSDC = 0.75;
+  const maticPriceUSDC = 0.10;
   const gasCostUSDC =
     Number(ethers.formatEther(gasCostWei)) * maticPriceUSDC;
 
