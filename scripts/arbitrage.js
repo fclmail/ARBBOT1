@@ -143,10 +143,10 @@ async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
 
   if (!bestSellOut) return null;
 
-  const premium = (amountIn * FLASH_PREMIUM_BPS) / 10000n;
+  const premium = (amountIn * FLASH_PREMIUM_BPS) / 200n;
 
   // FIX: gas estimate must be in USDC units (6 decimals)
-  const gasEstimate = ethers.parseUnits("1", 6);
+  const gasEstimate = ethers.parseUnits("0", 6);
 
   const netProfit = bestSellOut - amountIn - premium - gasEstimate;
 
