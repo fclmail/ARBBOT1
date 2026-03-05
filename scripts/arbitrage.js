@@ -20,17 +20,17 @@ const WALLET_PRIVATE_KEY =
 if (!RPC_LIST.length) throw new Error("No RPC endpoints provided");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
 
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || .4);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.4);
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0005);
 const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 2000);
 const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 8);
 const DRY_RUN = (process.env.DRY_RUN || "false") === "true";
 
-/* ================= TIMESTAMP & LOG HELPERS ================= */
+/* ================= TIMESTAMP ================= */
 const ts = () => new Date().toISOString();
 
-/* ================= PROVIDER (RPC FAILOVER) ================= */
+/* ================= PROVIDER ================= */
 async function getWorkingProvider() {
   for (const rpc of RPC_LIST) {
     try {
@@ -50,6 +50,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 const VAULT_ADDRESS = "0x621F7ccEb67136f7922E36aF56137e7A1dbA22f1";
+
 const vaultAbi = [
   {
     name: "executeArbitrage",
@@ -78,7 +79,7 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap:   "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 };
 
 const routerAbi = [
@@ -87,20 +88,27 @@ const routerAbi = [
 
 /* ================= TOKENS ================= */
 const TOKENS = {
-  USDC: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  USDT: "0xc2132D05D31c914a87C6611C10748AaCbBfB5A45",
+  WBTC: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
+  LINK: "0x53E0bca35eC356BD5ddDFEBBD1Fc0fD03FaBad39",
+  AAVE: "0xD6Df932A45C0f255f85145f286eA0B292B21C90B"
 };
 
-/* ================= SYMBOL MAPPING ================= */
+/* ================= SYMBOL MAP ================= */
 const TOKEN_SYMBOLS = Object.fromEntries(
   Object.entries(TOKENS).map(([sym, addr]) => [addr.toLowerCase(), sym])
 );
 
+function symbol(addr) {
+  return TOKEN_SYMBOLS[addr.toLowerCase()] || addr.slice(0, 6);
+}
+
 /* ================= HELPERS ================= */
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function quote(router, amountIn, path) {
   try {
@@ -112,155 +120,187 @@ async function quote(router, amountIn, path) {
   }
 }
 
-function symbol(addr) {
-  return TOKEN_SYMBOLS[addr.toLowerCase()] || addr.slice(0,6) + "…" + addr.slice(-4);
-}
+/* ================= HOP PATHS ================= */
+function buildPaths(usdc, token) {
 
-async function vaultUSDCBalance() {
-  const usdcAddress = await vault.usdc();
-  const usdcContract = new ethers.Contract(usdcAddress, ["function balanceOf(address) view returns(uint256)"], provider);
-  return Number(ethers.formatUnits(await usdcContract.balanceOf(VAULT_ADDRESS), 6));
+  const hops = [
+    TOKENS.WETH,
+    TOKENS.WMATIC,
+    TOKENS.DAI,
+    TOKENS.USDT
+  ];
+
+  const paths = [];
+
+  // direct
+  paths.push({
+    buy: [usdc, token],
+    sell: [token, usdc]
+  });
+
+  for (const hop of hops) {
+
+    if (hop === token) continue;
+
+    paths.push({
+      buy: [usdc, hop, token],
+      sell: [token, hop, usdc]
+    });
+
+    paths.push({
+      buy: [usdc, hop, token],
+      sell: [token, usdc]
+    });
+
+    paths.push({
+      buy: [usdc, token],
+      sell: [token, hop, usdc]
+    });
+  }
+
+  return paths;
 }
 
 /* ================= ARB CHECK ================= */
 async function checkArb(buyRouter, sellRouter, tokenAddr, usdc) {
+
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-  const buyPath = [usdc, tokenAddr];
-  const sellPath = [tokenAddr, usdc];
 
-  console.log(`[${ts()}] 🔎 SCAN | Token ${symbol(tokenAddr)} | Buy ${symbol(buyRouter)} → Sell ${symbol(sellRouter)}`);
+  const paths = buildPaths(usdc, tokenAddr);
 
-  const buyOut = await quote(buyRouter, amountIn, buyPath);
-  if (!buyOut) return null;
+  for (const p of paths) {
 
-  const sellOut = await quote(sellRouter, buyOut, sellPath);
-  if (!sellOut) return null;
+    const buyOut = await quote(buyRouter, amountIn, p.buy);
+    if (!buyOut) continue;
 
-  const received = Number(ethers.formatUnits(sellOut, 6));
-  const profit = received - MIN_TRADE_USDC;
+    const sellOut = await quote(sellRouter, buyOut, p.sell);
+    if (!sellOut) continue;
 
-  if (profit < MIN_EXPECTED_PROFIT) return null;
+    const received = Number(ethers.formatUnits(sellOut, 6));
+    const profit = received - MIN_TRADE_USDC;
 
-  return {
-    buyRouter,
-    sellRouter,
-    tokenAddr,
-    buyPath,
-    sellPath,
-    profit
-  };
-}
+    if (profit >= MIN_EXPECTED_PROFIT) {
 
-/* ================= EXECUTION QUEUE ================= */
-const executionQueue = [];
-let executing = false;
+      return {
+        buyRouter,
+        sellRouter,
+        tokenAddr,
+        buyPath: p.buy,
+        sellPath: p.sell,
+        profit
+      };
 
-async function processQueue() {
-  if (executing) return;
-  executing = true;
-
-  while (executionQueue.length) {
-    const arb = executionQueue.shift();
-    console.log(`[${ts()}] 🔥 EXECUTING | Token ${symbol(arb.tokenAddr)} | Profit: +${arb.profit.toFixed(6)} USDC`);
-
-    if (DRY_RUN) {
-      console.log(`[${ts()}] 🧪 DRY RUN — skipped tx`);
-      continue;
-    }
-
-    try {
-      const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
-      const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
-
-      const tx = await vault.executeArbitrage(
-        arb.buyRouter,
-        arb.sellRouter,
-        amountIn,
-        arb.buyPath,
-        arb.sellPath,
-        deadline
-      );
-
-      console.log(`[${ts()}] ⛓ TX SENT: ${tx.hash}`);
-      await tx.wait();
-      console.log(`[${ts()}] ✅ TX CONFIRMED`);
-
-      const updatedVaultBalance = await vaultUSDCBalance();
-      const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
-
-      console.log(`[${ts()}] 💰 Vault USDC balance: ${updatedVaultBalance.toFixed(6)} | Wallet MATIC: ${walletMatic.toFixed(6)}`);
-    } catch (e) {
-      console.log(`[${ts()}] ⚠️ TX FAILED: ${e.message}`);
     }
   }
 
-  executing = false;
+  return null;
 }
 
-/* ================= PARALLEL SCANNER ================= */
-async function runWithConcurrency(tasks, limit) {
-  const pool = [];
-  for (const task of tasks) {
-    const p = task();
-    pool.push(p);
-    if (pool.length >= limit) {
-      await Promise.race(pool);
-      pool.splice(pool.findIndex(x => x === p), 1);
-    }
+/* ================= EXECUTION ================= */
+async function executeArb(arb) {
+
+  console.log(`[${ts()}] 🔥 EXECUTING ${symbol(arb.tokenAddr)} +${arb.profit.toFixed(6)} USDC`);
+
+  if (DRY_RUN) {
+    console.log(`[${ts()}] DRY RUN`);
+    return;
   }
-  await Promise.allSettled(pool);
+
+  try {
+
+    const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+    const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
+    const tx = await vault.executeArbitrage(
+      arb.buyRouter,
+      arb.sellRouter,
+      amountIn,
+      arb.buyPath,
+      arb.sellPath,
+      deadline
+    );
+
+    console.log(`[${ts()}] TX SENT ${tx.hash}`);
+
+    await tx.wait();
+
+    console.log(`[${ts()}] ✅ CONFIRMED`);
+
+  } catch (e) {
+
+    console.log(`[${ts()}] ⚠️ TX FAILED ${e.message}`);
+
+  }
 }
 
 /* ================= SCAN ================= */
 async function scan() {
+
   const usdc = await vault.usdc();
-  const walletMatic = Number(ethers.formatUnits(await provider.getBalance(wallet.address), 18));
-  const vaultBalance = await vaultUSDCBalance();
 
-  console.log(`[${ts()}] 💎 Wallet MATIC balance: ${walletMatic.toFixed(6)} | Vault USDC balance: ${vaultBalance.toFixed(6)}`);
-
-  const tasks = [];
   const found = [];
 
+  const tasks = [];
+
   for (const [sym, tokenAddr] of Object.entries(TOKENS)) {
-    for (const [buyName, buyRouter] of Object.entries(routers)) {
-      for (const [sellName, sellRouter] of Object.entries(routers)) {
+
+    if (sym === "USDC") continue;
+
+    for (const buyRouter of Object.values(routers)) {
+      for (const sellRouter of Object.values(routers)) {
+
         if (buyRouter === sellRouter) continue;
 
         tasks.push(async () => {
+
           const arb = await checkArb(buyRouter, sellRouter, tokenAddr, usdc);
+
           if (arb) found.push(arb);
+
         });
+
       }
     }
   }
 
-  await runWithConcurrency(tasks, SCAN_CONCURRENCY);
+  for (let i = 0; i < tasks.length; i += SCAN_CONCURRENCY) {
 
-  found
-    .sort((a, b) => b.profit - a.profit)
-    .forEach(a => executionQueue.push(a));
+    await Promise.all(tasks.slice(i, i + SCAN_CONCURRENCY).map(t => t()));
 
-  if (found.length) {
-    console.log(`[${ts()}] 💡 ${found.length} profitable arbs queued`);
-    processQueue();
+  }
+
+  if (!found.length) return;
+
+  found.sort((a, b) => b.profit - a.profit);
+
+  console.log(`[${ts()}] 💡 ${found.length} opportunities`);
+
+  for (const arb of found) {
+
+    await executeArb(arb);
+
   }
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= LOOP ================= */
 (async () => {
-  console.log(`[${ts()}] 🚀 Parallel Arbitrage Bot Started (RPC Failover Enabled)`);
 
-  let cycle = 0;
+  console.log(`[${ts()}] 🚀 ARB BOT STARTED`);
+
   while (true) {
-    cycle++;
+
     try {
-      console.log(`[${ts()}] 🔄 Scan cycle ${cycle} started`);
+
       await scan();
-      console.log(`[${ts()}] ✅ Scan cycle ${cycle} completed`);
+
     } catch (e) {
-      console.log(`[${ts()}] ⚠️ Scan error: ${e.message}`);
+
+      console.log(`[${ts()}] ERROR ${e.message}`);
+
     }
+
     await sleep(SCAN_DELAY_MS);
+
   }
+
 })();
