@@ -8,19 +8,39 @@ dotenv.config({ override: true });
 const RPC_POLYGON = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-if (!PRIVATE_KEY) {
-  throw new Error("Invalid or missing private key. Please check your .env or GitHub Secrets.");
-}
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in .env or GitHub Secrets");
 
-/* ================= CONSTANTS ================= */
 const FLASH_AMOUNT_USDC = 10000n; // per simulation
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 const FLASH_PREMIUM_BPS = 9n; // 0.09% typical
+const MIN_TRADE_USDC = 10000n;
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+/* ================= TOKENS ================= */
+const TOKENS = {
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
+  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  USDT: "0x3813e82e6f7098b9583FC0F33a962D02018B6803"
+};
+
+/* ================= ROUTERS ================= */
+const routers = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+};
 
 /* ================= VAULT ================= */
 const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
@@ -42,130 +62,137 @@ const vaultAbi = [
 ];
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= ROUTERS ================= */
-const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
-};
-
-/* ================= TOKENS ================= */
-const TOKENS = {
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-  USDT: "0x3813e82e6f7098b9583FC0F33a962D02018B6803"
-};
-
 /* ================= ROUTER ABI ================= */
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"
-];
+const routerAbi = ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"];
 
 /* ================= HELPERS ================= */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function displayBalances() {
-  const maticBalance = await provider.getBalance(wallet.address);
-  const usdcAddress = await vault.usdc();
-  const erc20Abi = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
-  const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
-  const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
-  const decimals = await usdc.decimals();
-  return {
-    matic: ethers.formatEther(maticBalance),
-    vault: ethers.formatUnits(vaultBalance, decimals)
-  };
+function formatGreen(text) {
+  return `\x1b[32m${text}\x1b[0m`;
+}
+function formatRed(text) {
+  return `\x1b[31m${text}\x1b[0m`;
 }
 
-async function simulateProfit(buyRouterAddr, sellRouterAddr, path) {
+async function quote(routerAddr, amountIn, path) {
   try {
-    const buyRouter = new ethers.Contract(buyRouterAddr, routerAbi, provider);
-    const sellRouter = new ethers.Contract(sellRouterAddr, routerAbi, provider);
-    const amountIn = ethers.parseUnits(FLASH_AMOUNT_USDC.toString(), 6);
-
-    const buyAmounts = await buyRouter.getAmountsOut(amountIn, path);
-    const tokenOut = buyAmounts[buyAmounts.length - 1];
-
-    const sellAmounts = await sellRouter.getAmountsOut(tokenOut, [...path].reverse());
-    const returnedUSDC = sellAmounts[sellAmounts.length - 1];
-
-    const premium = (amountIn * FLASH_PREMIUM_BPS) / 10000n;
-    const gasEstimate = ethers.parseUnits("0.4", 18);
-    const netProfit = returnedUSDC - amountIn - premium - gasEstimate;
-
-    return {
-      returnedUSDC,
-      premium,
-      gasEstimate,
-      netProfit
-    };
+    const router = new ethers.Contract(routerAddr, routerAbi, provider);
+    const amounts = await router.getAmountsOut(amountIn, path);
+    return amounts[amounts.length - 1];
   } catch {
     return null;
   }
 }
 
-function formatGreen(text) {
-  return `\x1b[32m${text}\x1b[0m`;
-}
+/* ================= ARBITRAGE LOGIC ================= */
+async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
+  const usdc = TOKENS.USDC;
+  const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
-function formatRed(text) {
-  return `\x1b[31m${text}\x1b[0m`;
-}
+  // === Best buy path ===
+  let bestBuyOut, bestBuyPath;
+  const buyPaths = [
+    [usdc, tokenAddr],
+    [usdc, TOKENS.WMATIC, tokenAddr],
+    [usdc, TOKENS.WETH, tokenAddr],
+    [usdc, TOKENS.USDT, tokenAddr],
+    [usdc, TOKENS.DAI, tokenAddr]
+  ];
+  for (const p of buyPaths) {
+    const out = await quote(routers[buyRouterName], amountIn, p);
+    if (out && (!bestBuyOut || out > bestBuyOut)) {
+      bestBuyOut = out;
+      bestBuyPath = p;
+    }
+  }
+  if (!bestBuyOut) return null;
 
-async function tryFlashArb(buyRouterName, sellRouterName, tokenAddr) {
-  const usdc = await vault.usdc();
-  const path = [usdc, TOKENS.DAI, TOKENS.USDT, tokenAddr];
-
-  const result = await simulateProfit(routers[buyRouterName], routers[sellRouterName], path);
-
-  console.log("------------------------------------------------");
-  console.log("Simulation started");
-  console.log("Hop path:");
-  console.log(path.map((t) => t).join(" -> "));
-  console.log("Routers:");
-  console.log(`${buyRouterName} -> ${sellRouterName}`);
-  console.log(`Loan: ${FLASH_AMOUNT_USDC} USDC`);
-
-  if (!result || result.netProfit <= 0n) {
-    console.log(formatRed("Returned: Simulation failed / negative profit"));
-    console.log("PROFITABLE TRADE FOUND: NO");
-    return;
+  // === Best sell path ===
+  let bestSellOut, bestSellPath;
+  const sellPaths = [
+    [tokenAddr, usdc],
+    [tokenAddr, TOKENS.WMATIC, usdc],
+    [tokenAddr, TOKENS.WETH, usdc],
+    [tokenAddr, TOKENS.USDT, usdc],
+    [tokenAddr, TOKENS.DAI, usdc]
+  ];
+  for (const p of sellPaths) {
+    const out = await quote(routers[sellRouterName], bestBuyOut, p);
+    if (out && (!bestSellOut || out > bestSellOut)) {
+      bestSellOut = out;
+      bestSellPath = p;
+    }
   }
 
-  console.log(formatGreen(`Returned: ${ethers.formatUnits(result.returnedUSDC, 6)} USDC`));
-  console.log(formatGreen(`Flash loan fee: ${ethers.formatUnits(result.premium, 6)}`));
-  console.log(formatGreen(`Gas estimate: ${ethers.formatUnits(result.gasEstimate, 6)}`));
-  console.log(formatGreen(`Net profit: ${ethers.formatUnits(result.netProfit, 6)} USDC`));
-  console.log(formatGreen("PROFITABLE TRADE FOUND"));
+  if (!bestSellOut) return null;
 
-  // Simulate sending tx
-  console.log(formatGreen("Sending private bundle..."));
-  console.log(formatGreen("Tx sent (simulated)"));
-  console.log(formatGreen("Profit deposited to vault"));
-  const balances = await displayBalances();
-  console.log(formatGreen(`Vault balance: ${balances.vault} USDC`));
+  const premium = (amountIn * FLASH_PREMIUM_BPS) / 10000n;
+  const gasEstimate = ethers.parseUnits("0.4", 18);
+  const netProfit = bestSellOut - amountIn - premium - gasEstimate;
+
+  return {
+    buyRouter: buyRouterName,
+    sellRouter: sellRouterName,
+    buyPath: bestBuyPath,
+    sellPath: bestSellPath,
+    returnedUSDC: bestSellOut,
+    premium,
+    gasEstimate,
+    netProfit
+  };
 }
 
+/* ================= EXECUTE AND LOG ================= */
+async function executeTrade(trade) {
+  console.log("------------------------------------------------");
+  console.log("Simulation started");
+  console.log("Buy path:", trade.buyPath.join(" -> "));
+  console.log("Sell path:", trade.sellPath.join(" -> "));
+  console.log("Routers:", trade.buyRouter, "->", trade.sellRouter);
+  console.log(`Loan: ${MIN_TRADE_USDC} USDC`);
+
+  const netProfitFormatted = ethers.formatUnits(trade.netProfit, 6);
+  if (trade.netProfit > 0n) {
+    console.log(formatGreen(`Returned: ${ethers.formatUnits(trade.returnedUSDC, 6)} USDC`));
+    console.log(formatGreen(`Flash loan fee: ${ethers.formatUnits(trade.premium, 6)}`));
+    console.log(formatGreen(`Gas estimate: ${ethers.formatUnits(trade.gasEstimate, 6)}`));
+    console.log(formatGreen(`Net profit: ${netProfitFormatted} USDC`));
+    console.log(formatGreen("PROFITABLE TRADE FOUND"));
+
+    // Simulate sending tx
+    console.log(formatGreen("Sending private bundle..."));
+    console.log(formatGreen("Tx sent (simulated)"));
+    console.log(formatGreen("Profit deposited to vault"));
+
+    // Show vault balance
+    const erc20Abi = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
+    const usdc = new ethers.Contract(TOKENS.USDC, erc20Abi, provider);
+    const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
+    const decimals = await usdc.decimals();
+    console.log(formatGreen(`Vault balance: ${ethers.formatUnits(vaultBalance, decimals)} USDC`));
+  } else {
+    console.log(formatRed(`Returned: ${ethers.formatUnits(trade.returnedUSDC, 6)} USDC`));
+    console.log(formatRed(`Net profit: ${netProfitFormatted} USDC`));
+    console.log(formatRed("PROFITABLE TRADE FOUND: NO"));
+  }
+}
+
+/* ================= SCAN LOOP ================= */
 async function scan() {
   console.log("\nARB BOT STARTED");
   console.log(`RPC: ${RPC_POLYGON}`);
   console.log(`Wallet: ${wallet.address}`);
-  const balances = await displayBalances();
-  console.log(`MATIC balance: ${balances.matic}`);
-  console.log(`Vault balance: ${balances.vault} USDC`);
+
+  const maticBalance = await provider.getBalance(wallet.address);
+  console.log(`MATIC balance: ${ethers.formatEther(maticBalance)}`);
 
   for (const token of Object.values(TOKENS)) {
     for (const buyRouterName of Object.keys(routers)) {
       for (const sellRouterName of Object.keys(routers)) {
         if (buyRouterName !== sellRouterName) {
-          await tryFlashArb(buyRouterName, sellRouterName, token);
+          const trade = await findProfitableTrade(buyRouterName, sellRouterName, token);
+          if (trade) await executeTrade(trade);
         }
       }
     }
