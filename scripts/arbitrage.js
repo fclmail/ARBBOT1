@@ -11,7 +11,7 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in .env or GitHub Secrets");
 
 const FLASH_AMOUNT_USDC = 10000n; // per simulation
-const SCAN_INTERVAL_MS = 10_000;
+const SCAN_INTERVAL_MS = 2000;
 const DEADLINE_SECONDS = 60;
 const FLASH_PREMIUM_BPS = 9n; // 0.09% typical
 const MIN_TRADE_USDC = 10000n;
@@ -87,6 +87,10 @@ async function quote(routerAddr, amountIn, path) {
 
 /* ================= ARBITRAGE LOGIC ================= */
 async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
+
+  // FIX: Skip USDC to avoid useless USDC -> USDC trades
+  if (tokenAddr === TOKENS.USDC) return null;
+
   const usdc = TOKENS.USDC;
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
@@ -128,7 +132,10 @@ async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
   if (!bestSellOut) return null;
 
   const premium = (amountIn * FLASH_PREMIUM_BPS) / 10000n;
-  const gasEstimate = ethers.parseUnits("0.4", 18);
+
+  // FIX: gas estimate must be in USDC units (6 decimals)
+  const gasEstimate = ethers.parseUnits("1", 6);
+
   const netProfit = bestSellOut - amountIn - premium - gasEstimate;
 
   return {
@@ -160,12 +167,10 @@ async function executeTrade(trade) {
     console.log(formatGreen(`Net profit: ${netProfitFormatted} USDC`));
     console.log(formatGreen("PROFITABLE TRADE FOUND"));
 
-    // Simulate sending tx
     console.log(formatGreen("Sending private bundle..."));
     console.log(formatGreen("Tx sent (simulated)"));
     console.log(formatGreen("Profit deposited to vault"));
 
-    // Show vault balance
     const erc20Abi = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
     const usdc = new ethers.Contract(TOKENS.USDC, erc20Abi, provider);
     const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
