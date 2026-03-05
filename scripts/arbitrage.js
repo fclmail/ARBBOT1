@@ -10,11 +10,11 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in .env or GitHub Secrets");
 
-const FLASH_AMOUNT_USDC = 10000n; // per simulation
-const SCAN_INTERVAL_MS = 2000;
+const FLASH_AMOUNT_USDC = 10n; // per simulation
+const SCAN_INTERVAL_MS = 4000;
 const DEADLINE_SECONDS = 60;
 const FLASH_PREMIUM_BPS = 9n; // 0.09% typical
-const MIN_TRADE_USDC = 10000n;
+const MIN_TRADE_USDC = 10n;
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
