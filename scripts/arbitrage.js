@@ -20,7 +20,7 @@ const WALLET_PRIVATE_KEY =
 if (!RPC_LIST.length) throw new Error("No RPC endpoints provided");
 if (!WALLET_PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY missing");
 
-const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.02);
+const MIN_TRADE_USDC = Number(process.env.MIN_TRADE_USDC || 0.4);
 const MIN_EXPECTED_PROFIT = Number(process.env.MIN_EXPECTED_PROFIT || 0.0005);
 const DEADLINE_SECONDS = Number(process.env.DEADLINE_SECONDS || 60);
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 2000);
@@ -170,6 +170,8 @@ async function checkArb(buyRouter, sellRouter, tokenAddr, usdc) {
 
   for (const p of paths) {
 
+    console.log(`[${ts()}] 🔎 SCANNING | Buy: ${symbol(buyRouter)} → Sell: ${symbol(sellRouter)} | Path: ${p.buy.join(" → ")} → ${p.sell.join(" → ")}`);
+
     const buyOut = await quote(buyRouter, amountIn, p.buy);
     if (!buyOut) continue;
 
@@ -180,7 +182,6 @@ async function checkArb(buyRouter, sellRouter, tokenAddr, usdc) {
     const profit = received - MIN_TRADE_USDC;
 
     if (profit >= MIN_EXPECTED_PROFIT) {
-
       return {
         buyRouter,
         sellRouter,
@@ -189,7 +190,6 @@ async function checkArb(buyRouter, sellRouter, tokenAddr, usdc) {
         sellPath: p.sell,
         profit
       };
-
     }
   }
 
@@ -199,7 +199,7 @@ async function checkArb(buyRouter, sellRouter, tokenAddr, usdc) {
 /* ================= EXECUTION ================= */
 async function executeArb(arb) {
 
-  console.log(`[${ts()}] 🔥 EXECUTING ${symbol(arb.tokenAddr)} +${arb.profit.toFixed(6)} USDC`);
+  console.log(`[${ts()}] 🔥 EXECUTING | Token: ${symbol(arb.tokenAddr)} | Profit: +${arb.profit.toFixed(6)} USDC`);
 
   if (DRY_RUN) {
     console.log(`[${ts()}] DRY RUN`);
@@ -263,44 +263,4 @@ async function scan() {
     }
   }
 
-  for (let i = 0; i < tasks.length; i += SCAN_CONCURRENCY) {
-
-    await Promise.all(tasks.slice(i, i + SCAN_CONCURRENCY).map(t => t()));
-
-  }
-
-  if (!found.length) return;
-
-  found.sort((a, b) => b.profit - a.profit);
-
-  console.log(`[${ts()}] 💡 ${found.length} opportunities`);
-
-  for (const arb of found) {
-
-    await executeArb(arb);
-
-  }
-}
-
-/* ================= LOOP ================= */
-(async () => {
-
-  console.log(`[${ts()}] 🚀 ARB BOT STARTED`);
-
-  while (true) {
-
-    try {
-
-      await scan();
-
-    } catch (e) {
-
-      console.log(`[${ts()}] ERROR ${e.message}`);
-
-    }
-
-    await sleep(SCAN_DELAY_MS);
-
-  }
-
-})();
+  for (let i = 0; i
