@@ -1,42 +1,29 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-/* ================= ENV ================= */
-
 dotenv.config({ override: false });
 
-const RPC_POLYGON =
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL ||
-  "";
+// ================= ENV =================
+const RPC_POLYGON = process.env.RPC_POLYGON || process.env.RPC_URL || "";
+const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || "";
 
-const WALLET_PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY ||
-  "";
+// ================= CONSTANTS =================
+const FLASH_AMOUNT_USDC = 10000;      // Fixed flash loan amount
+const SCAN_INTERVAL_MS = 10_000;      // 10 seconds between scans
+const DEADLINE_SECONDS = 60;          // Swap deadline
+const FLASH_PREMIUM_BPS = 9;          // 0.09% typical Aave V3 fee
 
-/* ================= CONSTANTS ================= */
-
-const FLASH_AMOUNT_USDC = 1000;
-const SCAN_INTERVAL_MS = 10_000;
-const DEADLINE_SECONDS = 60;
-const FLASH_PREMIUM_BPS = 9; // 0.09% Aave V3 typical
-
-/* ================= PROVIDER ================= */
-
+// ================= PROVIDER =================
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
-/* ================= CONTRACT ================= */
-
-const VAULT_ADDRESS =
-  "0x901bFCb41EacB5fB54d89676b45042fABAdb03B9";
-
+// ================= CONTRACT =================
+const VAULT_ADDRESS = "0x901bFCb41EacB5fB54d89676b45042fABAdb03B9";
 const vaultAbi = [
   {
     name: "executeFlashArbitrage",
     type: "function",
+    stateMutability: "nonpayable",
     inputs: [
       { type: "address" },
       { type: "address" },
@@ -44,25 +31,13 @@ const vaultAbi = [
       { type: "address[]" },
       { type: "address[]" },
       { type: "uint256" }
-    ],
-    stateMutability: "nonpayable"
+    ]
   },
-  {
-    name: "usdc",
-    type: "function",
-    outputs: [{ type: "address" }],
-    stateMutability: "view"
-  }
+  { name: "usdc", type: "function", stateMutability: "view", outputs: [{ type: "address" }] }
 ];
-
-const routerAbi = [
-  "function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"
-];
-
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
-/* ================= ROUTERS ================= */
-
+// ================= ROUTERS =================
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -70,8 +45,7 @@ const routers = {
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS ================= */
-
+// ================= TOKENS =================
 const TOKENS = {
   WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
@@ -82,32 +56,35 @@ const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
-/* ================= HELPERS ================= */
+// ================= ROUTER ABI =================
+const routerAbi = ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"];
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// ================= HELPERS =================
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-/* ================= BALANCE DISPLAY ================= */
-
-async function displayBalances() {
-  const maticBalance = await provider.getBalance(wallet.address);
-  const usdcAddress = await vault.usdc();
-
-  const erc20Abi = [
-    "function balanceOf(address) view returns (uint256)",
-    "function decimals() view returns (uint8)"
-  ];
-
-  const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
-
-  const contractBalance = await usdc.balanceOf(VAULT_ADDRESS);
-  const decimals = await usdc.decimals();
-
-  console.log("Wallet MATIC:", ethers.formatEther(maticBalance));
-  console.log("Contract USDC:", ethers.formatUnits(contractBalance, decimals));
+function logStep(step, data = "") {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] ${step}:`, data);
 }
 
-/* ================= PROFIT SIMULATION ================= */
+// Display wallet and vault balances
+async function displayBalances() {
+  try {
+    const maticBalance = await provider.getBalance(wallet.address);
+    const usdcAddress = await vault.usdc();
+    const erc20Abi = ["function balanceOf(address) view returns (uint256)", "function decimals() view returns (uint8)"];
+    const usdc = new ethers.Contract(usdcAddress, erc20Abi, provider);
+    const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
+    const decimals = await usdc.decimals();
 
+    console.log("Wallet MATIC:", ethers.formatEther(maticBalance));
+    console.log("Vault USDC:", ethers.formatUnits(vaultBalance, decimals));
+  } catch (err) {
+    console.error("Balance display error:", err.message);
+  }
+}
+
+// ================= SIMULATION =================
 async function simulateProfit(buyRouterAddr, sellRouterAddr, tokenAddr, usdcAddr) {
   try {
     const buyRouter = new ethers.Contract(buyRouterAddr, routerAbi, provider);
@@ -122,28 +99,34 @@ async function simulateProfit(buyRouterAddr, sellRouterAddr, tokenAddr, usdcAddr
     const usdcOut = sellAmounts[1];
 
     const premium = (amountIn * BigInt(FLASH_PREMIUM_BPS)) / BigInt(10000);
-
     const profit = usdcOut - amountIn - premium;
 
-    return profit;
+    return { profit, tokenOut, usdcOut, premium };
   } catch {
-    return BigInt(0);
+    return { profit: 0n, tokenOut: 0n, usdcOut: 0n, premium: 0n };
   }
 }
 
-/* ================= FLASH EXECUTION ================= */
-
+// ================= EXECUTION =================
 async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
+  const { profit, tokenOut, usdcOut, premium } = await simulateProfit(buyRouter, sellRouter, tokenAddr, usdc);
 
-  const profit = await simulateProfit(buyRouter, sellRouter, tokenAddr, usdc);
+  logStep("--- SIMULATION ---");
+  logStep("BUY ROUTER", buyRouter);
+  logStep("SELL ROUTER", sellRouter);
+  logStep("TOKEN", tokenAddr);
+  logStep("BUY OUTPUT", ethers.formatUnits(tokenOut, 18));
+  logStep("SELL OUTPUT", ethers.formatUnits(usdcOut, 6));
+  logStep("FLASH FEE", ethers.formatUnits(premium, 6));
+  logStep("EXPECTED PROFIT", ethers.formatUnits(profit, 6));
 
   if (profit <= 0n) {
+    logStep("SKIPPED", "Not profitable");
     return;
   }
 
-  console.log("Profitable opportunity found:", ethers.formatUnits(profit, 6), "USDC");
-
+  logStep("FLASH LOAN SENT");
   try {
     const tx = await vault.executeFlashArbitrage(
       buyRouter,
@@ -153,20 +136,21 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
       [tokenAddr, usdc],
       Math.floor(Date.now() / 1000) + DEADLINE_SECONDS
     );
+    logStep("TX HASH", tx.hash);
 
-    console.log("Flash loan sent:", tx.hash);
     await tx.wait();
-    console.log("Flash arbitrage confirmed:", tx.hash);
+    logStep("FLASH ARBITRAGE CONFIRMED", tx.hash);
 
+    await displayBalances();
+    logStep("PROFIT DEPOSITED TO VAULT");
   } catch (err) {
-    console.log("Flash execution failed:", err.shortMessage || err.message);
+    logStep("FLASH EXECUTION FAILED", err.shortMessage || err.message);
   }
 }
 
-/* ================= SCAN ================= */
-
+// ================= SCAN =================
 async function scan() {
-  console.log("\nScan @", new Date().toISOString());
+  logStep("SCAN START", new Date().toISOString());
   await displayBalances();
 
   for (const token of Object.values(TOKENS)) {
@@ -180,16 +164,15 @@ async function scan() {
   }
 }
 
-/* ================= MAIN ================= */
-
+// ================= MAIN LOOP =================
 (async function mainLoop() {
-  console.log("Flash-enabled arbitrage bot started");
+  logStep("🚀 Blind Flash-enabled Arbitrage Bot Started");
 
   while (true) {
     try {
       await scan();
-    } catch (e) {
-      console.error(e);
+    } catch (err) {
+      logStep("SCAN ERROR", err.message);
     }
 
     await sleep(SCAN_INTERVAL_MS);
