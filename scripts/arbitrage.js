@@ -1,4 +1,3 @@
-// arbitrage.js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -48,8 +47,8 @@ const TOKENS = {
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
   SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-       Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-   Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+  Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
@@ -100,7 +99,6 @@ async function quote(routerAddr, amountIn, path) {
 /* ================= ARBITRAGE LOGIC ================= */
 async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
 
-  // FIX: Skip USDC to avoid useless USDC -> USDC trades
   if (tokenAddr === TOKENS.USDC) return null;
 
   const usdc = TOKENS.USDC;
@@ -144,11 +142,11 @@ async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
   if (!bestSellOut) return null;
 
   const premium = (amountIn * FLASH_PREMIUM_BPS) / 100n;
-
-  // FIX: gas estimate must be in USDC units (6 decimals)
   const gasEstimate = ethers.parseUnits("1", 6);
 
-  const netProfit = bestSellOut - amountIn - premium - gasEstimate;
+  // ⚡ CHANGE: use gross profit instead of net profit for execution
+  const grossProfit = bestSellOut - amountIn;
+  const netProfit = grossProfit - premium - gasEstimate;
 
   return {
     buyRouter: buyRouterName,
@@ -158,6 +156,7 @@ async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
     returnedUSDC: bestSellOut,
     premium,
     gasEstimate,
+    grossProfit,
     netProfit
   };
 }
@@ -172,10 +171,13 @@ async function executeTrade(trade) {
   console.log(`Loan: ${MIN_TRADE_USDC} USDC`);
 
   const netProfitFormatted = ethers.formatUnits(trade.netProfit, 6);
-  if (trade.netProfit > 0n) {
+  const grossProfitFormatted = ethers.formatUnits(trade.grossProfit, 6);
+
+  if (trade.grossProfit > 0n) {
     console.log(formatGreen(`Returned: ${ethers.formatUnits(trade.returnedUSDC, 6)} USDC`));
     console.log(formatGreen(`Flash loan fee: ${ethers.formatUnits(trade.premium, 6)}`));
     console.log(formatGreen(`Gas estimate: ${ethers.formatUnits(trade.gasEstimate, 6)}`));
+    console.log(formatGreen(`Gross profit: ${grossProfitFormatted} USDC`));
     console.log(formatGreen(`Net profit: ${netProfitFormatted} USDC`));
     console.log(formatGreen("PROFITABLE TRADE FOUND"));
 
@@ -190,6 +192,7 @@ async function executeTrade(trade) {
     console.log(formatGreen(`Vault balance: ${ethers.formatUnits(vaultBalance, decimals)} USDC`));
   } else {
     console.log(formatRed(`Returned: ${ethers.formatUnits(trade.returnedUSDC, 6)} USDC`));
+    console.log(formatRed(`Gross profit: ${grossProfitFormatted} USDC`));
     console.log(formatRed(`Net profit: ${netProfitFormatted} USDC`));
     console.log(formatRed("PROFITABLE TRADE FOUND: NO"));
   }
