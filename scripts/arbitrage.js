@@ -2,19 +2,18 @@
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
+import axios from "axios";
 
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
-
-// Hard fetch from environment secrets, using optional chaining and trim
-const RPC_POLYGON_WS = process.env.RPC_POLYGON_WS?.trim() || "";
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY?.trim() || "";
-
-console.log("Wallet private key present?", !!WALLET_PRIVATE_KEY);
+const RPC_POLYGON_WS = (process.env.RPC_POLYGON_WS || "").trim();
+const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "").trim();
+const WEBHOOK_URL = "https://webhook.site/a9382ae4-8773-428a-8c11-ebfabb8d65fa";
 
 if (!RPC_POLYGON_WS) throw new Error("RPC_POLYGON_WS missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+if (!WEBHOOK_URL) throw new Error("WEBHOOK_URL missing");
 
 /* ================= COLORS ================= */
 const GREEN = "\x1b[92m";
@@ -24,11 +23,11 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= PARAMETERS ================= */
-const MIN_TRADE_USDC = 2000;
+const MIN_TRADE_USDC = 2000; // Minimum arb trade in USDC
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const DEADLINE_SECONDS = 60;
-const PARALLEL_LIMIT = 10;
+const PARALLEL_LIMIT = 10; // Prevent too many parallel requests
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.WebSocketProvider(RPC_POLYGON_WS);
@@ -103,6 +102,15 @@ function buildSellPaths(usdc, token) {
   ];
 }
 
+/* ================= WEBHOOK ================= */
+async function sendWebhook(message) {
+  try {
+    await axios.post(WEBHOOK_URL, { content: message });
+  } catch (err) {
+    console.error(RED, "Webhook error:", err.message, RESET);
+  }
+}
+
 /* ================= SIMULATION ================= */
 async function vaultWillExecute(args) {
   try {
@@ -145,6 +153,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   if (safeProfit < MIN_EXPECTED_PROFIT) return;
 
   console.log(`${GREEN}🔥 Flash profit:${RESET} ${safeProfit.toFixed(6)} USDC`);
+  await sendWebhook(`🔥 Flash profit: ${safeProfit.toFixed(6)} USDC | Token: ${tokenAddr}`);
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
   const args = [
@@ -162,6 +171,7 @@ async function tryArb(buyRouter, sellRouter, tokenAddr) {
   const tx = await vault.executeFlashArbitrage(...args, { nonce, gasLimit: 2_000_000 });
   await tx.wait();
   console.log(`${GREEN}⚡ Flash executed | ${tx.hash}${RESET}`);
+  await sendWebhook(`⚡ Flash executed | Tx: ${tx.hash}`);
 }
 
 /* ================= MEMPOOL SCANNER ================= */
@@ -173,10 +183,12 @@ async function startMempoolScanner() {
       const tx = await provider.getTransaction(txHash);
       if (!tx || !tx.to) return;
 
+      // Only consider DEX routers
       if (!Object.values(routers).includes(tx.to)) return;
 
       console.log(`⚡ Pending swap detected: ${txHash}`);
 
+      // Execute all token/router combos in parallel (throttle to PARALLEL_LIMIT)
       const tasks = [];
       for (const token of Object.values(TOKENS)) {
         for (const buy of Object.values(routers)) {
