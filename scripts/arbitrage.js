@@ -39,8 +39,8 @@ const DEADLINE_SECONDS = 60;
 
 /* ================= WITHDRAW ================= */
 
-const WITHDRAW_THRESHOLD_USDC = 1;
-const WITHDRAW_PERCENT = 100;
+const WITHDRAW_THRESHOLD_USDC = 10;
+const WITHDRAW_PERCENT = 1;
 
 /* ================= PROVIDER ================= */
 
