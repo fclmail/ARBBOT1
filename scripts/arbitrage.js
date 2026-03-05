@@ -34,7 +34,7 @@ const RED = "\x1b[91m";
 
 /* ================= PARAMS ================= */
 
-const MIN_TRADE_USDC = .05;
+const MIN_TRADE_USDC = .21;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const PROFIT_SAFETY_MULTIPLIER = 0.9;
 const SCAN_INTERVAL_MS = 10_000;
@@ -47,7 +47,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= FLASH VAULT ================= */
 
-const VAULT_ADDRESS = "0x11887399855F0657cCd6018ca3A9aDa6Ac87664E";
+const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
 
 const vaultAbi = [
   "function executeFlashArbitrage(address,address,uint256,address[],address[],uint256)",
