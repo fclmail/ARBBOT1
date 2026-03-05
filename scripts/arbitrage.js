@@ -31,7 +31,7 @@ const YELLOW = "\x1b[93m";
 /* ================= CONSTANTS ================= */
 
 // SMART CONTRACT: minimum profit = 1 = 0.000001 USDCe
-const MIN_TRADE_USDC = .3;
+const MIN_TRADE_USDC = .03;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
