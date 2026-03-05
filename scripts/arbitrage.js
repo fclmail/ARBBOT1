@@ -111,6 +111,14 @@ async function simulateProfit(buyRouterAddr, sellRouterAddr, path) {
   }
 }
 
+function formatGreen(text) {
+  return `\x1b[32m${text}\x1b[0m`;
+}
+
+function formatRed(text) {
+  return `\x1b[31m${text}\x1b[0m`;
+}
+
 async function tryFlashArb(buyRouterName, sellRouterName, tokenAddr) {
   const usdc = await vault.usdc();
   const path = [usdc, TOKENS.DAI, TOKENS.USDT, tokenAddr];
@@ -126,23 +134,23 @@ async function tryFlashArb(buyRouterName, sellRouterName, tokenAddr) {
   console.log(`Loan: ${FLASH_AMOUNT_USDC} USDC`);
 
   if (!result || result.netProfit <= 0n) {
-    console.log("Returned: Simulation failed");
+    console.log(formatRed("Returned: Simulation failed / negative profit"));
     console.log("PROFITABLE TRADE FOUND: NO");
     return;
   }
 
-  console.log(`Returned: ${ethers.formatUnits(result.returnedUSDC, 6)} USDC`);
-  console.log(`Flash loan fee: ${ethers.formatUnits(result.premium, 6)}`);
-  console.log(`Gas estimate: ${ethers.formatUnits(result.gasEstimate, 6)}`);
-  console.log(`Net profit: ${ethers.formatUnits(result.netProfit, 6)} USDC`);
-  console.log("PROFITABLE TRADE FOUND");
+  console.log(formatGreen(`Returned: ${ethers.formatUnits(result.returnedUSDC, 6)} USDC`));
+  console.log(formatGreen(`Flash loan fee: ${ethers.formatUnits(result.premium, 6)}`));
+  console.log(formatGreen(`Gas estimate: ${ethers.formatUnits(result.gasEstimate, 6)}`));
+  console.log(formatGreen(`Net profit: ${ethers.formatUnits(result.netProfit, 6)} USDC`));
+  console.log(formatGreen("PROFITABLE TRADE FOUND"));
 
   // Simulate sending tx
-  console.log("Sending private bundle...");
-  console.log("Tx sent (simulated)");
-  console.log(`Profit deposited to vault`);
+  console.log(formatGreen("Sending private bundle..."));
+  console.log(formatGreen("Tx sent (simulated)"));
+  console.log(formatGreen("Profit deposited to vault"));
   const balances = await displayBalances();
-  console.log(`Vault balance: ${balances.vault} USDC`);
+  console.log(formatGreen(`Vault balance: ${balances.vault} USDC`));
 }
 
 async function scan() {
