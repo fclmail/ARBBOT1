@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -27,12 +26,15 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = .02;
+const MIN_TRADE_USDC = .7;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 60;
 const MAX_BATCH_SIZE = 3;
+
+/* ===== FIXED LOOP RE-EXECUTION (ADJUSTABLE) ===== */
+const FIXED_LOOP_REPEATS = 10;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -248,28 +250,35 @@ async function batchArb() {
       `${CYAN}Batch gas estimate:${RESET} ${estimatedGas}`
     );
 
-    const tx =
-      await vault.executeFlashBatchArbitrage(
-        buyRouters,
-        sellRouters,
-        amountsInUSDC,
-        pathsToToken,
-        pathsToUSDC,
-        deadline,
-        { gasLimit }
+    /* ===== FIXED LOOP RE-EXECUTION ===== */
+    for (let i = 0; i < FIXED_LOOP_REPEATS; i++) {
+
+      console.log(`${YELLOW}Fixed Loop Execution ${i + 1}/${FIXED_LOOP_REPEATS}${RESET}`);
+
+      const tx =
+        await vault.executeFlashBatchArbitrage(
+          buyRouters,
+          sellRouters,
+          amountsInUSDC,
+          pathsToToken,
+          pathsToUSDC,
+          deadline,
+          { gasLimit }
+        );
+
+      console.log(
+        `${GREEN}Batch flash sent:${RESET} ${tx.hash}`
       );
 
-    console.log(
-      `${GREEN}Batch flash sent:${RESET} ${tx.hash}`
-    );
+      await tx.wait();
 
-    await tx.wait();
+      console.log(
+        `${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`
+      );
 
-    console.log(
-      `${GREEN}Batch flash confirmed — profits deposited to vault${RESET}`
-    );
+      await logBalances();
 
-    await logBalances();
+    }
 
   } catch (err) {
     console.log(
