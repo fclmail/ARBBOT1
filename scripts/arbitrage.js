@@ -160,7 +160,8 @@ async function executeTradeLive(buyRouter, sellRouter, tokenAddr, amountUSDC) {
 
     const tx = await wallet.sendTransaction({
       to: VAULT_ADDRESS,
-      data
+      data,
+      gasLimit: 900000
     });
 
     console.log(`${colors.green}🔁 TX SENT — ${tx.hash}${colors.reset}`);
