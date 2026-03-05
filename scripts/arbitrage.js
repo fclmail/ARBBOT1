@@ -5,7 +5,7 @@ import { ethers } from "ethers";
 dotenv.config({ override: true });
 
 /* ================= CONFIG ================= */
-const RPC_POLYGON = "https://polygon-mainnet.gateway.tatum.io";
+const RPC_POLYGON = "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in .env or GitHub Secrets");
