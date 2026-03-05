@@ -1,4 +1,4 @@
-type here// scripts/arbitrage.js
+
 // ---------------------------------------------------------
 //  ARBITRAGE BOT – OPTION B (ABI MASKING)
 //  - NO SOLIDITY CHANGES
