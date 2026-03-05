@@ -5,13 +5,20 @@ dotenv.config({ override: false });
 
 // ================= ENV =================
 const RPC_POLYGON = process.env.RPC_POLYGON || process.env.RPC_URL || "";
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || "";
+let WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || "";
+
+// Remove potential quotes/spaces
+WALLET_PRIVATE_KEY = WALLET_PRIVATE_KEY.replace(/["']/g, "").trim();
+
+if (!WALLET_PRIVATE_KEY || WALLET_PRIVATE_KEY.length !== 64) {
+  throw new Error("Invalid or missing private key. Please check your .env file.");
+}
 
 // ================= CONSTANTS =================
-const FLASH_AMOUNT_USDC = 10000;      // Fixed flash loan amount
-const SCAN_INTERVAL_MS = 10_000;      // 10 seconds between scans
-const DEADLINE_SECONDS = 60;          // Swap deadline
-const FLASH_PREMIUM_BPS = 9;          // 0.09% typical Aave V3 fee
+const FLASH_AMOUNT_USDC = 10000;
+const SCAN_INTERVAL_MS = 10_000;
+const DEADLINE_SECONDS = 60;
+const FLASH_PREMIUM_BPS = 9;
 
 // ================= PROVIDER =================
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -35,6 +42,8 @@ const vaultAbi = [
   },
   { name: "usdc", type: "function", stateMutability: "view", outputs: [{ type: "address" }] }
 ];
+
+const routerAbi = ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"];
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 // ================= ROUTERS =================
@@ -56,18 +65,11 @@ const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
-// ================= ROUTER ABI =================
-const routerAbi = ["function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory amounts)"];
-
 // ================= HELPERS =================
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const logStep = (step, data = "") => console.log(`[${new Date().toISOString()}] ${step}:`, data);
 
-function logStep(step, data = "") {
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${step}:`, data);
-}
-
-// Display wallet and vault balances
+// ================= BALANCE DISPLAY =================
 async function displayBalances() {
   try {
     const maticBalance = await provider.getBalance(wallet.address);
@@ -77,14 +79,14 @@ async function displayBalances() {
     const vaultBalance = await usdc.balanceOf(VAULT_ADDRESS);
     const decimals = await usdc.decimals();
 
-    console.log("Wallet MATIC:", ethers.formatEther(maticBalance));
-    console.log("Vault USDC:", ethers.formatUnits(vaultBalance, decimals));
+    logStep("Wallet MATIC", ethers.formatEther(maticBalance));
+    logStep("Vault USDC", ethers.formatUnits(vaultBalance, decimals));
   } catch (err) {
     console.error("Balance display error:", err.message);
   }
 }
 
-// ================= SIMULATION =================
+// ================= PROFIT SIMULATION =================
 async function simulateProfit(buyRouterAddr, sellRouterAddr, tokenAddr, usdcAddr) {
   try {
     const buyRouter = new ethers.Contract(buyRouterAddr, routerAbi, provider);
@@ -107,7 +109,7 @@ async function simulateProfit(buyRouterAddr, sellRouterAddr, tokenAddr, usdcAddr
   }
 }
 
-// ================= EXECUTION =================
+// ================= FLASH EXECUTION =================
 async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
   const usdc = await vault.usdc();
   const { profit, tokenOut, usdcOut, premium } = await simulateProfit(buyRouter, sellRouter, tokenAddr, usdc);
@@ -140,7 +142,6 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
 
     await tx.wait();
     logStep("FLASH ARBITRAGE CONFIRMED", tx.hash);
-
     await displayBalances();
     logStep("PROFIT DEPOSITED TO VAULT");
   } catch (err) {
@@ -150,15 +151,13 @@ async function tryFlashArb(buyRouter, sellRouter, tokenAddr) {
 
 // ================= SCAN =================
 async function scan() {
-  logStep("SCAN START", new Date().toISOString());
+  logStep("SCAN START");
   await displayBalances();
 
   for (const token of Object.values(TOKENS)) {
     for (const buy of Object.values(routers)) {
       for (const sell of Object.values(routers)) {
-        if (buy !== sell) {
-          await tryFlashArb(buy, sell, token);
-        }
+        if (buy !== sell) await tryFlashArb(buy, sell, token);
       }
     }
   }
