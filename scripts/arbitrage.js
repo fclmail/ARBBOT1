@@ -1,6 +1,6 @@
-
+type here// scripts/arbitrage.js
 // ---------------------------------------------------------
-//  ARBITRAGE BOT – OPTION B (ABI MASKING)https://github.com/fclmail/ARBBOT1/security
+//  ARBITRAGE BOT – OPTION B (ABI MASKING)
 //  - NO SOLIDITY CHANGES
 //  - NO LOGIC CHANGES
 //  - MANUAL CALLDATA ENCODING
@@ -16,8 +16,9 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("WALLET_PRIVATE_KEY not found.");
 
 const DRY_RUN = false;
-const MIN_TRADE_USDC = .45;
-const MIN_EXPECTED_PROFIT = 0.00001; 
+const MIN_TRADE_USDC = 0.012;
+const MIN_EXPECTED_PROFIT = 0.000001;
+const MIN_PROFIT_PCT = 0.1;
 const SLIPPAGE_PCT = 0.05;
 const MAX_PROFIT_PCT = 550;
 
