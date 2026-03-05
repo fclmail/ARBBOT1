@@ -10,11 +10,11 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY in .env or GitHub Secrets");
 
-const FLASH_AMOUNT_USDC = 10000n; // per simulation
+const FLASH_AMOUNT_USDC = 100n; // per simulation
 const SCAN_INTERVAL_MS = 2000;
 const DEADLINE_SECONDS = 60;
-const FLASH_PREMIUM_BPS = 9n; // 0.09% typical
-const MIN_TRADE_USDC = 10000n;
+const FLASH_PREMIUM_BPS = 3n; // 0.09% typical
+const MIN_TRADE_USDC = 100n;
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -143,10 +143,10 @@ async function findProfitableTrade(buyRouterName, sellRouterName, tokenAddr) {
 
   if (!bestSellOut) return null;
 
-  const premium = (amountIn * FLASH_PREMIUM_BPS) / 200n;
+  const premium = (amountIn * FLASH_PREMIUM_BPS) / 700n;
 
   // FIX: gas estimate must be in USDC units (6 decimals)
-  const gasEstimate = ethers.parseUnits("0", 6);
+  const gasEstimate = ethers.parseUnits("1", 6);
 
   const netProfit = bestSellOut - amountIn - premium - gasEstimate;
 
