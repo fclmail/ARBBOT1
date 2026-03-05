@@ -13,7 +13,7 @@ const FLASH_AMOUNT_USDC = 1n; // per simulation
 const SCAN_INTERVAL_MS = 2000;
 const DEADLINE_SECONDS = 60;
 const FLASH_PREMIUM_BPS = 3n; // 0.09% typical
-const MIN_TRADE_USDC = .3n;
+const MIN_TRADE_USDC = 03n;
 
 /* ================= PROVIDER & WALLET ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
