@@ -48,7 +48,7 @@ const ROUTERS = {
   Dystopia: "0xbE75Dd16d029AA9c32f1Ce0C1d0b0c2c6dA4f4d4",
   MeshSwap: "0x10f4A785F458Bc144e3706575924889954946639",
   Fraxswap: "0xc2544A32872A91F4A553b404C6950e89De901fdb",
-  Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+  Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA"
 };"
 
 /* ================= VAULT ================= */
