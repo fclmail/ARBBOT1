@@ -5,12 +5,15 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-const RPC_POLYGON = process.env.RPC_POLYGON;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY || !/^0x[a-fA-F0-9]{64}$/.test(PRIVATE_KEY)) {
   throw new Error("Invalid or missing private key. Check GitHub Secrets.");
 }
+
+/* ================= HARD CODED RPC ================= */
+
+const RPC = "https://polygon-bor-rpc.publicnode.com";
 
 /* ================= SETTINGS ================= */
 
@@ -23,7 +26,7 @@ const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
 
 /* ================= PROVIDER ================= */
 
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
@@ -100,7 +103,7 @@ async function simulate(buyRouter, sellRouter, token) {
     console.log("Returned USDC:", ethers.formatUnits(usdcBack, 6));
     console.log("Flash loan fee:", ethers.formatUnits(fee, 6));
 
-    const gasEstimate = ethers.parseUnits("0.4", 6);
+    const gasEstimate = ethers.parseUnits("0.40", 6);
     const net = profit - gasEstimate;
 
     console.log("Gas estimate:", ethers.formatUnits(gasEstimate, 6));
@@ -201,6 +204,7 @@ async function startBot() {
   console.log("=====================================");
   console.log("FLASH ARBITRAGE BOT STARTED");
   console.log("Wallet:", wallet.address);
+  console.log("RPC:", RPC);
   console.log("Loan size:", FLASH_AMOUNT, "USDC");
   console.log("Scan interval:", SCAN_INTERVAL / 1000, "seconds");
   console.log("=====================================");
