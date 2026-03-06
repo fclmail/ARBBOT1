@@ -30,7 +30,7 @@ const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10000;
-const DEADLINE_SECONDS = 60;
+const DEADLINE_SECONDS = 600;
 const MAX_BATCH_SIZE = 10000;
 
 /* ================= PROFIT SAFETY ================= */
