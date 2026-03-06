@@ -31,7 +31,7 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
-const MAX_BATCH_SIZE = 5;
+const MAX_BATCH_SIZE = 10000;
 
 /* ================= PROFIT SAFETY ================= */
 const CONTRACT_MIN_PROFIT = 0.000001;
