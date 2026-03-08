@@ -2,8 +2,6 @@ import dotenv from "dotenv";
 import { ethers } from "ethers";
 import { Worker, isMainThread, parentPort, workerData } from "worker_threads";
 
-/* ================= ENV ================= */
-
 dotenv.config({ override: false });
 
 const RPC_POLYGON =
@@ -118,16 +116,59 @@ async function quote(routerAddr, amountIn, path) {
 }
 
 async function logBalances() {
+
   const vaultUSDC = await usdc.balanceOf(VAULT_ADDRESS);
   const formattedVaultUSDC = ethers.formatUnits(vaultUSDC, 6);
+
   const maticBalance = await provider.getBalance(wallet.address);
   const formattedMatic = ethers.formatEther(maticBalance);
 
   console.log(`${CYAN}Vault USDC Balance:${RESET} ${formattedVaultUSDC}`);
   console.log(`${CYAN}Wallet MATIC Balance:${RESET} ${formattedMatic}`);
+
 }
 
-/* ================= WORKER LOGIC ================= */
+/* ================= PATHS ================= */
+
+function buildBuyPaths(token) {
+
+  const USDC = TOKENS.USDC;
+
+  return [
+
+    [USDC, token],
+    [USDC, TOKENS.WMATIC, token],
+    [USDC, TOKENS.WETH, token],
+    [USDC, TOKENS.USDT, token],
+    [USDC, TOKENS.DAI, token],
+    [USDC, TOKENS.WETH, TOKENS.WMATIC, token],
+    [USDC, TOKENS.WMATIC, TOKENS.WETH, token],
+    [USDC, TOKENS.USDT, TOKENS.WETH, token]
+
+  ];
+
+}
+
+function buildSellPaths(token) {
+
+  const USDC = TOKENS.USDC;
+
+  return [
+
+    [token, USDC],
+    [token, TOKENS.WMATIC, USDC],
+    [token, TOKENS.WETH, USDC],
+    [token, TOKENS.USDT, USDC],
+    [token, TOKENS.DAI, USDC],
+    [token, TOKENS.WETH, TOKENS.WMATIC, USDC],
+    [token, TOKENS.WMATIC, TOKENS.WETH, USDC],
+    [token, TOKENS.USDT, TOKENS.WETH, USDC]
+
+  ];
+
+}
+
+/* ================= WORKER SCANNER ================= */
 
 async function scanWorker(tokens) {
 
@@ -143,30 +184,40 @@ async function scanWorker(tokens) {
 
       for (const token of tokens) {
 
-        const buyPath = [TOKENS.USDC, token];
-        const sellPath = [token, TOKENS.USDC];
+        const buyPaths = buildBuyPaths(token);
+        const sellPaths = buildSellPaths(token);
 
-        const buyOut = await quote(buy, amountIn, buyPath);
+        for (const buyPath of buyPaths) {
 
-        if (!buyOut) continue;
+          const buyOut = await quote(buy, amountIn, buyPath);
 
-        const sellOut = await quote(sell, buyOut, sellPath);
+          if (!buyOut) continue;
 
-        if (!sellOut) continue;
+          for (const sellPath of sellPaths) {
 
-        const profit =
-          Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC;
+            const sellOut = await quote(sell, buyOut, sellPath);
 
-        if (profit >= MIN_EXPECTED_PROFIT) {
+            if (!sellOut) continue;
 
-          opportunities.push({
-            buyRouter: buy,
-            sellRouter: sell,
-            amountIn,
-            bestBuyPath: buyPath,
-            bestSellPath: sellPath,
-            profit
-          });
+            const profit =
+              Number(ethers.formatUnits(sellOut, 6)) - MIN_TRADE_USDC;
+
+            if (profit >= MIN_EXPECTED_PROFIT) {
+
+              opportunities.push({
+
+                buyRouter: buy,
+                sellRouter: sell,
+                amountIn,
+                bestBuyPath: buyPath,
+                bestSellPath: sellPath,
+                profit
+
+              });
+
+            }
+
+          }
 
         }
 
@@ -218,24 +269,26 @@ if (isMainThread) {
 
     for (let i = 0; i < WORKERS; i++) {
 
-      chunks.push(
-        tokenList.slice(i * chunkSize, (i + 1) * chunkSize)
-      );
+      chunks.push(tokenList.slice(i * chunkSize, (i + 1) * chunkSize));
 
     }
 
     const start = Date.now();
 
-    const promises = chunks.map((tokens) => {
-      return new Promise((resolve) => {
+    const promises = chunks.map(tokens => {
+
+      return new Promise(resolve => {
 
         const worker = new Worker(new URL(import.meta.url), {
+
           workerData: { tokens }
+
         });
 
         worker.on("message", resolve);
 
       });
+
     });
 
     const results = await Promise.all(promises);
@@ -249,8 +302,10 @@ if (isMainThread) {
     console.log("Trades found:", opportunities.length);
 
     if (opportunities.length === 0) {
+
       console.log("No profitable trades found");
       return;
+
     }
 
     const batch = opportunities.slice(0, MAX_BATCH_SIZE);
