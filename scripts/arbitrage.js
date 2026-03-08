@@ -2,15 +2,30 @@ import "dotenv/config";
 import { ethers } from "ethers";
 
 /* ===============================
-   PROVIDER + WALLET
+   PROVIDER
 ================================ */
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC);
+
+/* ===============================
+   WALLET
+================================ */
 
 const wallet = new ethers.Wallet(
   process.env.PRIVATE_KEY,
   provider
 );
+
+/* ===============================
+   CONTRACT ADDRESS FIX
+================================ */
+
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+
+if (!CONTRACT_ADDRESS) {
+  console.error("ERROR: CONTRACT_ADDRESS secret missing");
+  process.exit(1);
+}
 
 /* ===============================
    CONFIG
@@ -30,17 +45,15 @@ const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 
 /* ===============================
-   TOKENS (Polygon ERC20)
+   TOKENS
 ================================ */
 
 const TOKENS = {
   USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-
   WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
   WBTC: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
-
   LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
   CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
@@ -49,7 +62,7 @@ const TOKENS = {
 };
 
 /* ===============================
-   DEX ROUTERS (Polygon)
+   DEX ROUTERS
 ================================ */
 
 const routers = {
@@ -71,7 +84,7 @@ const HOPS = [
 ];
 
 /* ===============================
-   ARBITRAGE CONTRACT
+   CONTRACT
 ================================ */
 
 const arbABI = [
@@ -79,13 +92,13 @@ const arbABI = [
 ];
 
 const arb = new ethers.Contract(
-  process.env.ARB_CONTRACT,
+  CONTRACT_ADDRESS,
   arbABI,
   wallet
 );
 
 /* ===============================
-   PROFIT SCANNER (placeholder)
+   PROFIT SCANNER
 ================================ */
 
 async function findProfitableTrade(buyRouter, sellRouter, token) {
@@ -117,13 +130,14 @@ async function findProfitableTrade(buyRouter, sellRouter, token) {
       };
 
     }
+
   }
 
   return null;
 }
 
 /* ===============================
-   FIX #1 — CONTINUOUS SCAN
+   FIX #1 CONTINUOUS SCANNING
 ================================ */
 
 async function parallelScan() {
@@ -145,14 +159,9 @@ async function parallelScan() {
 
           if (token === TOKENS.USDC) continue;
 
-          tasks.push({
-            buy,
-            sell,
-            token
-          });
+          tasks.push({ buy, sell, token });
 
         }
-
       }
     }
 
@@ -167,12 +176,11 @@ async function parallelScan() {
 
         const t = tasks[index++];
 
-        const trade =
-          await findProfitableTrade(
-            t.buy,
-            t.sell,
-            t.token
-          );
+        const trade = await findProfitableTrade(
+          t.buy,
+          t.sell,
+          t.token
+        );
 
         if (trade) {
 
@@ -225,12 +233,7 @@ function compressTrades(trades) {
       t.bestSellPath.join("-");
 
     if (!map.has(key)) {
-
-      map.set(key, {
-        trade: t,
-        repeat: 0
-      });
-
+      map.set(key, { trade: t, repeat: 0 });
     }
 
     map.get(key).repeat++;
@@ -276,7 +279,7 @@ function printCompressedBatch(routes) {
 }
 
 /* ===============================
-   MAIN BOT LOOP
+   MAIN BOT
 ================================ */
 
 async function run() {
@@ -338,8 +341,6 @@ async function run() {
         `Executing ${expanded.length} swaps...\n`
       );
 
-      /* FIX #2 — DYNAMIC GAS */
-
       const feeData =
         await provider.getFeeData();
 
@@ -364,10 +365,7 @@ async function run() {
 
     } catch (err) {
 
-      console.log(
-        "Batch failed:",
-        err.message
-      );
+      console.log("Batch failed:", err.message);
 
     }
   }
