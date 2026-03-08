@@ -30,7 +30,7 @@ const MIN_TRADE_USDC = 0.02;            // minimal trade size
 const MIN_EXPECTED_PROFIT = 0.000001;   // minimal profit to detect
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
-const TARGET_BATCH_SIZE = 100;          // collect 100 trades
+const TARGET_BATCH_SIZE = 20;          // collect 100 trades
 const WORKERS = 16;
 
 /* ================= PROVIDER & WALLET ================= */
