@@ -32,7 +32,7 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
 
-const TARGET_BATCH_SIZE = 100;
+const TARGET_BATCH_SIZE = 1000;
 const WORKERS = 16;
 
 /* ================= PROVIDER ================= */
