@@ -248,8 +248,11 @@ const profitable = [];
 
 async function worker() {
 
-while (index < tasks.length) { // remove early exit on TARGET_BATCH_SIZE
-   
+while (index < tasks.length) {
+  const t = tasks[index++];
+  const trade = await findProfitableTrade(t.buy, t.sell, t.token);
+  if (trade) profitable.push(trade);
+}   
 const t = tasks[index++];
 
 const trade = await findProfitableTrade(t.buy, t.sell, t.token);
