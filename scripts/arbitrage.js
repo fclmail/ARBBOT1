@@ -27,8 +27,8 @@ const RED = "\x1b[91m";
 
 /* ================= SETTINGS ================= */
 
-const MIN_TRADE_USDC = 25;         // realistic trade size
-const MIN_EXPECTED_PROFIT = 0.02;  // per trade minimum profit
+const MIN_TRADE_USDC = 0.02;         // realistic trade size
+const MIN_EXPECTED_PROFIT = 0.0000002;  // per trade minimum profit
 
 const SCAN_INTERVAL_MS = 1500;
 const DEADLINE_SECONDS = 60;
