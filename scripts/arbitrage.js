@@ -1,8 +1,3 @@
-PROVIDESNIPET ONLY SHOW EXACTLY WHAT TO DELETE AND SNIPET TO REPLACE IT WITH SO BATCH REACHES 100 BEFORE EXECUTING
-
-
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
