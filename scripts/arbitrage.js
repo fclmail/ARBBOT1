@@ -245,8 +245,17 @@ Minimum profit per trade: ${MIN_EXPECTED_PROFIT}
 Scanning opportunities...
 `);
 
-  const profitableTrades = await parallelScan();
-
+// Keep rescanning until we reach TARGET_BATCH_SIZE or no new trades found
+let profitableTrades = [];
+while (profitableTrades.length < TARGET_BATCH_SIZE) {
+    const newTrades = await parallelScan();
+    // stop if no new trades found to avoid infinite loop
+    if (newTrades.length === 0) break;
+    profitableTrades.push(...newTrades);
+    // remove duplicates
+    profitableTrades = Array.from(new Set(profitableTrades));
+}
+profitableTrades = profitableTrades.slice(0, TARGET_BATCH_SIZE);
   if (profitableTrades.length === 0) {
     console.log("No profitable trades found");
     return;
