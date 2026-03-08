@@ -30,7 +30,7 @@ const MIN_TRADE_USDC = 0.02; // minimum input per trade
 const MIN_EXPECTED_PROFIT = 0.000001; // filter tiny trades
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
-const MAX_BATCH_SIZE = 100; // target batch size
+const MAX_BATCH_SIZE = 10; // target batch size
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
