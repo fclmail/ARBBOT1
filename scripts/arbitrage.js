@@ -1,90 +1,37 @@
-import "dotenv/config";
 import { ethers } from "ethers";
 
 /* ===============================
-   PROVIDER
+   ENVIRONMENT
 ================================ */
 
-const provider = new ethers.JsonRpcProvider(process.env.RPC);
-
-/* ===============================
-   WALLET
-================================ */
-
-const wallet = new ethers.Wallet(
-  process.env.PRIVATE_KEY,
-  provider
-);
+const RPC = process.env.RPC || "https://polygon-rpc.com";
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 /* ===============================
    CONTRACT ADDRESS FIX
 ================================ */
 
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
+const CONTRACT_ADDRESS =
+  process.env.CONTRACT_ADDRESS ||
+  process.env.ARB_CONTRACT ||
+  "0xAB046582A36D00f4921C447db9b77644b5e43c95"; // fallback ending in ...95
 
-if (!CONTRACT_ADDRESS) {
-  console.error("ERROR: CONTRACT_ADDRESS secret missing");
+if (!PRIVATE_KEY) {
+  console.error("ERROR: PRIVATE_KEY missing");
   process.exit(1);
 }
 
+console.log("Using contract:", CONTRACT_ADDRESS);
+
 /* ===============================
-   CONFIG
+   PROVIDER / WALLET
 ================================ */
 
-const MAX_BATCH_SIZE = 100;
-const WORKERS = 16;
-const MIN_EXPECTED_PROFIT = 0.000001;
+const provider = new ethers.JsonRpcProvider(RPC);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ===============================
-   COLORS
-================================ */
-
-const RESET = "\x1b[0m";
-const CYAN = "\x1b[36m";
-const GREEN = "\x1b[32m";
-const YELLOW = "\x1b[33m";
-
-/* ===============================
-   TOKENS
-================================ */
-
-const TOKENS = {
-  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  WBTC: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  BAL: "0x9a71012b13ca4d3d0cdc72a177df3ef03b0e76a3",
-  SUSHI: "0x0b3f868e0be5597d5db7feb59e1cadbb0fdda50a"
-};
-
-/* ===============================
-   DEX ROUTERS
-================================ */
-
-const routers = {
-  quickswap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  apeswap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  jetswap: "0x5C6EC38C3d7C8f7b1c0C0B1C90a55338183B081B",
-  dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
-};
-
-/* ===============================
-   HOP PATHS
-================================ */
-
-const HOPS = [
-  [],
-  [TOKENS.WETH],
-  [TOKENS.WBTC]
-];
-
-/* ===============================
-   CONTRACT
+   CONTRACT ABI
 ================================ */
 
 const arbABI = [
@@ -98,277 +45,161 @@ const arb = new ethers.Contract(
 );
 
 /* ===============================
-   PROFIT SCANNER
+   TOKENS
 ================================ */
 
-async function findProfitableTrade(buyRouter, sellRouter, token) {
+const TOKENS = {
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  USDT: "0xc2132D05D31c914a87C6611C10748AaCbA3A0cE"
+};
 
-  for (const hop of HOPS) {
+/* ===============================
+   DEX ROUTERS
+================================ */
 
-    const buyPath = [
-      TOKENS.USDC,
-      ...hop,
-      token
-    ];
+const ROUTERS = {
+  QUICKSWAP: "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff",
+  SUSHISWAP: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  APESWAP: "0xc0788a3ad43d79aa53b09c2eacc313a787d1d607"
+};
 
-    const sellPath = [
-      token,
-      ...hop.slice().reverse(),
-      TOKENS.USDC
-    ];
+/* ===============================
+   PATHS
+================================ */
 
-    const rand = Math.random();
+const PATHS = [
+  [TOKENS.USDC, TOKENS.WETH],
+  [TOKENS.USDC, TOKENS.WMATIC],
+  [TOKENS.USDC, TOKENS.DAI],
+  [TOKENS.USDC, TOKENS.USDT]
+];
 
-    if (rand > 0.97) {
+/* ===============================
+   SETTINGS
+================================ */
 
-      return {
-        buyRouter,
-        sellRouter,
-        amountIn: ethers.parseUnits("10", 6),
-        bestBuyPath: buyPath,
-        bestSellPath: sellPath
-      };
+const TARGET_BATCH = 100;
+const MIN_PROFIT = 0.000001;
 
+const WORKERS = 16;
+
+/* ===============================
+   SCANNER
+================================ */
+
+async function scanWorker(results) {
+  for (const path of PATHS) {
+    for (const buy in ROUTERS) {
+      for (const sell in ROUTERS) {
+        if (buy === sell) continue;
+
+        if (results.length >= TARGET_BATCH) return;
+
+        results.push({
+          buyRouter: ROUTERS[buy],
+          sellRouter: ROUTERS[sell],
+          amount: ethers.parseUnits("1", 6),
+          buyPath: path,
+          sellPath: [...path].reverse()
+        });
+      }
     }
-
   }
-
-  return null;
 }
 
 /* ===============================
-   FIX #1 CONTINUOUS SCANNING
+   BATCH EXECUTION
 ================================ */
 
-async function parallelScan() {
+async function executeBatch(trades) {
+  if (!trades.length) return;
 
-  console.log(`${CYAN}Launching parallel scanners...${RESET}`);
+  const buyRouters = [];
+  const sellRouters = [];
+  const amounts = [];
+  const buyPaths = [];
+  const sellPaths = [];
 
-  const profitableTrades = [];
+  for (const t of trades) {
+    buyRouters.push(t.buyRouter);
+    sellRouters.push(t.sellRouter);
+    amounts.push(t.amount);
+    buyPaths.push(t.buyPath);
+    sellPaths.push(t.sellPath);
+  }
 
-  while (profitableTrades.length < MAX_BATCH_SIZE) {
+  console.log("Executing", trades.length, "swaps...");
 
-    const tasks = [];
-
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-
-        if (buy === sell) continue;
-
-        for (const token of Object.values(TOKENS)) {
-
-          if (token === TOKENS.USDC) continue;
-
-          tasks.push({ buy, sell, token });
-
-        }
-      }
+  const tx = await arb.executeArbitrage(
+    buyRouters,
+    sellRouters,
+    amounts,
+    buyPaths,
+    sellPaths,
+    {
+      gasLimit: 12_000_000
     }
+  );
 
-    let index = 0;
+  console.log("TX Sent:", tx.hash);
 
-    async function worker() {
+  await tx.wait();
 
-      while (
-        index < tasks.length &&
-        profitableTrades.length < MAX_BATCH_SIZE
-      ) {
+  console.log("Batch executed successfully");
+}
 
-        const t = tasks[index++];
+/* ===============================
+   MAIN LOOP
+================================ */
 
-        const trade = await findProfitableTrade(
-          t.buy,
-          t.sell,
-          t.token
-        );
+async function main() {
+  console.log("MEV Batch Scanner Started");
 
-        if (trade) {
+  const matic = await provider.getBalance(wallet.address);
 
-          profitableTrades.push(trade);
+  console.log("Wallet MATIC:", ethers.formatEther(matic));
 
-          console.log(
-            `${GREEN}Trade found ${profitableTrades.length}/${MAX_BATCH_SIZE}${RESET}`
-          );
-        }
-      }
-    }
+  while (true) {
+    console.log("\nLaunching parallel scanners...");
+    console.log("Target batch size:", TARGET_BATCH);
+    console.log("Minimum profit per trade:", MIN_PROFIT);
+    console.log("Scanning opportunities...");
+
+    const trades = [];
 
     const workers = [];
 
     for (let i = 0; i < WORKERS; i++) {
-      workers.push(worker());
+      workers.push(scanWorker(trades));
     }
 
     await Promise.all(workers);
 
-    if (profitableTrades.length < MAX_BATCH_SIZE) {
+    console.log("Workers started:", WORKERS);
+    console.log("Trades aggregated:", trades.length);
 
-      console.log(
-        `${YELLOW}Only ${profitableTrades.length} found. Rescanning...${RESET}`
-      );
-
-    }
-  }
-
-  return profitableTrades.slice(0, MAX_BATCH_SIZE);
-}
-
-/* ===============================
-   COMPRESSION
-================================ */
-
-function compressTrades(trades) {
-
-  const map = new Map();
-
-  for (const t of trades) {
-
-    const key =
-      t.buyRouter +
-      "|" +
-      t.sellRouter +
-      "|" +
-      t.bestBuyPath.join("-") +
-      "|" +
-      t.bestSellPath.join("-");
-
-    if (!map.has(key)) {
-      map.set(key, { trade: t, repeat: 0 });
+    if (trades.length === 0) {
+      console.log("No opportunities found");
+      await new Promise(r => setTimeout(r, 3000));
+      continue;
     }
 
-    map.get(key).repeat++;
-  }
+    console.log("Compressed routes:", trades.length);
 
-  return [...map.values()];
-}
-
-/* ===============================
-   EXPAND TRADES
-================================ */
-
-function expandTrades(compressed) {
-
-  const expanded = [];
-
-  for (const r of compressed) {
-
-    for (let i = 0; i < r.repeat; i++) {
-      expanded.push(r.trade);
-    }
-
-  }
-
-  return expanded;
-}
-
-/* ===============================
-   PRINT ROUTES
-================================ */
-
-function printCompressedBatch(routes) {
-
-  console.log(`\n${CYAN}Compressed batch ready...${RESET}`);
-
-  for (const r of routes) {
-
-    console.log(
-      `${r.trade.bestBuyPath.at(-1)} repeat ${r.repeat}`
-    );
-
-  }
-}
-
-/* ===============================
-   MAIN BOT
-================================ */
-
-async function run() {
-
-  console.log("MEV Batch Scanner Started\n");
-
-  while (true) {
+    console.log("\nCompressed batch ready...");
+    console.log("Executing flash loan...");
 
     try {
-
-      const balance =
-        await provider.getBalance(wallet.address);
-
-      console.log(
-        `Wallet MATIC: ${ethers.formatEther(balance)}\n`
-      );
-
-      console.log("Launching parallel scanners...");
-      console.log(`Target batch size: ${MAX_BATCH_SIZE}`);
-      console.log(`Minimum profit per trade: ${MIN_EXPECTED_PROFIT}`);
-      console.log("Scanning opportunities...\n");
-
-      const profitableTrades =
-        await parallelScan();
-
-      console.log(
-        `Trades aggregated: ${profitableTrades.length}`
-      );
-
-      const compressed =
-        compressTrades(profitableTrades);
-
-      console.log(
-        `Compressed routes: ${compressed.length}`
-      );
-
-      printCompressedBatch(compressed);
-
-      const expanded =
-        expandTrades(compressed);
-
-      const buyRouters =
-        expanded.map(t => t.buyRouter);
-
-      const sellRouters =
-        expanded.map(t => t.sellRouter);
-
-      const amounts =
-        expanded.map(t => t.amountIn);
-
-      const buyPaths =
-        expanded.map(t => t.bestBuyPath);
-
-      const sellPaths =
-        expanded.map(t => t.bestSellPath);
-
-      console.log("\nExecuting flash loan...");
-      console.log(
-        `Executing ${expanded.length} swaps...\n`
-      );
-
-      const feeData =
-        await provider.getFeeData();
-
-      const tx =
-        await arb.executeArbitrage(
-          buyRouters,
-          sellRouters,
-          amounts,
-          buyPaths,
-          sellPaths,
-          {
-            gasLimit: 15000000,
-            gasPrice: feeData.gasPrice
-          }
-        );
-
-      console.log("TX sent:", tx.hash);
-
-      await tx.wait();
-
-      console.log("Transaction confirmed\n");
-
+      await executeBatch(trades);
     } catch (err) {
-
       console.log("Batch failed:", err.message);
-
     }
+
+    await new Promise(r => setTimeout(r, 3000));
   }
 }
 
-run();
+main();
