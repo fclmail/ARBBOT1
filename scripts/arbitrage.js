@@ -26,7 +26,7 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = 0.02;            // minimal trade size
+const MIN_TRADE_USDC = 0.04;            // minimal trade size
 const MIN_EXPECTED_PROFIT = 0.000001;   // minimal profit to detect
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
