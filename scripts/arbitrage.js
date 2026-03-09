@@ -32,7 +32,7 @@ const MIN_EXPECTED_PROFIT = 0.000001;
 
 const SCAN_INTERVAL_MS = 10_000;
 const DEADLINE_SECONDS = 6000;
-const MAX_BATCH_SIZE = 20;
+const MAX_BATCH_SIZE = 5;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
