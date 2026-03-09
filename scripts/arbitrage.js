@@ -191,7 +191,7 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   if (!bestSellOut) return null;
 
   const sellOut = Number(ethers.formatUnits(bestSellOut, 6));
-  const slippageAdjusted = sellOut * 0.995;
+  const slippageAdjusted = sellOut * 0.005;
   const flashFee = MIN_TRADE_USDC * 0.0005;
   const profit = slippageAdjusted - MIN_TRADE_USDC - flashFee;
 
