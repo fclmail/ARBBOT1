@@ -29,9 +29,9 @@ const RED = "\x1b[91m";
 const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 
-const SCAN_INTERVAL_MS = 3000;
+const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
-const MAX_BATCH_SIZE = 30;
+const MAX_BATCH_SIZE = 00;1
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
@@ -115,7 +115,7 @@ const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
 };
 
-/* ================= GLOBAL TRADE QUEUE ================= */
+/* ================= GLOBAL QUEUE ================= */
 
 let tradeQueue = [];
 
@@ -194,7 +194,7 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
 
   }
 
-  if (!bestBuyOut) return;
+  if (!bestBuyOut) return null;
 
   let bestSellOut, bestSellPath;
 
@@ -218,22 +218,26 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
 
   }
 
-  if (!bestSellOut) return;
+  if (!bestSellOut) return null;
 
   const profit =
     Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
-  if (profit < MIN_EXPECTED_PROFIT) return;
+  if (profit < MIN_EXPECTED_PROFIT) return null;
 
-  console.log(`${GREEN}PROFIT FOUND ${profit.toFixed(6)}${RESET}`);
+  console.log(
+    `${GREEN}PROFIT FOUND ${profit.toFixed(6)}${RESET}`
+  );
 
-  tradeQueue.push({
+  return {
+
     buyRouter,
     sellRouter,
     amountIn,
     bestBuyPath,
     bestSellPath
-  });
+
+  };
 }
 
 /* ================= BATCH ================= */
@@ -241,6 +245,8 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
 async function batchArb() {
 
   await logBalances();
+
+  const scanTasks = [];
 
   for (const buy of Object.values(routers)) {
 
@@ -250,17 +256,21 @@ async function batchArb() {
 
       for (const token of Object.values(TOKENS)) {
 
-        await findProfitableTrade(buy, sell, token);
-
-        if (tradeQueue.length >= MAX_BATCH_SIZE) break;
+        scanTasks.push(
+          findProfitableTrade(buy, sell, token)
+        );
 
       }
 
-      if (tradeQueue.length >= MAX_BATCH_SIZE) break;
-
     }
 
-    if (tradeQueue.length >= MAX_BATCH_SIZE) break;
+  }
+
+  const results = await Promise.all(scanTasks);
+
+  for (const trade of results) {
+
+    if (trade) tradeQueue.push(trade);
 
   }
 
@@ -272,22 +282,20 @@ async function batchArb() {
 
   }
 
+  const profitableTrades = tradeQueue.slice(0, MAX_BATCH_SIZE);
+
   console.log(
-    `${YELLOW}Collected ${tradeQueue.length} profitable trades${RESET}`
+    `${YELLOW}Collected ${profitableTrades.length} profitable trades${RESET}`
   );
-
-  console.log(`${CYAN}Executing batch...${RESET}`);
-
-  const batch = tradeQueue.slice(0, MAX_BATCH_SIZE);
 
   const deadline =
     Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  const buyRouters = batch.map((t) => t.buyRouter);
-  const sellRouters = batch.map((t) => t.sellRouter);
-  const amountsInUSDC = batch.map((t) => t.amountIn);
-  const pathsToToken = batch.map((t) => t.bestBuyPath);
-  const pathsToUSDC = batch.map((t) => t.bestSellPath);
+  const buyRouters = profitableTrades.map((t) => t.buyRouter);
+  const sellRouters = profitableTrades.map((t) => t.sellRouter);
+  const amountsInUSDC = profitableTrades.map((t) => t.amountIn);
+  const pathsToToken = profitableTrades.map((t) => t.bestBuyPath);
+  const pathsToUSDC = profitableTrades.map((t) => t.bestSellPath);
 
   try {
 
