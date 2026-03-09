@@ -40,7 +40,7 @@ const MIN_EXPECTED_PROFIT = 0.0001;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
 
-const MAX_BATCH_SIZE = 5;
+const MAX_BATCH_SIZE = 1;
 const MAX_CONCURRENT_SCANS = 12;
 
 /* ================= PROVIDER ================= */
