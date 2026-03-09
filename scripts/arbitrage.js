@@ -26,7 +26,7 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = .02;
+const MIN_TRADE_USDC = 5;
 const MIN_EXPECTED_PROFIT = 0.0002;
 
 const SCAN_INTERVAL_MS = 5000;
@@ -190,10 +190,24 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   }
   if (!bestSellOut) return null;
 
-  const profit = Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+  const sellOut = Number(ethers.formatUnits(bestSellOut, 6));
+  const slippageAdjusted = sellOut * 0.995;
+  const flashFee = MIN_TRADE_USDC * 0.0005;
+  const profit = slippageAdjusted - MIN_TRADE_USDC - flashFee;
+
   if (profit < MIN_EXPECTED_PROFIT) return null;
 
-  console.log(`${GREEN}PROFIT FOUND ${profit.toFixed(6)}${RESET}`);
+  console.log(`${GREEN}PROFIT FOUND${RESET}`);
+  console.log("BUY ROUTER:", buyRouter);
+  console.log("SELL ROUTER:", sellRouter);
+  console.log("TOKEN:", tokenAddr);
+  console.log("BUY PATH:", bestBuyPath);
+  console.log("SELL PATH:", bestSellPath);
+  console.log("AMOUNT IN:", MIN_TRADE_USDC);
+  console.log("BUY OUTPUT:", Number(ethers.formatUnits(bestBuyOut,6)));
+  console.log("SELL OUTPUT:", Number(ethers.formatUnits(bestSellOut,6)));
+  console.log("PROFIT:", profit);
+  console.log("-----");
 
   return {
     buyRouter,
@@ -230,9 +244,8 @@ async function batchArb() {
     return;
   }
 
-  // --- FILTER TRADES ---
   const profitableTrades = tradeQueue
-    .filter(t => t.profit >= MIN_EXPECTED_PROFIT)
+    .filter(t => t.profit >= MIN_EXPECTED_PROFIT * 3)
     .sort((a, b) => b.profit - a.profit)
     .slice(0, MAX_BATCH_SIZE);
 
@@ -253,7 +266,6 @@ async function batchArb() {
   const pathsToToken = profitableTrades.map(t => t.bestBuyPath);
   const pathsToUSDC = profitableTrades.map(t => t.bestSellPath);
 
-  // --- STATIC SIMULATION ---
   try {
     console.log(`${CYAN}Running batch static simulation...${RESET}`);
     await vault.executeFlashBatchArbitrage.staticCall(
@@ -266,11 +278,16 @@ async function batchArb() {
     );
     console.log(`${CYAN}Batch simulation PASSED ✅${RESET}`);
   } catch (err) {
-    console.log(`${RED}Batch simulation FAILED ❌${RESET}`, decodeError(err));
+    console.log(`${RED}Batch simulation FAILED ❌${RESET}`);
+    console.log("Reason:", decodeError(err));
+    console.log("BUY ROUTERS:", buyRouters);
+    console.log("SELL ROUTERS:", sellRouters);
+    console.log("AMOUNTS:", amountsInUSDC.map(a=>Number(ethers.formatUnits(a,6))));
+    console.log("BUY PATHS:", pathsToToken);
+    console.log("SELL PATHS:", pathsToUSDC);
     return;
   }
 
-  // --- EXECUTE BATCH ---
   try {
     const estimatedGas = await vault.executeFlashBatchArbitrage.estimateGas(
       buyRouters,
@@ -280,7 +297,14 @@ async function batchArb() {
       pathsToUSDC,
       deadline
     );
+
     const gasLimit = (estimatedGas * 120n) / 100n;
+
+    const gasPrice = await provider.getFeeData();
+
+    console.log("Estimated Gas:", estimatedGas.toString());
+    console.log("Gas Limit:", gasLimit.toString());
+    console.log("Gas Price:", gasPrice.gasPrice?.toString());
 
     const tx = await vault.executeFlashBatchArbitrage(
       buyRouters,
