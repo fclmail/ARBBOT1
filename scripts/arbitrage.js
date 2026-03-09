@@ -27,11 +27,11 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 const MIN_TRADE_USDC = 0.02;
-const MIN_EXPECTED_PROFIT = 0.000001;
+const MIN_EXPECTED_PROFIT = 0.0003;
 
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
-const MAX_BATCH_SIZE = 10;
+const MAX_BATCH_SIZE = 200;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
