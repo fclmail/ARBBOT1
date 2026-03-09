@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+ximport dotenv from "dotenv";
 import { ethers } from "ethers";
 
 /* ================= ENV ================= */
