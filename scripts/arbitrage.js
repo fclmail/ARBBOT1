@@ -29,7 +29,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.05;
+const MIN_TRADE_USDC = 0.02;
 
 /* accounts for router fees + slippage */
 const PROFIT_BUFFER = 0.001;
