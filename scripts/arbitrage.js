@@ -27,7 +27,7 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = 0.72;
+const MIN_TRADE_USDC = 100;
 const MIN_EXPECTED_PROFIT = 0.01;
 
 const SCAN_INTERVAL_MS = 2000;
