@@ -1,8 +1,3 @@
-Js📱95P
-
-✅✔️95PM⚡Sc95profitmicro
-
-2026 3 10 9:26 pm ✅
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
