@@ -28,9 +28,14 @@ const RESET="\x1b[0m";
 /* ================= CONFIG ================= */
 
 const WORKERS=32;
-const MAX_BATCH_SIZE=20;
+
+const MAX_BATCH_SIZE=10;
+
 const MIN_TRADE_USDC=0.05;
-const MIN_PROFIT=0.00001;
+
+const FLASH_PREMIUM=0.0005;
+
+const CONTRACT_MIN_PROFIT=0.000001;
 
 const DEADLINE_SECONDS=60;
 
@@ -148,9 +153,22 @@ return null;
 }
 }
 
-/* ================= SCANNER ================= */
+/* ================= PROFIT ENGINE ================= */
 
-let scanned=0;
+function deterministicProfit(amountIn,buyOut,sellOut){
+
+const input=Number(ethers.formatUnits(amountIn,6));
+const out=Number(ethers.formatUnits(sellOut,6));
+
+const flashCost=input*FLASH_PREMIUM;
+
+const profit=out-input-flashCost;
+
+return profit;
+
+}
+
+/* ================= SCANNER ================= */
 
 async function scan(buy,sell,token){
 
@@ -161,8 +179,6 @@ let bestBuyOut,bestBuyPath;
 for(const p of buyPaths(token)){
 
 const out=await quote(buy,amountIn,p);
-
-scanned++;
 
 if(out && (!bestBuyOut || out>bestBuyOut)){
 
@@ -192,12 +208,13 @@ bestSellPath=p;
 
 if(!bestSellOut) return null;
 
-const rawProfit=
-Number(ethers.formatUnits(bestSellOut,6))-MIN_TRADE_USDC;
+const profit=deterministicProfit(
+amountIn,
+bestBuyOut,
+bestSellOut
+);
 
-const profit=rawProfit*0.7;
-
-if(profit<MIN_PROFIT) return null;
+if(profit<=0) return null;
 
 return{
 buyRouter:buy,
@@ -210,48 +227,12 @@ profit
 
 }
 
-/* ================= BALANCES ================= */
-
-async function balances(){
-
-const vaultBal=
-await usdc.balanceOf(CONTRACT);
-
-const matic=
-await provider.getBalance(wallet.address);
-
-console.log(`Vault USDC Balance: ${ethers.formatUnits(vaultBal,6)}`);
-console.log(`Wallet MATIC Balance: ${ethers.formatEther(matic)}`);
-
-}
-
 /* ================= BATCH ================= */
 
-async function runBatch(){
-
-console.log("Launching parallel scanners...\n");
-
-console.log(`Workers started: ${WORKERS}`);
-console.log(`Target batch size: ${MAX_BATCH_SIZE}`);
-console.log(`Minimum profit per trade: ${MIN_PROFIT}\n`);
-
-console.log("Scanning opportunities...\n");
+async function buildBatch(){
 
 let trades=[];
 let totalProfit=0;
-
-let sec=0;
-
-setInterval(()=>{
-
-sec++;
-console.log(`[${sec} sec] scanned ${scanned.toLocaleString()} opportunities`);
-
-},1000);
-
-while(trades.length<100){
-
-const tasks=[];
 
 for(const buy of Object.values(routers))
 for(const sell of Object.values(routers))
@@ -259,33 +240,47 @@ for(const token of Object.values(TOKENS)){
 
 if(buy===sell) continue;
 
-tasks.push(scan(buy,sell,token));
-
-}
-
-const results=await Promise.all(tasks);
-
-for(const r of results){
+const r=await scan(buy,sell,token);
 
 if(r){
 
 trades.push(r);
 totalProfit+=r.profit;
 
-if(trades.length>=100) break;
+if(trades.length>=MAX_BATCH_SIZE) break;
 
 }
 
 }
 
+return {trades,totalProfit};
+
 }
 
-console.log(`\n${trades.length} trades collected`);
-console.log(`Total profit: ${totalProfit.toFixed(5)} USDC\n`);
+/* ================= EXECUTION ================= */
 
-if(totalProfit<0.000001){
-console.log("Batch profit too small — rescanning\n");
+async function run(){
+
+console.log(CYAN+"Scanning arbitrage...\n"+RESET);
+
+const {trades,totalProfit}=await buildBatch();
+
+if(trades.length===0){
+
+console.log(YELLOW+"No valid opportunities\n"+RESET);
 return;
+
+}
+
+console.log(GREEN+`Valid trades: ${trades.length}`+RESET);
+
+console.log(GREEN+`Aggregated profit: ${totalProfit.toFixed(6)} USDC\n`+RESET);
+
+if(totalProfit<CONTRACT_MIN_PROFIT){
+
+console.log(RED+"Batch below contract minimum\n"+RESET);
+return;
+
 }
 
 const buyRouters=trades.map(t=>t.buyRouter);
@@ -296,6 +291,8 @@ const pathsSell=trades.map(t=>t.bestSellPath);
 
 const deadline=Math.floor(Date.now()/1000)+DEADLINE_SECONDS;
 
+console.log(CYAN+"Running simulation...\n"+RESET);
+
 await contract.executeFlashBatchArbitrage.staticCall(
 buyRouters,
 sellRouters,
@@ -305,7 +302,9 @@ pathsSell,
 deadline
 );
 
-console.log("Simulation pass");
+console.log(GREEN+"Simulation pass\n"+RESET);
+
+console.log(CYAN+"Executing arbitrage...\n"+RESET);
 
 const gas=
 await contract.executeFlashBatchArbitrage.estimateGas(
@@ -316,10 +315,6 @@ pathsBuy,
 pathsSell,
 deadline
 );
-
-console.log(`Gas: ${gas}\n`);
-
-console.log("Executing flash arbitrage");
 
 const tx=
 await contract.executeFlashBatchArbitrage(
@@ -332,16 +327,12 @@ deadline,
 {gasLimit:gas*120n/100n}
 );
 
-console.log(tx.hash);
+console.log(GREEN+"TX:"+tx.hash+RESET);
 
 await tx.wait();
 
-console.log("\nProfit deposited to vault\n");
-
-await balances();
+console.log(GREEN+"\nProfit deposited to vault\n"+RESET);
 
 }
 
-/* ================= MAIN ================= */
-
-runBatch();
+run();
