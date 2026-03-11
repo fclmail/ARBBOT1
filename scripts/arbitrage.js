@@ -31,7 +31,7 @@ const WORKERS=32;
 
 const MAX_BATCH_SIZE=10;
 
-const MIN_TRADE_USDC=0.05;
+const MIN_TRADE_USDC=0.02;
 
 const FLASH_PREMIUM=0.0005;
 
