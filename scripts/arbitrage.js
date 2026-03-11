@@ -28,8 +28,8 @@ const RESET="\x1b[0m";
 /* ================= CONFIG ================= */
 
 const WORKERS=32;
-const MAX_BATCH_SIZE=10;
-const MIN_TRADE_USDC=0.02;
+const MAX_BATCH_SIZE=20;
+const MIN_TRADE_USDC=0.05;
 const MIN_PROFIT=0.00001;
 
 const DEADLINE_SECONDS=60;
@@ -283,7 +283,7 @@ if(trades.length>=100) break;
 console.log(`\n${trades.length} trades collected`);
 console.log(`Total profit: ${totalProfit.toFixed(5)} USDC\n`);
 
-if(totalProfit<0.00001){
+if(totalProfit<0.000001){
 console.log("Batch profit too small — rescanning\n");
 return;
 }
