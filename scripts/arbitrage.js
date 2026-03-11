@@ -1,73 +1,70 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-import os from "os";
 
 /* ================= ENV ================= */
 
 dotenv.config();
 
 const RPC_POLYGON =
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL;
+process.env.RPC_POLYGON ||
+process.env.POLYGON_RPC ||
+process.env.RPC_URL;
 
 const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY;
+process.env.WALLET_PRIVATE_KEY ||
+process.env.PRIVATE_KEY;
 
 if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= COLORS ================= */
 
-const GREEN = "\x1b[92m";
-const CYAN = "\x1b[96m";
-const YELLOW = "\x1b[93m";
-const RESET = "\x1b[0m";
+const GREEN="\x1b[92m";
+const CYAN="\x1b[96m";
+const YELLOW="\x1b[93m";
+const RED="\x1b[91m";
+const RESET="\x1b[0m";
 
 /* ================= CONFIG ================= */
 
-const WORKERS = 32;
-const MAX_BATCH_SIZE = 10;
-const MIN_TRADE_USDC = 0.05;
-const MIN_PROFIT = 0.00001;
+const WORKERS=32;
+const MAX_BATCH_SIZE=10;
+const MIN_TRADE_USDC=0.05;
+const MIN_PROFIT=0.00001;
 
-const DEADLINE_SECONDS = 60;
+const DEADLINE_SECONDS=60;
 
 /* ================= PROVIDER ================= */
 
-const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const provider=new ethers.JsonRpcProvider(RPC_POLYGON);
+const wallet=new ethers.Wallet(PRIVATE_KEY,provider);
 
 /* ================= CONTRACT ================= */
 
-const CONTRACT =
-  "0xf2F8e22D4A8F0a546fe0c42FfFC2cdCc6F9c827f";
+const CONTRACT="0xf2F8e22D4A8F0a546fe0c42FfFC2cdCc6F9c827f";
 
-const ABI = [
+const ABI=[
 {
-"name":"executeFlashBatchArbitrage",
-"type":"function",
-"inputs":[
-{"name":"buyRouters","type":"address[]"},
-{"name":"sellRouters","type":"address[]"},
-{"name":"amountsInUSDC","type":"uint256[]"},
-{"name":"pathsToToken","type":"address[][]"},
-{"name":"pathsToUSDC","type":"address[][]"},
-{"name":"deadline","type":"uint256"}
+name:"executeFlashBatchArbitrage",
+type:"function",
+inputs:[
+{name:"buyRouters",type:"address[]"},
+{name:"sellRouters",type:"address[]"},
+{name:"amountsInUSDC",type:"uint256[]"},
+{name:"pathsToToken",type:"address[][]"},
+{name:"pathsToUSDC",type:"address[][]"},
+{name:"deadline",type:"uint256"}
 ]
 }
 ];
 
-const contract = new ethers.Contract(CONTRACT, ABI, wallet);
+const contract=new ethers.Contract(CONTRACT,ABI,wallet);
 
 /* ================= USDC ================= */
 
-const USDC =
-"0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDC="0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const usdc = new ethers.Contract(
+const usdc=new ethers.Contract(
 USDC,
 ["function balanceOf(address) view returns(uint256)"],
 provider
@@ -75,7 +72,7 @@ provider
 
 /* ================= ROUTERS ================= */
 
-const routers = {
+const routers={
 QuickSwap:"0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
 SushiSwap:"0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
 Dfyn:"0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
@@ -142,26 +139,20 @@ return[
 /* ================= QUOTE ================= */
 
 async function quote(router,amount,path){
-
 try{
-
 const r=routerContracts[router];
 const amounts=await r.getAmountsOut(amount,path);
 return amounts.at(-1);
-
 }catch{
-
 return null;
-
+}
 }
 
-}
-
-/* ================= SCAN ================= */
+/* ================= SCANNER ================= */
 
 let scanned=0;
 
-async function scanOpportunity(buy,sell,token){
+async function scan(buy,sell,token){
 
 const amountIn=ethers.parseUnits(MIN_TRADE_USDC.toString(),6);
 
@@ -201,8 +192,10 @@ bestSellPath=p;
 
 if(!bestSellOut) return null;
 
-const profit=
+const rawProfit=
 Number(ethers.formatUnits(bestSellOut,6))-MIN_TRADE_USDC;
+
+const profit=rawProfit*0.7;
 
 if(profit<MIN_PROFIT) return null;
 
@@ -217,7 +210,7 @@ profit
 
 }
 
-/* ================= BALANCE ================= */
+/* ================= BALANCES ================= */
 
 async function balances(){
 
@@ -252,7 +245,6 @@ let sec=0;
 setInterval(()=>{
 
 sec++;
-
 console.log(`[${sec} sec] scanned ${scanned.toLocaleString()} opportunities`);
 
 },1000);
@@ -267,12 +259,11 @@ for(const token of Object.values(TOKENS)){
 
 if(buy===sell) continue;
 
-tasks.push(scanOpportunity(buy,sell,token));
+tasks.push(scan(buy,sell,token));
 
 }
 
-const results=
-await Promise.all(tasks);
+const results=await Promise.all(tasks);
 
 for(const r of results){
 
@@ -292,14 +283,18 @@ if(trades.length>=100) break;
 console.log(`\n${trades.length} trades collected`);
 console.log(`Total profit: ${totalProfit.toFixed(5)} USDC\n`);
 
+if(totalProfit<0.1){
+console.log("Batch profit too small — rescanning\n");
+return;
+}
+
 const buyRouters=trades.map(t=>t.buyRouter);
 const sellRouters=trades.map(t=>t.sellRouter);
 const amounts=trades.map(t=>t.amountIn);
 const pathsBuy=trades.map(t=>t.bestBuyPath);
 const pathsSell=trades.map(t=>t.bestSellPath);
 
-const deadline=
-Math.floor(Date.now()/1000)+DEADLINE_SECONDS;
+const deadline=Math.floor(Date.now()/1000)+DEADLINE_SECONDS;
 
 await contract.executeFlashBatchArbitrage.staticCall(
 buyRouters,
