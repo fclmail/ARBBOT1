@@ -283,7 +283,7 @@ if(trades.length>=100) break;
 console.log(`\n${trades.length} trades collected`);
 console.log(`Total profit: ${totalProfit.toFixed(5)} USDC\n`);
 
-if(totalProfit<0.1){
+if(totalProfit<0.00001){
 console.log("Batch profit too small — rescanning\n");
 return;
 }
