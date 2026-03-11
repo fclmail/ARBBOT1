@@ -1,6 +1,3 @@
-💽💾✅JS 95 BATCH📃 ORIGINAL AGGREGATION WITH ⚡MIN PROFIT BUFFER
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
