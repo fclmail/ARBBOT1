@@ -34,8 +34,8 @@ const MIN_EXPECTED_PROFIT = 0.0002;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
 
-const TARGET_BATCH_SIZE = 20;
-const WORKERS = 16;
+const TARGET_BATCH_SIZE = 2;
+const WORKERS = 32;
 
 /* ================= TRADE BUFFER ================= */
 
