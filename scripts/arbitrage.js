@@ -35,7 +35,7 @@ const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
 
 const TARGET_BATCH_SIZE = 2;
-const WORKERS = 32;
+const WORKERS = 16;
 
 /* ================= TRADE BUFFER ================= */
 
