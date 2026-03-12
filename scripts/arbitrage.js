@@ -19,6 +19,7 @@ if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= COLORS ================= */
+
 const GREEN = "\x1b[92m";
 const RESET = "\x1b[0m";
 const CYAN = "\x1b[96m";
@@ -27,14 +28,18 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = 0.8;
-const MIN_EXPECTED_PROFIT = 0.01;
+const MIN_TRADE_USDC = 0.02;
+const MIN_EXPECTED_PROFIT = 0.0002;
 
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
 
-const TARGET_BATCH_SIZE = 100;
+const TARGET_BATCH_SIZE = 10;
 const WORKERS = 16;
+
+/* ================= TRADE BUFFER ================= */
+
+let tradeBuffer = [];
 
 /* ================= PROVIDER ================= */
 
@@ -327,14 +332,25 @@ Minimum profit per trade: ${MIN_EXPECTED_PROFIT}
 Scanning opportunities...
 `);
 
-const profitableTrades = await parallelScan();
+const newTrades = await parallelScan();
 
-if (profitableTrades.length === 0) {
+if (newTrades.length > 0) {
+tradeBuffer.push(...newTrades);
+}
 
-console.log("No profitable trades found");
+console.log(`Buffered trades: ${tradeBuffer.length}/${TARGET_BATCH_SIZE}`);
+
+if (tradeBuffer.length < TARGET_BATCH_SIZE) {
+
+console.log(`${YELLOW}Waiting until full batch is reached...${RESET}`);
+
 return;
 
 }
+
+const profitableTrades = tradeBuffer.slice(0, TARGET_BATCH_SIZE);
+
+tradeBuffer = tradeBuffer.slice(TARGET_BATCH_SIZE);
 
 console.log(`Trades aggregated: ${profitableTrades.length}`);
 
@@ -424,6 +440,3 @@ await sleep(SCAN_INTERVAL_MS);
 }
 
 main().catch(console.error);
-
-
-
