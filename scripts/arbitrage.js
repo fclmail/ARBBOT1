@@ -34,7 +34,7 @@ const MIN_EXPECTED_PROFIT = 0.0002;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
 
-const TARGET_BATCH_SIZE = 10;
+const TARGET_BATCH_SIZE = 1;
 const WORKERS = 16;
 
 /* ================= TRADE BUFFER ================= */
@@ -48,7 +48,7 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const VAULT_ADDRESS = "0xAB046582A36D00f4921C447db9b77644b5e43c95";
+const VAULT_ADDRESS = "0xf2F8e22D4A8F0a546fe0c42FfFC2cdCc6F9c827f";
 
 const vaultAbi = [
 {
