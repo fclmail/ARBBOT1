@@ -24,7 +24,7 @@ const MIN_TRADE_USDC = 0.02; // micro trade amount
 const MIN_EXPECTED_PROFIT = 0.000001; // minimum profit per micro trade
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 6000;
-const TARGET_BATCH_SIZE = 20; // execute batch when reached
+const TARGET_BATCH_SIZE = 10; // execute batch when reached
 const WORKERS = 16;
 
 /* ================= TRADE BUFFER ================= */
