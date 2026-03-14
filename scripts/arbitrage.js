@@ -35,7 +35,7 @@ const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
-const VAULT_ADDRESS = "0xf7e8A1580Dd9b3757Fb6a1f86AD5ed0e0F3EfC31";
+const VAULT_ADDRESS = "0x6dED2f1A44Ac58201510ddd56677ecb864Af5467";
 
 const vaultAbi = [
   {
