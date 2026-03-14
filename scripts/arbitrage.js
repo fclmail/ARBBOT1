@@ -9,7 +9,7 @@ const RPC_POLYGON =
 const WALLET_PRIVATE_KEY =
   (process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY || "").trim();
 const VAULT_CONTRACT_ADDRESS =
-  (process.env.VAULT_CONTRACT_ADDRESS || "").trim(); // Your deployed VaultArbitrageEnforcer
+  (process.env.VAULT_CONTRACT_ADDRESS || "0x6dED2f1A44Ac58201510ddd56677ecb864Af5467").trim(); // Your deployed VaultArbitrageEnforcer
 const USDC_ADDRESS =
   (process.env.USDC_ADDRESS || "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174").trim(); // Polygon USDC
 
