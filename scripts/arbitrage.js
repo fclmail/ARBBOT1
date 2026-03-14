@@ -39,18 +39,24 @@ const VAULT_ADDRESS = "0x6dED2f1A44Ac58201510ddd56677ecb864Af5467";
 
 const vaultAbi = [
   {
-    name: "executeFlashBatchArbitrage",
-    type: "function",
-    inputs: [
-      { name: "buyRouters", type: "address[]" },
-      { name: "sellRouters", type: "address[]" },
-      { name: "amountsInUSDC", type: "uint256[]" },
-      { name: "pathsToToken", type: "address[][]" },
-      { name: "pathsToUSDC", type: "address[][]" },
-      { name: "deadline", type: "uint256" }
+    "inputs": [
+      {
+        "components": [
+          { "name": "buyRouters", "type": "address[]" },
+          { "name": "sellRouters", "type": "address[]" },
+          { "name": "amountsInUSDC", "type": "uint256[]" },
+          { "name": "pathsToToken", "type": "address[][]" },
+          { "name": "pathsToUSDC", "type": "address[][]" }
+        ],
+        "name": "p",
+        "type": "tuple"
+      },
+      { "name": "deadline", "type": "uint256" }
     ],
-    outputs: [],
-    stateMutability: "nonpayable"
+    "name": "executeFlashBatchArbitrage",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
   }
 ];
 
@@ -58,6 +64,7 @@ const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= USDC ================= */
 const usdcAbi = ["function balanceOf(address owner) view returns (uint256)"];
+
 const usdc = new ethers.Contract(
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
   usdcAbi,
@@ -356,6 +363,14 @@ Executing ${expanded.length} swaps...
   const pathsToUSDC =
     expanded.map(t => t.bestSellPath);
 
+  const params = {
+    buyRouters,
+    sellRouters,
+    amountsInUSDC,
+    pathsToToken,
+    pathsToUSDC
+  };
+
   const batchTotalAmount =
     amountsInUSDC.reduce(
       (a, b) =>
@@ -387,11 +402,7 @@ Executing ${expanded.length} swaps...
     try {
 
       await vault.executeFlashBatchArbitrage.staticCall(
-        buyRouters,
-        sellRouters,
-        amountsInUSDC,
-        pathsToToken,
-        pathsToUSDC,
+        params,
         deadline
       );
 
@@ -415,21 +426,13 @@ Executing ${expanded.length} swaps...
 
     const gasEstimate =
       await vault.executeFlashBatchArbitrage.estimateGas(
-        buyRouters,
-        sellRouters,
-        amountsInUSDC,
-        pathsToToken,
-        pathsToUSDC,
+        params,
         deadline
       );
 
     const tx =
       await vault.executeFlashBatchArbitrage(
-        buyRouters,
-        sellRouters,
-        amountsInUSDC,
-        pathsToToken,
-        pathsToUSDC,
+        params,
         deadline,
         {
           gasLimit:
