@@ -13,9 +13,9 @@ if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = 0.01;
+const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
-const TARGET_BATCH_SIZE = 3; // partial execution batch size
+const TARGET_BATCH_SIZE = 2;
 const WORKERS = 16;
 const DEADLINE_SECONDS = 6000;
 const SCAN_INTERVAL_MS = 5000;
@@ -26,10 +26,12 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 const VAULT_ADDRESS = "0x6dED2f1A44Ac58201510ddd56677ecb864Af5467";
+
 const vaultAbi = [
   "function executeFlashBatchArbitrage(address[],address[],uint256[],address[][],address[][],uint256)",
   "event ArbitrageExecuted(address,address,address,uint256,uint256,uint256,uint256)"
 ];
+
 const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= TOKENS ================= */
@@ -53,7 +55,10 @@ const routers = {
   ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
-const routerAbi = ["function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"];
+
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+];
 
 /* ================= BUFFER ================= */
 let tradeBuffer = [];
@@ -71,8 +76,11 @@ async function quote(routerAddr, amount, path) {
   }
 }
 
+/* ================= FIND TRADE ================= */
 async function findProfitableTrade(buyRouter, sellRouter, token) {
+
   if (token === TOKENS.USDC) return null;
+  if (buyRouter === sellRouter) return null;
 
   const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
 
@@ -85,6 +93,7 @@ async function findProfitableTrade(buyRouter, sellRouter, token) {
   ];
 
   let bestOut, bestBuyPath;
+
   for (const p of buyPaths) {
     const out = await quote(buyRouter, amountIn, p);
     if (out && (!bestOut || out > bestOut)) {
@@ -92,6 +101,7 @@ async function findProfitableTrade(buyRouter, sellRouter, token) {
       bestBuyPath = p;
     }
   }
+
   if (!bestOut) return null;
 
   const sellPaths = [
@@ -103,6 +113,7 @@ async function findProfitableTrade(buyRouter, sellRouter, token) {
   ];
 
   let bestSell, bestSellPath;
+
   for (const p of sellPaths) {
     const out = await quote(sellRouter, bestOut, p);
     if (out && (!bestSell || out > bestSell)) {
@@ -110,9 +121,11 @@ async function findProfitableTrade(buyRouter, sellRouter, token) {
       bestSellPath = p;
     }
   }
+
   if (!bestSell) return null;
 
   const profit = Number(ethers.formatUnits(bestSell, 6)) - MIN_TRADE_USDC;
+
   if (profit < MIN_EXPECTED_PROFIT) return null;
 
   return { buyRouter, sellRouter, amountIn, bestBuyPath, bestSellPath, profit };
@@ -120,13 +133,16 @@ async function findProfitableTrade(buyRouter, sellRouter, token) {
 
 /* ================= PARALLEL SCAN ================= */
 async function parallelScan() {
+
   console.log("\nLaunching parallel scanners...");
   console.log("Workers started:", WORKERS);
 
   const tasks = [];
+
   for (const buy of Object.values(routers)) {
     for (const sell of Object.values(routers)) {
       if (buy === sell) continue;
+
       for (const token of Object.values(TOKENS)) {
         tasks.push({ buy, sell, token });
       }
@@ -135,6 +151,7 @@ async function parallelScan() {
 
   let index = 0;
   const profitable = [];
+
   async function worker() {
     while (index < tasks.length) {
       const t = tasks[index++];
@@ -145,6 +162,7 @@ async function parallelScan() {
 
   const workers = [];
   for (let i = 0; i < WORKERS; i++) workers.push(worker());
+
   await Promise.all(workers);
 
   console.log(`Parallel scan finished, found ${profitable.length} trades`);
@@ -153,59 +171,146 @@ async function parallelScan() {
 
 /* ================= EXECUTE BATCH ================= */
 async function executeBatch(trades) {
+
   console.log(`\nCollected trades: ${trades.length}`);
+
   const expanded = trades.slice(0, TARGET_BATCH_SIZE);
+
   console.log(`Compressed: ${expanded.length}`);
-  console.log("Executing batch...\n");
+  console.log("Preparing batch...\n");
 
   const buyRouters = expanded.map(t => t.buyRouter);
   const sellRouters = expanded.map(t => t.sellRouter);
   const amounts = expanded.map(t => t.amountIn);
   const pathsA = expanded.map(t => t.bestBuyPath);
   const pathsB = expanded.map(t => t.bestSellPath);
+
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  const tx = await vault.executeFlashBatchArbitrage(buyRouters, sellRouters, amounts, pathsA, pathsB, deadline);
-  console.log("Transaction sent:", tx.hash);
+  console.log("Batch payload:");
+  console.log({
+    buyRouters,
+    sellRouters,
+    amounts: amounts.map(a => a.toString()),
+    pathsA,
+    pathsB,
+    deadline
+  });
 
-  const receipt = await tx.wait();
-  console.log("Transaction confirmed");
-  console.log("Gas used:", receipt.gasUsed.toString());
+  /* ================= DEBUG SIMULATION ================= */
 
-  let executed = 0;
-  let failed = 0;
-  let profit = 0;
+  console.log("\nRunning callStatic simulation...");
 
-  for (const log of receipt.logs) {
-    try {
-      const parsed = vault.interface.parseLog(log);
-      if (parsed.name === "ArbitrageExecuted") {
-        executed++;
-        const p = Number(parsed.args[6]) / 1e6;
-        if (p <= 0) failed++;
-        else profit += p;
-      }
-    } catch {}
+  try {
+
+    await vault.callStatic.executeFlashBatchArbitrage(
+      buyRouters,
+      sellRouters,
+      amounts,
+      pathsA,
+      pathsB,
+      deadline
+    );
+
+    console.log("Simulation SUCCESS — sending transaction\n");
+
+  } catch (err) {
+
+    console.log("\n=== SIMULATION FAILED ===");
+
+    console.log("Short message:");
+    console.log(err.shortMessage);
+
+    console.log("\nFull error:");
+    console.dir(err, { depth: null });
+
+    if (err.reason) console.log("\nRevert reason:", err.reason);
+
+    if (err.error?.message)
+      console.log("\nRPC error:", err.error.message);
+
+    console.log("\nBatch aborted.\n");
+
+    return;
   }
 
-  console.log(`Swaps executed: ${executed}`);
-  console.log(`Swaps failed: ${failed}`);
-  console.log(`Total profit: ${profit.toFixed(3)} USDC`);
+  /* ================= SEND TX ================= */
+
+  try {
+
+    const tx = await vault.executeFlashBatchArbitrage(
+      buyRouters,
+      sellRouters,
+      amounts,
+      pathsA,
+      pathsB,
+      deadline
+    );
+
+    console.log("Transaction sent:", tx.hash);
+
+    const receipt = await tx.wait();
+
+    console.log("Transaction confirmed");
+    console.log("Gas used:", receipt.gasUsed.toString());
+
+    let executed = 0;
+    let failed = 0;
+    let profit = 0;
+
+    for (const log of receipt.logs) {
+
+      try {
+
+        const parsed = vault.interface.parseLog(log);
+
+        if (parsed.name === "ArbitrageExecuted") {
+
+          executed++;
+
+          const p = Number(parsed.args[6]) / 1e6;
+
+          if (p <= 0) failed++;
+          else profit += p;
+        }
+
+      } catch {}
+    }
+
+    console.log(`Swaps executed: ${executed}`);
+    console.log(`Swaps failed: ${failed}`);
+    console.log(`Total profit: ${profit.toFixed(6)} USDC`);
+
+  } catch (err) {
+
+    console.log("\n=== TRANSACTION FAILED ===");
+
+    console.log(err.shortMessage);
+
+    console.dir(err, { depth: null });
+
+  }
 }
 
 /* ================= MAIN LOOP ================= */
 async function main() {
+
   console.log("MEV Batch Scanner Started");
 
   while (true) {
+
     const newTrades = await parallelScan();
+
     if (newTrades.length > 0) {
+
       tradeBuffer.push(...newTrades);
       console.log("Buffered trades:", tradeBuffer.length);
     }
 
     if (tradeBuffer.length >= TARGET_BATCH_SIZE) {
+
       const batch = tradeBuffer.splice(0, TARGET_BATCH_SIZE);
+
       await executeBatch(batch);
     }
 
