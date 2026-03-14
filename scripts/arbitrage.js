@@ -13,7 +13,7 @@ if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
 if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = 0.41;
+const MIN_TRADE_USDC = 0.02;
 const MIN_EXPECTED_PROFIT = 0.000001;
 const TARGET_BATCH_SIZE = 4; // partial execution batch size
 const WORKERS = 16;
