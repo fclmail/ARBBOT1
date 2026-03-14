@@ -15,7 +15,7 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
 /* ================= CONSTANTS ================= */
 const MIN_TRADE_USDC = 0.03;
 const MIN_EXPECTED_PROFIT = 0.000001;
-const TARGET_BATCH_SIZE = 240; // partial execution batch size
+const TARGET_BATCH_SIZE = 2; // partial execution batch size
 const WORKERS = 16;
 const DEADLINE_SECONDS = 6000;
 const SCAN_INTERVAL_MS = 5000;
