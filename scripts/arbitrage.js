@@ -1,5 +1,3 @@
-Original 11:36 PM
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
