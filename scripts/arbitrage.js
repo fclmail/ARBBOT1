@@ -21,7 +21,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 const MIN_TRADE_USDC = 0.020;
-const TARGET_BATCH_SIZE = 2;
+const TARGET_BATCH_SIZE = 20;
 const SCAN_INTERVAL_MS = 400;
 const DEADLINE_SECONDS = 60;
 const NUM_WORKERS = 32;
