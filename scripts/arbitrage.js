@@ -20,9 +20,8 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= SETTINGS ================= */
 const WORKERS = 16;
-const BUFFER_TARGET = 1000; // only execute when full
-const PARTIAL_SIZE = 120;   // safe compressed batch
-const SCAN_DELAY = 20000;   // 1 scan per 20 seconds
+const BUFFER_TARGET = 1000; // execute batch when full
+const SCAN_DELAY = 20000;   // 1 scan per 20s
 const DEADLINE_SECONDS = 6000;
 
 /* ================= COLORS ================= */
@@ -36,12 +35,12 @@ const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 const VAULT_ADDRESS =
   "0x6dED2f1A44Ac58201510ddd56677ecb864Af5467";
 
-const abi = [
+const vaultAbi = [
   "function executeFlashBatchArbitrage(address[],address[],uint256[],address[][],address[][],uint256)",
   "event ArbitrageExecuted(address,address,address,uint256,uint256,uint256,uint256)"
 ];
 
-const vault = new ethers.Contract(VAULT_ADDRESS, abi, wallet);
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
 
 /* ================= TOKENS ================= */
 const TOKENS = {
@@ -60,24 +59,22 @@ const routers = [
 /* ================= BUFFER ================= */
 let buffer = [];
 
-/* ================= RANDOM TRADE ================= */
+/* ================= RANDOM TRADE GENERATOR ================= */
 function makeTrade() {
   const buy = routers[Math.floor(Math.random() * routers.length)];
   const sell = routers[Math.floor(Math.random() * routers.length)];
   if (buy === sell) return null;
 
-  // smaller amounts to guarantee vault coverage
-  const amount = 0.01 + Math.random() * 0.02; 
+  const amount = 0.01 + Math.random() * 0.02; // safe small amounts
   const amountIn = ethers.parseUnits(amount.toFixed(6), 6);
 
-  // safe paths
   const pathA = [TOKENS.USDC, TOKENS.WMATIC];
   const pathB = [TOKENS.WMATIC, TOKENS.USDC];
 
   return { buy, sell, amountIn, pathA, pathB };
 }
 
-/* ================= WORKER ================= */
+/* ================= WORKERS ================= */
 async function worker() {
   while (true) {
     if (buffer.length < BUFFER_TARGET) {
@@ -101,14 +98,6 @@ async function worker() {
   }
 }
 
-/* ================= PARTIAL FILTER ================= */
-function partialFilter() {
-  console.log("Filter partial execution...");
-  const batch = buffer.splice(0, PARTIAL_SIZE);
-  console.log("Partial trades kept:", batch.length);
-  return batch;
-}
-
 /* ================= EXECUTE BATCH ================= */
 async function executeBatch(trades) {
   const buy = trades.map(t => t.buy);
@@ -119,7 +108,7 @@ async function executeBatch(trades) {
 
   const deadline = Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
 
-  console.log("Simulation start...");
+  console.log("\nSimulation start...");
   try {
     await vault.executeFlashBatchArbitrage.staticCall(
       buy,
@@ -131,13 +120,11 @@ async function executeBatch(trades) {
     );
     console.log(green("Simulation pass"));
   } catch (err) {
-    console.log("Simulation failed", err.message || "");
+    console.log("Simulation failed:", err.message || "");
     return;
   }
 
-  console.log("\nCollected trades: 1000");
-  console.log(`Compressed: ${trades.length}`);
-  console.log("Executing batch...");
+  console.log("Executing batch...\n");
 
   const tx = await vault.executeFlashBatchArbitrage(
     buy,
@@ -149,42 +136,45 @@ async function executeBatch(trades) {
   );
 
   const receipt = await tx.wait();
-  let ok = 0, fail = 0, profit = 0;
+
+  let totalExecuted = 0;
+  let totalFailed = 0;
+  let totalProfit = 0;
+  let totalGas = receipt.gasUsed;
 
   for (const log of receipt.logs) {
     try {
-      const p = vault.interface.parseLog(log);
-      if (p.name === "ArbitrageExecuted") {
-        ok++;
-        const pr = Number(p.args[6]) / 1e6;
-        if (pr <= 0) fail++;
-        else profit += pr;
+      const parsed = vault.interface.parseLog(log);
+      if (parsed.name === "ArbitrageExecuted") {
+        totalExecuted++;
+        const profit = Number(parsed.args[6]) / 1e6;
+        if (profit <= 0) totalFailed++;
+        else totalProfit += profit;
       }
     } catch {}
   }
 
-  console.log(`Swaps executed: ${ok}`);
-  console.log(`Swaps failed: ${fail}`);
-  console.log(`Total profit: ${profit.toFixed(3)} USDC\n`);
+  console.log(`Swaps executed: ${totalExecuted}`);
+  console.log(`Swaps failed: ${totalFailed}`);
+  console.log(`Total profit: ${totalProfit.toFixed(6)} USDC`);
+  console.log(`Total gas used: ${totalGas.toString()}`);
   console.log("Transaction sent:", tx.hash);
-  console.log("Transaction confirmed");
-  console.log("Gas used:", receipt.gasUsed.toString());
+  console.log("Transaction confirmed\n");
 }
 
 /* ================= MAIN ================= */
 async function main() {
   console.log("Elo");
 
-  // start workers
   for (let i = 0; i < WORKERS; i++) worker();
 
-  // main loop executes only when buffer full
   while (true) {
     if (buffer.length >= BUFFER_TARGET) {
-      const batch = partialFilter();
-      await executeBatch(batch);
+      console.log("\nBuffer full. Executing contract batch loop...");
+      await executeBatch(buffer);
+      buffer = []; // clear buffer after execution
     }
-    await new Promise(r => setTimeout(r, SCAN_DELAY)); // 20s scan
+    await new Promise(r => setTimeout(r, SCAN_DELAY));
   }
 }
 
