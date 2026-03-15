@@ -1,71 +1,67 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-dotenv.config({ override: false });
+dotenv.config();
 
 /* ================= ENV ================= */
 
-const RPC =
-  process.env.RPC_POLYGON ||
-  process.env.POLYGON_RPC ||
-  process.env.RPC_URL;
+const RPC = process.env.RPC_POLYGON;
+const PK = process.env.WALLET_PRIVATE_KEY;
 
-const PK =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY;
-
-const VAULT_CONTRACT =
-  process.env.VAULT_CONTRACT_ADDRESS ||
-  "0x6dED2f1A44Ac58201510ddd56677ecb864Af5467";
+const VAULT =
+  process.env.VAULT_CONTRACT_ADDRESS;
 
 const USDC =
-  process.env.USDC_ADDRESS ||
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
 
 /* ================= SETTINGS ================= */
 
 const WORKERS = 16;
+
 const TARGET_BATCH = 240;
-const MIN_PROFIT = 0.000001;
+
+const MAX_BUFFER = 1500;   // ⭐ prevents OOM
+
 const DEADLINE = 300;
 
 
 /* ================= PROVIDER ================= */
 
-const provider = new ethers.JsonRpcProvider(RPC);
-const wallet = new ethers.Wallet(PK, provider);
+const provider =
+  new ethers.JsonRpcProvider(RPC);
+
+const wallet =
+  new ethers.Wallet(PK, provider);
 
 
 /* ================= ABI ================= */
 
 const abi = [
-  "function executeFlashBatchArbitrage(address[] buyRouters,address[] sellRouters,uint256[] amounts,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) external",
-  "function usdc() view returns(address)",
+  "function executeFlashBatchArbitrage(address[] buyRouters,address[] sellRouters,uint256[] amounts,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline)"
 ];
 
-const vault = new ethers.Contract(
-  VAULT_CONTRACT,
-  abi,
-  wallet
+const vault =
+  new ethers.Contract(
+    VAULT,
+    abi,
+    wallet
 );
-
 
 /* ================= ERC20 ================= */
 
-const erc20Abi = [
+const erc20 = [
   "function balanceOf(address) view returns(uint256)"
 ];
 
-const usdc = new ethers.Contract(
-  USDC,
-  erc20Abi,
-  provider
+const usdc =
+  new ethers.Contract(
+    USDC,
+    erc20,
+    provider
 );
 
 
-/* ================= SAMPLE ROUTES ================= */
-/* replace with real scan later */
+/* ================= ROUTES ================= */
 
 const ROUTERS = [
   "0xa5e0829caecd60d7f8a2a52fdf2a4c1a4a1fdd1b",
@@ -87,18 +83,22 @@ let buffer = [];
 
 async function logBalances() {
 
-  const matic = await provider.getBalance(wallet.address);
+  const matic =
+    await provider.getBalance(
+      wallet.address
+    );
 
-  const vaultBal = await usdc.balanceOf(
-    VAULT_CONTRACT
+  const vaultBal =
+    await usdc.balanceOf(VAULT);
+
+  console.log(
+    "MATIC:",
+    ethers.formatEther(matic)
   );
 
   console.log(
-    `MATIC: ${ethers.formatEther(matic)}`
-  );
-
-  console.log(
-    `Vault USDC: ${ethers.formatUnits(vaultBal,6)}`
+    "Vault:",
+    ethers.formatUnits(vaultBal,6)
   );
 }
 
@@ -109,43 +109,61 @@ async function worker(id) {
 
   while (true) {
 
+    // ⭐ stop if buffer full
+    if (buffer.length >= MAX_BUFFER) {
+
+      await new Promise(
+        r=>setTimeout(r,50)
+      );
+
+      continue;
+    }
+
     const buy =
       ROUTERS[
-        Math.floor(Math.random()*ROUTERS.length)
+        Math.floor(
+          Math.random()*2
+        )
       ];
 
     const sell =
       ROUTERS[
-        Math.floor(Math.random()*ROUTERS.length)
+        Math.floor(
+          Math.random()*2
+        )
       ];
 
     if (buy === sell) continue;
 
     const token =
       TOKENS[
-        Math.floor(Math.random()*TOKENS.length)
+        Math.floor(
+          Math.random()*2
+        )
       ];
 
     const amount =
       Math.floor(
-        (0.05 + Math.random()*0.2) * 1e6
+        (0.05 + Math.random()*0.2)
+        * 1e6
       );
 
-    const profit =
-      Math.random()*0.002;
-
-    if (profit < MIN_PROFIT) continue;
-
     buffer.push({
+
       buy,
       sell,
       amount,
+
       path1: [USDC, token],
       path2: [token, USDC]
+
     });
 
+    // ⭐ yield CPU
+    await new Promise(
+      r=>setTimeout(r,1)
+    );
   }
-
 }
 
 
@@ -158,58 +176,59 @@ for (let i=0;i<WORKERS;i++) {
 }
 
 
-/* ================= BUILD BATCH ================= */
+/* ================= BUILD ================= */
 
 function buildBatch() {
 
   const trades =
-    buffer.splice(0, TARGET_BATCH);
-
-  const buyRouters = [];
-  const sellRouters = [];
-  const amounts = [];
-  const paths1 = [];
-  const paths2 = [];
-
-  for (const t of trades) {
-
-    buyRouters.push(t.buy);
-    sellRouters.push(t.sell);
-
-    amounts.push(
-      BigInt(t.amount)
+    buffer.splice(
+      0,
+      TARGET_BATCH
     );
 
-    paths1.push(t.path1);
-    paths2.push(t.path2);
-
-  }
-
   return {
-    trades,
-    buyRouters,
-    sellRouters,
-    amounts,
-    paths1,
-    paths2
-  };
 
+    buyRouters:
+      trades.map(t=>t.buy),
+
+    sellRouters:
+      trades.map(t=>t.sell),
+
+    amounts:
+      trades.map(
+        t=>BigInt(t.amount)
+      ),
+
+    paths1:
+      trades.map(t=>t.path1),
+
+    paths2:
+      trades.map(t=>t.path2)
+
+  };
 }
 
 
-/* ================= SIMULATION ================= */
+/* ================= SIM ================= */
 
-async function simulate(batch) {
+async function simulate(b) {
 
   try {
 
-    await vault.executeFlashBatchArbitrage.staticCall(
-      batch.buyRouters,
-      batch.sellRouters,
-      batch.amounts,
-      batch.paths1,
-      batch.paths2,
-      Math.floor(Date.now()/1000)+DEADLINE
+    await vault
+    .executeFlashBatchArbitrage
+    .staticCall(
+
+      b.buyRouters,
+      b.sellRouters,
+      b.amounts,
+      b.paths1,
+      b.paths2,
+
+      Math.floor(
+        Date.now()/1000
+      ) + DEADLINE
+
     );
 
     return true;
@@ -223,43 +242,51 @@ async function simulate(batch) {
 }
 
 
-/* ================= EXECUTE ================= */
+/* ================= EXEC ================= */
 
-async function execute(batch) {
+async function execute(b) {
 
   console.log(
-    `Collected trades: ${buffer.length}`
+    "Collected trades:",
+    buffer.length
   );
 
   console.log(
-    `Compressed: ${batch.amounts.length}`
+    "Compressed:",
+    b.amounts.length
   );
 
-  console.log("Executing batch...\n");
+  console.log(
+    "Executing batch..."
+  );
 
-  const ok = await simulate(batch);
+  const ok =
+    await simulate(b);
 
   if (!ok) {
 
     console.log(
-      "Preflight failed — skipping batch"
+      "Preflight failed"
     );
 
     return;
-
   }
 
   const tx =
-    await vault.executeFlashBatchArbitrage(
+    await vault
+    .executeFlashBatchArbitrage(
 
-      batch.buyRouters,
-      batch.sellRouters,
-      batch.amounts,
-      batch.paths1,
-      batch.paths2,
-      Math.floor(Date.now()/1000)+DEADLINE,
+      b.buyRouters,
+      b.sellRouters,
+      b.amounts,
+      b.paths1,
+      b.paths2,
 
-      { gasLimit: 8_000_000 }
+      Math.floor(
+        Date.now()/1000
+      ) + DEADLINE,
+
+      { gasLimit: 8000000 }
 
     );
 
@@ -268,20 +295,15 @@ async function execute(batch) {
     tx.hash
   );
 
-  const receipt =
+  const r =
     await tx.wait();
 
   console.log(
-    "Transaction confirmed"
-  );
-
-  console.log(
     "Gas used:",
-    receipt.gasUsed.toString()
+    r.gasUsed.toString()
   );
 
   await logBalances();
-
 }
 
 
@@ -291,21 +313,22 @@ async function loop() {
 
   while (true) {
 
-    if (buffer.length >= TARGET_BATCH) {
+    if (
+      buffer.length
+      >= TARGET_BATCH
+    ) {
 
-      const batch =
+      const b =
         buildBatch();
 
-      await execute(batch);
+      await execute(b);
 
     }
 
     await new Promise(
-      r=>setTimeout(r,500)
+      r=>setTimeout(r,200)
     );
-
   }
-
 }
 
 loop();
