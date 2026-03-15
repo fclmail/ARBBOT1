@@ -20,7 +20,7 @@ if (!WALLET_PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= SETTINGS ================= */
 const WORKERS = 16;
-const BUFFER_TARGET = 10; // execute batch when full
+const BUFFER_TARGET = 3; // execute batch when full
 const SCAN_DELAY = 20000;   // 1 scan per 20s
 const DEADLINE_SECONDS = 6000;
 
@@ -65,7 +65,7 @@ function makeTrade() {
   const sell = routers[Math.floor(Math.random() * routers.length)];
   if (buy === sell) return null;
 
-  const amount = 0.0001 + Math.random() * 0.02; // safe small amounts
+  const amount = 0.01 + Math.random() * 0.02; // safe small amounts
   const amountIn = ethers.parseUnits(amount.toFixed(6), 6);
 
   const pathA = [TOKENS.USDC, TOKENS.WMATIC];
