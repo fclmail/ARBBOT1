@@ -27,7 +27,7 @@ const RED = "\x1b[91m";
 /* ================= CONSTANTS ================= */
 //🟢3 MAIN TUNING SECTION
 
-const MIN_TRADE_USDC = 0.020;
+const MIN_TRADE_USDC = 0.030;
 const TARGET_BATCH_SIZE = 2;
 const SCAN_INTERVAL_MS = 400;
 const DEADLINE_SECONDS = 60;
