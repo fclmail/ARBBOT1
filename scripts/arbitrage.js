@@ -1,4 +1,4 @@
-import do "dotenv";
+import dot "dotenv";
 import { ethers } from "ethers";
 
 dotenv.config({ override: false });
