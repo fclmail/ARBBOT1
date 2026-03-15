@@ -20,11 +20,11 @@ const YELLOW = "\x1b[93m";
 const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
-const MIN_TRADE_USDC = 10000;
+const MIN_TRADE_USDC = 0.020;
 const TARGET_BATCH_SIZE = 2;
 const SCAN_INTERVAL_MS = 400;
 const DEADLINE_SECONDS = 60;
-const NUM_WORKERS = 64;
+const NUM_WORKERS = 32;
 
 /* ================= PROVIDER ================= */
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
