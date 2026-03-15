@@ -35,14 +35,12 @@ const NUM_WORKERS = 32;
 
 
 /* ================= PROVIDER ================= */
-//🟢4 RPC + wallet connection
 
 const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
 const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
 
 
 /* ================= ROUTERS ================= */
-//🟢5 DEX routers used for swaps
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -53,7 +51,6 @@ const routers = {
 
 
 /* ================= FACTORIES ================= */
-//🟢6 Used to read reserves
 
 const factories = {
   QuickSwap: "0x5757371414417b8c6caad45baef941abc7d3ab32",
@@ -64,7 +61,6 @@ const factories = {
 
 
 /* ================= TOKENS ================= */
-//🟢7 Tokens scanned
 
 const TOKENS = {
   USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
@@ -117,8 +113,7 @@ const vault = new ethers.Contract(
 );
 
 
-/* ================= BALANCE ================= */
-//🟢17 wallet MATIC + vault USDC display
+/* ================= BALANCE DISPLAY ================= */
 
 const erc20Abi = [
   "function balanceOf(address) view returns(uint256)"
@@ -143,12 +138,31 @@ async function showBalances() {
     );
 
   console.log(
-    `${CYAN}Wallet MATIC:${RESET}`,
+    CYAN,
+    "Wallet MATIC:",
     ethers.formatEther(matic)
   );
 
   console.log(
-    `${CYAN}Vault USDC:${RESET}`,
-    Number(vaultBal) / 1e6
+    CYAN,
+    "Vault USDC:",
+    Number(vaultBal) / 1e6,
+    RESET
+  );
+}
+
+
+/* ================= HELPERS ================= */
+
+const sleep = (ms) =>
+  new Promise(r => setTimeout(r, ms));
+
+
+function decodeError(err) {
+  return (
+    err?.reason ||
+    err?.shortMessage ||
+    err?.message ||
+    "Unknown error"
   );
 }
