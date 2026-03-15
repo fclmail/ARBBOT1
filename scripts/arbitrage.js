@@ -21,7 +21,7 @@ if (!PK) throw new Error("PK missing");
 /* ================= SETTINGS ================= */
 
 const WORKERS = 16;
-const BUFFER_TARGET = 1000;
+const BUFFER_TARGET = 1;
 const SCAN_DELAY = 20000;
 const DEADLINE_SECONDS = 6000;
 
