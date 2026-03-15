@@ -1,5 +1,3 @@
-🟢🐚J's 31 PARALEL 16 wekrs 
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
