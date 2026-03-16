@@ -30,8 +30,8 @@ const RESET="\x1b[0m";
 
 const WORKERS=32;
 const MAX_BATCH_SIZE=1;
-const MIN_TRADE_USDC=0.02;
-const MIN_PROFIT=0.00001;
+const MIN_TRADE_USDC=2;
+const MIN_PROFIT=0.001;
 
 const DEADLINE_SECONDS=10;
 
