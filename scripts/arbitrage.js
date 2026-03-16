@@ -34,7 +34,7 @@ const MIN_TRADE_USDC = 0.02;                // FIXED (was 0.02)
 const MIN_PROFIT_USDC = 0.00001;         // NEW
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
-const MAX_BATCH_SIZE = 100;
+const MAX_BATCH_SIZE = 1;
 
 /* ================= PROVIDER ================= */
 
