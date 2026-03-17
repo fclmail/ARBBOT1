@@ -146,7 +146,7 @@ async function quote(routerAddr, amountIn, path) {
     const router = routerContracts[routerAddr];
     const amounts = await router.getAmountsOut(amountIn, path);
 
-    return amounts.at(-1);
+    return amounts.at(1);
 
   } catch {
 
