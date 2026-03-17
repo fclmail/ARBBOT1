@@ -35,7 +35,7 @@ const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
 
 /* CHANGE SIZE HERE */
-const MAX_BATCH_SIZE = 100;
+const MAX_BATCH_SIZE = 1000;
 
 /* ================= PROVIDER ================= */
 
