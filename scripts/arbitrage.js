@@ -32,14 +32,14 @@ const VAULT_ADDRESS =
 "0xC1888f15C47e79E45342Dea9249622476A83563f";
 
 const WORKERS = 16;
-const BATCH_SIZE = 20;
-const TARGET_COLLECT = 10000;
+const BATCH_SIZE = 1000;
+const TARGET_COLLECT = 1000;
 
 const MIN_TRADE_USDC = 0.02;          // ✅ RESTORED
 const MIN_PROFIT_THRESHOLD = 0.000001;
 
-const DEADLINE_SECONDS = 60;
-const SCAN_DELAY = 10000;
+const DEADLINE_SECONDS = 30;
+const SCAN_DELAY = 400;
 
 /* ================= ADDRESSES ================= */
 
