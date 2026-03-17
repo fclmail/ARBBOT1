@@ -33,51 +33,34 @@ const VAULT_ADDRESS =
 
 const WORKERS = 16;
 const BATCH_SIZE = 20;
-const TARGET_COLLECT = 100;
+const TARGET_COLLECT = 10;
 
-const MIN_PROFIT_THRESHOLD = 0.00005;
+const MIN_PROFIT_THRESHOLD = 0.000001;
 const DEADLINE_SECONDS = 60;
-const SCAN_DELAY = 10000;
+const SCAN_DELAY = 5000;
 
-const MIN_TRADE_USDC = .02;
+/* ================= ADDRESSES ================= */
 
-/* ================= TOKENS (FROM J1) ================= */
+const USDC  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDT  = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
+const WETH  = "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619";
+const WMATIC= "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+const DAI   = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063";
 
-const TOKENS = {
+const TOKEN_LIST = [
+USDC,
+USDT,
+WETH,
+WMATIC,
+DAI
+];
 
-USDC:"0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-USDT:"0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-WBTC:"0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-APE:"0x4d224452801aced8b2f0aebe155379bb5d594381",
-CRV:"0x172370d5cd63279efa6d502dab29171933a610af",
-DAI:"0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-WETH:"0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-LINK:"0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-FRAX:"0x45c32fA6DF82ead1e2EF74d17b76547EDdFaFF89",
-MAI:"0xa3Fa99A148fA48D14Ed51d610c367C61876997F1",
-BUSD:"0xdAb529f40e671A1D4BF91361c21bf9F0C9712Ab7",
-TUSD:"0x2e1AD108fF1D8C782fcBbB89AAd783aC49586756",
-UNI:"0xb33EaAd8d922B1083446DC23f610c2567fB5180f",
-SUSHI:"0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a",
-QUICK:"0x831753DD7087CaC61aB5644b308642cc1c33Dc13",
-BAL:"0x9a71012B13CA4d3D0Cdc72A177DF3Ef03b0E76A3",
-stMATIC:"0x3A58a54C066FdC0F2D55FC9C89F0415C92eBf3C4",
-wstETH:"0x03b54A6e9a984069379FAe1a4Fc4dBaE93b3bccd",
-AAVE:"0xd6df932a45c0f255f85145f286ea0b292b21c90b"
-
-};
-
-const TOKEN_LIST = Object.values(TOKENS);
-
-/* ================= DEX (FROM J1) ================= */
+/* ================= DEX ================= */
 
 const DEXES = [
 
 "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
 "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-"0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-"0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
 "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
 "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 
@@ -115,7 +98,7 @@ const provider =
 new ethers.JsonRpcProvider(workerData.RPC);
 
 const routerAbi = [
-"function getAmountsOut(uint amountIn,address[] calldata path)view returns(uint[] memory)"
+"function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
 ];
 
 async function quote(router, amountIn, path) {
@@ -130,10 +113,7 @@ provider
 );
 
 const out =
-await r.getAmountsOut(
-amountIn,
-path
-);
+await r.getAmountsOut(amountIn, path);
 
 return out.at(-1);
 
@@ -151,18 +131,14 @@ const {
 workerId,
 TOKEN_LIST,
 DEXES,
+RPC,
 WORKERS
 } = workerData;
 
 let trades = [];
 
-const usdc = TOKENS.USDC;
-
 const amountIn =
-ethers.parseUnits(
-MIN_TRADE_USDC.toString(),
-6
-);
+ethers.parseUnits("0.02",6);
 
 const MIN_PROFIT =
 ethers.parseUnits(
@@ -170,100 +146,53 @@ MIN_PROFIT_THRESHOLD.toString(),
 6
 );
 
-/* HOPS FROM J1 */
+/* FULL HOPS */
 
 const HOPS = [
 
 [],
-[TOKENS.WMATIC],
-[TOKENS.WETH],
-[TOKENS.USDT],
-[TOKENS.DAI]
+[WETH],
+[WMATIC],
+[USDT],
+[DAI]
 
 ];
 
 for (
-let t = workerId;
+let t = workerId + 1;
 t < TOKEN_LIST.length;
 t += WORKERS
 ) {
 
-const token =
-TOKEN_LIST[t];
-
-if (token === usdc) continue;
+const token = TOKEN_LIST[t];
 
 for (const buy of DEXES)
 for (const sell of DEXES) {
 
 if (buy === sell) continue;
 
-/* BEST BUY */
-
-let bestBuyOut;
-let bestBuyPath;
-
 for (const hop of HOPS) {
 
-const path =
-[usdc, ...hop, token];
+const buyPath =
+[USDC, ...hop, token];
 
-const out =
-await quote(
-buy,
-amountIn,
-path
-);
+const sellPath =
+[token, ...hop.slice().reverse(), USDC];
 
-if (
-out &&
-(!bestBuyOut || out > bestBuyOut)
-) {
+const buyOut =
+await quote(buy, amountIn, buyPath);
 
-bestBuyOut = out;
-bestBuyPath = path;
+if (!buyOut) continue;
 
-}
+const sellOut =
+await quote(sell, buyOut, sellPath);
 
-}
+if (!sellOut) continue;
 
-if (!bestBuyOut) continue;
-
-/* BEST SELL */
-
-let bestSellOut;
-let bestSellPath;
-
-for (const hop of HOPS) {
-
-const path =
-[token, ...hop.slice().reverse(), usdc];
-
-const out =
-await quote(
-sell,
-bestBuyOut,
-path
-);
-
-if (
-out &&
-(!bestSellOut || out > bestSellOut)
-) {
-
-bestSellOut = out;
-bestSellPath = path;
-
-}
-
-}
-
-if (!bestSellOut) continue;
-
-/* PROFIT J1 METHOD */
+/* J1 profit */
 
 const profitBig =
-bestSellOut - amountIn;
+sellOut - amountIn;
 
 if (profitBig <= MIN_PROFIT)
 continue;
@@ -281,11 +210,13 @@ trades.push({
 buyRouter: buy,
 sellRouter: sell,
 amountIn,
-pathToToken: bestBuyPath,
-pathToUSDC: bestSellPath,
+pathToToken: buyPath,
+pathToUSDC: sellPath,
 profit
 
 });
+
+}
 
 }
 
@@ -299,12 +230,46 @@ scan();
 
 }
 
-/* ================= MAIN (UNCHANGED) ================= */
+/* ================= MAIN ================= */
 
 if (isMainThread) {
 
 let BUFFER = [];
 let TOTAL_PROFIT = 0;
+
+async function logBalances() {
+
+const erc20Abi =
+["function balanceOf(address) view returns (uint256)"];
+
+const usdc =
+new ethers.Contract(
+USDC,
+erc20Abi,
+provider
+);
+
+const vaultUSDC =
+await usdc.balanceOf(
+VAULT_ADDRESS
+);
+
+const walletMatic =
+await provider.getBalance(
+wallet.address
+);
+
+console.log(
+"Vault USDC:",
+ethers.formatUnits(vaultUSDC,6)
+);
+
+console.log(
+"Wallet MATIC:",
+ethers.formatEther(walletMatic)
+);
+
+}
 
 function runWorkers() {
 
@@ -353,12 +318,24 @@ async function sendBatch(trades){
 
 const batch={
 
-buyRouters: trades.map(t=>t.buyRouter),
-sellRouters: trades.map(t=>t.sellRouter),
-amountsInUSDC: trades.map(t=>t.amountIn),
-pathsToToken: trades.map(t=>t.pathToToken),
-pathsToUSDC: trades.map(t=>t.pathToUSDC),
-deadline: Math.floor(Date.now()/1000)+DEADLINE_SECONDS
+buyRouters:
+trades.map(t=>t.buyRouter),
+
+sellRouters:
+trades.map(t=>t.sellRouter),
+
+amountsInUSDC:
+trades.map(t=>t.amountIn),
+
+pathsToToken:
+trades.map(t=>t.pathToToken),
+
+pathsToUSDC:
+trades.map(t=>t.pathToUSDC),
+
+deadline:
+Math.floor(Date.now()/1000)
++ DEADLINE_SECONDS
 
 };
 
@@ -377,7 +354,11 @@ async function main(){
 
 while(true){
 
-console.log("Scanning workers");
+console.log("==========");
+
+await logBalances();
+
+console.log("Scanning with",WORKERS,"workers");
 
 const trades =
 await runWorkers();
@@ -388,24 +369,23 @@ for(const t of trades)
 TOTAL_PROFIT += t.profit;
 
 console.log(
-BUFFER.length,
-"collected"
+"Collected",
+BUFFER.length
 );
 
 console.log(
 "Estimated profit",
-TOTAL_PROFIT.toFixed(4),
+TOTAL_PROFIT.toFixed(6),
 "USDC"
 );
 
-if(BUFFER.length>=TARGET_COLLECT){
+/* ✅ ONLY EXECUTE WHEN FULL */
 
-console.log("TARGET reached");
-break;
+if(BUFFER.length >= BATCH_SIZE){
 
-}
-
-if(BUFFER.length>=BATCH_SIZE){
+console.log(
+"BATCH FULL → EXECUTING"
+);
 
 const batch =
 BUFFER.slice(0,BATCH_SIZE);
