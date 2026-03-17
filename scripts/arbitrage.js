@@ -33,11 +33,13 @@ const VAULT_ADDRESS =
 
 const WORKERS = 16;
 const BATCH_SIZE = 20;
-const TARGET_COLLECT = 10;
+const TARGET_COLLECT = 10000;
 
+const MIN_TRADE_USDC = 0.02;          // ✅ RESTORED
 const MIN_PROFIT_THRESHOLD = 0.000001;
+
 const DEADLINE_SECONDS = 60;
-const SCAN_DELAY = 5000;
+const SCAN_DELAY = 10000;
 
 /* ================= ADDRESSES ================= */
 
@@ -48,11 +50,29 @@ const WMATIC= "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 const DAI   = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063";
 
 const TOKEN_LIST = [
+
 USDC,
 USDT,
 WETH,
 WMATIC,
-DAI
+DAI,
+
+"0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6", // WBTC
+"0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", // LINK
+"0x172370d5cd63279efa6d502dab29171933a610af", // CRV
+"0x45c32fA6DF82ead1e2EF74d17b76547EDdFaFF89", // FRAX
+"0xa3Fa99A148fA48D14Ed51d610c367C61876997F1", // MAI
+"0xdAb529f40e671A1D4BF91361c21bf9F0C9712Ab7", // BUSD
+"0x2e1AD108fF1D8C782fcBbB89AAd783aC49586756", // TUSD
+"0xb33EaAd8d922B1083446DC23f610c2567fB5180f", // UNI
+"0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a", // SUSHI
+"0x831753DD7087CaC61aB5644b308642cc1c33Dc13", // QUICK
+"0x9a71012B13CA4d3D0Cdc72A177DF3Ef03b0E76A3", // BAL
+"0x3A58a54C066FdC0F2D55FC9C89F0415C92eBf3C4", // stMATIC
+"0x03b54A6e9a984069379FAe1a4Fc4dBaE93b3bccd", // wstETH
+"0xd6df932a45c0f255f85145f286ea0b292b21c90b", // AAVE
+"0x4d224452801aced8b2f0aebe155379bb5d594381"  // APE
+
 ];
 
 /* ================= DEX ================= */
@@ -132,21 +152,24 @@ workerId,
 TOKEN_LIST,
 DEXES,
 RPC,
-WORKERS
+WORKERS,
+MIN_TRADE_USDC,
+MIN_PROFIT_THRESHOLD
 } = workerData;
 
 let trades = [];
 
 const amountIn =
-ethers.parseUnits("0.02",6);
+ethers.parseUnits(
+MIN_TRADE_USDC.toString(),
+6
+);
 
 const MIN_PROFIT =
 ethers.parseUnits(
 MIN_PROFIT_THRESHOLD.toString(),
 6
 );
-
-/* FULL HOPS */
 
 const HOPS = [
 
@@ -188,8 +211,6 @@ const sellOut =
 await quote(sell, buyOut, sellPath);
 
 if (!sellOut) continue;
-
-/* J1 profit */
 
 const profitBig =
 sellOut - amountIn;
@@ -237,40 +258,6 @@ if (isMainThread) {
 let BUFFER = [];
 let TOTAL_PROFIT = 0;
 
-async function logBalances() {
-
-const erc20Abi =
-["function balanceOf(address) view returns (uint256)"];
-
-const usdc =
-new ethers.Contract(
-USDC,
-erc20Abi,
-provider
-);
-
-const vaultUSDC =
-await usdc.balanceOf(
-VAULT_ADDRESS
-);
-
-const walletMatic =
-await provider.getBalance(
-wallet.address
-);
-
-console.log(
-"Vault USDC:",
-ethers.formatUnits(vaultUSDC,6)
-);
-
-console.log(
-"Wallet MATIC:",
-ethers.formatEther(walletMatic)
-);
-
-}
-
 function runWorkers() {
 
 return new Promise(resolve => {
@@ -289,7 +276,9 @@ workerId:i,
 TOKEN_LIST,
 DEXES,
 RPC,
-WORKERS
+WORKERS,
+MIN_TRADE_USDC,
+MIN_PROFIT_THRESHOLD
 }
 }
 );
@@ -354,12 +343,6 @@ async function main(){
 
 while(true){
 
-console.log("==========");
-
-await logBalances();
-
-console.log("Scanning with",WORKERS,"workers");
-
 const trades =
 await runWorkers();
 
@@ -368,24 +351,9 @@ BUFFER.push(...trades);
 for(const t of trades)
 TOTAL_PROFIT += t.profit;
 
-console.log(
-"Collected",
-BUFFER.length
-);
-
-console.log(
-"Estimated profit",
-TOTAL_PROFIT.toFixed(6),
-"USDC"
-);
-
-/* ✅ ONLY EXECUTE WHEN FULL */
+console.log("Collected",BUFFER.length);
 
 if(BUFFER.length >= BATCH_SIZE){
-
-console.log(
-"BATCH FULL → EXECUTING"
-);
 
 const batch =
 BUFFER.slice(0,BATCH_SIZE);
