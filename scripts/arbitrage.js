@@ -28,12 +28,12 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = .02;
+const MIN_TRADE_USDC = 0.02;
 const SCAN_INTERVAL_MS = 10000;
 const DEADLINE_SECONDS = 60;
 
 /* FIXED */
-const MAX_BATCH_SIZE = 11;
+const MAX_BATCH_SIZE = 10;
 
 /* ================= PROVIDER ================= */
 
@@ -146,7 +146,7 @@ async function quote(routerAddr, amountIn, path) {
     const router = routerContracts[routerAddr];
     const amounts = await router.getAmountsOut(amountIn, path);
 
-    return amounts.at(1);
+    return amounts.at(-1);
 
   } catch {
 
