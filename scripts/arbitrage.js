@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -34,6 +33,9 @@ const DEADLINE_SECONDS = 60;
 
 /* FIXED */
 const MAX_BATCH_SIZE = 10;
+
+/* ✅ ADDED: minimum profit filter */
+const MIN_PROFIT_USDC = 0.00001;
 
 /* ================= PROVIDER ================= */
 
@@ -214,6 +216,9 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
   const profit =
     Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
 
+  /* ✅ ADDED: filter by min profit */
+  if (profit < MIN_PROFIT_USDC) return null;
+
   console.log(
     `${GREEN}PROFIT FOUND ${profit.toFixed(6)}${RESET} | TOKEN ${tokenAddr}`
   );
@@ -223,7 +228,8 @@ async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
     sellRouter,
     amountIn,
     bestBuyPath,
-    bestSellPath
+    bestSellPath,
+    profit // ✅ ADDED
   };
 
 }
@@ -272,6 +278,16 @@ async function batchArb() {
       }
 
     }
+
+    /* ✅ ADDED: total profit calculation */
+    const totalProfit = profitableTrades.reduce(
+      (sum, t) => sum + (t.profit || 0),
+      0
+    );
+
+    console.log(
+      `${CYAN}Total expected profit:${RESET} ${totalProfit.toFixed(6)} USDC`
+    );
 
     console.log(
       `${YELLOW}Collected ${profitableTrades.length} profitable trades so far${RESET}`
