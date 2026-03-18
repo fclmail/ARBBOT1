@@ -27,8 +27,8 @@ const RED = "\x1b[91m";
 
 /* ================= CONSTANTS ================= */
 
-const MIN_TRADE_USDC = .03;
-const SCAN_INTERVAL_MS = 5000;
+const MIN_TRADE_USDC = .01;
+const SCAN_INTERVAL_MS = 500;
 const DEADLINE_SECONDS = 60;
 
 /* FIXED */
