@@ -28,11 +28,11 @@ const RED = "\x1b[91m";
 /* ================= CONSTANTS ================= */
 
 const MIN_TRADE_USDC = .01;
-const SCAN_INTERVAL_MS = 5000;
+const SCAN_INTERVAL_MS = 4000;
 const DEADLINE_SECONDS = 60;
 
 /* FIXED */
-const MAX_BATCH_SIZE = 2000;
+const MAX_BATCH_SIZE = 300;
 
 /* ✅ ADDED: minimum profit filter */
 const MIN_PROFIT_USDC = 0.0002;
