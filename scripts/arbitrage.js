@@ -32,10 +32,10 @@ const SCAN_INTERVAL_MS = 500;
 const DEADLINE_SECONDS = 60;
 
 /* FIXED */
-const MAX_BATCH_SIZE = 00;
+const MAX_BATCH_SIZE = 100;
 
 /* ✅ ADDED: minimum profit filter */
-const MIN_PROFIT_USDC = 0.0002;
+const MIN_PROFIT_USDC = 0.0003;
 
 /* ================= PROVIDER ================= */
 
