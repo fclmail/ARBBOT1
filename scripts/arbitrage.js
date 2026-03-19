@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+gimport dotenv from "dotenv";
 import { ethers } from "ethers";
 
 dotenv.config({ override: false });
@@ -30,9 +30,9 @@ const RED = "\x1b[91m";
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT_USDC = 0.01;
-const MIN_PROFIT_USDC = 0.000001;
+const MIN_PROFIT_USDC = 0.0002;
 
-const MAX_BATCH_SIZE = 10;
+const MAX_BATCH_SIZE = 300;
 const DEADLINE_SECONDS = 60;
 const SCAN_INTERVAL_MS = 500;
 
