@@ -29,11 +29,16 @@ const RED = "\x1b[91m";
 
 /* ================= CONFIG ================= */
 
-const TRADE_AMOUNT_USDC = 0.01;
+const TRADE_AMOUNT_USDC = 0.0151;
 const MIN_PROFIT_USDC = 0.0003;
-const MAX_BATCH_SIZE = 150;
+const MAX_BATCH_SIZE = 100;
 const DEADLINE_SECONDS = 60;
 const SCAN_INTERVAL_MS = 500;
+
+/* ===== THRESHOLD ===== */
+
+const SWEEP_THRESHOLD = .30;
+const SWEEP_PERCENT = 0.10;
 
 /* ================= PROVIDER ================= */
 
@@ -80,7 +85,10 @@ const USDC =
 
 const usdc = new ethers.Contract(
   USDC,
-  ["function balanceOf(address) view returns(uint256)"],
+  [
+    "function balanceOf(address) view returns(uint256)",
+    "function approve(address,uint256)"
+  ],
   wallet
 );
 
@@ -111,6 +119,10 @@ const routers = {
 const routerAbi =
   ["function getAmountsOut(uint,address[]) view returns(uint[])"];
 
+const swapRouterAbi = [
+  "function swapExactTokensForETH(uint,uint,address[],address,uint)"
+];
+
 /* ================= TOKENS ================= */
 
 const TOKENS = {
@@ -132,433 +144,76 @@ const TOKENS = {
 
 };
 
-/* ================= HELPERS ================= */
+/* ================= THRESHOLD SWEEP ================= */
 
-const sleep = ms =>
-  new Promise(r => setTimeout(r, ms));
+async function sweepIfThreshold() {
 
-async function logBalances() {
-
-  const v =
-    await usdc.balanceOf(
-      VAULT_ADDRESS
+  const bal =
+    Number(
+      ethers.formatUnits(
+        await usdc.balanceOf(
+          VAULT_ADDRESS
+        ),
+        6
+      )
     );
 
-  const m =
-    await provider.getBalance(
-      wallet.address
-    );
+  if (bal < SWEEP_THRESHOLD) return;
+
+  const amount =
+    bal * SWEEP_PERCENT;
 
   console.log(
-    CYAN,
-    "Vault USDC:",
-    RESET,
-    ethers.formatUnits(v, 6)
+    YELLOW,
+    "Threshold reached",
+    amount,
+    RESET
   );
 
-  console.log(
-    CYAN,
-    "Wallet MATIC:",
-    RESET,
-    ethers.formatEther(m)
-  );
-}
-
-async function quote(
-  router,
-  amount,
-  path
-) {
-  try {
-    const r =
-      new ethers.Contract(
-        router,
-        routerAbi,
-        provider
-      );
-
-    const a =
-      await r.getAmountsOut(
-        amount,
-        path
-      );
-
-    return a.at(-1);
-
-  } catch {
-    return null;
-  }
-}
-
-/* ================= PATHS ================= */
-
-function buildPaths(token) {
-
-  return [
-
-    [USDC, token],
-
-    [USDC, TOKENS.WETH, token],
-
-    [USDC, TOKENS.WMATIC, token],
-
-    [USDC, TOKENS.DAI, token],
-
-    [USDC, TOKENS.USDT, token]
-
-  ];
-}
-
-function buildSell(token) {
-
-  return [
-
-    [token, USDC],
-
-    [token, TOKENS.WETH, USDC],
-
-    [token, TOKENS.WMATIC, USDC],
-
-    [token, TOKENS.DAI, USDC],
-
-    [token, TOKENS.USDT, USDC]
-
-  ];
-}
-
-/* ================= FIND TRADE ================= */
-
-async function findTrade(
-  buy,
-  sell,
-  token
-) {
-
-  const amountIn =
+  const amt =
     ethers.parseUnits(
-      TRADE_AMOUNT_USDC.toString(),
+      amount.toString(),
       6
     );
 
-  const buyPaths =
-    buildPaths(token);
-
-  const sellPaths =
-    buildSell(token);
-
-  for (const bp of buyPaths) {
-
-    const buyOut =
-      await quote(
-        buy,
-        amountIn,
-        bp
-      );
-
-    if (!buyOut) continue;
-
-    for (const sp of sellPaths) {
-
-      const sellOut =
-        await quote(
-          sell,
-          buyOut,
-          sp
-        );
-
-      if (!sellOut) continue;
-
-      const profit =
-        Number(
-          ethers.formatUnits(
-            sellOut,
-            6
-          )
-        ) -
-        Number(
-          ethers.formatUnits(
-            amountIn,
-            6
-          )
-        );
-
-      if (
-        profit <
-        MIN_PROFIT_USDC
-      ) continue;
-
-      console.log(
-        GREEN,
-        "PROFIT",
-        RESET,
-        profit.toFixed(6)
-      );
-
-      return {
-        buy,
-        sell,
-        amountIn,
-        buyPath: bp,
-        sellPath: sp,
-        profit
-      };
-    }
-  }
-
-  return null;
-}
-
-/* ================= MICRO AGG ================= */
-
-function microAggregate(trades) {
-
-  const map =
-    new Map();
-
-  for (const t of trades) {
-
-    const key =
-      t.buy +
-      t.sell +
-      t.buyPath.join();
-
-    if (!map.has(key))
-      map.set(key, []);
-
-    map.get(key).push(t);
-  }
-
-  const out = [];
-
-  for (const g of map.values()) {
-
-    const t = g[0];
-
-    const total =
-      g.reduce(
-        (s, x) =>
-          s +
-          Number(
-            ethers.formatUnits(
-              x.amountIn,
-              6
-            )
-          ),
-        0
-      );
-
-    const profit =
-      g.reduce(
-        (s, x) =>
-          s + x.profit,
-        0
-      );
-
-    out.push({
-
-      buy: t.buy,
-      sell: t.sell,
-
-      amountIn:
-        ethers.parseUnits(
-          total.toString(),
-          6
-        ),
-
-      buyPath: t.buyPath,
-      sellPath: t.sellPath,
-      profit
-
-    });
-  }
-
-  return out;
-}
-
-/* ================= SIM ================= */
-
-async function simulate(batch) {
-
-  try {
-
-    await vault.executeFlashBatchArbitrage.staticCall(
-      batch
-    );
-
-    return true;
-
-  } catch {
-
-    return false;
-
-  }
-}
-
-/* ================= BATCH ================= */
-
-async function batchArb() {
-
-  await logBalances();
-
-  const trades = [];
-
-  let totalProfit = 0;
-
-  while (
-    trades.length <
-    MAX_BATCH_SIZE
-  ) {
-
-    const tasks = [];
-
-    for (const buy of Object.values(routers)) {
-      for (const sell of Object.values(routers)) {
-
-        if (buy === sell) continue;
-
-        for (const token of Object.values(TOKENS)) {
-
-          tasks.push(
-            findTrade(
-              buy,
-              sell,
-              token
-            )
-          );
-
-        }
-      }
-    }
-
-    const res =
-      await Promise.all(tasks);
-
-    for (const t of res) {
-      if (!t) continue;
-      trades.push(t);
-      totalProfit += t.profit;
-    }
-
-    console.log(
-      YELLOW,
-      "Collected",
-      trades.length,
-      "Total:",
-      totalProfit.toFixed(6),
-      RESET
-    );
-  }
-
-  let grouped =
-    microAggregate(trades);
-
-  console.log(
-    "After agg:",
-    grouped.length
+  await usdc.approve(
+    routers.QuickSwap,
+    amt
   );
 
-  const deadline =
-    Math.floor(
-      Date.now() / 1000
-    ) +
-    DEADLINE_SECONDS;
+  const router =
+    new ethers.Contract(
+      routers.QuickSwap,
+      swapRouterAbi,
+      wallet
+    );
 
-  const batch = {
+  const path = [
+    USDC,
+    TOKENS.WMATIC
+  ];
 
-    buyRouters:
-      grouped.map(t => t.buy),
+  const tx =
+    await router.swapExactTokensForETH(
 
-    sellRouters:
-      grouped.map(t => t.sell),
+      amt,
+      0,
+      path,
+      wallet.address,
+      Math.floor(
+        Date.now() / 1000
+      ) + 60
 
-    amountsInUSDC:
-      grouped.map(t => t.amountIn),
-
-    pathsToToken:
-      grouped.map(t => t.buyPath),
-
-    pathsToUSDC:
-      grouped.map(t => t.sellPath),
-
-    deadline
-
-  };
+    );
 
   console.log(
-    "Simulating..."
+    "SWEEP TX",
+    tx.hash
   );
 
-  const ok =
-    await simulate(batch);
+  await tx.wait();
 
-  if (!ok) {
-
-    console.log(
-      RED,
-      "SIM FAIL",
-      RESET
-    );
-
-    return;
-  }
-
-  try {
-
-    const gas =
-      await vault.executeFlashBatchArbitrage.estimateGas(
-        batch
-      );
-
-    const tx =
-      await vault.executeFlashBatchArbitrage(
-        batch,
-        {
-          gasLimit:
-            (gas * 130n) /
-            100n
-        }
-      );
-
-    console.log(
-      GREEN,
-      "TX",
-      RESET,
-      tx.hash
-    );
-
-    await tx.wait();
-
-    console.log(
-      GREEN,
-      "CONFIRMED",
-      RESET
-    );
-
-  } catch (e) {
-
-    console.log(
-      RED,
-      "FAIL",
-      RESET,
-      e.message
-    );
-
-  }
+  console.log(
+    "SWEEP DONE"
+  );
 }
-
-/* ================= LOOP ================= */
-
-async function main() {
-
-  while (true) {
-
-    await batchArb();
-
-    await sleep(
-      SCAN_INTERVAL_MS
-    );
-
-  }
-}
-
-main();
