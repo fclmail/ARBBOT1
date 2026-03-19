@@ -30,8 +30,8 @@ const RED = "\x1b[91m";
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT_USDC = 0.01;
-const MIN_PROFIT_USDC = 0.000001;
-const MAX_BATCH_SIZE = 10;
+const MIN_PROFIT_USDC = 0.0003;
+const MAX_BATCH_SIZE = 100;
 const DEADLINE_SECONDS = 60;
 const SCAN_INTERVAL_MS = 500;
 
@@ -80,9 +80,7 @@ const USDC =
 
 const usdc = new ethers.Contract(
   USDC,
-  [
-    "function balanceOf(address) view returns(uint256)"
-  ],
+  ["function balanceOf(address) view returns(uint256)"],
   wallet
 );
 
@@ -188,9 +186,7 @@ async function quote(
     return a.at(-1);
 
   } catch {
-
     return null;
-
   }
 }
 
@@ -206,7 +202,9 @@ function buildPaths(token) {
 
     [USDC, TOKENS.WMATIC, token],
 
-    [USDC, TOKENS.DAI, token]
+    [USDC, TOKENS.DAI, token],
+
+    [USDC, TOKENS.USDT, token]
 
   ];
 }
@@ -221,7 +219,9 @@ function buildSell(token) {
 
     [token, TOKENS.WMATIC, USDC],
 
-    [token, TOKENS.DAI, USDC]
+    [token, TOKENS.DAI, USDC],
+
+    [token, TOKENS.USDT, USDC]
 
   ];
 }
@@ -310,9 +310,7 @@ async function findTrade(
 
 /* ================= MICRO AGG ================= */
 
-function microAggregate(
-  trades
-) {
+function microAggregate(trades) {
 
   const map =
     new Map();
@@ -327,9 +325,7 @@ function microAggregate(
     if (!map.has(key))
       map.set(key, []);
 
-    map
-      .get(key)
-      .push(t);
+    map.get(key).push(t);
   }
 
   const out = [];
@@ -351,10 +347,16 @@ function microAggregate(
         0
       );
 
+    const profit =
+      g.reduce(
+        (s, x) =>
+          s + x.profit,
+        0
+      );
+
     out.push({
 
       buy: t.buy,
-
       sell: t.sell,
 
       amountIn:
@@ -364,15 +366,8 @@ function microAggregate(
         ),
 
       buyPath: t.buyPath,
-
       sellPath: t.sellPath,
-
-      profit:
-        g.reduce(
-          (s, x) =>
-            s + x.profit,
-          0
-        )
+      profit
 
     });
   }
@@ -382,9 +377,7 @@ function microAggregate(
 
 /* ================= SIM ================= */
 
-async function simulate(
-  batch
-) {
+async function simulate(batch) {
 
   try {
 
@@ -409,6 +402,8 @@ async function batchArb() {
 
   const trades = [];
 
+  let totalProfit = 0;
+
   while (
     trades.length <
     MAX_BATCH_SIZE
@@ -416,20 +411,12 @@ async function batchArb() {
 
     const tasks = [];
 
-    for (const buy of Object.values(
-      routers
-    )) {
+    for (const buy of Object.values(routers)) {
+      for (const sell of Object.values(routers)) {
 
-      for (const sell of Object.values(
-        routers
-      )) {
+        if (buy === sell) continue;
 
-        if (buy === sell)
-          continue;
-
-        for (const token of Object.values(
-          TOKENS
-        )) {
+        for (const token of Object.values(TOKENS)) {
 
           tasks.push(
             findTrade(
@@ -444,26 +431,26 @@ async function batchArb() {
     }
 
     const res =
-      await Promise.all(
-        tasks
-      );
+      await Promise.all(tasks);
 
-    for (const t of res)
-      if (t)
-        trades.push(t);
+    for (const t of res) {
+      if (!t) continue;
+      trades.push(t);
+      totalProfit += t.profit;
+    }
 
     console.log(
       YELLOW,
       "Collected",
-      RESET,
-      trades.length
+      trades.length,
+      "Total:",
+      totalProfit.toFixed(6),
+      RESET
     );
   }
 
   let grouped =
-    microAggregate(
-      trades
-    );
+    microAggregate(trades);
 
   console.log(
     "After agg:",
@@ -479,29 +466,19 @@ async function batchArb() {
   const batch = {
 
     buyRouters:
-      grouped.map(
-        t => t.buy
-      ),
+      grouped.map(t => t.buy),
 
     sellRouters:
-      grouped.map(
-        t => t.sell
-      ),
+      grouped.map(t => t.sell),
 
     amountsInUSDC:
-      grouped.map(
-        t => t.amountIn
-      ),
+      grouped.map(t => t.amountIn),
 
     pathsToToken:
-      grouped.map(
-        t => t.buyPath
-      ),
+      grouped.map(t => t.buyPath),
 
     pathsToUSDC:
-      grouped.map(
-        t => t.sellPath
-      ),
+      grouped.map(t => t.sellPath),
 
     deadline
 
@@ -512,9 +489,7 @@ async function batchArb() {
   );
 
   const ok =
-    await simulate(
-      batch
-    );
+    await simulate(batch);
 
   if (!ok) {
 
