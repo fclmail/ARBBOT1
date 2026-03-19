@@ -29,8 +29,8 @@ const RED = "\x1b[91m";
 
 /* ================= CONFIG ================= */
 
-const TRADE_AMOUNT_USDC = 0.0051;
-const MIN_PROFIT_USDC = 0.0003;
+const TRADE_AMOUNT_USDC = 0.01;
+const MIN_PROFIT_USDC = 0.000001;
 const MAX_BATCH_SIZE = 10;
 const DEADLINE_SECONDS = 60;
 const SCAN_INTERVAL_MS = 500;
@@ -60,11 +60,11 @@ const vaultAbi = [
           { name: "amountsInUSDC", type: "uint256[]" },
           { name: "pathsToToken", type: "address[][]" },
           { name: "pathsToUSDC", type: "address[][]" },
-          { name: "deadline", type: "uint256" },
-        ],
-      },
-    ],
-  },
+          { name: "deadline", type: "uint256" }
+        ]
+      }
+    ]
+  }
 ];
 
 const vault = new ethers.Contract(
@@ -81,8 +81,7 @@ const USDC =
 const usdc = new ethers.Contract(
   USDC,
   [
-    "function balanceOf(address) view returns(uint256)",
-    "function approve(address,uint256)",
+    "function balanceOf(address) view returns(uint256)"
   ],
   wallet
 );
@@ -90,129 +89,257 @@ const usdc = new ethers.Contract(
 /* ================= ROUTERS ================= */
 
 const routers = {
+
   QuickSwap:
     "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+
   SushiSwap:
     "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+
   Dfyn:
     "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+
   Firebird:
     "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+
   ApeSwap:
     "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+
   Wault:
-    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef",
+    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+
 };
 
-const routerAbi = [
-  "function getAmountsOut(uint,address[]) view returns(uint[])",
-];
+const routerAbi =
+  ["function getAmountsOut(uint,address[]) view returns(uint[])"];
 
 /* ================= TOKENS ================= */
 
 const TOKENS = {
+
   WMATIC:
     "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+
   WETH:
     "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+
   DAI:
     "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+
+  USDT:
+    "0xc2132D05D31c914a87C6611C10748AaCbB7c7c06",
+
+  WBTC:
+    "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
+
 };
 
 /* ================= HELPERS ================= */
 
-const sleep = (ms) =>
-  new Promise((r) => setTimeout(r, ms));
+const sleep = ms =>
+  new Promise(r => setTimeout(r, ms));
 
-async function quote(router, amount, path) {
-  try {
-    const r = new ethers.Contract(
-      router,
-      routerAbi,
-      provider
+async function logBalances() {
+
+  const v =
+    await usdc.balanceOf(
+      VAULT_ADDRESS
     );
-    const a = await r.getAmountsOut(amount, path);
+
+  const m =
+    await provider.getBalance(
+      wallet.address
+    );
+
+  console.log(
+    CYAN,
+    "Vault USDC:",
+    RESET,
+    ethers.formatUnits(v, 6)
+  );
+
+  console.log(
+    CYAN,
+    "Wallet MATIC:",
+    RESET,
+    ethers.formatEther(m)
+  );
+}
+
+async function quote(
+  router,
+  amount,
+  path
+) {
+  try {
+    const r =
+      new ethers.Contract(
+        router,
+        routerAbi,
+        provider
+      );
+
+    const a =
+      await r.getAmountsOut(
+        amount,
+        path
+      );
+
     return a.at(-1);
+
   } catch {
+
     return null;
+
   }
+}
+
+/* ================= PATHS ================= */
+
+function buildPaths(token) {
+
+  return [
+
+    [USDC, token],
+
+    [USDC, TOKENS.WETH, token],
+
+    [USDC, TOKENS.WMATIC, token],
+
+    [USDC, TOKENS.DAI, token]
+
+  ];
+}
+
+function buildSell(token) {
+
+  return [
+
+    [token, USDC],
+
+    [token, TOKENS.WETH, USDC],
+
+    [token, TOKENS.WMATIC, USDC],
+
+    [token, TOKENS.DAI, USDC]
+
+  ];
 }
 
 /* ================= FIND TRADE ================= */
 
-async function findTrade(buy, sell, token) {
+async function findTrade(
+  buy,
+  sell,
+  token
+) {
+
   const amountIn =
     ethers.parseUnits(
       TRADE_AMOUNT_USDC.toString(),
       6
     );
 
-  const buyPath = [USDC, token];
-  const sellPath = [token, USDC];
+  const buyPaths =
+    buildPaths(token);
 
-  const buyOut = await quote(
-    buy,
-    amountIn,
-    buyPath
-  );
+  const sellPaths =
+    buildSell(token);
 
-  if (!buyOut) return null;
+  for (const bp of buyPaths) {
 
-  const sellOut = await quote(
-    sell,
-    buyOut,
-    sellPath
-  );
+    const buyOut =
+      await quote(
+        buy,
+        amountIn,
+        bp
+      );
 
-  if (!sellOut) return null;
+    if (!buyOut) continue;
 
-  const profit =
-    Number(
-      ethers.formatUnits(sellOut, 6)
-    ) - TRADE_AMOUNT_USDC;
+    for (const sp of sellPaths) {
 
-  if (profit < MIN_PROFIT_USDC)
-    return null;
+      const sellOut =
+        await quote(
+          sell,
+          buyOut,
+          sp
+        );
 
-  console.log(
-    `${GREEN}PROFIT${RESET}`,
-    profit.toFixed(6)
-  );
+      if (!sellOut) continue;
 
-  return {
-    buy,
-    sell,
-    amountIn,
-    buyPath,
-    sellPath,
-    profit,
-  };
+      const profit =
+        Number(
+          ethers.formatUnits(
+            sellOut,
+            6
+          )
+        ) -
+        Number(
+          ethers.formatUnits(
+            amountIn,
+            6
+          )
+        );
+
+      if (
+        profit <
+        MIN_PROFIT_USDC
+      ) continue;
+
+      console.log(
+        GREEN,
+        "PROFIT",
+        RESET,
+        profit.toFixed(6)
+      );
+
+      return {
+        buy,
+        sell,
+        amountIn,
+        buyPath: bp,
+        sellPath: sp,
+        profit
+      };
+    }
+  }
+
+  return null;
 }
 
 /* ================= MICRO AGG ================= */
 
-function microAggregate(trades) {
-  const map = new Map();
+function microAggregate(
+  trades
+) {
+
+  const map =
+    new Map();
 
   for (const t of trades) {
+
     const key =
       t.buy +
       t.sell +
-      t.buyPath[1];
+      t.buyPath.join();
 
     if (!map.has(key))
       map.set(key, []);
 
-    map.get(key).push(t);
+    map
+      .get(key)
+      .push(t);
   }
 
   const out = [];
 
-  for (const group of map.values()) {
-    const t = group[0];
+  for (const g of map.values()) {
+
+    const t = g[0];
 
     const total =
-      group.reduce(
+      g.reduce(
         (s, x) =>
           s +
           Number(
@@ -225,57 +352,85 @@ function microAggregate(trades) {
       );
 
     out.push({
+
       buy: t.buy,
+
       sell: t.sell,
+
       amountIn:
         ethers.parseUnits(
           total.toString(),
           6
         ),
+
       buyPath: t.buyPath,
+
       sellPath: t.sellPath,
-      profit: group.reduce(
-        (s, x) => s + x.profit,
-        0
-      ),
+
+      profit:
+        g.reduce(
+          (s, x) =>
+            s + x.profit,
+          0
+        )
+
     });
   }
 
   return out;
 }
 
-/* ================= SIMULATION ================= */
+/* ================= SIM ================= */
 
-async function simulate(batch) {
+async function simulate(
+  batch
+) {
+
   try {
+
     await vault.executeFlashBatchArbitrage.staticCall(
       batch
     );
+
     return true;
+
   } catch {
+
     return false;
+
   }
 }
 
 /* ================= BATCH ================= */
 
 async function batchArb() {
+
+  await logBalances();
+
   const trades = [];
 
-  while (trades.length < MAX_BATCH_SIZE) {
+  while (
+    trades.length <
+    MAX_BATCH_SIZE
+  ) {
+
     const tasks = [];
 
     for (const buy of Object.values(
       routers
     )) {
+
       for (const sell of Object.values(
         routers
       )) {
-        if (buy === sell) continue;
+
+        if (buy === sell)
+          continue;
 
         for (const token of Object.values(
           TOKENS
         )) {
+
           tasks.push(
             findTrade(
               buy,
@@ -283,26 +438,32 @@ async function batchArb() {
               token
             )
           );
+
         }
       }
     }
 
     const res =
-      await Promise.all(tasks);
+      await Promise.all(
+        tasks
+      );
 
     for (const t of res)
-      if (t) trades.push(t);
+      if (t)
+        trades.push(t);
 
     console.log(
-      `${YELLOW}Collected${RESET}`,
+      YELLOW,
+      "Collected",
+      RESET,
       trades.length
     );
   }
 
-  console.log("Micro agg...");
-
   let grouped =
-    microAggregate(trades);
+    microAggregate(
+      trades
+    );
 
   console.log(
     "After agg:",
@@ -312,25 +473,38 @@ async function batchArb() {
   const deadline =
     Math.floor(
       Date.now() / 1000
-    ) + DEADLINE_SECONDS;
+    ) +
+    DEADLINE_SECONDS;
 
   const batch = {
-    buyRouters: grouped.map(
-      (t) => t.buy
-    ),
-    sellRouters: grouped.map(
-      (t) => t.sell
-    ),
-    amountsInUSDC: grouped.map(
-      (t) => t.amountIn
-    ),
-    pathsToToken: grouped.map(
-      (t) => t.buyPath
-    ),
-    pathsToUSDC: grouped.map(
-      (t) => t.sellPath
-    ),
-    deadline,
+
+    buyRouters:
+      grouped.map(
+        t => t.buy
+      ),
+
+    sellRouters:
+      grouped.map(
+        t => t.sell
+      ),
+
+    amountsInUSDC:
+      grouped.map(
+        t => t.amountIn
+      ),
+
+    pathsToToken:
+      grouped.map(
+        t => t.buyPath
+      ),
+
+    pathsToUSDC:
+      grouped.map(
+        t => t.sellPath
+      ),
+
+    deadline
+
   };
 
   console.log(
@@ -338,16 +512,23 @@ async function batchArb() {
   );
 
   const ok =
-    await simulate(batch);
+    await simulate(
+      batch
+    );
 
   if (!ok) {
+
     console.log(
-      "Sim failed skip"
+      RED,
+      "SIM FAIL",
+      RESET
     );
+
     return;
   }
 
   try {
+
     const gas =
       await vault.executeFlashBatchArbitrage.estimateGas(
         batch
@@ -359,36 +540,49 @@ async function batchArb() {
         {
           gasLimit:
             (gas * 130n) /
-            100n,
+            100n
         }
       );
 
     console.log(
+      GREEN,
       "TX",
+      RESET,
       tx.hash
     );
 
     await tx.wait();
 
     console.log(
-      "CONFIRMED"
+      GREEN,
+      "CONFIRMED",
+      RESET
     );
+
   } catch (e) {
+
     console.log(
+      RED,
       "FAIL",
+      RESET,
       e.message
     );
+
   }
 }
 
 /* ================= LOOP ================= */
 
 async function main() {
+
   while (true) {
+
     await batchArb();
+
     await sleep(
       SCAN_INTERVAL_MS
     );
+
   }
 }
 
