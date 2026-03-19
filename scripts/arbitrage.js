@@ -38,7 +38,7 @@ const SCAN_INTERVAL_MS = 500;
 /* ===== THRESHOLD ===== */
 
 const SWEEP_THRESHOLD = .30;
-const SWEEP_PERCENT = 0.10;
+const SWEEP_PERCENT = 0.01;
 
 /* ================= PROVIDER ================= */
 
