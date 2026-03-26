@@ -29,7 +29,7 @@ const RED = "\x1b[91m";
 
 /* ================= CONFIG ================= */
 
-const TRADE_AMOUNT_USDC = 0.01;
+const TRADE_AMOUNT_USDC = 0.0051;
 const MIN_PROFIT_USDC = 0.00001;
 const MAX_BATCH_SIZE = 10;
 const DEADLINE_SECONDS = 60;
