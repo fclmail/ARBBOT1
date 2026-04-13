@@ -3,24 +3,6 @@ import { ethers } from "ethers";
 
 dotenv.config({ override: false });
 
-/* ================= PROCESS ERROR GUARD ================= */
-
-process.on("unhandledRejection", async (err) => {
-  const msg = (err?.message || "").toLowerCase();
-
-  if (
-    err?.code === "ECONNRESET" ||
-    msg.includes("econnreset") ||
-    msg.includes("failed to detect network")
-  ) {
-    console.log("PROCESS RECOVERING FROM RPC FAILURE...");
-    await initProvider();
-    return;
-  }
-
-  throw err;
-});
-
 /* ================= ENV ================= */
 
 const PRIVATE_KEY =
@@ -131,11 +113,7 @@ let isExecuting = false;
 function rebuildContracts() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  usdc = new ethers.Contract(
-    USDC,
-    erc20Abi,
-    provider
-  );
+  usdc = new ethers.Contract(USDC, erc20Abi, provider);
 
   vault = new ethers.Contract(
     CONTRACT_ADDRESS,
@@ -154,8 +132,6 @@ function rebuildContracts() {
 function newProvider() {
   const url = RPCS[rpcIndex];
   rpcIndex = (rpcIndex + 1) % RPCS.length;
-
-  console.log(`ACTIVE RPC -> ${url}`);
 
   return new ethers.JsonRpcProvider(
     url,
@@ -261,9 +237,10 @@ async function findTrade(buy, sell, token) {
 async function executeBatch(trades) {
   if (!trades.length) return;
 
-  console.log("\nBATCH THRESHOLD REACHED");
+  if (isExecuting) return;
+  isExecuting = true;
 
-  /* revalidate */
+  console.log("\nBATCH THRESHOLD REACHED");
 
   const validTrades = [];
 
@@ -296,6 +273,7 @@ async function executeBatch(trades) {
     console.log("NO VALID TRADES");
     microTrades = [];
     runningProfit = 0n;
+    isExecuting = false;
     return;
   }
 
@@ -334,8 +312,7 @@ async function executeBatch(trades) {
         tx.wait(),
         new Promise((_, reject) =>
           setTimeout(
-            () =>
-              reject(new Error("TX WAIT TIMEOUT")),
+            () => reject(new Error("timeout")),
             TX_WAIT_TIMEOUT_MS
           )
         )
@@ -344,7 +321,7 @@ async function executeBatch(trades) {
       console.log(
         `TX MINED STATUS ${receipt.status}`
       );
-    } catch (e) {
+    } catch {
       console.log("TX CONFIRM FAILED");
     }
 
@@ -356,85 +333,57 @@ async function executeBatch(trades) {
         `VAULT AFTER ${fmt(afterBal)} USDC`
       );
     } catch {}
+
+    isExecuting = false;
   })();
 
   microTrades = [];
   runningProfit = 0n;
 }
 
-/* ================= TASKS ================= */
-
-function buildTasks() {
-  const tasks = [];
-
-  for (const buy of Object.values(routers)) {
-    for (const sell of Object.values(routers)) {
-      if (buy === sell) continue;
-
-      for (const token of Object.values(TOKENS)) {
-        tasks.push({ buy, sell, token });
-      }
-    }
-  }
-
-  return tasks;
-}
-
 /* ================= LOOP ================= */
 
 async function scanLoop() {
   while (true) {
-    const tasks = buildTasks();
-    let index = 0;
+    const routersArr = Object.values(routers);
+    const tokensArr = Object.values(TOKENS);
 
-    async function worker() {
-      while (index < tasks.length) {
-        if (isExecuting) {
-          await sleep(10);
-          continue;
-        }
+    for (const buy of routersArr) {
+      for (const sell of routersArr) {
+        if (buy === sell) continue;
 
-        const task = tasks[index++];
-        if (!task) break;
+        for (const token of tokensArr) {
+          if (isExecuting) break;
 
-        const trade = await findTrade(
-          task.buy,
-          task.sell,
-          task.token
-        );
+          const trade = await findTrade(
+            buy,
+            sell,
+            token
+          );
 
-        if (!trade) continue;
+          if (!trade) continue;
 
-        microTrades.push(trade);
-        runningProfit += trade.expectedProfit;
+          microTrades.push(trade);
+          runningProfit += trade.expectedProfit;
 
-        console.log(
-          `MICRO TOTAL ${microTrades.length}`
-        );
+          console.log(
+            `MICRO TOTAL ${microTrades.length}`
+          );
 
-        console.log(
-          `RUNNING TOTAL ${fmt(runningProfit)}`
-        );
+          console.log(
+            `RUNNING TOTAL ${fmt(runningProfit)}`
+          );
 
-        if (
-          runningProfit >= MIN_BATCH_PROFIT &&
-          !isExecuting
-        ) {
-          isExecuting = true;
-
-          executeBatch([...microTrades])
-            .finally(() => {
-              isExecuting = false;
-            });
+          if (
+            runningProfit >= MIN_BATCH_PROFIT
+          ) {
+            executeBatch([...microTrades]);
+          }
         }
       }
     }
 
-    await Promise.all(
-      Array.from({ length: WORKER_COUNT }, worker)
-    );
-
-    await sleep(200);
+    await sleep(100);
   }
 }
 
