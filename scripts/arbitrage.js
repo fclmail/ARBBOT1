@@ -51,13 +51,18 @@ const TRADE_AMOUNT = ethers.parseUnits("0.04", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00022", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
 
-const MAX_BATCH_SIZE = 1000;
-const SCAN_INTERVAL_MS = 500;
 const DEADLINE_SECONDS = 60;
 const WORKER_COUNT = 32;
 
 const RPC_CALL_MAX_RETRIES = 5;
 const RPC_BACKOFF_BASE_MS = 250;
+
+/**
+ * Execution controls:
+ * - sendTx timeout ensures you always print TX hash or fail quickly and rotate RPC.
+ */
+const SEND_TX_TIMEOUT_MS = 30_000;
+const TX_WAIT_TIMEOUT_MS = 120_000;
 
 /* ================= CONTRACT ================= */
 
@@ -81,7 +86,7 @@ const routerAbi = [
   "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
-/* ================= ROUTERS ================= */
+/* ================= ROUTERS (same as yours) ================= */
 
 const routers = {
   QuickSwap:
@@ -98,7 +103,7 @@ const routers = {
     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS ================= */
+/* ================= TOKENS (same as yours) ================= */
 
 const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
@@ -123,6 +128,18 @@ function fmt(x) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function withTimeout(promise, ms, label = "operation") {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`${label} timeout after ${ms}ms`)),
+        ms
+      )
+    )
+  ]);
 }
 
 /* ================= BATCH STATE ================= */
@@ -323,67 +340,74 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= EXECUTE ================= */
+/* ================= EXECUTE (fixed) ================= */
 
 async function executeBatch(trades) {
   if (!trades.length) return;
 
   console.log("BATCH THRESHOLD REACHED");
-  console.log(
-    `EXECUTING ${trades.length} TRADES`
-  );
+  console.log(`EXECUTING ${trades.length} TRADES`);
 
   const batch = {
     buyRouters: trades.map((t) => t.buy),
     sellRouters: trades.map((t) => t.sell),
-    amountsInUSDC: trades.map(
-      (t) => t.amountIn
-    ),
-    pathsToToken: trades.map(
-      (t) => t.buyPath
-    ),
-    pathsToUSDC: trades.map(
-      (t) => t.sellPath
-    ),
-    deadline:
-      Math.floor(Date.now() / 1000) +
-      DEADLINE_SECONDS
+    amountsInUSDC: trades.map((t) => t.amountIn),
+    pathsToToken: trades.map((t) => t.buyPath),
+    pathsToUSDC: trades.map((t) => t.sellPath),
+    deadline: Math.floor(Date.now() / 1000) + 60
   };
 
-  const tx = await safeRpc(() =>
-    vault.executeFlashBatchArbitrage(batch)
-  );
-
-  console.log(`TX ${tx.hash}`);
-  console.log("WAITING FOR CONFIRMATION...");
-
-  const receipt = await Promise.race([
-    tx.wait(),
-    new Promise((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              "TX WAIT TIMEOUT"
-            )
-          ),
-        120000
-      )
-    )
-  ]);
-
-  console.log(
-    `TX STATUS ${receipt.status}`
-  );
-
-  const afterBal = await safeRpc(() =>
+  // Balance before (so you can see change)
+  const beforeBal = await safeRpc(() =>
     usdc.balanceOf(CONTRACT_ADDRESS)
   );
 
-  console.log(
-    `CONTRACT AFTER ${fmt(afterBal)} USDC`
+  console.log(`VAULT BEFORE ${fmt(beforeBal)} USDC`);
+
+  // ---- FIX #1: timeout sendTx so we always reach "TX ... 0x..." ----
+  const tx = await safeRpc(() =>
+    withTimeout(
+      vault.executeFlashBatchArbitrage(batch),
+      SEND_TX_TIMEOUT_MS,
+      "sendTx"
+    )
   );
 
+  // ---- FIX: tx hash prints immediately ----
+  console.log(`TX ${tx.hash}`);
+  console.log("SENT. CONFIRMING IN BACKGROUND...");
+
+  // ---- FIX #2: confirmation + vault balance check in background ----
+  (async () => {
+    try {
+      const receipt = await Promise.race([
+        tx.wait(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("TX WAIT TIMEOUT")),
+            TX_WAIT_TIMEOUT_MS
+          )
+        )
+      ]);
+
+      console.log(`TX MINED. STATUS: ${receipt.status}`);
+    } catch (e) {
+      console.log(`TX CONFIRM FAILED (background): ${e?.message || e}`);
+    }
+
+    try {
+      const afterBal = await safeRpc(() =>
+        usdc.balanceOf(CONTRACT_ADDRESS)
+      );
+      console.log(`VAULT AFTER ${fmt(afterBal)} USDC`);
+    } catch (e) {
+      console.log(
+        `BALANCE CHECK FAILED (background): ${e?.message || e}`
+      );
+    }
+  })();
+
+  // reset state immediately so bot keeps running
   microTrades = [];
   runningProfit = 0n;
 }
@@ -434,30 +458,16 @@ async function scanLoop() {
         if (!trade) continue;
 
         microTrades.push(trade);
-        runningProfit +=
-          trade.expectedProfit;
+        runningProfit += trade.expectedProfit;
 
-        console.log(
-          `MICRO TOTAL ${microTrades.length}`
-        );
+        console.log(`MICRO TOTAL ${microTrades.length}`);
+        console.log(`RUNNING TOTAL ${fmt(runningProfit)}`);
 
-        console.log(
-          `RUNNING TOTAL ${fmt(
-            runningProfit
-          )}`
-        );
-
-        if (
-          runningProfit >=
-            MIN_BATCH_PROFIT &&
-          !isExecuting
-        ) {
+        if (runningProfit >= MIN_BATCH_PROFIT && !isExecuting) {
           isExecuting = true;
 
           try {
-            await executeBatch([
-              ...microTrades
-            ]);
+            await executeBatch([...microTrades]);
           } finally {
             isExecuting = false;
           }
@@ -466,13 +476,10 @@ async function scanLoop() {
     }
 
     await Promise.all(
-      Array.from(
-        { length: WORKER_COUNT },
-        worker
-      )
+      Array.from({ length: WORKER_COUNT }, worker)
     );
 
-    await sleep(SCAN_INTERVAL_MS);
+    await sleep(500);
   }
 }
 
