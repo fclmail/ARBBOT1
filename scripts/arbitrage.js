@@ -57,12 +57,7 @@ const WORKER_COUNT = 32;
 const RPC_CALL_MAX_RETRIES = 5;
 const RPC_BACKOFF_BASE_MS = 250;
 
-/**
- * Execution controls:
- * - sendTx timeout ensures you always print TX hash or fail quickly and rotate RPC.
- */
-const SEND_TX_TIMEOUT_MS = 30_000;
-const TX_WAIT_TIMEOUT_MS = 120_000;
+const TX_WAIT_TIMEOUT_MS = 120000;
 
 /* ================= CONTRACT ================= */
 
@@ -86,24 +81,18 @@ const routerAbi = [
   "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
-/* ================= ROUTERS (same as yours) ================= */
+/* ================= ROUTERS ================= */
 
 const routers = {
-  QuickSwap:
-    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap:
-    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn:
-    "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-  Firebird:
-    "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
-  ApeSwap:
-    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault:
-    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+  Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS (same as yours) ================= */
+/* ================= TOKENS ================= */
 
 const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
@@ -130,19 +119,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function withTimeout(promise, ms, label = "operation") {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`${label} timeout after ${ms}ms`)),
-        ms
-      )
-    )
-  ]);
-}
-
-/* ================= BATCH STATE ================= */
+/* ================= STATE ================= */
 
 let microTrades = [];
 let runningProfit = 0n;
@@ -153,11 +130,7 @@ let isExecuting = false;
 function rebuildContracts() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  usdc = new ethers.Contract(
-    USDC,
-    erc20Abi,
-    provider
-  );
+  usdc = new ethers.Contract(USDC, erc20Abi, provider);
 
   vault = new ethers.Contract(
     CONTRACT_ADDRESS,
@@ -198,55 +171,15 @@ function rotateRPC() {
   rebuildContracts();
 }
 
-function isRetryableRpcError(e) {
-  const msg = (e?.message || "").toLowerCase();
-
-  return (
-    e?.code === "ECONNRESET" ||
-    msg.includes("timeout") ||
-    msg.includes("missing response") ||
-    msg.includes("network")
-  );
-}
-
-async function safeRpc(fn, attempt = 0) {
-  try {
-    return await fn();
-  } catch (e) {
-    if (!isRetryableRpcError(e)) throw e;
-
-    console.log(`RPC ERROR: ${e?.message}`);
-
-    if (attempt >= RPC_CALL_MAX_RETRIES) {
-      rotateRPC();
-      throw e;
-    }
-
-    rotateRPC();
-
-    const waitMs =
-      RPC_BACKOFF_BASE_MS * (2 ** attempt);
-
-    console.log(
-      `RPC retry ${attempt + 1}/${RPC_CALL_MAX_RETRIES} in ${waitMs}ms`
-    );
-
-    await sleep(waitMs);
-
-    return safeRpc(fn, attempt + 1);
-  }
-}
-
-/* ================= QUOTES ================= */
+/* ================= QUOTE ================= */
 
 async function quote(router, amount, path) {
   try {
-    const out = await safeRpc(() =>
-      routerContracts[router].getAmountsOut(
+    const out =
+      await routerContracts[router].getAmountsOut(
         amount,
         path
-      )
-    );
+      );
 
     return out.at(-1);
   } catch {
@@ -254,42 +187,26 @@ async function quote(router, amount, path) {
   }
 }
 
-/* ================= HOPS ================= */
+/* ================= PATHS ================= */
 
 function buildBuyPaths(token) {
-  const paths = [[USDC, token]];
-
-  if (token !== TOKENS.WETH)
-    paths.push([USDC, TOKENS.WETH, token]);
-
-  if (token !== TOKENS.WMATIC)
-    paths.push([USDC, TOKENS.WMATIC, token]);
-
-  if (token !== TOKENS.DAI)
-    paths.push([USDC, TOKENS.DAI, token]);
-
-  if (token !== TOKENS.USDT)
-    paths.push([USDC, TOKENS.USDT, token]);
-
-  return paths;
+  return [
+    [USDC, token],
+    [USDC, TOKENS.WETH, token],
+    [USDC, TOKENS.WMATIC, token],
+    [USDC, TOKENS.DAI, token],
+    [USDC, TOKENS.USDT, token]
+  ];
 }
 
 function buildSellPaths(token) {
-  const paths = [[token, USDC]];
-
-  if (token !== TOKENS.WETH)
-    paths.push([token, TOKENS.WETH, USDC]);
-
-  if (token !== TOKENS.WMATIC)
-    paths.push([token, TOKENS.WMATIC, USDC]);
-
-  if (token !== TOKENS.DAI)
-    paths.push([token, TOKENS.DAI, USDC]);
-
-  if (token !== TOKENS.USDT)
-    paths.push([token, TOKENS.USDT, USDC]);
-
-  return paths;
+  return [
+    [token, USDC],
+    [token, TOKENS.WETH, USDC],
+    [token, TOKENS.WMATIC, USDC],
+    [token, TOKENS.DAI, USDC],
+    [token, TOKENS.USDT, USDC]
+  ];
 }
 
 /* ================= FIND TRADE ================= */
@@ -340,7 +257,7 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= EXECUTE (fixed) ================= */
+/* ================= EXECUTE (FIXED) ================= */
 
 async function executeBatch(trades) {
   if (!trades.length) return;
@@ -357,27 +274,29 @@ async function executeBatch(trades) {
     deadline: Math.floor(Date.now() / 1000) + 60
   };
 
-  // Balance before (so you can see change)
-  const beforeBal = await safeRpc(() =>
-    usdc.balanceOf(CONTRACT_ADDRESS)
+  const beforeBal =
+    await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  console.log(
+    `VAULT BEFORE ${fmt(beforeBal)} USDC`
   );
 
-  console.log(`VAULT BEFORE ${fmt(beforeBal)} USDC`);
+  /* ===== IMMEDIATE SEND (NO GAS ESTIMATION STALL) ===== */
 
-  // ---- FIX #1: timeout sendTx so we always reach "TX ... 0x..." ----
-  const tx = await safeRpc(() =>
-    withTimeout(
-      vault.executeFlashBatchArbitrage(batch),
-      SEND_TX_TIMEOUT_MS,
-      "sendTx"
-    )
-  );
+  const tx = await wallet.sendTransaction({
+    to: CONTRACT_ADDRESS,
+    data: vault.interface.encodeFunctionData(
+      "executeFlashBatchArbitrage",
+      [batch]
+    ),
+    gasLimit: 3500000n
+  });
 
-  // ---- FIX: tx hash prints immediately ----
   console.log(`TX ${tx.hash}`);
   console.log("SENT. CONFIRMING IN BACKGROUND...");
 
-  // ---- FIX #2: confirmation + vault balance check in background ----
+  /* ===== BACKGROUND CONFIRM ===== */
+
   (async () => {
     try {
       const receipt = await Promise.race([
@@ -390,24 +309,25 @@ async function executeBatch(trades) {
         )
       ]);
 
-      console.log(`TX MINED. STATUS: ${receipt.status}`);
+      console.log(
+        `TX MINED STATUS ${receipt.status}`
+      );
     } catch (e) {
-      console.log(`TX CONFIRM FAILED (background): ${e?.message || e}`);
+      console.log(
+        `TX CONFIRM FAILED ${e.message}`
+      );
     }
 
     try {
-      const afterBal = await safeRpc(() =>
-        usdc.balanceOf(CONTRACT_ADDRESS)
-      );
-      console.log(`VAULT AFTER ${fmt(afterBal)} USDC`);
-    } catch (e) {
+      const afterBal =
+        await usdc.balanceOf(CONTRACT_ADDRESS);
+
       console.log(
-        `BALANCE CHECK FAILED (background): ${e?.message || e}`
+        `VAULT AFTER ${fmt(afterBal)} USDC`
       );
-    }
+    } catch {}
   })();
 
-  // reset state immediately so bot keeps running
   microTrades = [];
   runningProfit = 0n;
 }
@@ -442,7 +362,7 @@ async function scanLoop() {
     async function worker() {
       while (index < tasks.length) {
         if (isExecuting) {
-          await sleep(100);
+          await sleep(10);
           continue;
         }
 
@@ -463,14 +383,16 @@ async function scanLoop() {
         console.log(`MICRO TOTAL ${microTrades.length}`);
         console.log(`RUNNING TOTAL ${fmt(runningProfit)}`);
 
-        if (runningProfit >= MIN_BATCH_PROFIT && !isExecuting) {
+        if (
+          runningProfit >= MIN_BATCH_PROFIT &&
+          !isExecuting
+        ) {
           isExecuting = true;
 
-          try {
-            await executeBatch([...microTrades]);
-          } finally {
-            isExecuting = false;
-          }
+          executeBatch([...microTrades])
+            .finally(() => {
+              isExecuting = false;
+            });
         }
       }
     }
@@ -479,7 +401,7 @@ async function scanLoop() {
       Array.from({ length: WORKER_COUNT }, worker)
     );
 
-    await sleep(500);
+    await sleep(200);
   }
 }
 
