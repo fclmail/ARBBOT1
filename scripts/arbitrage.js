@@ -29,7 +29,7 @@ const PRIVATE_KEY =
 
 if (!PRIVATE_KEY) throw new Error("PK missing");
 
-/* ================= RPCS ================= */
+/* ================= RPC ================= */
 
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
@@ -51,12 +51,7 @@ const TRADE_AMOUNT = ethers.parseUnits("0.04", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00022", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
 
-const DEADLINE_SECONDS = 60;
 const WORKER_COUNT = 32;
-
-const RPC_CALL_MAX_RETRIES = 5;
-const RPC_BACKOFF_BASE_MS = 250;
-
 const TX_WAIT_TIMEOUT_MS = 120000;
 
 /* ================= CONTRACT ================= */
@@ -84,12 +79,18 @@ const routerAbi = [
 /* ================= ROUTERS ================= */
 
 const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-  Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+  QuickSwap:
+    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap:
+    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  Dfyn:
+    "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+  Firebird:
+    "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+  ApeSwap:
+    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  Wault:
+    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
 /* ================= TOKENS ================= */
@@ -130,7 +131,11 @@ let isExecuting = false;
 function rebuildContracts() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  usdc = new ethers.Contract(USDC, erc20Abi, provider);
+  usdc = new ethers.Contract(
+    USDC,
+    erc20Abi,
+    provider
+  );
 
   vault = new ethers.Contract(
     CONTRACT_ADDRESS,
@@ -162,12 +167,6 @@ function newProvider() {
 async function initProvider() {
   provider = newProvider();
   await provider.getNetwork();
-  rebuildContracts();
-}
-
-function rotateRPC() {
-  console.log("RPC FAILED ROTATING...");
-  provider = newProvider();
   rebuildContracts();
 }
 
@@ -257,31 +256,66 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= EXECUTE (FIXED) ================= */
+/* ================= EXECUTE ================= */
 
 async function executeBatch(trades) {
   if (!trades.length) return;
 
-  console.log("BATCH THRESHOLD REACHED");
-  console.log(`EXECUTING ${trades.length} TRADES`);
+  console.log("\nBATCH THRESHOLD REACHED");
 
-  const batch = {
-    buyRouters: trades.map((t) => t.buy),
-    sellRouters: trades.map((t) => t.sell),
-    amountsInUSDC: trades.map((t) => t.amountIn),
-    pathsToToken: trades.map((t) => t.buyPath),
-    pathsToUSDC: trades.map((t) => t.sellPath),
-    deadline: Math.floor(Date.now() / 1000) + 60
-  };
+  /* revalidate */
+
+  const validTrades = [];
+
+  for (const t of trades) {
+    try {
+      const buyOut = await quote(
+        t.buy,
+        t.amountIn,
+        t.buyPath
+      );
+
+      if (!buyOut) continue;
+
+      const sellOut = await quote(
+        t.sell,
+        buyOut,
+        t.sellPath
+      );
+
+      if (!sellOut) continue;
+
+      const profit = sellOut - t.amountIn;
+
+      if (profit >= MIN_PROFIT)
+        validTrades.push(t);
+    } catch {}
+  }
+
+  if (!validTrades.length) {
+    console.log("NO VALID TRADES");
+    microTrades = [];
+    runningProfit = 0n;
+    return;
+  }
+
+  console.log(`VALID TRADES ${validTrades.length}`);
 
   const beforeBal =
     await usdc.balanceOf(CONTRACT_ADDRESS);
 
   console.log(
-    `VAULT BEFORE ${fmt(beforeBal)} USDC`
+    `VAULT BEFORE ${fmt(beforeBal)} USDC\n`
   );
 
-  /* ===== IMMEDIATE SEND (NO GAS ESTIMATION STALL) ===== */
+  const batch = {
+    buyRouters: validTrades.map((t) => t.buy),
+    sellRouters: validTrades.map((t) => t.sell),
+    amountsInUSDC: validTrades.map((t) => t.amountIn),
+    pathsToToken: validTrades.map((t) => t.buyPath),
+    pathsToUSDC: validTrades.map((t) => t.sellPath),
+    deadline: Math.floor(Date.now() / 1000) + 60
+  };
 
   const tx = await wallet.sendTransaction({
     to: CONTRACT_ADDRESS,
@@ -292,10 +326,7 @@ async function executeBatch(trades) {
     gasLimit: 3500000n
   });
 
-  console.log(`TX ${tx.hash}`);
-  console.log("SENT. CONFIRMING IN BACKGROUND...");
-
-  /* ===== BACKGROUND CONFIRM ===== */
+  console.log(`TX ${tx.hash}\n`);
 
   (async () => {
     try {
@@ -303,7 +334,8 @@ async function executeBatch(trades) {
         tx.wait(),
         new Promise((_, reject) =>
           setTimeout(
-            () => reject(new Error("TX WAIT TIMEOUT")),
+            () =>
+              reject(new Error("TX WAIT TIMEOUT")),
             TX_WAIT_TIMEOUT_MS
           )
         )
@@ -313,9 +345,7 @@ async function executeBatch(trades) {
         `TX MINED STATUS ${receipt.status}`
       );
     } catch (e) {
-      console.log(
-        `TX CONFIRM FAILED ${e.message}`
-      );
+      console.log("TX CONFIRM FAILED");
     }
 
     try {
@@ -354,8 +384,6 @@ function buildTasks() {
 
 async function scanLoop() {
   while (true) {
-    console.log("\nNEW SCAN");
-
     const tasks = buildTasks();
     let index = 0;
 
@@ -380,8 +408,13 @@ async function scanLoop() {
         microTrades.push(trade);
         runningProfit += trade.expectedProfit;
 
-        console.log(`MICRO TOTAL ${microTrades.length}`);
-        console.log(`RUNNING TOTAL ${fmt(runningProfit)}`);
+        console.log(
+          `MICRO TOTAL ${microTrades.length}`
+        );
+
+        console.log(
+          `RUNNING TOTAL ${fmt(runningProfit)}`
+        );
 
         if (
           runningProfit >= MIN_BATCH_PROFIT &&
