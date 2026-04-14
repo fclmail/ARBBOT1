@@ -31,7 +31,15 @@ let routerContracts;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.04", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00022", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.01", 6);
+
+/* ---------- SAFETY MULTIPLIER (NEW) ---------- */
+/* 1.6x buffer so contract minimum always passes */
+const SAFETY_MULTIPLIER = 160n;
+
+/* actual trigger */
+const SAFE_BATCH_TRIGGER =
+  (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
 
 const WORKER_COUNT = 32;
 const TX_WAIT_TIMEOUT_MS = 120000;
@@ -236,8 +244,8 @@ async function findTrade(buy, sell, token) {
 
 async function executeBatch(trades) {
   if (!trades.length) return;
-
   if (isExecuting) return;
+
   isExecuting = true;
 
   console.log("\nBATCH THRESHOLD REACHED");
@@ -270,9 +278,6 @@ async function executeBatch(trades) {
   }
 
   if (!validTrades.length) {
-    console.log("NO VALID TRADES");
-    microTrades = [];
-    runningProfit = 0n;
     isExecuting = false;
     return;
   }
@@ -325,14 +330,12 @@ async function executeBatch(trades) {
       console.log("TX CONFIRM FAILED");
     }
 
-    try {
-      const afterBal =
-        await usdc.balanceOf(CONTRACT_ADDRESS);
+    const afterBal =
+      await usdc.balanceOf(CONTRACT_ADDRESS);
 
-      console.log(
-        `VAULT AFTER ${fmt(afterBal)} USDC`
-      );
-    } catch {}
+    console.log(
+      `VAULT AFTER ${fmt(afterBal)} USDC`
+    );
 
     isExecuting = false;
   })();
@@ -374,9 +377,8 @@ async function scanLoop() {
             `RUNNING TOTAL ${fmt(runningProfit)}`
           );
 
-          if (
-            runningProfit >= MIN_BATCH_PROFIT
-          ) {
+          /* -------- SAFETY TRIGGER -------- */
+          if (runningProfit >= SAFE_BATCH_TRIGGER) {
             executeBatch([...microTrades]);
           }
         }
