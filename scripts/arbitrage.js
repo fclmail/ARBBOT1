@@ -31,17 +31,17 @@ let routerContracts;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.04", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00022", 6);
+
+/* batch reduced to 0.01 */
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.01", 6);
 
-/* ---------- SAFETY MULTIPLIER (NEW) ---------- */
-/* 1.6x buffer so contract minimum always passes */
-const SAFETY_MULTIPLIER = 160n;
+/* safety multiplier */
+const SAFETY_MULTIPLIER = 150n;
 
-/* actual trigger */
+/* safe trigger */
 const SAFE_BATCH_TRIGGER =
   (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
 
-const WORKER_COUNT = 32;
 const TX_WAIT_TIMEOUT_MS = 120000;
 
 /* ================= CONTRACT ================= */
@@ -221,10 +221,6 @@ async function findTrade(buy, sell, token) {
 
       if (profit < MIN_PROFIT) continue;
 
-      console.log(
-        `PROFIT FOUND ${fmt(profit)} USDC`
-      );
-
       return {
         buy,
         sell,
@@ -253,36 +249,61 @@ async function executeBatch(trades) {
   const validTrades = [];
 
   for (const t of trades) {
-    try {
-      const buyOut = await quote(
-        t.buy,
-        t.amountIn,
-        t.buyPath
-      );
+    const buyOut = await quote(
+      t.buy,
+      t.amountIn,
+      t.buyPath
+    );
 
-      if (!buyOut) continue;
+    if (!buyOut) continue;
 
-      const sellOut = await quote(
-        t.sell,
-        buyOut,
-        t.sellPath
-      );
+    const sellOut = await quote(
+      t.sell,
+      buyOut,
+      t.sellPath
+    );
 
-      if (!sellOut) continue;
+    if (!sellOut) continue;
 
-      const profit = sellOut - t.amountIn;
+    const profit = sellOut - t.amountIn;
 
-      if (profit >= MIN_PROFIT)
-        validTrades.push(t);
-    } catch {}
-  }
-
-  if (!validTrades.length) {
-    isExecuting = false;
-    return;
+    if (profit >= MIN_PROFIT)
+      validTrades.push(t);
   }
 
   console.log(`VALID TRADES ${validTrades.length}`);
+
+  /* ---------- FINAL SIMULATION ---------- */
+
+  let simulatedProfit = 0n;
+
+  for (const t of validTrades) {
+    const buyOut = await quote(
+      t.buy,
+      t.amountIn,
+      t.buyPath
+    );
+
+    if (!buyOut) continue;
+
+    const sellOut = await quote(
+      t.sell,
+      buyOut,
+      t.sellPath
+    );
+
+    if (!sellOut) continue;
+
+    simulatedProfit += sellOut - t.amountIn;
+  }
+
+  console.log(`SIM PROFIT ${fmt(simulatedProfit)}`);
+
+  if (simulatedProfit < SAFE_BATCH_TRIGGER) {
+    console.log("SIM BELOW SAFE THRESHOLD — SKIP");
+    isExecuting = false;
+    return;
+  }
 
   const beforeBal =
     await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -309,7 +330,7 @@ async function executeBatch(trades) {
     gasLimit: 3500000n
   });
 
-  console.log(`TX ${tx.hash}\n`);
+  console.log(`TX ${tx.hash}`);
 
   (async () => {
     try {
@@ -348,14 +369,11 @@ async function executeBatch(trades) {
 
 async function scanLoop() {
   while (true) {
-    const routersArr = Object.values(routers);
-    const tokensArr = Object.values(TOKENS);
-
-    for (const buy of routersArr) {
-      for (const sell of routersArr) {
+    for (const buy of Object.values(routers)) {
+      for (const sell of Object.values(routers)) {
         if (buy === sell) continue;
 
-        for (const token of tokensArr) {
+        for (const token of Object.values(TOKENS)) {
           if (isExecuting) break;
 
           const trade = await findTrade(
@@ -370,14 +388,9 @@ async function scanLoop() {
           runningProfit += trade.expectedProfit;
 
           console.log(
-            `MICRO TOTAL ${microTrades.length}`
-          );
-
-          console.log(
             `RUNNING TOTAL ${fmt(runningProfit)}`
           );
 
-          /* -------- SAFETY TRIGGER -------- */
           if (runningProfit >= SAFE_BATCH_TRIGGER) {
             executeBatch([...microTrades]);
           }
@@ -385,7 +398,7 @@ async function scanLoop() {
       }
     }
 
-    await sleep(100);
+    await sleep(50);
   }
 }
 
