@@ -36,7 +36,7 @@ const MIN_PROFIT = ethers.parseUnits("0.00022", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.01", 6);
 
 /* safety multiplier */
-const SAFETY_MULTIPLIER = 150n;
+const SAFETY_MULTIPLIER = 230n;
 
 /* safe trigger */
 const SAFE_BATCH_TRIGGER =
