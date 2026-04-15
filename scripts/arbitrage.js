@@ -34,13 +34,11 @@ const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
 
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.00002", 6);
 
-/* safety multiplier */
 const SAFETY_MULTIPLIER = 120n;
 
 const SAFE_BATCH_TRIGGER =
   (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
 
-/* parallel workers */
 const WORKER_COUNT = 32;
 
 const TX_WAIT_TIMEOUT_MS = 120000;
@@ -104,7 +102,9 @@ const TOKENS = {
 /* ================= HELPERS ================= */
 
 function fmt(x) {
-  return ethers.formatUnits(x, 6);
+  return Number(
+    ethers.formatUnits(x, 6)
+  ).toFixed(6);
 }
 
 function sleep(ms) {
@@ -247,8 +247,6 @@ async function executeBatch(trades) {
   console.log("\nBATCH THRESHOLD REACHED");
   console.log(`INITIAL TRADES ${trades.length}`);
 
-  /* FULL REQUOTE REBUILD */
-
   const validTrades = [];
 
   for (const t of trades) {
@@ -280,8 +278,6 @@ async function executeBatch(trades) {
 
   console.log(`VALID TRADES ${validTrades.length}`);
 
-  /* rebuild fresh total */
-
   let simulatedProfit = 0n;
 
   for (const t of validTrades)
@@ -299,7 +295,7 @@ async function executeBatch(trades) {
     await usdc.balanceOf(CONTRACT_ADDRESS);
 
   console.log(
-    `VAULT BEFORE ${fmt(beforeBal)} USDC\n`
+    `\nVAULT BEFORE ${fmt(beforeBal)} USDC (${beforeBal})\n`
   );
 
   const batch = {
@@ -314,30 +310,35 @@ async function executeBatch(trades) {
   const tx =
     await vault.executeFlashBatchArbitrage(batch);
 
-  console.log(`TX ${tx.hash}`);
+  console.log(`TX ${tx.hash}\n`);
 
-  (async () => {
-    try {
-      const receipt = await tx.wait();
-      console.log(
-        `TX MINED STATUS ${receipt.status}`
-      );
-    } catch {
-      console.log("TX CONFIRM FAILED");
-    }
+  const receipt = await tx.wait();
 
-    const afterBal =
-      await usdc.balanceOf(CONTRACT_ADDRESS);
+  console.log(
+    `TX MINED STATUS ${receipt.status}\n`
+  );
 
-    console.log(
-      `VAULT AFTER ${fmt(afterBal)} USDC`
-    );
+  await sleep(300);
 
-    isExecuting = false;
-  })();
+  const afterBal =
+    await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  console.log(
+    `VAULT AFTER ${fmt(afterBal)} USDC (${afterBal})\n`
+  );
+
+  const profit =
+    afterBal > beforeBal
+      ? afterBal - beforeBal
+      : 0n;
+
+  console.log(
+    `BATCH PROFIT ${fmt(profit)} USDC (${profit})`
+  );
 
   microTrades = [];
   runningProfit = 0n;
+  isExecuting = false;
 }
 
 /* ================= PARALLEL SCAN LOOP ================= */
