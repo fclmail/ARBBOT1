@@ -41,7 +41,7 @@ const SAFE_BATCH_TRIGGER =
   (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
 
 /* parallel workers */
-const WORKER_COUNT = 16;
+const WORKER_COUNT = 32;
 
 const TX_WAIT_TIMEOUT_MS = 120000;
 
