@@ -193,26 +193,21 @@ function buildSellPaths(token) {
 /* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
+
   const buyPaths = buildBuyPaths(token);
   const sellPaths = buildSellPaths(token);
 
   for (const buyPath of buyPaths) {
 
-    const buyOut = await quote(
-      buy,
-      TRADE_AMOUNT,
-      buyPath
-    );
+    const buyOut =
+      await quote(buy, TRADE_AMOUNT, buyPath);
 
     if (!buyOut) continue;
 
     for (const sellPath of sellPaths) {
 
-      const sellOut = await quote(
-        sell,
-        buyOut,
-        sellPath
-      );
+      const sellOut =
+        await quote(sell, buyOut, sellPath);
 
       if (!sellOut) continue;
 
@@ -246,19 +241,13 @@ async function rebuildBatch(trades) {
 
   for (const t of trades) {
 
-    const buyOut = await quote(
-      t.buy,
-      t.amountIn,
-      t.buyPath
-    );
+    const buyOut =
+      await quote(t.buy, t.amountIn, t.buyPath);
 
     if (!buyOut) continue;
 
-    const sellOut = await quote(
-      t.sell,
-      buyOut,
-      t.sellPath
-    );
+    const sellOut =
+      await quote(t.sell, buyOut, t.sellPath);
 
     if (!sellOut) continue;
 
@@ -282,11 +271,13 @@ async function rebuildBatch(trades) {
 
 async function executeBatch(trades) {
 
+  const snapshot = [...trades];
+
   console.log("\nBATCH THRESHOLD REACHED");
-  console.log(`INITIAL TRADES ${trades.length}\n`);
+  console.log(`INITIAL TRADES ${snapshot.length}\n`);
 
   const validTrades =
-    await rebuildBatch(trades);
+    await rebuildBatch(snapshot);
 
   console.log(`VALID TRADES ${validTrades.length}`);
 
@@ -295,9 +286,7 @@ async function executeBatch(trades) {
   for (const t of validTrades)
     simulatedProfit += t.expectedProfit;
 
-  console.log(
-    `SIM PROFIT ${fmt(simulatedProfit)}`
-  );
+  console.log(`SIM PROFIT ${fmt(simulatedProfit)}`);
 
   if (simulatedProfit < SAFE_BATCH_TRIGGER) {
     console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
@@ -313,12 +302,12 @@ async function executeBatch(trades) {
   );
 
   const batch = {
-    buyRouters: validTrades.map((t) => t.buy),
-    sellRouters: validTrades.map((t) => t.sell),
-    amountsInUSDC: validTrades.map((t) => t.amountIn),
-    pathsToToken: validTrades.map((t) => t.buyPath),
-    pathsToUSDC: validTrades.map((t) => t.sellPath),
-    deadline: Math.floor(Date.now() / 1000) + 60
+    buyRouters: validTrades.map(t => t.buy),
+    sellRouters: validTrades.map(t => t.sell),
+    amountsInUSDC: validTrades.map(t => t.amountIn),
+    pathsToToken: validTrades.map(t => t.buyPath),
+    pathsToUSDC: validTrades.map(t => t.sellPath),
+    deadline: Math.floor(Date.now()/1000) + 60
   };
 
   const tx =
@@ -335,7 +324,11 @@ async function executeBatch(trades) {
     `TX MINED STATUS ${receipt.status}\n`
   );
 
-  await sleep(300);
+  await provider.waitForBlock(
+    receipt.blockNumber + 1
+  );
+
+  await sleep(250);
 
   const afterBal =
     await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -381,10 +374,8 @@ async function scanLoop() {
 
       while (true) {
 
-        if (isExecuting) {
-          await sleep(5);
-          continue;
-        }
+        while (isExecuting)
+          await sleep(50);
 
         const i = index++;
 
@@ -412,6 +403,7 @@ async function scanLoop() {
           runningProfit >= SAFE_BATCH_TRIGGER &&
           !isExecuting
         ) {
+
           isExecuting = true;
 
           const batch = [...microTrades];
