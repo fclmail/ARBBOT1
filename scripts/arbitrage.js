@@ -99,9 +99,7 @@ const TOKENS = {
 /* ================= HELPERS ================= */
 
 function fmt(x) {
-  return Number(
-    ethers.formatUnits(x, 6)
-  ).toFixed(6);
+  return Number(ethers.formatUnits(x, 6)).toFixed(6);
 }
 
 function sleep(ms) {
@@ -333,10 +331,8 @@ async function executeBatch(trades) {
   };
 
   let tx;
-  let receipt;
 
   try {
-
     tx =
       await vault.executeFlashBatchArbitrage(
         batch,
@@ -345,7 +341,7 @@ async function executeBatch(trades) {
 
     console.log(`TX ${tx.hash}\n`);
 
-    receipt = await tx.wait();
+    const receipt = await tx.wait();
 
     console.log(
       `TX MINED STATUS ${receipt.status}\n`
@@ -444,7 +440,8 @@ async function scanLoop() {
           microTrades = [];
           runningProfit = 0n;
 
-          executeBatch(batch);
+          // FIX #1: await so we don't overlap and so logs/balances match this tx
+          await executeBatch(batch);
         }
       }
     }
