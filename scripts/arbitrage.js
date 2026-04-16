@@ -32,7 +32,7 @@ let routerContracts;
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
 
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.01", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.0001", 6);
 
 const SAFETY_MULTIPLIER = 120n;
 
@@ -40,8 +40,6 @@ const SAFE_BATCH_TRIGGER =
   (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
 
 const WORKER_COUNT = 32;
-
-const TX_WAIT_TIMEOUT_MS = 120000;
 
 /* ================= CONTRACT ================= */
 
@@ -237,19 +235,17 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= EXECUTE ================= */
+/* ================= OPTION 1 ================= */
+/* FULL BATCH REQUOTE + REBUILD */
 
-async function executeBatch(trades) {
-  if (!trades.length || isExecuting) return;
+async function rebuildBatch(trades) {
 
-  isExecuting = true;
+  console.log("\nFULL BATCH REQUOTE START");
 
-  console.log("\nBATCH THRESHOLD REACHED");
-  console.log(`INITIAL TRADES ${trades.length}`);
-
-  const validTrades = [];
+  const fresh = [];
 
   for (const t of trades) {
+
     const buyOut = await quote(
       t.buy,
       t.amountIn,
@@ -266,24 +262,52 @@ async function executeBatch(trades) {
 
     if (!sellOut) continue;
 
-    const profit = sellOut - t.amountIn;
+    const profit =
+      sellOut - t.amountIn;
 
-    if (profit >= MIN_PROFIT) {
-      validTrades.push({
-        ...t,
-        expectedProfit: profit
-      });
-    }
+    if (profit < MIN_PROFIT) continue;
+
+    fresh.push({
+      ...t,
+      expectedProfit: profit
+    });
   }
 
-  console.log(`VALID TRADES ${validTrades.length}`);
+  console.log(
+    `REBUILT TRADES ${fresh.length}`
+  );
+
+  return fresh;
+}
+
+/* ================= EXECUTE ================= */
+
+async function executeBatch(trades) {
+
+  if (!trades.length || isExecuting) return;
+
+  isExecuting = true;
+
+  console.log("\nBATCH THRESHOLD REACHED");
+  console.log(`INITIAL TRADES ${trades.length}`);
+
+  /* ===== OPTION 1 REBUILD ===== */
+
+  const validTrades =
+    await rebuildBatch(trades);
+
+  console.log(
+    `VALID TRADES ${validTrades.length}`
+  );
 
   let simulatedProfit = 0n;
 
   for (const t of validTrades)
     simulatedProfit += t.expectedProfit;
 
-  console.log(`SIM PROFIT ${fmt(simulatedProfit)}`);
+  console.log(
+    `SIM PROFIT ${fmt(simulatedProfit)}`
+  );
 
   if (simulatedProfit < SAFE_BATCH_TRIGGER) {
     console.log("SIM BELOW SAFE THRESHOLD — SKIP");
@@ -308,7 +332,10 @@ async function executeBatch(trades) {
   };
 
   const tx =
-    await vault.executeFlashBatchArbitrage(batch);
+    await vault.executeFlashBatchArbitrage(
+      batch,
+      { gasLimit: 2000000 }
+    );
 
   console.log(`TX ${tx.hash}\n`);
 
@@ -344,6 +371,7 @@ async function executeBatch(trades) {
 /* ================= PARALLEL SCAN LOOP ================= */
 
 async function scanLoop() {
+
   const tasks = [];
 
   for (const buy of Object.values(routers)) {
@@ -357,16 +385,20 @@ async function scanLoop() {
   }
 
   while (true) {
+
     let index = 0;
 
     async function worker() {
+
       while (true) {
+
         if (isExecuting) {
           await sleep(5);
           continue;
         }
 
         const i = index++;
+
         if (i >= tasks.length) break;
 
         const task = tasks[i];
@@ -386,7 +418,10 @@ async function scanLoop() {
           `RUNNING TOTAL ${fmt(runningProfit)}`
         );
 
-        if (runningProfit >= SAFE_BATCH_TRIGGER) {
+        if (
+          runningProfit >= SAFE_BATCH_TRIGGER &&
+          !isExecuting
+        ) {
           executeBatch([...microTrades]);
         }
       }
