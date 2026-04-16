@@ -30,11 +30,10 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.0001", 6);
+const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
 
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.0003", 6);
-
-const SAFETY_MULTIPLIER = 190n;
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.001", 6);
+const SAFETY_MULTIPLIER = 180n;
 
 const SAFE_BATCH_TRIGGER =
   (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
@@ -198,6 +197,7 @@ async function findTrade(buy, sell, token) {
   const sellPaths = buildSellPaths(token);
 
   for (const buyPath of buyPaths) {
+
     const buyOut = await quote(
       buy,
       TRADE_AMOUNT,
@@ -207,6 +207,7 @@ async function findTrade(buy, sell, token) {
     if (!buyOut) continue;
 
     for (const sellPath of sellPaths) {
+
       const sellOut = await quote(
         sell,
         buyOut,
@@ -235,12 +236,11 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= OPTION 1 ================= */
-/* FULL BATCH REQUOTE + REBUILD */
+/* ================= OPTION 1 REBUILD ================= */
 
 async function rebuildBatch(trades) {
 
-  console.log("\nFULL BATCH REQUOTE START");
+  console.log("\nFULL BATCH REQUOTE START\n");
 
   const fresh = [];
 
@@ -273,9 +273,7 @@ async function rebuildBatch(trades) {
     });
   }
 
-  console.log(
-    `REBUILT TRADES ${fresh.length}`
-  );
+  console.log(`REBUILT TRADES ${fresh.length}`);
 
   return fresh;
 }
@@ -284,21 +282,13 @@ async function rebuildBatch(trades) {
 
 async function executeBatch(trades) {
 
-  if (!trades.length || isExecuting) return;
-
-  isExecuting = true;
-
   console.log("\nBATCH THRESHOLD REACHED");
-  console.log(`INITIAL TRADES ${trades.length}`);
-
-  /* ===== OPTION 1 REBUILD ===== */
+  console.log(`INITIAL TRADES ${trades.length}\n`);
 
   const validTrades =
     await rebuildBatch(trades);
 
-  console.log(
-    `VALID TRADES ${validTrades.length}`
-  );
+  console.log(`VALID TRADES ${validTrades.length}`);
 
   let simulatedProfit = 0n;
 
@@ -310,7 +300,7 @@ async function executeBatch(trades) {
   );
 
   if (simulatedProfit < SAFE_BATCH_TRIGGER) {
-    console.log("SIM BELOW SAFE THRESHOLD — SKIP");
+    console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
     isExecuting = false;
     return;
   }
@@ -360,15 +350,13 @@ async function executeBatch(trades) {
       : 0n;
 
   console.log(
-    `BATCH PROFIT ${fmt(profit)} USDC (${profit})`
+    `BATCH PROFIT ${fmt(profit)} USDC (${profit})\n`
   );
 
-  microTrades = [];
-  runningProfit = 0n;
   isExecuting = false;
 }
 
-/* ================= PARALLEL SCAN LOOP ================= */
+/* ================= SCANNER ================= */
 
 async function scanLoop() {
 
@@ -376,6 +364,7 @@ async function scanLoop() {
 
   for (const buy of Object.values(routers)) {
     for (const sell of Object.values(routers)) {
+
       if (buy === sell) continue;
 
       for (const token of Object.values(TOKENS)) {
@@ -403,11 +392,12 @@ async function scanLoop() {
 
         const task = tasks[i];
 
-        const trade = await findTrade(
-          task.buy,
-          task.sell,
-          task.token
-        );
+        const trade =
+          await findTrade(
+            task.buy,
+            task.sell,
+            task.token
+          );
 
         if (!trade) continue;
 
@@ -422,7 +412,14 @@ async function scanLoop() {
           runningProfit >= SAFE_BATCH_TRIGGER &&
           !isExecuting
         ) {
-          executeBatch([...microTrades]);
+          isExecuting = true;
+
+          const batch = [...microTrades];
+
+          microTrades = [];
+          runningProfit = 0n;
+
+          executeBatch(batch);
         }
       }
     }
