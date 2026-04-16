@@ -29,7 +29,7 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
+const TRADE_AMOUNT = ethers.parseUnits("0.01", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
 
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.001", 6);
@@ -55,7 +55,8 @@ const erc20Abi = [
 ];
 
 const contractAbi = [
-  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
+  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
+  "event ArbitrageExecuted(address indexed buyRouter,address indexed sellRouter,address indexed token,uint256 amountInUSDC,uint256 beforeBal,uint256 afterBal,uint256 profitUSDC)"
 ];
 
 const routerAbi = [
@@ -99,7 +100,9 @@ const TOKENS = {
 /* ================= HELPERS ================= */
 
 function fmt(x) {
-  return Number(ethers.formatUnits(x, 6)).toFixed(6);
+  return Number(
+    ethers.formatUnits(x, 6)
+  ).toFixed(6);
 }
 
 function sleep(ms) {
@@ -191,26 +194,29 @@ function buildSellPaths(token) {
 /* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
+
   const buyPaths = buildBuyPaths(token);
   const sellPaths = buildSellPaths(token);
 
   for (const buyPath of buyPaths) {
 
-    const buyOut = await quote(
-      buy,
-      TRADE_AMOUNT,
-      buyPath
-    );
+    const buyOut =
+      await quote(
+        buy,
+        TRADE_AMOUNT,
+        buyPath
+      );
 
     if (!buyOut) continue;
 
     for (const sellPath of sellPaths) {
 
-      const sellOut = await quote(
-        sell,
-        buyOut,
-        sellPath
-      );
+      const sellOut =
+        await quote(
+          sell,
+          buyOut,
+          sellPath
+        );
 
       if (!sellOut) continue;
 
@@ -244,19 +250,21 @@ async function rebuildBatch(trades) {
 
   for (const t of trades) {
 
-    const buyOut = await quote(
-      t.buy,
-      t.amountIn,
-      t.buyPath
-    );
+    const buyOut =
+      await quote(
+        t.buy,
+        t.amountIn,
+        t.buyPath
+      );
 
     if (!buyOut) continue;
 
-    const sellOut = await quote(
-      t.sell,
-      buyOut,
-      t.sellPath
-    );
+    const sellOut =
+      await quote(
+        t.sell,
+        buyOut,
+        t.sellPath
+      );
 
     if (!sellOut) continue;
 
@@ -280,22 +288,11 @@ async function rebuildBatch(trades) {
 
 async function executeBatch(trades) {
 
-  if (!trades.length) {
-    isExecuting = false;
-    return;
-  }
-
   console.log("\nBATCH THRESHOLD REACHED");
   console.log(`INITIAL TRADES ${trades.length}\n`);
 
   const validTrades =
     await rebuildBatch(trades);
-
-  if (!validTrades.length) {
-    console.log("NO VALID TRADES AFTER REBUILD\n");
-    isExecuting = false;
-    return;
-  }
 
   console.log(`VALID TRADES ${validTrades.length}`);
 
@@ -330,33 +327,54 @@ async function executeBatch(trades) {
     deadline: Math.floor(Date.now() / 1000) + 60
   };
 
-  let tx;
-
-  try {
-    tx =
-      await vault.executeFlashBatchArbitrage(
-        batch,
-        { gasLimit: 2000000 }
-      );
-
-    console.log(`TX ${tx.hash}\n`);
-
-    const receipt = await tx.wait();
-
-    console.log(
-      `TX MINED STATUS ${receipt.status}\n`
+  const tx =
+    await vault.executeFlashBatchArbitrage(
+      batch,
+      { gasLimit: 2000000 }
     );
 
-  } catch (err) {
+  console.log(`TX ${tx.hash}\n`);
 
-    console.log("TX FAILED");
-    console.log(err.reason || err.message);
+  const receipt = await tx.wait();
 
-    isExecuting = false;
-    return;
+  console.log(
+    `TX MINED STATUS ${receipt.status}\n`
+  );
+
+  /* ========= EVENT DEBUG ========= */
+
+  const iface =
+    new ethers.Interface(contractAbi);
+
+  let eventProfit = 0n;
+
+  for (const log of receipt.logs) {
+    try {
+
+      const parsed =
+        iface.parseLog(log);
+
+      if (
+        parsed.name ===
+        "ArbitrageExecuted"
+      ) {
+
+        const p =
+          parsed.args.profitUSDC;
+
+        eventProfit += p;
+
+        console.log(
+          `TRADE ${fmt(p)}`
+        );
+      }
+
+    } catch {}
   }
 
-  await sleep(300);
+  console.log(
+    `\nEVENT PROFIT ${fmt(eventProfit)}\n`
+  );
 
   const afterBal =
     await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -430,18 +448,19 @@ async function scanLoop() {
         );
 
         if (
-          runningProfit >= SAFE_BATCH_TRIGGER &&
+          runningProfit >=
+          SAFE_BATCH_TRIGGER &&
           !isExecuting
         ) {
           isExecuting = true;
 
-          const batch = [...microTrades];
+          const batch =
+            [...microTrades];
 
           microTrades = [];
           runningProfit = 0n;
 
-          // FIX #1: await so we don't overlap and so logs/balances match this tx
-          await executeBatch(batch);
+          executeBatch(batch);
         }
       }
     }
