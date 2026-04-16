@@ -30,11 +30,11 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
+const MIN_PROFIT = ethers.parseUnits("0.001", 6);
 
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.0001", 6);
 
-const SAFETY_MULTIPLIER = 120n;
+const SAFETY_MULTIPLIER = 190n;
 
 const SAFE_BATCH_TRIGGER =
   (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
