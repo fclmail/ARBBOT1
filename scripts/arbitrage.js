@@ -330,7 +330,7 @@ async function executeBatch(trades) {
   const tx =
     await vault.executeFlashBatchArbitrage(
       batch,
-      { gasLimit: 2000000 }
+      { gasLimit: 8000000 }
     );
 
   console.log(`TX ${tx.hash}\n`);
