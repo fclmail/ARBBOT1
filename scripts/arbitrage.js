@@ -33,7 +33,7 @@ const TRADE_AMOUNT = ethers.parseUnits("0.01", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
 
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.03", 6);
-const SAFETY_MULTIPLIER = 180n;
+const SAFETY_MULTIPLIER = 200n;
 
 const SAFE_BATCH_TRIGGER =
   (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
