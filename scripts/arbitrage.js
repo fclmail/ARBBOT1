@@ -105,6 +105,12 @@ function fmt(x) {
   ).toFixed(6);
 }
 
+function fmtMatic(x){
+  return Number(
+    ethers.formatUnits(x, 18)
+  ).toFixed(6);
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -311,11 +317,20 @@ async function executeBatch(trades) {
     return;
   }
 
+  /* WALLET MATIC BEFORE */
+
+  const walletBefore =
+    await provider.getBalance(wallet.address);
+
+  console.log(
+    `WALLET MATIC BEFORE ${fmtMatic(walletBefore)}`
+  );
+
   const beforeBal =
     await usdc.balanceOf(CONTRACT_ADDRESS);
 
   console.log(
-    `\nVAULT BEFORE ${fmt(beforeBal)}\n`
+    `VAULT BEFORE ${fmt(beforeBal)}\n`
   );
 
   const batch = {
@@ -330,7 +345,11 @@ async function executeBatch(trades) {
   const tx =
     await vault.executeFlashBatchArbitrage(
       batch,
-      { gasLimit: 8000000 }
+      {
+        gasLimit: 8000000,
+        maxFeePerGas: ethers.parseUnits("60", "gwei"),
+        maxPriorityFeePerGas: ethers.parseUnits("25", "gwei")
+      }
     );
 
   console.log(`TX ${tx.hash}\n`);
@@ -341,7 +360,12 @@ async function executeBatch(trades) {
     `TX MINED STATUS ${receipt.status}\n`
   );
 
-  /* ========= EVENT DEBUG ========= */
+  const walletAfter =
+    await provider.getBalance(wallet.address);
+
+  console.log(
+    `WALLET MATIC AFTER ${fmtMatic(walletAfter)}\n`
+  );
 
   const iface =
     new ethers.Interface(contractAbi);
