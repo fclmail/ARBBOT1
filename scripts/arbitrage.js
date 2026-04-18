@@ -317,8 +317,6 @@ async function executeBatch(trades) {
     return;
   }
 
-  /* WALLET MATIC BEFORE */
-
   const walletBefore =
     await provider.getBalance(wallet.address);
 
@@ -346,7 +344,7 @@ async function executeBatch(trades) {
     await vault.executeFlashBatchArbitrage(
       batch,
       {
-        gasLimit: 8000000,
+        gasLimit: 2000000,
         maxFeePerGas: ethers.parseUnits("60", "gwei"),
         maxPriorityFeePerGas: ethers.parseUnits("25", "gwei")
       }
@@ -354,7 +352,20 @@ async function executeBatch(trades) {
 
   console.log(`TX ${tx.hash}\n`);
 
-  const receipt = await tx.wait();
+  /* ===== FIX: timeout wait ===== */
+
+  const receipt =
+    await provider.waitForTransaction(
+      tx.hash,
+      1,
+      60000
+    );
+
+  if (!receipt) {
+    console.log("TX TIMEOUT — CONTINUE\n");
+    isExecuting = false;
+    return;
+  }
 
   console.log(
     `TX MINED STATUS ${receipt.status}\n`
