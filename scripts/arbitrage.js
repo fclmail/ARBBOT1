@@ -340,19 +340,23 @@ async function executeBatch(trades) {
     deadline: Math.floor(Date.now() / 1000) + 60
   };
 
+  /* ===== AUTO BUMP GAS FIX ===== */
+
+  const fee = await provider.getFeeData();
+
   const tx =
     await vault.executeFlashBatchArbitrage(
       batch,
       {
         gasLimit: 2000000,
-        maxFeePerGas: ethers.parseUnits("60", "gwei"),
-        maxPriorityFeePerGas: ethers.parseUnits("25", "gwei")
+        maxFeePerGas:
+          fee.maxFeePerGas * 12n / 10n,
+        maxPriorityFeePerGas:
+          fee.maxPriorityFeePerGas * 12n / 10n
       }
     );
 
   console.log(`TX ${tx.hash}\n`);
-
-  /* ===== FIX: timeout wait ===== */
 
   const receipt =
     await provider.waitForTransaction(
