@@ -105,7 +105,7 @@ function fmt(x) {
   ).toFixed(6);
 }
 
-function fmtMatic(x){
+function fmtMatic(x) {
   return Number(
     ethers.formatUnits(x, 18)
   ).toFixed(6);
@@ -246,7 +246,7 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= FULL BATCH REBUILD ================= */
+/* ================= REBUILD ================= */
 
 async function rebuildBatch(trades) {
 
@@ -303,13 +303,10 @@ async function executeBatch(trades) {
   console.log(`VALID TRADES ${validTrades.length}`);
 
   let simulatedProfit = 0n;
-
   for (const t of validTrades)
     simulatedProfit += t.expectedProfit;
 
-  console.log(
-    `SIM PROFIT ${fmt(simulatedProfit)}`
-  );
+  console.log(`SIM PROFIT ${fmt(simulatedProfit)}`);
 
   if (simulatedProfit < SAFE_BATCH_TRIGGER) {
     console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
@@ -327,9 +324,7 @@ async function executeBatch(trades) {
   const beforeBal =
     await usdc.balanceOf(CONTRACT_ADDRESS);
 
-  console.log(
-    `VAULT BEFORE ${fmt(beforeBal)}\n`
-  );
+  console.log(`VAULT BEFORE ${fmt(beforeBal)}`);
 
   const batch = {
     buyRouters: validTrades.map((t) => t.buy),
@@ -339,8 +334,6 @@ async function executeBatch(trades) {
     pathsToUSDC: validTrades.map((t) => t.sellPath),
     deadline: Math.floor(Date.now() / 1000) + 60
   };
-
-  /* ===== AUTO BUMP GAS FIX ===== */
 
   const fee = await provider.getFeeData();
 
@@ -356,80 +349,43 @@ async function executeBatch(trades) {
       }
     );
 
-  console.log(`TX ${tx.hash}\n`);
+  console.log(`TX ${tx.hash}`);
 
-  const receipt =
-    await provider.waitForTransaction(
-      tx.hash,
-      1,
-      60000
-    );
+  let receipt;
 
-  if (!receipt) {
-    console.log("TX TIMEOUT — CONTINUE\n");
-    isExecuting = false;
-    return;
+  try {
+
+    receipt =
+      await provider.waitForTransaction(
+        tx.hash,
+        1,
+        60000
+      );
+
+  } catch (e) {
+
+    if (e.code === "TIMEOUT") {
+      console.log("\nTX TIMEOUT — CONTINUE\n");
+      isExecuting = false;
+      return;
+    }
+
+    throw e;
   }
 
-  console.log(
-    `TX MINED STATUS ${receipt.status}\n`
-  );
+  console.log(`TX MINED STATUS ${receipt.status}`);
 
   const walletAfter =
     await provider.getBalance(wallet.address);
 
   console.log(
-    `WALLET MATIC AFTER ${fmtMatic(walletAfter)}\n`
-  );
-
-  const iface =
-    new ethers.Interface(contractAbi);
-
-  let eventProfit = 0n;
-
-  for (const log of receipt.logs) {
-    try {
-
-      const parsed =
-        iface.parseLog(log);
-
-      if (
-        parsed.name ===
-        "ArbitrageExecuted"
-      ) {
-
-        const p =
-          parsed.args.profitUSDC;
-
-        eventProfit += p;
-
-        console.log(
-          `TRADE ${fmt(p)}`
-        );
-      }
-
-    } catch {}
-  }
-
-  console.log(
-    `\nEVENT PROFIT ${fmt(eventProfit)}\n`
+    `WALLET MATIC AFTER ${fmtMatic(walletAfter)}`
   );
 
   const afterBal =
     await usdc.balanceOf(CONTRACT_ADDRESS);
 
-  console.log(
-    `VAULT AFTER ${fmt(afterBal)}\n`
-  );
-
-  const profit =
-    afterBal > beforeBal
-      ? afterBal - beforeBal
-      : 0n;
-
-  console.log(
-    `BATCH PROFIT ${fmt(profit)}\n`
-  );
+  console.log(`VAULT AFTER ${fmt(afterBal)}`);
 
   isExecuting = false;
 }
@@ -493,8 +449,7 @@ async function scanLoop() {
         ) {
           isExecuting = true;
 
-          const batch =
-            [...microTrades];
+          const batch = [...microTrades];
 
           microTrades = [];
           runningProfit = 0n;
