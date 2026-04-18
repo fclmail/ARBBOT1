@@ -207,22 +207,14 @@ async function findTrade(buy, sell, token) {
   for (const buyPath of buyPaths) {
 
     const buyOut =
-      await quote(
-        buy,
-        TRADE_AMOUNT,
-        buyPath
-      );
+      await quote(buy, TRADE_AMOUNT, buyPath);
 
     if (!buyOut) continue;
 
     for (const sellPath of sellPaths) {
 
       const sellOut =
-        await quote(
-          sell,
-          buyOut,
-          sellPath
-        );
+        await quote(sell, buyOut, sellPath);
 
       if (!sellOut) continue;
 
@@ -328,65 +320,58 @@ async function scanLoop() {
     }
   }
 
-  while (true) {
+  let index = 0;
 
-    let index = 0;
+  async function worker() {
 
-    async function worker() {
+    while (true) {
 
-      while (true) {
+      if (isExecuting) {
+        await sleep(5);
+        continue;
+      }
 
-        if (isExecuting) {
-          await sleep(5);
-          continue;
-        }
+      const task =
+        tasks[index++ % tasks.length];
 
-        const i = index++;
-
-        if (i >= tasks.length) break;
-
-        const task = tasks[i];
-
-        const trade =
-          await findTrade(
-            task.buy,
-            task.sell,
-            task.token
-          );
-
-        if (!trade) continue;
-
-        microTrades.push(trade);
-        runningProfit += trade.expectedProfit;
-
-        console.log(
-          `RUNNING TOTAL ${fmt(runningProfit)}`
+      const trade =
+        await findTrade(
+          task.buy,
+          task.sell,
+          task.token
         );
 
-        if (
-          runningProfit >=
-          SAFE_BATCH_TRIGGER &&
-          !isExecuting
-        ) {
-          isExecuting = true;
+      if (!trade) continue;
 
-          const batch = [...microTrades];
+      microTrades.push(trade);
+      runningProfit += trade.expectedProfit;
 
-          microTrades = [];
-          runningProfit = 0n;
+      console.log(
+        `RUNNING TOTAL ${fmt(runningProfit)}`
+      );
 
-          await executeBatch(batch);
-        }
+      if (
+        runningProfit >= SAFE_BATCH_TRIGGER &&
+        !isExecuting
+      ) {
+        isExecuting = true;
+
+        const batch = [...microTrades];
+
+        microTrades = [];
+        runningProfit = 0n;
+
+        await executeBatch(batch);
       }
     }
-
-    await Promise.all(
-      Array.from(
-        { length: WORKER_COUNT },
-        worker
-      )
-    );
   }
+
+  await Promise.all(
+    Array.from(
+      { length: WORKER_COUNT },
+      worker
+    )
+  );
 }
 
 /* ================= MAIN ================= */
