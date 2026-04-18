@@ -17,7 +17,7 @@ const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
   "https://polygon.llamarpc.com",
   "https://polygon.drpc.org",
- // "https://polygon-public.nodies.app"
+  "https://polygon-public.nodies.app"
 ];
 
 let rpcIndex = 0;
