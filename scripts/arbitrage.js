@@ -207,14 +207,22 @@ async function findTrade(buy, sell, token) {
   for (const buyPath of buyPaths) {
 
     const buyOut =
-      await quote(buy, TRADE_AMOUNT, buyPath);
+      await quote(
+        buy,
+        TRADE_AMOUNT,
+        buyPath
+      );
 
     if (!buyOut) continue;
 
     for (const sellPath of sellPaths) {
 
       const sellOut =
-        await quote(sell, buyOut, sellPath);
+        await quote(
+          sell,
+          buyOut,
+          sellPath
+        );
 
       if (!sellOut) continue;
 
@@ -238,69 +246,148 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
+/* ================= REBUILD ================= */
+
+async function rebuildBatch(trades) {
+
+  console.log("\nFULL BATCH REQUOTE START\n");
+
+  const fresh = [];
+
+  for (const t of trades) {
+
+    const buyOut =
+      await quote(
+        t.buy,
+        t.amountIn,
+        t.buyPath
+      );
+
+    if (!buyOut) continue;
+
+    const sellOut =
+      await quote(
+        t.sell,
+        buyOut,
+        t.sellPath
+      );
+
+    if (!sellOut) continue;
+
+    const profit =
+      sellOut - t.amountIn;
+
+    if (profit < MIN_PROFIT) continue;
+
+    fresh.push({
+      ...t,
+      expectedProfit: profit
+    });
+  }
+
+  console.log(`REBUILT TRADES ${fresh.length}`);
+
+  return fresh;
+}
+
 /* ================= EXECUTE ================= */
 
 async function executeBatch(trades) {
 
+  console.log("\nBATCH THRESHOLD REACHED");
+  console.log(`INITIAL TRADES ${trades.length}\n`);
+
+  const validTrades =
+    await rebuildBatch(trades);
+
+  console.log(`VALID TRADES ${validTrades.length}`);
+
+  let simulatedProfit = 0n;
+  for (const t of validTrades)
+    simulatedProfit += t.expectedProfit;
+
+  console.log(`SIM PROFIT ${fmt(simulatedProfit)}`);
+
+  if (simulatedProfit < SAFE_BATCH_TRIGGER) {
+    console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
+    isExecuting = false;
+    return;
+  }
+
+  const walletBefore =
+    await provider.getBalance(wallet.address);
+
+  console.log(
+    `WALLET MATIC BEFORE ${fmtMatic(walletBefore)}`
+  );
+
+  const beforeBal =
+    await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  console.log(`VAULT BEFORE ${fmt(beforeBal)}`);
+
+  const batch = {
+    buyRouters: validTrades.map((t) => t.buy),
+    sellRouters: validTrades.map((t) => t.sell),
+    amountsInUSDC: validTrades.map((t) => t.amountIn),
+    pathsToToken: validTrades.map((t) => t.buyPath),
+    pathsToUSDC: validTrades.map((t) => t.sellPath),
+    deadline: Math.floor(Date.now() / 1000) + 60
+  };
+
+  const fee = await provider.getFeeData();
+
+  const tx =
+    await vault.executeFlashBatchArbitrage(
+      batch,
+      {
+        gasLimit: 2000000,
+        maxFeePerGas:
+          fee.maxFeePerGas * 12n / 10n,
+        maxPriorityFeePerGas:
+          fee.maxPriorityFeePerGas * 12n / 10n
+      }
+    );
+
+  console.log(`TX ${tx.hash}`);
+
+  let receipt;
+
   try {
 
-    console.log("\nBATCH THRESHOLD REACHED");
-    console.log(`INITIAL TRADES ${trades.length}\n`);
-
-    let simulatedProfit = 0n;
-    for (const t of trades)
-      simulatedProfit += t.expectedProfit;
-
-    console.log(`SIM PROFIT ${fmt(simulatedProfit)}`);
-
-    const walletBefore =
-      await provider.getBalance(wallet.address);
-
-    console.log(
-      `WALLET MATIC BEFORE ${fmtMatic(walletBefore)}`
-    );
-
-    const beforeBal =
-      await usdc.balanceOf(CONTRACT_ADDRESS);
-
-    console.log(`VAULT BEFORE ${fmt(beforeBal)}`);
-
-    const batch = {
-      buyRouters: trades.map((t) => t.buy),
-      sellRouters: trades.map((t) => t.sell),
-      amountsInUSDC: trades.map((t) => t.amountIn),
-      pathsToToken: trades.map((t) => t.buyPath),
-      pathsToUSDC: trades.map((t) => t.sellPath),
-      deadline: Math.floor(Date.now() / 1000) + 60
-    };
-
-    const tx =
-      await vault.executeFlashBatchArbitrage(
-        batch,
-        { gasLimit: 2000000 }
+    receipt =
+      await provider.waitForTransaction(
+        tx.hash,
+        1,
+        60000
       );
 
-    console.log(`TX ${tx.hash}`);
+  } catch (e) {
 
-    const receipt = await tx.wait();
+    if (e.code === "TIMEOUT") {
+      console.log("\nTX TIMEOUT — CONTINUE\n");
+      isExecuting = false;
+      return;
+    }
 
-    console.log(`TX MINED STATUS ${receipt.status}`);
-
-    const walletAfter =
-      await provider.getBalance(wallet.address);
-
-    console.log(
-      `WALLET MATIC AFTER ${fmtMatic(walletAfter)}`
-    );
-
-    const afterBal =
-      await usdc.balanceOf(CONTRACT_ADDRESS);
-
-    console.log(`VAULT AFTER ${fmt(afterBal)}\n`);
-
-  } finally {
-    isExecuting = false;
+    throw e;
   }
+
+  console.log(`TX MINED STATUS ${receipt.status}`);
+
+  const walletAfter =
+    await provider.getBalance(wallet.address);
+
+  console.log(
+    `WALLET MATIC AFTER ${fmtMatic(walletAfter)}`
+  );
+
+  const afterBal =
+    await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  console.log(`VAULT AFTER ${fmt(afterBal)}`);
+
+  isExecuting = false;
 }
 
 /* ================= SCANNER ================= */
@@ -320,58 +407,65 @@ async function scanLoop() {
     }
   }
 
-  let index = 0;
+  while (true) {
 
-  async function worker() {
+    let index = 0;
 
-    while (true) {
+    async function worker() {
 
-      if (isExecuting) {
-        await sleep(5);
-        continue;
-      }
+      while (true) {
 
-      const task =
-        tasks[index++ % tasks.length];
+        if (isExecuting) {
+          await sleep(5);
+          continue;
+        }
 
-      const trade =
-        await findTrade(
-          task.buy,
-          task.sell,
-          task.token
+        const i = index++;
+
+        if (i >= tasks.length) break;
+
+        const task = tasks[i];
+
+        const trade =
+          await findTrade(
+            task.buy,
+            task.sell,
+            task.token
+          );
+
+        if (!trade) continue;
+
+        microTrades.push(trade);
+        runningProfit += trade.expectedProfit;
+
+        console.log(
+          `RUNNING TOTAL ${fmt(runningProfit)}`
         );
 
-      if (!trade) continue;
+        if (
+          runningProfit >=
+          SAFE_BATCH_TRIGGER &&
+          !isExecuting
+        ) {
+          isExecuting = true;
 
-      microTrades.push(trade);
-      runningProfit += trade.expectedProfit;
+          const batch = [...microTrades];
 
-      console.log(
-        `RUNNING TOTAL ${fmt(runningProfit)}`
-      );
+          microTrades = [];
+          runningProfit = 0n;
 
-      if (
-        runningProfit >= SAFE_BATCH_TRIGGER &&
-        !isExecuting
-      ) {
-        isExecuting = true;
-
-        const batch = [...microTrades];
-
-        microTrades = [];
-        runningProfit = 0n;
-
-        await executeBatch(batch);
+          executeBatch(batch);
+        }
       }
     }
-  }
 
-  await Promise.all(
-    Array.from(
-      { length: WORKER_COUNT },
-      worker
-    )
-  );
+    await Promise.all(
+      Array.from(
+        { length: WORKER_COUNT },
+        worker
+      )
+    );
+  }
 }
 
 /* ================= MAIN ================= */
