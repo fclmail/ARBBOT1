@@ -31,12 +31,7 @@ let routerContracts;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
-
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.008", 6);
-const SAFETY_MULTIPLIER = 190n;
-
-const SAFE_BATCH_TRIGGER =
-  (MIN_BATCH_PROFIT * SAFETY_MULTIPLIER) / 100n;
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
 
 const WORKER_COUNT = 32;
 
@@ -139,12 +134,12 @@ async function initProvider() {
   rebuildContracts();
 
   const onchainMin = await vault.minimumProfitUSDC();
-  console.log(`ONCHAIN MIN PROFIT ${fmt(onchainMin)}`);
+  console.log(`ONCHAIN MIN PROFIT ${fmt(onchainMin)}\n`);
 }
 
 /* ================= BALANCE ================= */
 
-async function getVaultUSDCRaw() {
+async function getContractUSDC() {
   return await usdc.balanceOf(CONTRACT_ADDRESS);
 }
 
@@ -185,14 +180,11 @@ function buildSellPaths(token) {
 /* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
-
   for (const bp of buildBuyPaths(token)) {
-
     const buyOut = await quote(buy, TRADE_AMOUNT, bp);
     if (!buyOut) continue;
 
     for (const sp of buildSellPaths(token)) {
-
       const sellOut = await quote(sell, buyOut, sp);
       if (!sellOut) continue;
 
@@ -211,21 +203,17 @@ async function findTrade(buy, sell, token) {
       };
     }
   }
-
   return null;
 }
 
 /* ================= REVALIDATION ================= */
 
 async function revalidateTrades(trades) {
-
   console.log("\nFULL BATCH REQUOTE START\n");
 
   const valid = [];
-  let refreshedTotal = 0n;
 
   for (const t of trades) {
-
     const buyOut = await quote(t.buy, t.amountIn, t.buyPath);
     if (!buyOut) continue;
 
@@ -237,13 +225,10 @@ async function revalidateTrades(trades) {
     if (profit < MIN_PROFIT) continue;
 
     t.expectedProfit = profit;
-
-    refreshedTotal += profit;
-
     valid.push(t);
   }
 
-  return { valid, refreshedTotal };
+  return valid;
 }
 
 /* ================= EXECUTE ================= */
@@ -251,39 +236,51 @@ async function revalidateTrades(trades) {
 async function executeBatch(trades) {
 
   console.log("\nBATCH THRESHOLD REACHED");
-
   console.log(`REBUILT TRADES ${trades.length}`);
 
-  const { valid, refreshedTotal } =
-    await revalidateTrades(trades);
+  const valid = await revalidateTrades(trades);
 
   console.log(`VALID TRADES ${valid.length}`);
+  console.log("SORTED BEST → WORST\n");
 
-  if (refreshedTotal < SAFE_BATCH_TRIGGER) {
-    console.log(`BATCH REJECTED (weak total ${fmt(refreshedTotal)})\n`);
+  valid.sort((a, b) =>
+    b.expectedProfit > a.expectedProfit ? 1 : -1
+  );
+
+  const beforeBal = await getContractUSDC();
+
+  let usable = [];
+  let usedCapital = 0n;
+  let usableProfit = 0n;
+
+  for (const t of valid) {
+    if (usedCapital + t.amountIn > beforeBal) break;
+
+    usedCapital += t.amountIn;
+    usableProfit += t.expectedProfit;
+    usable.push(t);
+  }
+
+  if (usable.length === 0) {
+    console.log("NO USABLE TRADES\n");
     isExecuting = false;
     return;
   }
 
-  if (valid.length === 0) {
-    console.log("NO VALID TRADES AFTER REQUOTE\n");
-    isExecuting = false;
-    return;
-  }
-
-  const beforeBal = await getVaultUSDCRaw();
-  console.log(`VAULT BEFORE ${fmt(beforeBal)}\n`);
+  console.log(`EXECUTING TRADES ${usable.length}`);
+  console.log(`USED CAPITAL ${fmt(usedCapital)} USDC`);
+  console.log(`PROFIT ${fmt(usableProfit)}\n`);
 
   const fee = await provider.getFeeData();
 
   const tx =
     await vault.executeFlashBatchArbitrage(
       {
-        buyRouters: valid.map(t => t.buy),
-        sellRouters: valid.map(t => t.sell),
-        amountsInUSDC: valid.map(t => t.amountIn),
-        pathsToToken: valid.map(t => t.buyPath),
-        pathsToUSDC: valid.map(t => t.sellPath),
+        buyRouters: usable.map(t => t.buy),
+        sellRouters: usable.map(t => t.sell),
+        amountsInUSDC: usable.map(t => t.amountIn),
+        pathsToToken: usable.map(t => t.buyPath),
+        pathsToUSDC: usable.map(t => t.sellPath),
         deadline: Math.floor(Date.now() / 1000) + 30
       },
       {
@@ -293,24 +290,20 @@ async function executeBatch(trades) {
       }
     );
 
-  console.log(`TX ${tx.hash}`);
+  console.log(`TX SENT ${tx.hash}\n`);
 
   await provider.waitForTransaction(tx.hash);
 
-  console.log("TX MINED\n");
-
-  await sleep(2000);
-
-  const afterBal = await getVaultUSDCRaw();
-
-  console.log(`VAULT AFTER  ${fmt(afterBal)}`);
+  const afterBal = await getContractUSDC();
 
   const delta =
     afterBal > beforeBal
       ? afterBal - beforeBal
       : 0n;
 
-  console.log(`REAL PROFIT ${fmt(delta)}\n`);
+  console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
+  console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
+  console.log(`REAL PROFIT     ${fmt(delta)}\n`);
 
   isExecuting = false;
 }
@@ -334,7 +327,6 @@ async function scanLoop() {
   let i = 0;
 
   async function worker() {
-
     while (true) {
 
       if (isExecuting) {
@@ -354,7 +346,7 @@ async function scanLoop() {
 
       console.log(`RUNNING TOTAL ${fmt(runningProfit)}`);
 
-      if (runningProfit >= SAFE_BATCH_TRIGGER && !isExecuting) {
+      if (!isExecuting && runningProfit >= MIN_BATCH_PROFIT) {
 
         isExecuting = true;
 
