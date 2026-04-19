@@ -32,7 +32,7 @@ let routerContracts;
 const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0003", 6);
 
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.009", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.0005", 6);
 const SAFETY_MULTIPLIER = 190n;
 
 const SAFE_BATCH_TRIGGER =
@@ -295,36 +295,19 @@ async function rebuildBatch(trades) {
 async function executeBatch(trades) {
 
   console.log("\nBATCH THRESHOLD REACHED");
-  console.log(`INITIAL TRADES ${trades.length}\n`);
 
   const validTrades =
     await rebuildBatch(trades);
 
-  console.log(`VALID TRADES ${validTrades.length}`);
-
   let simulatedProfit = 0n;
   for (const t of validTrades)
     simulatedProfit += t.expectedProfit;
-
-  console.log(`SIM PROFIT ${fmt(simulatedProfit)}`);
 
   if (simulatedProfit < SAFE_BATCH_TRIGGER) {
     console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
     isExecuting = false;
     return;
   }
-
-  const walletBefore =
-    await provider.getBalance(wallet.address);
-
-  console.log(
-    `WALLET MATIC BEFORE ${fmtMatic(walletBefore)}`
-  );
-
-  const beforeBal =
-    await usdc.balanceOf(CONTRACT_ADDRESS);
-
-  console.log(`VAULT BEFORE ${fmt(beforeBal)}`);
 
   const batch = {
     buyRouters: validTrades.map((t) => t.buy),
@@ -351,41 +334,10 @@ async function executeBatch(trades) {
 
   console.log(`TX ${tx.hash}`);
 
-  let receipt;
+  const receipt =
+    await provider.waitForTransaction(tx.hash);
 
-  try {
-
-    receipt =
-      await provider.waitForTransaction(
-        tx.hash,
-        1,
-        60000
-      );
-
-  } catch (e) {
-
-    if (e.code === "TIMEOUT") {
-      console.log("\nTX TIMEOUT — CONTINUE\n");
-      isExecuting = false;
-      return;
-    }
-
-    throw e;
-  }
-
-  console.log(`TX MINED STATUS ${receipt.status}`);
-
-  const walletAfter =
-    await provider.getBalance(wallet.address);
-
-  console.log(
-    `WALLET MATIC AFTER ${fmtMatic(walletAfter)}`
-  );
-
-  const afterBal =
-    await usdc.balanceOf(CONTRACT_ADDRESS);
-
-  console.log(`VAULT AFTER ${fmt(afterBal)}`);
+  console.log(`TX MINED`);
 
   isExecuting = false;
 }
@@ -407,65 +359,60 @@ async function scanLoop() {
     }
   }
 
-  while (true) {
+  let index = 0;
 
-    let index = 0;
+  async function worker() {
 
-    async function worker() {
+    while (true) {
 
-      while (true) {
+      if (isExecuting) {
+        await sleep(5);
+        continue;
+      }
 
-        if (isExecuting) {
-          await sleep(5);
-          continue;
-        }
+      const i = index++ % tasks.length;
 
-        const i = index++;
+      const task = tasks[i];
 
-        if (i >= tasks.length) break;
-
-        const task = tasks[i];
-
-        const trade =
-          await findTrade(
-            task.buy,
-            task.sell,
-            task.token
-          );
-
-        if (!trade) continue;
-
-        microTrades.push(trade);
-        runningProfit += trade.expectedProfit;
-
-        console.log(
-          `RUNNING TOTAL ${fmt(runningProfit)}`
+      const trade =
+        await findTrade(
+          task.buy,
+          task.sell,
+          task.token
         );
 
-        if (
-          runningProfit >=
-          SAFE_BATCH_TRIGGER &&
-          !isExecuting
-        ) {
-          isExecuting = true;
+      if (!trade) continue;
 
-          const batch = [...microTrades];
+      microTrades.push(trade);
+      runningProfit += trade.expectedProfit;
 
-          microTrades = [];
-          runningProfit = 0n;
+      console.log(
+        `RUNNING TOTAL ${fmt(runningProfit)}`
+      );
 
-          executeBatch(batch);
-        }
+      if (
+        runningProfit >=
+        SAFE_BATCH_TRIGGER &&
+        !isExecuting
+      ) {
+        isExecuting = true;
+
+        const batch = [...microTrades];
+
+        microTrades = [];
+        runningProfit = 0n;
+
+        executeBatch(batch);
       }
     }
-
-    await Promise.all(
-      Array.from(
-        { length: WORKER_COUNT },
-        worker
-      )
-    );
   }
+
+  await Promise.all(
+    Array.from(
+      { length: WORKER_COUNT },
+      worker
+    )
+  );
 }
 
 /* ================= MAIN ================= */
