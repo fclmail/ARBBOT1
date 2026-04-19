@@ -30,7 +30,7 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
+const MIN_PROFIT = ethers.parseUnits("0.0003", 6);
 
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.0009", 6);
 const SAFETY_MULTIPLIER = 190n;
@@ -105,6 +105,12 @@ function fmt(x) {
   ).toFixed(6);
 }
 
+function fmtMatic(x) {
+  return Number(
+    ethers.formatUnits(x, 18)
+  ).toFixed(6);
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -162,6 +168,28 @@ async function initProvider() {
   provider = newProvider();
   await provider.getNetwork();
   rebuildContracts();
+}
+
+/* ================= BALANCE HELPERS ================= */
+
+async function getVaultUSDC() {
+
+  const bal =
+    await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  return Number(
+    ethers.formatUnits(bal, 6)
+  ).toFixed(5);
+}
+
+async function getWalletMatic() {
+
+  const bal =
+    await provider.getBalance(wallet.address);
+
+  return Number(
+    ethers.formatUnits(bal, 18)
+  ).toFixed(6);
 }
 
 /* ================= QUOTE ================= */
@@ -258,12 +286,20 @@ async function rebuildBatch(trades) {
   for (const t of trades) {
 
     const buyOut =
-      await quote(t.buy, t.amountIn, t.buyPath);
+      await quote(
+        t.buy,
+        t.amountIn,
+        t.buyPath
+      );
 
     if (!buyOut) continue;
 
     const sellOut =
-      await quote(t.sell, buyOut, t.sellPath);
+      await quote(
+        t.sell,
+        buyOut,
+        t.sellPath
+      );
 
     if (!sellOut) continue;
 
@@ -300,6 +336,7 @@ async function executeBatch(trades) {
   if (simulatedProfit < SAFE_BATCH_TRIGGER) {
 
     console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
+
     isExecuting = false;
     return;
   }
@@ -345,6 +382,12 @@ async function executeBatch(trades) {
   await provider.waitForTransaction(tx.hash);
 
   console.log(`TX MINED`);
+
+  const vaultBal = await getVaultUSDC();
+  const maticBal = await getWalletMatic();
+
+  console.log(`\nVAULT USDC ${vaultBal}`);
+  console.log(`WALLET MATIC ${maticBal}`);
 
   isExecuting = false;
 }
@@ -414,8 +457,6 @@ async function scanLoop() {
 
         microTrades = [];
         runningProfit = 0n;
-
-        /* ⭐ FIX APPLIED HERE */
 
         await executeBatch(batch);
       }
