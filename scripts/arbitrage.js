@@ -30,7 +30,7 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
+const MIN_PROFIT = ethers.parseUnits("0.0003", 6);
 
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.0009", 6);
 const SAFETY_MULTIPLIER = 190n;
@@ -55,8 +55,7 @@ const erc20Abi = [
 ];
 
 const contractAbi = [
-  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
-  "event ArbitrageExecuted(address indexed buyRouter,address indexed sellRouter,address indexed token,uint256 amountInUSDC,uint256 beforeBal,uint256 afterBal,uint256 profitUSDC)"
+  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
 ];
 
 const routerAbi = [
@@ -66,18 +65,12 @@ const routerAbi = [
 /* ================= ROUTERS ================= */
 
 const routers = {
-  QuickSwap:
-    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap:
-    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn:
-    "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-  Firebird:
-    "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
-  ApeSwap:
-    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault:
-    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+  Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
 /* ================= TOKENS ================= */
@@ -100,19 +93,15 @@ const TOKENS = {
 /* ================= HELPERS ================= */
 
 function fmt(x) {
-  return Number(
-    ethers.formatUnits(x, 6)
-  ).toFixed(6);
+  return Number(ethers.formatUnits(x, 6)).toFixed(6);
 }
 
 function fmtMatic(x) {
-  return Number(
-    ethers.formatUnits(x, 18)
-  ).toFixed(6);
+  return Number(ethers.formatUnits(x, 18)).toFixed(6);
 }
 
 function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise(r => setTimeout(r, ms));
 }
 
 /* ================= STATE ================= */
@@ -121,32 +110,20 @@ let microTrades = [];
 let runningProfit = 0n;
 let isExecuting = false;
 
-/* ================= RPC ================= */
+/* ================= INIT ================= */
 
 function rebuildContracts() {
 
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  usdc = new ethers.Contract(
-    USDC,
-    erc20Abi,
-    provider
-  );
+  usdc = new ethers.Contract(USDC, erc20Abi, provider);
 
-  vault = new ethers.Contract(
-    CONTRACT_ADDRESS,
-    contractAbi,
-    wallet
-  );
+  vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
 
   routerContracts = Object.fromEntries(
-    Object.values(routers).map((address) => [
-      address,
-      new ethers.Contract(
-        address,
-        routerAbi,
-        provider
-      )
+    Object.values(routers).map(a => [
+      a,
+      new ethers.Contract(a, routerAbi, provider)
     ])
   );
 }
@@ -164,48 +141,31 @@ function newProvider() {
 }
 
 async function initProvider() {
-
   provider = newProvider();
   await provider.getNetwork();
   rebuildContracts();
 }
 
-/* ================= BALANCE HELPERS ================= */
+/* ================= BALANCE (JS1 STYLE SYSTEM) ================= */
 
 async function getVaultUSDC() {
-
-  const bal =
-    await usdc.balanceOf(CONTRACT_ADDRESS);
-
-  return Number(
-    ethers.formatUnits(bal, 6)
-  ).toFixed(5);
+  const bal = await usdc.balanceOf(CONTRACT_ADDRESS);
+  return Number(ethers.formatUnits(bal, 6)).toFixed(6);
 }
 
 async function getWalletMatic() {
-
-  const bal =
-    await provider.getBalance(wallet.address);
-
-  return Number(
-    ethers.formatUnits(bal, 18)
-  ).toFixed(6);
+  const bal = await provider.getBalance(wallet.address);
+  return Number(ethers.formatUnits(bal, 18)).toFixed(6);
 }
 
 /* ================= QUOTE ================= */
 
 async function quote(router, amount, path) {
-
   try {
-
     const out =
-      await routerContracts[router]
-        .getAmountsOut(amount, path);
-
+      await routerContracts[router].getAmountsOut(amount, path);
     return out.at(-1);
-
   } catch {
-
     return null;
   }
 }
@@ -213,7 +173,6 @@ async function quote(router, amount, path) {
 /* ================= PATHS ================= */
 
 function buildBuyPaths(token) {
-
   return [
     [USDC, token],
     [USDC, TOKENS.WETH, token],
@@ -224,7 +183,6 @@ function buildBuyPaths(token) {
 }
 
 function buildSellPaths(token) {
-
   return [
     [token, USDC],
     [token, TOKENS.WETH, USDC],
@@ -238,25 +196,15 @@ function buildSellPaths(token) {
 
 async function findTrade(buy, sell, token) {
 
-  const buyPaths = buildBuyPaths(token);
-  const sellPaths = buildSellPaths(token);
-
-  for (const buyPath of buyPaths) {
-
-    const buyOut =
-      await quote(buy, TRADE_AMOUNT, buyPath);
-
+  for (const bp of buildBuyPaths(token)) {
+    const buyOut = await quote(buy, TRADE_AMOUNT, bp);
     if (!buyOut) continue;
 
-    for (const sellPath of sellPaths) {
-
-      const sellOut =
-        await quote(sell, buyOut, sellPath);
-
+    for (const sp of buildSellPaths(token)) {
+      const sellOut = await quote(sell, buyOut, sp);
       if (!sellOut) continue;
 
-      const profit =
-        sellOut - TRADE_AMOUNT;
+      const profit = sellOut - TRADE_AMOUNT;
 
       if (profit < MIN_PROFIT) continue;
 
@@ -265,8 +213,8 @@ async function findTrade(buy, sell, token) {
         sell,
         token,
         amountIn: TRADE_AMOUNT,
-        buyPath,
-        sellPath,
+        buyPath: bp,
+        sellPath: sp,
         expectedProfit: profit
       };
     }
@@ -275,118 +223,47 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= REBUILD ================= */
-
-async function rebuildBatch(trades) {
-
-  console.log("\nFULL BATCH REQUOTE START\n");
-
-  const fresh = [];
-
-  for (const t of trades) {
-
-    const buyOut =
-      await quote(
-        t.buy,
-        t.amountIn,
-        t.buyPath
-      );
-
-    if (!buyOut) continue;
-
-    const sellOut =
-      await quote(
-        t.sell,
-        buyOut,
-        t.sellPath
-      );
-
-    if (!sellOut) continue;
-
-    const profit =
-      sellOut - t.amountIn;
-
-    if (profit < MIN_PROFIT) continue;
-
-    fresh.push({
-      ...t,
-      expectedProfit: profit
-    });
-  }
-
-  console.log(`REBUILT TRADES ${fresh.length}`);
-
-  return fresh;
-}
-
 /* ================= EXECUTE ================= */
 
 async function executeBatch(trades) {
 
   console.log("\nBATCH THRESHOLD REACHED");
+  console.log("FULL BATCH REQUOTE START\n");
 
-  const validTrades =
-    await rebuildBatch(trades);
-
-  let simulatedProfit = 0n;
-
-  for (const t of validTrades)
-    simulatedProfit += t.expectedProfit;
-
-  if (simulatedProfit < SAFE_BATCH_TRIGGER) {
-
-    console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
-
-    isExecuting = false;
-    return;
-  }
-
-  const batch = {
-
-    buyRouters:
-      validTrades.map((t) => t.buy),
-
-    sellRouters:
-      validTrades.map((t) => t.sell),
-
-    amountsInUSDC:
-      validTrades.map((t) => t.amountIn),
-
-    pathsToToken:
-      validTrades.map((t) => t.buyPath),
-
-    pathsToUSDC:
-      validTrades.map((t) => t.sellPath),
-
-    deadline:
-      Math.floor(Date.now() / 1000) + 60
-  };
-
-  const fee =
-    await provider.getFeeData();
+  const fee = await provider.getFeeData();
 
   const tx =
     await vault.executeFlashBatchArbitrage(
-      batch,
+      {
+        buyRouters: trades.map(t => t.buy),
+        sellRouters: trades.map(t => t.sell),
+        amountsInUSDC: trades.map(t => t.amountIn),
+        pathsToToken: trades.map(t => t.buyPath),
+        pathsToUSDC: trades.map(t => t.sellPath),
+        deadline: Math.floor(Date.now() / 1000) + 60
+      },
       {
         gasLimit: 2000000,
-        maxFeePerGas:
-          fee.maxFeePerGas * 12n / 10n,
-        maxPriorityFeePerGas:
-          fee.maxPriorityFeePerGas * 12n / 10n
+        maxFeePerGas: fee.maxFeePerGas * 12n / 10n,
+        maxPriorityFeePerGas: fee.maxPriorityFeePerGas * 12n / 10n
       }
     );
 
+  console.log(`REBUILT TRADES ${trades.length}`);
   console.log(`TX ${tx.hash}`);
 
   await provider.waitForTransaction(tx.hash);
 
-  console.log(`TX MINED`);
+  console.log("TX MINED");
+
+  /* ================= JS1 SETTLEMENT SYSTEM ================= */
+
+  await sleep(2000);
 
   const vaultBal = await getVaultUSDC();
   const maticBal = await getWalletMatic();
 
-  console.log(`\nVAULT USDC ${vaultBal}`);
+  console.log(`VAULT USDC ${vaultBal}`);
   console.log(`WALLET MATIC ${maticBal}`);
 
   isExecuting = false;
@@ -398,19 +275,17 @@ async function scanLoop() {
 
   const tasks = [];
 
-  for (const buy of Object.values(routers)) {
-    for (const sell of Object.values(routers)) {
+  for (const b of Object.values(routers)) {
+    for (const s of Object.values(routers)) {
+      if (b === s) continue;
 
-      if (buy === sell) continue;
-
-      for (const token of Object.values(TOKENS)) {
-
-        tasks.push({ buy, sell, token });
+      for (const t of Object.values(TOKENS)) {
+        tasks.push({ buy: b, sell: s, token: t });
       }
     }
   }
 
-  let index = 0;
+  let i = 0;
 
   async function worker() {
 
@@ -421,40 +296,22 @@ async function scanLoop() {
         continue;
       }
 
-      const i =
-        index++ % tasks.length;
+      const task = tasks[i++ % tasks.length];
 
-      const task = tasks[i];
-
-      const trade =
-        await findTrade(
-          task.buy,
-          task.sell,
-          task.token
-        );
+      const trade = await findTrade(task.buy, task.sell, task.token);
 
       if (!trade) continue;
 
       microTrades.push(trade);
+      runningProfit += trade.expectedProfit;
 
-      runningProfit +=
-        trade.expectedProfit;
+      console.log(`RUNNING TOTAL ${fmt(runningProfit)}`);
 
-      console.log(
-        `RUNNING TOTAL ${fmt(runningProfit)}`
-      );
-
-      if (
-        runningProfit >=
-        SAFE_BATCH_TRIGGER &&
-        !isExecuting
-      ) {
+      if (runningProfit >= SAFE_BATCH_TRIGGER && !isExecuting) {
 
         isExecuting = true;
 
-        const batch =
-          [...microTrades];
-
+        const batch = [...microTrades];
         microTrades = [];
         runningProfit = 0n;
 
@@ -463,20 +320,12 @@ async function scanLoop() {
     }
   }
 
-  await Promise.all(
-    Array.from(
-      { length: WORKER_COUNT },
-      worker
-    )
-  );
+  await Promise.all(Array.from({ length: 32 }, worker));
 }
 
 /* ================= MAIN ================= */
 
 (async function main() {
-
   await initProvider();
-
   await scanLoop();
-
 })();
