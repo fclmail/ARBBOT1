@@ -96,10 +96,6 @@ function fmt(x) {
   return Number(ethers.formatUnits(x, 6)).toFixed(6);
 }
 
-function fmtMatic(x) {
-  return Number(ethers.formatUnits(x, 18)).toFixed(6);
-}
-
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
@@ -113,11 +109,8 @@ let isExecuting = false;
 /* ================= INIT ================= */
 
 function rebuildContracts() {
-
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
   usdc = new ethers.Contract(USDC, erc20Abi, provider);
-
   vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
 
   routerContracts = Object.fromEntries(
@@ -129,7 +122,6 @@ function rebuildContracts() {
 }
 
 function newProvider() {
-
   const url = RPCS[rpcIndex];
   rpcIndex = (rpcIndex + 1) % RPCS.length;
 
@@ -146,16 +138,11 @@ async function initProvider() {
   rebuildContracts();
 }
 
-/* ================= BALANCE (JS1 STYLE SYSTEM) ================= */
+/* ================= BALANCE ================= */
 
 async function getVaultUSDC() {
   const bal = await usdc.balanceOf(CONTRACT_ADDRESS);
   return Number(ethers.formatUnits(bal, 6)).toFixed(6);
-}
-
-async function getWalletMatic() {
-  const bal = await provider.getBalance(wallet.address);
-  return Number(ethers.formatUnits(bal, 18)).toFixed(6);
 }
 
 /* ================= QUOTE ================= */
@@ -195,7 +182,6 @@ function buildSellPaths(token) {
 /* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
-
   for (const bp of buildBuyPaths(token)) {
     const buyOut = await quote(buy, TRADE_AMOUNT, bp);
     if (!buyOut) continue;
@@ -219,8 +205,34 @@ async function findTrade(buy, sell, token) {
       };
     }
   }
-
   return null;
+}
+
+/* ================= REVALIDATION ================= */
+
+async function revalidateTrades(trades) {
+
+  console.log("\nFULL BATCH REQUOTE START\n");
+
+  const valid = [];
+
+  for (const t of trades) {
+
+    const buyOut = await quote(t.buy, t.amountIn, t.buyPath);
+    if (!buyOut) continue;
+
+    const sellOut = await quote(t.sell, buyOut, t.sellPath);
+    if (!sellOut) continue;
+
+    const profit = sellOut - t.amountIn;
+
+    // strict filter (same logic, fresh state)
+    if (profit < MIN_PROFIT) continue;
+
+    valid.push(t);
+  }
+
+  return valid;
 }
 
 /* ================= EXECUTE ================= */
@@ -228,18 +240,29 @@ async function findTrade(buy, sell, token) {
 async function executeBatch(trades) {
 
   console.log("\nBATCH THRESHOLD REACHED");
-  console.log("FULL BATCH REQUOTE START\n");
+
+  console.log(`REBUILT TRADES ${trades.length}`);
+
+  const validTrades = await revalidateTrades(trades);
+
+  console.log(`VALID TRADES ${validTrades.length}`);
+
+  if (validTrades.length === 0) {
+    console.log("NO VALID TRADES AFTER REQUOTE\n");
+    isExecuting = false;
+    return;
+  }
 
   const fee = await provider.getFeeData();
 
   const tx =
     await vault.executeFlashBatchArbitrage(
       {
-        buyRouters: trades.map(t => t.buy),
-        sellRouters: trades.map(t => t.sell),
-        amountsInUSDC: trades.map(t => t.amountIn),
-        pathsToToken: trades.map(t => t.buyPath),
-        pathsToUSDC: trades.map(t => t.sellPath),
+        buyRouters: validTrades.map(t => t.buy),
+        sellRouters: validTrades.map(t => t.sell),
+        amountsInUSDC: validTrades.map(t => t.amountIn),
+        pathsToToken: validTrades.map(t => t.buyPath),
+        pathsToUSDC: validTrades.map(t => t.sellPath),
         deadline: Math.floor(Date.now() / 1000) + 60
       },
       {
@@ -249,22 +272,17 @@ async function executeBatch(trades) {
       }
     );
 
-  console.log(`REBUILT TRADES ${trades.length}`);
   console.log(`TX ${tx.hash}`);
 
   await provider.waitForTransaction(tx.hash);
 
   console.log("TX MINED");
 
-  /* ================= JS1 SETTLEMENT SYSTEM ================= */
-
   await sleep(2000);
 
   const vaultBal = await getVaultUSDC();
-  const maticBal = await getWalletMatic();
 
   console.log(`VAULT USDC ${vaultBal}`);
-  console.log(`WALLET MATIC ${maticBal}`);
 
   isExecuting = false;
 }
@@ -288,7 +306,6 @@ async function scanLoop() {
   let i = 0;
 
   async function worker() {
-
     while (true) {
 
       if (isExecuting) {
@@ -312,6 +329,7 @@ async function scanLoop() {
         isExecuting = true;
 
         const batch = [...microTrades];
+
         microTrades = [];
         runningProfit = 0n;
 
@@ -320,7 +338,7 @@ async function scanLoop() {
     }
   }
 
-  await Promise.all(Array.from({ length: 32 }, worker));
+  await Promise.all(Array.from({ length: WORKER_COUNT }, worker));
 }
 
 /* ================= MAIN ================= */
