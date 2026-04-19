@@ -105,12 +105,6 @@ function fmt(x) {
   ).toFixed(6);
 }
 
-function fmtMatic(x) {
-  return Number(
-    ethers.formatUnits(x, 18)
-  ).toFixed(6);
-}
-
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -124,9 +118,14 @@ let isExecuting = false;
 /* ================= RPC ================= */
 
 function rebuildContracts() {
+
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  usdc = new ethers.Contract(USDC, erc20Abi, provider);
+  usdc = new ethers.Contract(
+    USDC,
+    erc20Abi,
+    provider
+  );
 
   vault = new ethers.Contract(
     CONTRACT_ADDRESS,
@@ -137,12 +136,17 @@ function rebuildContracts() {
   routerContracts = Object.fromEntries(
     Object.values(routers).map((address) => [
       address,
-      new ethers.Contract(address, routerAbi, provider)
+      new ethers.Contract(
+        address,
+        routerAbi,
+        provider
+      )
     ])
   );
 }
 
 function newProvider() {
+
   const url = RPCS[rpcIndex];
   rpcIndex = (rpcIndex + 1) % RPCS.length;
 
@@ -154,6 +158,7 @@ function newProvider() {
 }
 
 async function initProvider() {
+
   provider = newProvider();
   await provider.getNetwork();
   rebuildContracts();
@@ -162,15 +167,17 @@ async function initProvider() {
 /* ================= QUOTE ================= */
 
 async function quote(router, amount, path) {
+
   try {
+
     const out =
-      await routerContracts[router].getAmountsOut(
-        amount,
-        path
-      );
+      await routerContracts[router]
+        .getAmountsOut(amount, path);
 
     return out.at(-1);
+
   } catch {
+
     return null;
   }
 }
@@ -178,6 +185,7 @@ async function quote(router, amount, path) {
 /* ================= PATHS ================= */
 
 function buildBuyPaths(token) {
+
   return [
     [USDC, token],
     [USDC, TOKENS.WETH, token],
@@ -188,6 +196,7 @@ function buildBuyPaths(token) {
 }
 
 function buildSellPaths(token) {
+
   return [
     [token, USDC],
     [token, TOKENS.WETH, USDC],
@@ -207,22 +216,14 @@ async function findTrade(buy, sell, token) {
   for (const buyPath of buyPaths) {
 
     const buyOut =
-      await quote(
-        buy,
-        TRADE_AMOUNT,
-        buyPath
-      );
+      await quote(buy, TRADE_AMOUNT, buyPath);
 
     if (!buyOut) continue;
 
     for (const sellPath of sellPaths) {
 
       const sellOut =
-        await quote(
-          sell,
-          buyOut,
-          sellPath
-        );
+        await quote(sell, buyOut, sellPath);
 
       if (!sellOut) continue;
 
@@ -257,20 +258,12 @@ async function rebuildBatch(trades) {
   for (const t of trades) {
 
     const buyOut =
-      await quote(
-        t.buy,
-        t.amountIn,
-        t.buyPath
-      );
+      await quote(t.buy, t.amountIn, t.buyPath);
 
     if (!buyOut) continue;
 
     const sellOut =
-      await quote(
-        t.sell,
-        buyOut,
-        t.sellPath
-      );
+      await quote(t.sell, buyOut, t.sellPath);
 
     if (!sellOut) continue;
 
@@ -300,25 +293,40 @@ async function executeBatch(trades) {
     await rebuildBatch(trades);
 
   let simulatedProfit = 0n;
+
   for (const t of validTrades)
     simulatedProfit += t.expectedProfit;
 
   if (simulatedProfit < SAFE_BATCH_TRIGGER) {
+
     console.log("SIM BELOW SAFE THRESHOLD — SKIP\n");
     isExecuting = false;
     return;
   }
 
   const batch = {
-    buyRouters: validTrades.map((t) => t.buy),
-    sellRouters: validTrades.map((t) => t.sell),
-    amountsInUSDC: validTrades.map((t) => t.amountIn),
-    pathsToToken: validTrades.map((t) => t.buyPath),
-    pathsToUSDC: validTrades.map((t) => t.sellPath),
-    deadline: Math.floor(Date.now() / 1000) + 60
+
+    buyRouters:
+      validTrades.map((t) => t.buy),
+
+    sellRouters:
+      validTrades.map((t) => t.sell),
+
+    amountsInUSDC:
+      validTrades.map((t) => t.amountIn),
+
+    pathsToToken:
+      validTrades.map((t) => t.buyPath),
+
+    pathsToUSDC:
+      validTrades.map((t) => t.sellPath),
+
+    deadline:
+      Math.floor(Date.now() / 1000) + 60
   };
 
-  const fee = await provider.getFeeData();
+  const fee =
+    await provider.getFeeData();
 
   const tx =
     await vault.executeFlashBatchArbitrage(
@@ -334,8 +342,7 @@ async function executeBatch(trades) {
 
   console.log(`TX ${tx.hash}`);
 
-  const receipt =
-    await provider.waitForTransaction(tx.hash);
+  await provider.waitForTransaction(tx.hash);
 
   console.log(`TX MINED`);
 
@@ -354,6 +361,7 @@ async function scanLoop() {
       if (buy === sell) continue;
 
       for (const token of Object.values(TOKENS)) {
+
         tasks.push({ buy, sell, token });
       }
     }
@@ -370,7 +378,8 @@ async function scanLoop() {
         continue;
       }
 
-      const i = index++ % tasks.length;
+      const i =
+        index++ % tasks.length;
 
       const task = tasks[i];
 
@@ -384,7 +393,9 @@ async function scanLoop() {
       if (!trade) continue;
 
       microTrades.push(trade);
-      runningProfit += trade.expectedProfit;
+
+      runningProfit +=
+        trade.expectedProfit;
 
       console.log(
         `RUNNING TOTAL ${fmt(runningProfit)}`
@@ -395,14 +406,18 @@ async function scanLoop() {
         SAFE_BATCH_TRIGGER &&
         !isExecuting
       ) {
+
         isExecuting = true;
 
-        const batch = [...microTrades];
+        const batch =
+          [...microTrades];
 
         microTrades = [];
         runningProfit = 0n;
 
-        executeBatch(batch);
+        /* ⭐ FIX APPLIED HERE */
+
+        await executeBatch(batch);
       }
     }
   }
@@ -418,6 +433,9 @@ async function scanLoop() {
 /* ================= MAIN ================= */
 
 (async function main() {
+
   await initProvider();
+
   await scanLoop();
+
 })();
