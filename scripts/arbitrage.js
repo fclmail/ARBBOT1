@@ -38,7 +38,7 @@ const WORKER_COUNT = 32;
 /* ================= GAS TOP-UP ================= */
 
 const WITHDRAW_THRESHOLD = ethers.parseUnits(".05", 6);
-const WITHDRAW_PERCENT = 1n;
+const WITHDRAW_PERCENT = 2n;
 
 /* ================= CONTRACT ================= */
 
