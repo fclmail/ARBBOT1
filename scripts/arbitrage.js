@@ -15,9 +15,9 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
-  "https://polygon.llamarpc.com",
-  "https://polygon.drpc.org",
-  "https://polygon-public.nodies.app"
+ // "https://polygon.llamarpc.com",
+  //"https://polygon.drpc.org",
+//  "https://polygon-public.nodies.app"
 ];
 
 let rpcIndex = 0;
@@ -30,7 +30,7 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
+const MIN_PROFIT = ethers.parseUnits("0.000003", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
 
 const WORKER_COUNT = 32;
