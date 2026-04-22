@@ -32,7 +32,7 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits(".04", 6);
-const MIN_PROFIT = ethers.parseUnits("0.000002", 6);
+const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits(".005", 6);
 
 const WORKER_COUNT = 32;
