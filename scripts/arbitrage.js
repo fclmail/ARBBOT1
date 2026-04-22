@@ -15,9 +15,9 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
- // "https://polygon.llamarpc.com",
-  //"https://polygon.drpc.org",
-  //"https://polygon-public.nodies.app"
+  "https://polygon.llamarpc.com",
+  "https://polygon.drpc.org",
+  "https://polygon-public.nodies.app"
 ];
 
 let rpcIndex = 0;
@@ -31,14 +31,16 @@ let routerContracts;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.0005", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.0002", 6);
 
 const WORKER_COUNT = 32;
 
 /* ================= GAS TOP-UP ================= */
 
-const WITHDRAW_THRESHOLD = ethers.parseUnits(".05", 6);
-const WITHDRAW_PERCENT = 2n;
+const WITHDRAW_THRESHOLD = ethers.parseUnits("5", 6);
+const WITHDRAW_PERCENT = 1n;
+
+const MIN_POL_FOR_TX = ethers.parseEther("0.35");
 
 /* ================= CONTRACT ================= */
 
@@ -108,9 +110,20 @@ let isExecuting = false;
 /* ================= INIT ================= */
 
 function rebuildContracts() {
+
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
-  vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+
+  usdc = new ethers.Contract(
+    USDC,
+    erc20Abi,
+    wallet
+  );
+
+  vault = new ethers.Contract(
+    CONTRACT_ADDRESS,
+    contractAbi,
+    wallet
+  );
 
   routerContracts = Object.fromEntries(
     Object.values(routers).map(a => [
@@ -121,33 +134,52 @@ function rebuildContracts() {
 }
 
 function newProvider() {
+
   const url = RPCS[rpcIndex];
   rpcIndex = (rpcIndex + 1) % RPCS.length;
+
   return new ethers.JsonRpcProvider(url);
 }
 
 async function initProvider() {
+
   provider = newProvider();
+
   await provider.getNetwork();
+
   rebuildContracts();
 
   const onchainMin = await vault.minimumProfitUSDC();
+
   console.log(`ONCHAIN MIN PROFIT ${fmt(onchainMin)}\n`);
 }
 
-/* ================= GAS TOP-UP ================= */
+/* ================= GAS TOPUP ================= */
 
 async function topUpGas() {
-  try {
-    const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
-    if (contractBal < WITHDRAW_THRESHOLD) return;
 
-    const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
+  try {
+
+    const contractBal =
+      await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    if (contractBal < WITHDRAW_THRESHOLD) {
+      console.log("⚠️ CONTRACT USDC TOO LOW FOR GAS TOPUP\n");
+      return;
+    }
+
+    const amount =
+      (contractBal * WITHDRAW_PERCENT) / 100n;
 
     console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
 
-    await (await vault.withdrawERC20(USDC, amount)).wait();
-    await (await usdc.approve(routers.QuickSwap, amount)).wait();
+    await (
+      await vault.withdrawERC20(USDC, amount)
+    ).wait();
+
+    await (
+      await usdc.approve(routers.QuickSwap, amount)
+    ).wait();
 
     const router = new ethers.Contract(
       routers.QuickSwap,
@@ -176,14 +208,18 @@ async function topUpGas() {
       wallet
     );
 
-    const bal = await wmatic.balanceOf(wallet.address);
+    const bal =
+      await wmatic.balanceOf(wallet.address);
 
     if (bal > 0n) {
+
       await (await wmatic.withdraw(bal)).wait();
+
       console.log("🔥 WMATIC → POL");
     }
 
   } catch (e) {
+
     console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
   }
 }
@@ -191,11 +227,19 @@ async function topUpGas() {
 /* ================= QUOTE ================= */
 
 async function quote(router, amount, path) {
+
   try {
+
     const out =
-      await routerContracts[router].getAmountsOut(amount, path);
+      await routerContracts[router].getAmountsOut(
+        amount,
+        path
+      );
+
     return out.at(-1);
+
   } catch {
+
     return null;
   }
 }
@@ -203,6 +247,7 @@ async function quote(router, amount, path) {
 /* ================= PATHS ================= */
 
 function buildBuyPaths(token) {
+
   return [
     [USDC, token],
     [USDC, TOKENS.WETH, token],
@@ -213,6 +258,7 @@ function buildBuyPaths(token) {
 }
 
 function buildSellPaths(token) {
+
   return [
     [token, USDC],
     [token, TOKENS.WETH, USDC],
@@ -225,15 +271,23 @@ function buildSellPaths(token) {
 /* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
+
   for (const bp of buildBuyPaths(token)) {
-    const buyOut = await quote(buy, TRADE_AMOUNT, bp);
+
+    const buyOut =
+      await quote(buy, TRADE_AMOUNT, bp);
+
     if (!buyOut) continue;
 
     for (const sp of buildSellPaths(token)) {
-      const sellOut = await quote(sell, buyOut, sp);
+
+      const sellOut =
+        await quote(sell, buyOut, sp);
+
       if (!sellOut) continue;
 
-      const profit = sellOut - TRADE_AMOUNT;
+      const profit =
+        sellOut - TRADE_AMOUNT;
 
       if (profit < MIN_PROFIT) continue;
 
@@ -248,53 +302,102 @@ async function findTrade(buy, sell, token) {
       };
     }
   }
+
   return null;
 }
 
 /* ================= EXECUTE ================= */
 
 async function executeBatch(trades) {
+
   console.log("\nBATCH THRESHOLD REACHED");
 
-  const beforeBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+  const polBal =
+    await provider.getBalance(wallet.address);
 
-  const tx = await vault.executeFlashBatchArbitrage({
-    buyRouters: trades.map(t => t.buy),
-    sellRouters: trades.map(t => t.sell),
-    amountsInUSDC: trades.map(t => t.amountIn),
-    pathsToToken: trades.map(t => t.buyPath),
-    pathsToUSDC: trades.map(t => t.sellPath),
-    deadline: Math.floor(Date.now() / 1000) + 30
-  });
+  console.log(
+    `POL BALANCE ${ethers.formatEther(polBal)}`
+  );
+
+  if (polBal < MIN_POL_FOR_TX) {
+
+    console.log(
+      `⚠️ LOW POL BALANCE ${ethers.formatEther(polBal)}`
+    );
+
+    await topUpGas();
+
+    const newBal =
+      await provider.getBalance(wallet.address);
+
+    console.log(
+      `POL AFTER TOPUP ${ethers.formatEther(newBal)}\n`
+    );
+  }
+
+  const beforeBal =
+    await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  let tx;
+
+  try {
+
+    tx =
+      await vault.executeFlashBatchArbitrage({
+        buyRouters: trades.map(t => t.buy),
+        sellRouters: trades.map(t => t.sell),
+        amountsInUSDC: trades.map(t => t.amountIn),
+        pathsToToken: trades.map(t => t.buyPath),
+        pathsToUSDC: trades.map(t => t.sellPath),
+        deadline: Math.floor(Date.now() / 1000) + 30
+      });
+
+  } catch (e) {
+
+    console.log(
+      `⚠️ EXECUTION FAILED: ${e.message}\n`
+    );
+
+    isExecuting = false;
+    return;
+  }
 
   console.log(`TX SENT ${tx.hash}`);
 
   await provider.waitForTransaction(tx.hash);
 
-  const afterBal = await usdc.balanceOf(CONTRACT_ADDRESS);
-  const profit = afterBal - beforeBal;
+  const afterBal =
+    await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  const profit =
+    afterBal - beforeBal;
 
   console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
   console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
   console.log(`REAL PROFIT     ${fmt(profit)}\n`);
 
-  await topUpGas();
-
   isExecuting = false;
 }
 
-/* ================= SCAN LOOP (RESTORED) ================= */
+/* ================= SCAN LOOP ================= */
 
 async function scanLoop() {
 
   const tasks = [];
 
   for (const b of Object.values(routers)) {
+
     for (const s of Object.values(routers)) {
+
       if (b === s) continue;
 
       for (const t of Object.values(TOKENS)) {
-        tasks.push({ buy: b, sell: s, token: t });
+
+        tasks.push({
+          buy: b,
+          sell: s,
+          token: t
+        });
       }
     }
   }
@@ -302,26 +405,39 @@ async function scanLoop() {
   let i = 0;
 
   async function worker() {
+
     while (true) {
 
       if (isExecuting) {
+
         await sleep(5);
         continue;
       }
 
-      const task = tasks[i++ % tasks.length];
+      const task =
+        tasks[i++ % tasks.length];
 
       const trade =
-        await findTrade(task.buy, task.sell, task.token);
+        await findTrade(
+          task.buy,
+          task.sell,
+          task.token
+        );
 
       if (!trade) continue;
 
       microTrades.push(trade);
+
       runningProfit += trade.expectedProfit;
 
-      console.log(`RUNNING TOTAL ${fmt(runningProfit)}`);
+      console.log(
+        `RUNNING TOTAL ${fmt(runningProfit)}`
+      );
 
-      if (!isExecuting && runningProfit >= MIN_BATCH_PROFIT) {
+      if (
+        !isExecuting &&
+        runningProfit >= MIN_BATCH_PROFIT
+      ) {
 
         isExecuting = true;
 
@@ -343,7 +459,18 @@ async function scanLoop() {
 /* ================= MAIN ================= */
 
 (async function main() {
+
   console.log("🚀 BOT STARTED\n");
+
   await initProvider();
+
+  const bal =
+    await provider.getBalance(wallet.address);
+
+  console.log(
+    `STARTING POL BALANCE ${ethers.formatEther(bal)}\n`
+  );
+
   await scanLoop();
+
 })();
