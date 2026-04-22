@@ -31,7 +31,7 @@ let routerContracts;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.0005", 6);
 
 const WORKER_COUNT = 32;
 
