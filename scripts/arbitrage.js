@@ -1,5 +1,3 @@
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -16,11 +14,10 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 /* ================= RPC ================= */
 
 const RPCS = [
- // "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
   "https://polygon-bor-rpc.publicnode.com",
-//  "https://polygon.llamarpc.com",
-//  "https://polygon.drpc.org",
- // "https://polygon-public.nodies.app"
+  "https://polygon.llamarpc.com",
+  "https://polygon.drpc.org",
+  "https://polygon-public.nodies.app"
 ];
 
 let rpcIndex = 0;
@@ -32,11 +29,16 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const TRADE_AMOUNT = ethers.parseUnits(".02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits(".005", 6);
+const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
+const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
 
 const WORKER_COUNT = 32;
+
+/* ================= GAS TOP-UP ================= */
+
+const WITHDRAW_THRESHOLD = ethers.parseUnits(".05", 6);
+const WITHDRAW_PERCENT = 1n;
 
 /* ================= CONTRACT ================= */
 
@@ -49,16 +51,19 @@ const USDC =
 /* ================= ABI ================= */
 
 const erc20Abi = [
-  "function balanceOf(address) view returns (uint256)"
+  "function balanceOf(address) view returns (uint256)",
+  "function approve(address,uint256)"
 ];
 
 const contractAbi = [
   "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
-  "function minimumProfitUSDC() view returns (uint256)"
+  "function minimumProfitUSDC() view returns (uint256)",
+  "function withdrawERC20(address,uint256)"
 ];
 
 const routerAbi = [
-  "function getAmountsOut(uint,address[]) view returns(uint[])"
+  "function getAmountsOut(uint,address[]) view returns(uint[])",
+  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
 ];
 
 /* ================= ROUTERS ================= */
@@ -76,161 +81,9 @@ const routers = {
 
 const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
   CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
   QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
   SHIB: "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
@@ -243,13 +96,8 @@ const TOKENS = {
 
 /* ================= HELPERS ================= */
 
-function fmt(x) {
-  return ethers.formatUnits(x, 6);
-}
-
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
+const fmt = x => ethers.formatUnits(x, 6);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ================= STATE ================= */
 
@@ -261,7 +109,7 @@ let isExecuting = false;
 
 function rebuildContracts() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-  usdc = new ethers.Contract(USDC, erc20Abi, provider);
+  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
   vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
 
   routerContracts = Object.fromEntries(
@@ -275,12 +123,7 @@ function rebuildContracts() {
 function newProvider() {
   const url = RPCS[rpcIndex];
   rpcIndex = (rpcIndex + 1) % RPCS.length;
-
-  return new ethers.JsonRpcProvider(
-    url,
-    { name: "matic", chainId: 137 },
-    { staticNetwork: true }
-  );
+  return new ethers.JsonRpcProvider(url);
 }
 
 async function initProvider() {
@@ -292,10 +135,57 @@ async function initProvider() {
   console.log(`ONCHAIN MIN PROFIT ${fmt(onchainMin)}\n`);
 }
 
-/* ================= BALANCE ================= */
+/* ================= GAS TOP-UP ================= */
 
-async function getContractUSDC() {
-  return await usdc.balanceOf(CONTRACT_ADDRESS);
+async function topUpGas() {
+  try {
+    const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+    if (contractBal < WITHDRAW_THRESHOLD) return;
+
+    const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
+
+    console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
+
+    await (await vault.withdrawERC20(USDC, amount)).wait();
+    await (await usdc.approve(routers.QuickSwap, amount)).wait();
+
+    const router = new ethers.Contract(
+      routers.QuickSwap,
+      routerAbi,
+      wallet
+    );
+
+    await (
+      await router.swapExactTokensForTokens(
+        amount,
+        0,
+        [USDC, TOKENS.WMATIC],
+        wallet.address,
+        Math.floor(Date.now() / 1000) + 120
+      )
+    ).wait();
+
+    console.log("✅ USDC → WMATIC");
+
+    const wmatic = new ethers.Contract(
+      TOKENS.WMATIC,
+      [
+        "function withdraw(uint256)",
+        "function balanceOf(address) view returns(uint256)"
+      ],
+      wallet
+    );
+
+    const bal = await wmatic.balanceOf(wallet.address);
+
+    if (bal > 0n) {
+      await (await wmatic.withdraw(bal)).wait();
+      console.log("🔥 WMATIC → POL");
+    }
+
+  } catch (e) {
+    console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
+  }
 }
 
 /* ================= QUOTE ================= */
@@ -361,109 +251,39 @@ async function findTrade(buy, sell, token) {
   return null;
 }
 
-/* ================= REVALIDATION ================= */
-
-async function revalidateTrades(trades) {
-  console.log("\nFULL BATCH REQUOTE START\n");
-
-  const valid = [];
-
-  for (const t of trades) {
-    const buyOut = await quote(t.buy, t.amountIn, t.buyPath);
-    if (!buyOut) continue;
-
-    const sellOut = await quote(t.sell, buyOut, t.sellPath);
-    if (!sellOut) continue;
-
-    const profit = sellOut - t.amountIn;
-
-    if (profit < MIN_PROFIT) continue;
-
-    t.expectedProfit = profit;
-    valid.push(t);
-  }
-
-  return valid;
-}
-
 /* ================= EXECUTE ================= */
 
 async function executeBatch(trades) {
-
   console.log("\nBATCH THRESHOLD REACHED");
-  console.log(`REBUILT TRADES ${trades.length}`);
 
-  const valid = await revalidateTrades(trades);
+  const beforeBal = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-  console.log(`VALID TRADES ${valid.length}`);
-  console.log("SORTED BEST → WORST\n");
+  const tx = await vault.executeFlashBatchArbitrage({
+    buyRouters: trades.map(t => t.buy),
+    sellRouters: trades.map(t => t.sell),
+    amountsInUSDC: trades.map(t => t.amountIn),
+    pathsToToken: trades.map(t => t.buyPath),
+    pathsToUSDC: trades.map(t => t.sellPath),
+    deadline: Math.floor(Date.now() / 1000) + 30
+  });
 
-  valid.sort((a, b) =>
-    b.expectedProfit > a.expectedProfit ? 1 : -1
-  );
-
-  const beforeBal = await getContractUSDC();
-
-  let usable = [];
-  let usedCapital = 0n;
-  let usableProfit = 0n;
-
-  for (const t of valid) {
-    if (usedCapital + t.amountIn > beforeBal) break;
-
-    usedCapital += t.amountIn;
-    usableProfit += t.expectedProfit;
-    usable.push(t);
-  }
-
-  if (usable.length === 0) {
-    console.log("NO USABLE TRADES\n");
-    isExecuting = false;
-    return;
-  }
-
-  console.log(`EXECUTING TRADES ${usable.length}`);
-  console.log(`USED CAPITAL ${fmt(usedCapital)} USDC`);
-  console.log(`PROFIT ${fmt(usableProfit)}\n`);
-
-  const fee = await provider.getFeeData();
-
-  const tx =
-    await vault.executeFlashBatchArbitrage(
-      {
-        buyRouters: usable.map(t => t.buy),
-        sellRouters: usable.map(t => t.sell),
-        amountsInUSDC: usable.map(t => t.amountIn),
-        pathsToToken: usable.map(t => t.buyPath),
-        pathsToUSDC: usable.map(t => t.sellPath),
-        deadline: Math.floor(Date.now() / 1000) + 30
-      },
-      {
-        gasLimit: 2000000,
-        maxFeePerGas: fee.maxFeePerGas * 12n / 10n,
-        maxPriorityFeePerGas: fee.maxPriorityFeePerGas * 12n / 10n
-      }
-    );
-
-  console.log(`TX SENT ${tx.hash}\n`);
+  console.log(`TX SENT ${tx.hash}`);
 
   await provider.waitForTransaction(tx.hash);
 
-  const afterBal = await getContractUSDC();
-
-  const delta =
-    afterBal > beforeBal
-      ? afterBal - beforeBal
-      : 0n;
+  const afterBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+  const profit = afterBal - beforeBal;
 
   console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
   console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
-  console.log(`REAL PROFIT     ${fmt(delta)}\n`);
+  console.log(`REAL PROFIT     ${fmt(profit)}\n`);
+
+  await topUpGas();
 
   isExecuting = false;
 }
 
-/* ================= SCANNER ================= */
+/* ================= SCAN LOOP (RESTORED) ================= */
 
 async function scanLoop() {
 
@@ -523,6 +343,7 @@ async function scanLoop() {
 /* ================= MAIN ================= */
 
 (async function main() {
+  console.log("🚀 BOT STARTED\n");
   await initProvider();
   await scanLoop();
 })();
