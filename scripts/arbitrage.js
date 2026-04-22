@@ -14,8 +14,8 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 /* ================= RPC ================= */
 
 const RPCS = [
-  //"https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
-  "https://polygon-bor-rpc.publicnode.com",
+  "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
+  //"https://polygon-bor-rpc.publicnode.com",
  //"https://polygon.llamarpc.com",
   //"https://polygon.drpc.org",
 //"https://polygon-public.nodies.app"
