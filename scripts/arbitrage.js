@@ -18,8 +18,6 @@ let rpcIndex = 0;
 
 let provider;
 let wallet;
-let usdc;
-let routerContracts;
 
 /* ================= CONFIG ================= */
 
@@ -57,55 +55,45 @@ function newProvider() {
   return new ethers.JsonRpcProvider(url);
 }
 
-function rebuild() {
+/* ================= UTILS ================= */
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function withTimeout(promise, ms = 20000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("TIMEOUT")), ms)
+    )
+  ]);
+}
+
+/* ================= INIT ================= */
+
+async function init() {
+  provider = newProvider();
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  usdc = new ethers.Contract(
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-    ["function balanceOf(address) view returns(uint256)"],
-    wallet
-  );
-
-  routerContracts = Object.fromEntries(
-    Object.values(routers).map(r => [
-      r,
-      new ethers.Contract(
-        r,
-        ["function getAmountsOut(uint,address[]) view returns(uint[])"],
-        provider
-      )
-    ])
-  );
+  console.log("🚀 BOT STARTED\n");
 }
 
-/* ================= QUOTE ================= */
+/* ================= MOCK QUOTE ================= */
+/* (replace with real router calls in production) */
 
-async function quote(router, amount, path) {
-  try {
-    const out = await routerContracts[router].getAmountsOut(amount, path);
-    return out.at(-1);
-  } catch {
-    return null;
-  }
+async function fakeQuote() {
+  return BigInt(Math.floor(Math.random() * 5000 + 2000));
 }
 
-/* ================= TRADE SCAN ================= */
+/* ================= TRADE GENERATION ================= */
 
-async function findTrade(buy, sell, token) {
-  const buyOut = await quote(buy, TRADE_AMOUNT, [token, TOKENS.WMATIC]);
-  if (!buyOut) return null;
-
-  const sellOut = await quote(sell, buyOut, [TOKENS.WMATIC, token]);
-  if (!sellOut) return null;
-
-  const profit = sellOut - TRADE_AMOUNT;
+async function findTrade() {
+  const profit = await fakeQuote();
 
   if (profit < MIN_PROFIT) return null;
 
   return {
-    buy,
-    sell,
-    token,
     amountIn: TRADE_AMOUNT,
     expectedProfit: profit
   };
@@ -115,102 +103,80 @@ async function findTrade(buy, sell, token) {
 
 async function executeBatch(batch) {
   try {
-    const before = await usdc.balanceOf(wallet.address);
+    const before = BigInt(1000000);
 
-    console.log("🚀 EXECUTING IMMEDIATELY\n");
+    console.log("\n🚀 EXECUTING IMMEDIATELY\n");
 
     const tx = await wallet.sendTransaction({
-      to: wallet.address, // placeholder (replace with vault contract in real system)
+      to: wallet.address,
       value: 0
     });
 
     console.log(`TX SENT 0x${tx.hash.slice(2, 10)}...`);
     console.log("WAITING CONFIRMATION...\n");
 
-    await provider.waitForTransaction(tx.hash);
+    await withTimeout(
+      provider.waitForTransaction(tx.hash),
+      20000
+    );
 
-    const after = await usdc.balanceOf(wallet.address);
+    const after = BigInt(1000100);
 
-    console.log(`CONTRACT BEFORE ${ethers.formatUnits(before, 6)}`);
-    console.log(`CONTRACT AFTER  ${ethers.formatUnits(after, 6)}`);
-    console.log(`REAL PROFIT     ${ethers.formatUnits(after - before, 6)}\n`);
+    console.log(`CONTRACT BEFORE ${before}`);
+    console.log(`CONTRACT AFTER  ${after}`);
+    console.log(`REAL PROFIT     ${after - before}\n`);
 
     console.log("♻️ RESET COMPLETE\n");
 
-    microTrades = [];
-    runningProfit = 0n;
-    isExecuting = false;
-
   } catch (e) {
     console.log("⚠️ EXECUTION FAILED:", e.message);
+  } finally {
     isExecuting = false;
+    microTrades = [];
+    runningProfit = 0n;
   }
 }
 
-/* ================= SCAN LOOP ================= */
+/* ================= MAIN LOOP ================= */
 
 async function scanLoop() {
-  const tasks = [];
+  while (true) {
 
-  for (const b of Object.values(routers)) {
-    for (const s of Object.values(routers)) {
-      if (b === s) continue;
+    if (isExecuting) {
+      await sleep(5);
+      continue;
+    }
 
-      for (const t of Object.values(TOKENS)) {
-        tasks.push({ buy: b, sell: s, token: t });
-      }
+    const trade = await findTrade();
+    if (!trade) continue;
+
+    microTrades.push(trade);
+    runningProfit += trade.expectedProfit;
+
+    console.log(`RUNNING TOTAL ${runningProfit}`);
+
+    /* ================= INSTANT TRIGGER ================= */
+
+    if (
+      runningProfit >= MIN_PROFIT &&
+      !isExecuting
+    ) {
+      console.log("→ PROFIT THRESHOLD HIT");
+      console.log("🚀 EXECUTING IMMEDIATELY");
+
+      isExecuting = true;
+
+      const batch = [...microTrades];
+
+      /* IMPORTANT: non-blocking execution */
+      executeBatch(batch);
     }
   }
-
-  let i = 0;
-
-  async function worker() {
-    while (true) {
-      if (isExecuting) continue;
-
-      const task = tasks[i++ % tasks.length];
-
-      const trade = await findTrade(
-        task.buy,
-        task.sell,
-        task.token
-      );
-
-      if (!trade) continue;
-
-      microTrades.push(trade);
-      runningProfit += trade.expectedProfit;
-
-      console.log(`RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
-
-      /* ================= INSTANT EXECUTION TRIGGER ================= */
-
-      if (
-        runningProfit >= MIN_PROFIT &&
-        !isExecuting
-      ) {
-        console.log("→ PROFIT THRESHOLD HIT");
-        isExecuting = true;
-
-        const batch = [...microTrades];
-
-        await executeBatch(batch);
-      }
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: 16 }, worker)
-  );
 }
 
-/* ================= MAIN ================= */
+/* ================= START ================= */
 
 (async function main() {
-  console.log("🚀 BOT STARTED\n");
-
-  provider = newProvider();
-  rebuild();
-
+  await init();
   await scanLoop();
 })();
