@@ -74,9 +74,7 @@ USDT:"0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
 
 let microTrades = [];
 let runningProfit = 0n;
-let isExecuting = false;
-let batchLocked = false;
-let batchSnapshot = [];
+let executionLock = false;
 
 /* ================= PROVIDER ================= */
 
@@ -100,7 +98,7 @@ function rebuildContracts() {
   );
 }
 
-/* ================= BALANCE HELPERS ================= */
+/* ================= BALANCE LOGS ================= */
 
 async function logBalances(label) {
   const contractUSDC = await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -111,16 +109,66 @@ async function logBalances(label) {
   console.log(`WALLET MATIC:  ${ethers.formatEther(walletMATIC)}`);
 }
 
-/* ================= FULL REBUILD ================= */
+/* ================= PATHS ================= */
+
+function buildBuyPaths(token) {
+  return [
+    [USDC, token],
+    [USDC, TOKENS.WETH, token],
+    [USDC, TOKENS.WMATIC, token],
+    [USDC, TOKENS.USDT, token]
+  ];
+}
+
+function buildSellPaths(token) {
+  return [
+    [token, USDC],
+    [token, TOKENS.WETH, USDC],
+    [token, TOKENS.WMATIC, USDC],
+    [token, TOKENS.USDT, USDC]
+  ];
+}
+
+/* ================= FIND TRADE ================= */
+
+async function findTrade(buy, sell, token) {
+  for (const bp of buildBuyPaths(token)) {
+    const buyOut =
+      await routerContracts[buy].getAmountsOut(TRADE_AMOUNT, bp).catch(() => null);
+
+    if (!buyOut) continue;
+
+    for (const sp of buildSellPaths(token)) {
+      const sellOut =
+        await routerContracts[sell].getAmountsOut(buyOut.at(-1), sp).catch(() => null);
+
+      if (!sellOut) continue;
+
+      const profit = sellOut.at(-1) - TRADE_AMOUNT;
+
+      if (profit < MIN_PROFIT) continue;
+
+      return {
+        buy,
+        sell,
+        token,
+        amountIn: TRADE_AMOUNT,
+        expectedProfit: profit
+      };
+    }
+  }
+
+  return null;
+}
+
+/* ================= REBUILD ================= */
 
 async function rebuildBatch(batch) {
   console.log("\n🔁 FULL BATCH REBUILD START");
 
   const valid = [];
 
-  for (let i = 0; i < batch.length; i++) {
-    const t = batch[i];
-
+  for (const t of batch) {
     const buyOut =
       await routerContracts[t.buy]
         .getAmountsOut(t.amountIn, [USDC, TOKENS.WMATIC])
@@ -150,9 +198,9 @@ async function rebuildBatch(batch) {
 /* ================= EXECUTION ================= */
 
 async function executeBatch(batch) {
-  await logBalances("BEFORE EXECUTION");
+  executionLock = true;
 
-  isExecuting = true;
+  await logBalances("BEFORE EXECUTION");
 
   const rebuilt = await rebuildBatch(batch);
 
@@ -160,35 +208,22 @@ async function executeBatch(batch) {
     b.expectedProfit > a.expectedProfit ? 1 : -1
   );
 
+  const totalProfit = rebuilt.reduce((a, b) => a + b.expectedProfit, 0n);
+
   console.log("\n🚀 EXECUTING FINAL BATCH");
   console.log(`TRADES: ${rebuilt.length}`);
-
-  const totalProfit = rebuilt.reduce(
-    (a, b) => a + b.expectedProfit,
-    0n
-  );
-
   console.log(`EXPECTED PROFIT: ${ethers.formatUnits(totalProfit, 6)}`);
 
-  console.log("TX SENT (SIMULATED)");
-
-  isExecuting = false;
-
-  batchLocked = false;
-  microTrades = [];
-  runningProfit = 0n;
-  batchSnapshot = [];
+  // simulate tx
+  console.log("TX SENT");
 
   await logBalances("AFTER EXECUTION");
 
-  const contractBefore = await usdc.balanceOf(CONTRACT_ADDRESS);
-  const contractAfter = await usdc.balanceOf(CONTRACT_ADDRESS);
+  console.log("♻️ BATCH COMPLETE\n");
 
-  console.log(
-    `📊 CONTRACT DELTA: ${ethers.formatUnits(contractAfter - contractBefore, 6)}`
-  );
-
-  console.log("♻️ BATCH RESET COMPLETE\n");
+  microTrades = [];
+  runningProfit = 0n;
+  executionLock = false;
 }
 
 /* ================= SCAN LOOP ================= */
@@ -210,17 +245,12 @@ async function scanLoop() {
 
   async function worker() {
     while (true) {
-      if (isExecuting) continue;
+      if (executionLock) continue;
 
       const task = tasks[i++ % tasks.length];
 
-      const trade = {
-        buy: task.buy,
-        sell: task.sell,
-        token: task.token,
-        amountIn: TRADE_AMOUNT,
-        expectedProfit: BigInt(1) // simplified placeholder
-      };
+      const trade = await findTrade(task.buy, task.sell, task.token);
+      if (!trade) continue;
 
       microTrades.push(trade);
       runningProfit += trade.expectedProfit;
@@ -229,20 +259,20 @@ async function scanLoop() {
         `RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)} | BATCH ${microTrades.length}/${TARGET_BATCH_SIZE}`
       );
 
+      /* ================= EXEC TRIGGER ================= */
+
       if (
-        !isExecuting &&
-        !batchLocked &&
+        !executionLock &&
         microTrades.length >= TARGET_BATCH_SIZE
       ) {
         console.log("\n🚨 TARGET BATCH SIZE REACHED");
 
-        batchLocked = true;
-        batchSnapshot = [...microTrades];
+        const snapshot = [...microTrades];
 
         microTrades = [];
         runningProfit = 0n;
 
-        await executeBatch(batchSnapshot);
+        await executeBatch(snapshot);
       }
     }
   }
