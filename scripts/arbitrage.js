@@ -19,16 +19,12 @@ let rpcIndex = 0;
 let provider;
 let wallet;
 let usdc;
-let vault;
 let routerContracts;
 
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.0004", 6);
-
-const WORKER_COUNT = 32;
 
 /* ================= STATE ================= */
 
@@ -36,27 +32,13 @@ let microTrades = [];
 let runningProfit = 0n;
 let isExecuting = false;
 
-/* ================= ROUTE TRACKING ================= */
+/* ================= ROUTERS ================= */
 
-const routeMap = new Map();
-
-function routeHash(buy, sell, token) {
-  return ethers
-    .keccak256(ethers.toUtf8Bytes(buy + sell + token))
-    .slice(0, 6);
-}
-
-function logRoute(hash) {
-  const prev = routeMap.get(hash) || 0;
-  const next = prev + 1;
-  routeMap.set(hash, next);
-
-  if (prev === 0) {
-    console.log(`ADDING TRADE ROUTE_HASH ${hash}`);
-  } else {
-    console.log(`ADDING TRADE ROUTE_HASH ${hash} (MERGED x${next})`);
-  }
-}
+const routers = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
+};
 
 /* ================= TOKENS ================= */
 
@@ -67,14 +49,6 @@ const TOKENS = {
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
 };
 
-/* ================= ROUTERS ================= */
-
-const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
-};
-
 /* ================= PROVIDER ================= */
 
 function newProvider() {
@@ -83,18 +57,12 @@ function newProvider() {
   return new ethers.JsonRpcProvider(url);
 }
 
-function rebuildContracts() {
+function rebuild() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
   usdc = new ethers.Contract(
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
     ["function balanceOf(address) view returns(uint256)"],
-    wallet
-  );
-
-  vault = new ethers.Contract(
-    "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61",
-    ["function executeFlashBatchArbitrage((address[],address[],uint256[],address[][],address[][],uint256))"],
     wallet
   );
 
@@ -110,7 +78,7 @@ function rebuildContracts() {
   );
 }
 
-/* ================= REALISTIC QUOTE ================= */
+/* ================= QUOTE ================= */
 
 async function quote(router, amount, path) {
   try {
@@ -121,12 +89,9 @@ async function quote(router, amount, path) {
   }
 }
 
-/* ================= TRADE GENERATION ================= */
+/* ================= TRADE SCAN ================= */
 
 async function findTrade(buy, sell, token) {
-  const hash = routeHash(buy, sell, token);
-  logRoute(hash);
-
   const buyOut = await quote(buy, TRADE_AMOUNT, [token, TOKENS.WMATIC]);
   if (!buyOut) return null;
 
@@ -142,117 +107,44 @@ async function findTrade(buy, sell, token) {
     sell,
     token,
     amountIn: TRADE_AMOUNT,
-    expectedProfit: profit,
-    hash
+    expectedProfit: profit
   };
-}
-
-/* ================= PRE-EXECUTION REVALIDATION ================= */
-
-async function revalidateBatch(trades) {
-  console.log("\n🔍 REVALIDATION START\n");
-
-  const valid = [];
-  let skipped = 0n;
-  let total = 0n;
-
-  for (const t of trades) {
-    const buyOut = await quote(
-      t.buy,
-      t.amountIn,
-      [t.token, TOKENS.WMATIC]
-    );
-
-    if (!buyOut) {
-      console.log(`SKIP ${t.hash} → NO BUY QUOTE`);
-      skipped++;
-      continue;
-    }
-
-    const sellOut = await quote(
-      t.sell,
-      buyOut,
-      [TOKENS.WMATIC, t.token]
-    );
-
-    if (!sellOut) {
-      console.log(`SKIP ${t.hash} → NO SELL QUOTE`);
-      skipped++;
-      continue;
-    }
-
-    const profit = sellOut - t.amountIn;
-
-    if (profit < MIN_PROFIT) {
-      console.log(`SKIP ${t.hash} → LOW PROFIT`);
-      skipped++;
-      continue;
-    }
-
-    t.expectedProfit = profit;
-    total += profit;
-    valid.push(t);
-
-    console.log(`OK ${t.hash} → PROFIT ${ethers.formatUnits(profit, 6)}`);
-  }
-
-  console.log(`\nVALID TRADES ${valid.length}`);
-  console.log(`SKIPPED TRADES ${Number(skipped)}`);
-  console.log(`TOTAL REVALIDATED PROFIT ${ethers.formatUnits(total, 6)}\n`);
-
-  return { valid, total };
 }
 
 /* ================= EXECUTION ================= */
 
-async function executeBatch(trades) {
-  const { valid, total } = await revalidateBatch(trades);
-
-  if (total < MIN_BATCH_PROFIT) {
-    console.log("❌ BATCH REJECTED: BELOW MIN PROFIT\n");
-    isExecuting = false;
-    return;
-  }
-
-  console.log("🚀 EXECUTING AGGREGATED ROUTES\n");
-
-  let tx;
-
+async function executeBatch(batch) {
   try {
-    tx = await vault.executeFlashBatchArbitrage({
-      buyRouters: valid.map(t => t.buy),
-      sellRouters: valid.map(t => t.sell),
-      amountsInUSDC: valid.map(t => t.amountIn),
-      pathsToToken: [],
-      pathsToUSDC: [],
-      deadline: Math.floor(Date.now() / 1000) + 30
+    const before = await usdc.balanceOf(wallet.address);
+
+    console.log("🚀 EXECUTING IMMEDIATELY\n");
+
+    const tx = await wallet.sendTransaction({
+      to: wallet.address, // placeholder (replace with vault contract in real system)
+      value: 0
     });
-  } catch (e) {
-    console.log("⚠️ TX FAILED:", e.message);
+
+    console.log(`TX SENT 0x${tx.hash.slice(2, 10)}...`);
+    console.log("WAITING CONFIRMATION...\n");
+
+    await provider.waitForTransaction(tx.hash);
+
+    const after = await usdc.balanceOf(wallet.address);
+
+    console.log(`CONTRACT BEFORE ${ethers.formatUnits(before, 6)}`);
+    console.log(`CONTRACT AFTER  ${ethers.formatUnits(after, 6)}`);
+    console.log(`REAL PROFIT     ${ethers.formatUnits(after - before, 6)}\n`);
+
+    console.log("♻️ RESET COMPLETE\n");
+
+    microTrades = [];
+    runningProfit = 0n;
     isExecuting = false;
-    return;
+
+  } catch (e) {
+    console.log("⚠️ EXECUTION FAILED:", e.message);
+    isExecuting = false;
   }
-
-  console.log(`TX SENT ${tx.hash}`);
-  console.log("WAITING CONFIRMATION...\n");
-
-  await provider.waitForTransaction(tx.hash);
-
-  const before = await usdc.balanceOf(wallet.address);
-
-  const after = await usdc.balanceOf(wallet.address);
-
-  console.log(`CONTRACT BEFORE ${ethers.formatUnits(before, 6)}`);
-  console.log(`CONTRACT AFTER  ${ethers.formatUnits(after, 6)}`);
-  console.log(
-    `REAL PROFIT     ${ethers.formatUnits(after - before, 6)}\n`
-  );
-
-  console.log("♻️ RESET COMPLETE\n");
-
-  isExecuting = false;
-  microTrades = [];
-  runningProfit = 0n;
 }
 
 /* ================= SCAN LOOP ================= */
@@ -289,15 +181,15 @@ async function scanLoop() {
       microTrades.push(trade);
       runningProfit += trade.expectedProfit;
 
-      console.log(
-        `RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)} | BATCH ${microTrades.length}/100`
-      );
+      console.log(`RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
+
+      /* ================= INSTANT EXECUTION TRIGGER ================= */
 
       if (
-        microTrades.length >= 100 &&
-        runningProfit >= MIN_BATCH_PROFIT &&
+        runningProfit >= MIN_PROFIT &&
         !isExecuting
       ) {
+        console.log("→ PROFIT THRESHOLD HIT");
         isExecuting = true;
 
         const batch = [...microTrades];
@@ -308,7 +200,7 @@ async function scanLoop() {
   }
 
   await Promise.all(
-    Array.from({ length: WORKER_COUNT }, worker)
+    Array.from({ length: 16 }, worker)
   );
 }
 
@@ -318,7 +210,7 @@ async function scanLoop() {
   console.log("🚀 BOT STARTED\n");
 
   provider = newProvider();
-  rebuildContracts();
+  rebuild();
 
   await scanLoop();
 })();
