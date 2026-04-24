@@ -31,7 +31,7 @@ const TRADE_AMOUNT = ethers.parseUnits("0.02",6);
 const MIN_PROFIT = ethers.parseUnits("0.000001",6);
 
 const MIN_BATCH_PROFIT =
-ethers.parseUnits("0.004",6);
+ethers.parseUnits("0.0002",6);
 
 const WORKER_COUNT = 32;
 
