@@ -23,6 +23,7 @@ let wallet;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.0004", 6);
 
 /* ================= STATE ================= */
 
@@ -57,18 +58,8 @@ function newProvider() {
 
 /* ================= UTILS ================= */
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-function withTimeout(promise, ms = 20000) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("TIMEOUT")), ms)
-    )
-  ]);
-}
+const fmt = x => ethers.formatUnits(x, 6);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ================= INIT ================= */
 
@@ -79,23 +70,24 @@ async function init() {
   console.log("🚀 BOT STARTED\n");
 }
 
-/* ================= MOCK QUOTE ================= */
-/* (replace with real router calls in production) */
+/* ================= MOCK TRADE ================= */
+/* replace with real router quotes */
 
-async function fakeQuote() {
-  return BigInt(Math.floor(Math.random() * 5000 + 2000));
+async function fakeProfit() {
+  return BigInt(Math.floor(Math.random() * 5000 + 1000));
 }
 
-/* ================= TRADE GENERATION ================= */
+/* ================= TRADE FINDER ================= */
 
 async function findTrade() {
-  const profit = await fakeQuote();
+  const profit = await fakeProfit();
 
   if (profit < MIN_PROFIT) return null;
 
   return {
     amountIn: TRADE_AMOUNT,
-    expectedProfit: profit
+    expectedProfit: profit,
+    hash: "0x" + Math.random().toString(16).slice(2, 6)
   };
 }
 
@@ -105,26 +97,24 @@ async function executeBatch(batch) {
   try {
     const before = BigInt(1000000);
 
-    console.log("\n🚀 EXECUTING IMMEDIATELY\n");
+    console.log("\n🚀 EXECUTING IMMEDIATELY");
+    console.log(`📦 EXECUTING BATCH SIZE ${batch.length}`);
 
     const tx = await wallet.sendTransaction({
       to: wallet.address,
       value: 0
     });
 
-    console.log(`TX SENT 0x${tx.hash.slice(2, 10)}...`);
+    console.log(`TX SENT 0x${tx.hash.slice(2, 8)}...`);
     console.log("WAITING CONFIRMATION...\n");
 
-    await withTimeout(
-      provider.waitForTransaction(tx.hash),
-      20000
-    );
+    await provider.waitForTransaction(tx.hash);
 
     const after = BigInt(1000100);
 
-    console.log(`CONTRACT BEFORE ${before}`);
-    console.log(`CONTRACT AFTER  ${after}`);
-    console.log(`REAL PROFIT     ${after - before}\n`);
+    console.log(`CONTRACT BEFORE ${fmt(before)}`);
+    console.log(`CONTRACT AFTER  ${fmt(after)}`);
+    console.log(`REAL PROFIT     ${fmt(after - before)}\n`);
 
     console.log("♻️ RESET COMPLETE\n");
 
@@ -140,6 +130,7 @@ async function executeBatch(batch) {
 /* ================= MAIN LOOP ================= */
 
 async function scanLoop() {
+
   while (true) {
 
     if (isExecuting) {
@@ -153,23 +144,45 @@ async function scanLoop() {
     microTrades.push(trade);
     runningProfit += trade.expectedProfit;
 
-    console.log(`RUNNING TOTAL ${runningProfit}`);
+    /* ================= FIX 1: LIVE RUNNING LOG ================= */
 
-    /* ================= INSTANT TRIGGER ================= */
+    console.log(
+      `ADDING TRADE ${trade.hash} | +${fmt(trade.expectedProfit)} USDC`
+    );
+
+    console.log(
+      `RUNNING TOTAL ${fmt(runningProfit)} | BATCH SIZE ${microTrades.length}`
+    );
+
+    /* ================= FIX 2: BATCH EXPECTED PROFIT ================= */
+
+    const batchExpectedProfit = microTrades.reduce(
+      (sum, t) => sum + t.expectedProfit,
+      0n
+    );
+
+    console.log(
+      `📦 BATCH EXPECTED PROFIT ${fmt(batchExpectedProfit)} USDC`
+    );
+
+    /* ================= FIX 3: THRESHOLD CHECK ================= */
 
     if (
-      runningProfit >= MIN_PROFIT &&
+      runningProfit >= MIN_BATCH_PROFIT &&
       !isExecuting
     ) {
-      console.log("→ PROFIT THRESHOLD HIT");
-      console.log("🚀 EXECUTING IMMEDIATELY");
 
-      isExecuting = true;
+      console.log("\n→ PROFIT THRESHOLD HIT");
 
-      const batch = [...microTrades];
+      console.log(
+        `🚀 EXECUTING BATCH (EXPECTED PROFIT ${fmt(batchExpectedProfit)} USDC)\n`
+      );
+
+      const batchSnapshot = [...microTrades];
 
       /* IMPORTANT: non-blocking execution */
-      executeBatch(batch);
+      isExecuting = true;
+      executeBatch(batchSnapshot);
     }
   }
 }
