@@ -28,7 +28,7 @@ const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
 
 const WORKER_COUNT = 32;
-const TARGET_BATCH_SIZE = 100;
+const TARGET_BATCH_SIZE = 20;
 
 /* ================= CONTRACT ================= */
 
