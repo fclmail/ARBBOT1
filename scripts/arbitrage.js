@@ -32,7 +32,7 @@ const ABI = [
 
 /* ================= CONFIG ================= */
 
-const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
+const TRADE_AMOUNT = ethers.parseUnits("0.01", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.002", 6);
 
 /* ================= ROUTERS ================= */
