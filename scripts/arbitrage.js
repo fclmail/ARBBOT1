@@ -23,7 +23,7 @@ let wallet;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.0004", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.04", 6);
 
 /* ================= STATE ================= */
 
