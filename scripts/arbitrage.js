@@ -13,23 +13,27 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= RPC ================= */
 
-const RPCS = ["https://polygon-bor-rpc.publicnode.com"];
-let rpcIndex = 0;
+const RPCS = [
+  "https://polygon-bor-rpc.publicnode.com"
+];
 
+let rpcIndex = 0;
 let provider;
 let wallet;
+
+/* ================= CONTRACT ================= */
+
+const CONTRACT =
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+
+const ABI = [
+ "function executeFlashBatchArbitrage((address[],address[],uint256[],address[][],address[][],uint256)) external"
+];
 
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("1", 6);
-
-/* ================= STATE ================= */
-
-let microTrades = [];
-let runningProfit = 0n;
-let isExecuting = false;
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.04", 6);
 
 /* ================= ROUTERS ================= */
 
@@ -42,11 +46,19 @@ const routers = {
 /* ================= TOKENS ================= */
 
 const TOKENS = {
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
 };
+
+/* ================= STATE ================= */
+
+let microTrades = [];
+let runningProfit = 0n;
+let isExecuting = false;
+
+let arb;
 
 /* ================= PROVIDER ================= */
 
@@ -67,63 +79,157 @@ async function init() {
   provider = newProvider();
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  console.log("🚀 BOT STARTED\n");
+  arb = new ethers.Contract(
+    CONTRACT,
+    ABI,
+    wallet
+  );
+
+  console.log("🚀 CONTRACT ARB BOT STARTED\n");
 }
 
-/* ================= MOCK TRADE ================= */
-/* replace with real router quotes */
+/* ================= ROUTER ABI ================= */
 
-async function fakeProfit() {
-  return BigInt(Math.floor(Math.random() * 5000 + 1000));
+const routerABI = [
+"function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"
+];
+
+/* ================= QUOTE ================= */
+
+async function getQuote(router, path, amount) {
+  try {
+
+    const r = new ethers.Contract(
+      router,
+      routerABI,
+      provider
+    );
+
+    const amounts =
+      await r.getAmountsOut(amount, path);
+
+    return amounts[amounts.length - 1];
+
+  } catch {
+    return 0n;
+  }
 }
 
-/* ================= TRADE FINDER ================= */
+/* ================= FIND TRADE ================= */
 
 async function findTrade() {
-  const profit = await fakeProfit();
 
-  if (profit < MIN_PROFIT) return null;
+  const tokens = [
+    TOKENS.WMATIC,
+    TOKENS.WETH,
+    TOKENS.DAI
+  ];
 
-  return {
-    amountIn: TRADE_AMOUNT,
-    expectedProfit: profit,
-    hash: "0x" + Math.random().toString(16).slice(2, 6)
-  };
+  for (const buyName in routers) {
+    for (const sellName in routers) {
+
+      if (buyName === sellName) continue;
+
+      const buyRouter = routers[buyName];
+      const sellRouter = routers[sellName];
+
+      for (const token of tokens) {
+
+        const pathToToken = [
+          TOKENS.USDC,
+          token
+        ];
+
+        const pathToUSDC = [
+          token,
+          TOKENS.USDC
+        ];
+
+        const tokenOut =
+          await getQuote(
+            buyRouter,
+            pathToToken,
+            TRADE_AMOUNT
+          );
+
+        if (tokenOut === 0n) continue;
+
+        const usdcBack =
+          await getQuote(
+            sellRouter,
+            pathToUSDC,
+            tokenOut
+          );
+
+        if (usdcBack === 0n) continue;
+
+        if (usdcBack > TRADE_AMOUNT) {
+
+          const profit =
+            usdcBack - TRADE_AMOUNT;
+
+          return {
+            buyRouter,
+            sellRouter,
+            amountIn: TRADE_AMOUNT,
+            expectedProfit: profit,
+            pathToToken,
+            pathToUSDC
+          };
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
-/* ================= EXECUTION ================= */
+/* ================= EXECUTE BATCH ================= */
 
 async function executeBatch(batch) {
+
   try {
-    const before = BigInt(1000000);
 
-    console.log("\n🚀 EXECUTING IMMEDIATELY");
-    console.log(`📦 EXECUTING BATCH SIZE ${batch.length}`);
+    console.log("\n🚀 EXECUTING BATCH");
+    console.log(`📦 SIZE ${batch.length}`);
 
-    const tx = await wallet.sendTransaction({
-      to: wallet.address,
-      value: 0
-    });
+    const buyRouters = batch.map(t => t.buyRouter);
+    const sellRouters = batch.map(t => t.sellRouter);
+    const amountsInUSDC = batch.map(t => t.amountIn);
+    const pathsToToken = batch.map(t => t.pathToToken);
+    const pathsToUSDC = batch.map(t => t.pathToUSDC);
 
-    console.log(`TX SENT 0x${tx.hash.slice(2, 8)}...`);
+    const deadline =
+      Math.floor(Date.now()/1000) + 60;
+
+    const tx =
+      await arb.executeFlashBatchArbitrage({
+        buyRouters,
+        sellRouters,
+        amountsInUSDC,
+        pathsToToken,
+        pathsToUSDC,
+        deadline
+      });
+
+    console.log(`TX SENT ${tx.hash}`);
     console.log("WAITING CONFIRMATION...\n");
 
-    await provider.waitForTransaction(tx.hash);
+    await tx.wait();
 
-    const after = BigInt(1000100);
-
-    console.log(`CONTRACT BEFORE ${fmt(before)}`);
-    console.log(`CONTRACT AFTER  ${fmt(after)}`);
-    console.log(`REAL PROFIT     ${fmt(after - before)}\n`);
-
-    console.log("♻️ RESET COMPLETE\n");
+    console.log("✅ BATCH EXECUTED\n");
 
   } catch (e) {
-    console.log("⚠️ EXECUTION FAILED:", e.message);
+
+    console.log("⚠️ EXECUTION FAILED");
+    console.log(e.message);
+
   } finally {
+
     isExecuting = false;
     microTrades = [];
     runningProfit = 0n;
+
   }
 }
 
@@ -134,55 +240,39 @@ async function scanLoop() {
   while (true) {
 
     if (isExecuting) {
-      await sleep(5);
+      await sleep(10);
       continue;
     }
 
     const trade = await findTrade();
+
     if (!trade) continue;
 
     microTrades.push(trade);
     runningProfit += trade.expectedProfit;
 
-    /* ================= FIX 1: LIVE RUNNING LOG ================= */
-
     console.log(
-      `ADDING TRADE ${trade.hash} | +${fmt(trade.expectedProfit)} USDC`
+      `ADD TRADE +${fmt(trade.expectedProfit)}`
     );
 
     console.log(
-      `RUNNING TOTAL ${fmt(runningProfit)} | BATCH SIZE ${microTrades.length}`
+      `RUNNING ${fmt(runningProfit)} | ${microTrades.length}`
     );
-
-    /* ================= FIX 2: BATCH EXPECTED PROFIT ================= */
-
-    const batchExpectedProfit = microTrades.reduce(
-      (sum, t) => sum + t.expectedProfit,
-      0n
-    );
-
-    console.log(
-      `📦 BATCH EXPECTED PROFIT ${fmt(batchExpectedProfit)} USDC`
-    );
-
-    /* ================= FIX 3: THRESHOLD CHECK ================= */
 
     if (
       runningProfit >= MIN_BATCH_PROFIT &&
       !isExecuting
     ) {
 
-      console.log("\n→ PROFIT THRESHOLD HIT");
-
       console.log(
-        `🚀 EXECUTING BATCH (EXPECTED PROFIT ${fmt(batchExpectedProfit)} USDC)\n`
+        "\n🎯 BATCH PROFIT HIT\n"
       );
 
-      const batchSnapshot = [...microTrades];
+      const batch = [...microTrades];
 
-      /* IMPORTANT: non-blocking execution */
       isExecuting = true;
-      executeBatch(batchSnapshot);
+
+      executeBatch(batch);
     }
   }
 }
