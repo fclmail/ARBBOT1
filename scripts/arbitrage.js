@@ -36,15 +36,13 @@ const PRIVATE_KEY =
 
 if (!PRIVATE_KEY) throw new Error("PK missing");
 
-/* ================= RPC ================= */
+/* ================= RPC (PRIORITY ORDER) ================= */
 
 const RPCS = [
- // "https://polygon-rpc.com",
   "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
   "https://polygon-bor-rpc.publicnode.com",
-  "https://rpc.ankr.com/polygon",
-  "https://polygon.llamarpc.com",
-  "https://polygon-bor.publicnode.com"
+  "https://polygon-rpc.com",
+  "https://rpc.ankr.com/polygon"
 ];
 
 let rpcIndex = 0;
@@ -62,11 +60,9 @@ const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
 const WORKER_COUNT = 12;
 const SCAN_INTERVAL_MS = 1500;
 
-/* ================= ADDRESSES ================= */
+/* ================= TOKENS ================= */
 
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
-/* ================= TOKENS ================= */
 
 const TOKENS = {
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
@@ -124,11 +120,7 @@ function rebuildContracts() {
     ])
   );
 
-  usdcContract = new ethers.Contract(
-    USDC,
-    erc20Abi,
-    provider
-  );
+  usdcContract = new ethers.Contract(USDC, erc20Abi, provider);
 }
 
 async function initProvider() {
@@ -172,7 +164,7 @@ async function logBalances() {
 
 /* ================= PATHS ================= */
 
-function path(token) {
+function paths(token) {
   return [
     [USDC, token],
     [token, USDC]
@@ -181,11 +173,15 @@ function path(token) {
 
 /* ================= QUOTE ================= */
 
-async function quote(router, amount, p) {
+async function quote(router, amount, path) {
   const res = await safeRpc(() =>
-    routerContracts[router].getAmountsOut(amount, p)
+    routerContracts[router].getAmountsOut(amount, path)
   );
-  return res?.at(-1) || null;
+
+  if (!res) return null;
+
+  // FIX: strict BigInt conversion (prevents fake trillion values)
+  return BigInt(res.at(-1).toString());
 }
 
 /* ================= FIND ================= */
@@ -193,14 +189,14 @@ async function quote(router, amount, p) {
 async function findTrade(buy, sell, token) {
   console.log(`CHECK ${buy} -> ${sell} | ${token}`);
 
-  for (const p of path(token)) {
+  for (const p of paths(token)) {
     const out = await quote(buy, TRADE_AMOUNT, p);
     if (!out) continue;
 
     const back = await quote(sell, out, p);
     if (!back) continue;
 
-    const profit = back - TRADE_AMOUNT;
+    const profit = back > TRADE_AMOUNT ? back - TRADE_AMOUNT : 0n;
 
     if (profit > MIN_PROFIT) {
       return profit;
