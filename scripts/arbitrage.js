@@ -40,6 +40,8 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 
 const RPCS = [
  // "https://polygon-rpc.com",
+  "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
+  "https://polygon-bor-rpc.publicnode.com",
   "https://rpc.ankr.com/polygon",
   "https://polygon.llamarpc.com",
   "https://polygon-bor.publicnode.com"
