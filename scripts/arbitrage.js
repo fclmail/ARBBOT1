@@ -34,9 +34,9 @@ const PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY ||
   process.env.PRIVATE_KEY;
 
-if (!PRIVATE_KEY) throw new Error("PK missing");
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE KEY");
 
-/* ================= RPC (PRIORITY ORDER) ================= */
+/* ================= RPC (priority order) ================= */
 
 const RPCS = [
   "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
@@ -60,15 +60,35 @@ const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
 const WORKER_COUNT = 10;
 const SCAN_INTERVAL_MS = 1500;
 
-/* ================= TOKENS ================= */
+/* ================= TOKENS (FIXED WITH DECIMALS) ================= */
 
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDC = {
+  addr: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  symbol: "USDC",
+  decimals: 6
+};
 
 const TOKENS = {
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+  WETH: {
+    addr: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    symbol: "WETH",
+    decimals: 18
+  },
+  WMATIC: {
+    addr: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    symbol: "WMATIC",
+    decimals: 18
+  },
+  DAI: {
+    addr: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+    symbol: "DAI",
+    decimals: 18
+  },
+  USDT: {
+    addr: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    symbol: "USDT",
+    decimals: 6
+  }
 };
 
 /* ================= ROUTERS ================= */
@@ -119,7 +139,7 @@ function rebuild() {
     ])
   );
 
-  usdcContract = new ethers.Contract(USDC, erc20Abi, provider);
+  usdcContract = new ethers.Contract(USDC.addr, erc20Abi, provider);
 }
 
 async function init() {
@@ -163,10 +183,10 @@ async function logBalances() {
 
 /* ================= PATHS ================= */
 
-function paths(token) {
+function paths(tokenAddr) {
   return [
-    [USDC, token],
-    [token, USDC]
+    [USDC.addr, tokenAddr],
+    [tokenAddr, USDC.addr]
   ];
 }
 
@@ -177,26 +197,36 @@ async function quote(router, amount, path) {
     routerContracts[router].getAmountsOut(amount, path)
   );
 
-  if (!res) return null;
+  return res ? res.at(-1) : null;
+}
 
-  return BigInt(res.at(-1).toString());
+/* ================= DECIMAL NORMALIZATION ================= */
+
+function toUSDC(value, token) {
+  if (!value) return 0n;
+
+  const normalized = ethers.formatUnits(value, token.decimals);
+  return ethers.parseUnits(normalized, 6);
 }
 
 /* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
-  console.log(`CHECK ${buy} -> ${sell} | ${token}`);
+  console.log(`CHECK ${buy} -> ${sell} | ${token.symbol}`);
 
-  for (const p of paths(token)) {
+  for (const p of paths(token.addr)) {
     const out = await quote(buy, TRADE_AMOUNT, p);
     if (!out) continue;
 
     const back = await quote(sell, out, p);
     if (!back) continue;
 
-    // FIXED SAFE PROFIT LOGIC
+    // FIXED DECIMAL SAFE PROFIT
+    const buyUSDC = TRADE_AMOUNT;
+    const sellUSDC = toUSDC(back, token);
+
     const profit =
-      back > TRADE_AMOUNT ? back - TRADE_AMOUNT : 0n;
+      sellUSDC > buyUSDC ? sellUSDC - buyUSDC : 0n;
 
     if (profit > MIN_PROFIT) {
       return profit;
