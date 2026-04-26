@@ -57,7 +57,7 @@ const TRADE_AMOUNT = ethers.parseUnits("0.01", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
 
-const WORKER_COUNT = 12;
+const WORKER_COUNT = 10;
 const SCAN_INTERVAL_MS = 1500;
 
 /* ================= TOKENS ================= */
@@ -93,7 +93,6 @@ const erc20Abi = [
 /* ================= STATE ================= */
 
 let runningProfit = 0n;
-let isExecuting = false;
 
 /* ================= HELPERS ================= */
 
@@ -110,7 +109,7 @@ function newProvider() {
   return new ethers.JsonRpcProvider(url);
 }
 
-function rebuildContracts() {
+function rebuild() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
   routerContracts = Object.fromEntries(
@@ -123,10 +122,10 @@ function rebuildContracts() {
   usdcContract = new ethers.Contract(USDC, erc20Abi, provider);
 }
 
-async function initProvider() {
+async function init() {
   provider = newProvider();
   await provider.getNetwork();
-  rebuildContracts();
+  rebuild();
 
   console.log(`WALLET -> 0x${wallet.address.slice(2, 8)}...`);
 }
@@ -180,11 +179,10 @@ async function quote(router, amount, path) {
 
   if (!res) return null;
 
-  // FIX: strict BigInt conversion (prevents fake trillion values)
   return BigInt(res.at(-1).toString());
 }
 
-/* ================= FIND ================= */
+/* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
   console.log(`CHECK ${buy} -> ${sell} | ${token}`);
@@ -196,7 +194,9 @@ async function findTrade(buy, sell, token) {
     const back = await quote(sell, out, p);
     if (!back) continue;
 
-    const profit = back > TRADE_AMOUNT ? back - TRADE_AMOUNT : 0n;
+    // FIXED SAFE PROFIT LOGIC
+    const profit =
+      back > TRADE_AMOUNT ? back - TRADE_AMOUNT : 0n;
 
     if (profit > MIN_PROFIT) {
       return profit;
@@ -224,7 +224,36 @@ function buildTasks() {
   return tasks;
 }
 
-/* ================= LOOP ================= */
+/* ================= WORKER ================= */
+
+async function worker(chunk, id) {
+  let local = 0n;
+
+  for (const t of chunk) {
+    const profit = await findTrade(t.buy, t.sell, t.token);
+
+    if (!profit) {
+      console.log(`W${id} NO TRADE`);
+      continue;
+    }
+
+    local += profit;
+
+    console.log(`W${id} TRADE | ${fmt(profit)}`);
+
+    if (local >= MIN_BATCH_PROFIT / 2n) {
+      runningProfit += local;
+
+      console.log(
+        `W${id} FLUSH | ${fmt(local)} | TOTAL ${fmt(runningProfit)}`
+      );
+
+      local = 0n;
+    }
+  }
+}
+
+/* ================= CONTINUOUS LOOP ================= */
 
 async function scanLoop() {
   while (true) {
@@ -233,43 +262,16 @@ async function scanLoop() {
     await logBalances();
 
     const tasks = buildTasks();
-    const chunkSize = Math.ceil(tasks.length / WORKER_COUNT);
+    const size = Math.ceil(tasks.length / WORKER_COUNT);
 
     const chunks = [];
-    for (let i = 0; i < tasks.length; i += chunkSize) {
-      chunks.push(tasks.slice(i, i + chunkSize));
-    }
-
-    async function worker(chunk, id) {
-      let local = 0n;
-
-      for (const t of chunk) {
-        if (isExecuting) break;
-
-        const profit = await findTrade(t.buy, t.sell, t.token);
-
-        if (!profit) {
-          console.log(`W${id} NO TRADE`);
-          continue;
-        }
-
-        local += profit;
-
-        console.log(`W${id} TRADE | ${fmt(profit)}`);
-
-        if (local >= MIN_BATCH_PROFIT / 2n) {
-          runningProfit += local;
-
-          console.log(
-            `W${id} FLUSH | ${fmt(local)} | TOTAL ${fmt(runningProfit)}`
-          );
-
-          local = 0n;
-        }
-      }
+    for (let i = 0; i < tasks.length; i += size) {
+      chunks.push(tasks.slice(i, i + size));
     }
 
     await Promise.all(chunks.map((c, i) => worker(c, i)));
+
+    console.log("SCAN COMPLETE → RESTARTING...\n");
 
     await sleep(SCAN_INTERVAL_MS);
   }
@@ -278,6 +280,6 @@ async function scanLoop() {
 /* ================= MAIN ================= */
 
 (async () => {
-  await initProvider();
+  await init();
   await scanLoop();
 })();
