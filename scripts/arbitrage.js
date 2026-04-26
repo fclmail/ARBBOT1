@@ -1,34 +1,9 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-dotenv.config({ override: false });
+dotenv.config();
 
-/* ================= LIMITER ================= */
-
-const MAX_CONCURRENT = 20;
-let active = 0;
-const queue = [];
-
-function limit(fn) {
-  return new Promise((resolve, reject) => {
-    const run = async () => {
-      active++;
-      try {
-        resolve(await fn());
-      } catch (e) {
-        reject(e);
-      } finally {
-        active--;
-        if (queue.length) queue.shift()();
-      }
-    };
-
-    if (active < MAX_CONCURRENT) run();
-    else queue.push(run);
-  });
-}
-
-/* ================= ENV ================= */
+/* ================= CONFIG ================= */
 
 const PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY ||
@@ -51,42 +26,54 @@ let wallet;
 let routerContracts;
 let usdcContract;
 
-/* ================= CONFIG ================= */
+/* ================= LIMITER ================= */
 
-const TRADE_AMOUNT = ethers.parseUnits("0.01", 6);
-const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
+const MAX_CONCURRENT = 15;
+let active = 0;
+const queue = [];
 
-const WORKER_COUNT = 10;
-const SCAN_INTERVAL_MS = 1500;
+function limit(fn) {
+  return new Promise((resolve, reject) => {
+    const run = async () => {
+      active++;
+      try {
+        resolve(await fn());
+      } catch (e) {
+        reject(e);
+      } finally {
+        active--;
+        if (queue.length) queue.shift()();
+      }
+    };
 
-/* ================= TOKENS (FIXED WITH DECIMALS) ================= */
+    if (active < MAX_CONCURRENT) run();
+    else queue.push(run);
+  });
+}
+
+/* ================= TOKENS ================= */
 
 const USDC = {
   addr: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  symbol: "USDC",
-  decimals: 6
+  decimals: 6,
+  symbol: "USDC"
 };
 
 const TOKENS = {
   WETH: {
     addr: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-    symbol: "WETH",
     decimals: 18
   },
   WMATIC: {
     addr: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-    symbol: "WMATIC",
     decimals: 18
   },
   DAI: {
     addr: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-    symbol: "DAI",
     decimals: 18
   },
   USDT: {
     addr: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-    symbol: "USDT",
     decimals: 6
   }
 };
@@ -112,12 +99,11 @@ const erc20Abi = [
 
 /* ================= STATE ================= */
 
+const TRADE_AMOUNT = 10_000n; // 0.01 USDC in raw 6 decimals = 10_000
+const MIN_PROFIT = 100n;
+const MIN_BATCH_PROFIT = 200n;
+
 let runningProfit = 0n;
-
-/* ================= HELPERS ================= */
-
-const fmt = (x) => ethers.formatUnits(x, 6);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ================= RPC ================= */
 
@@ -139,7 +125,11 @@ function rebuild() {
     ])
   );
 
-  usdcContract = new ethers.Contract(USDC.addr, erc20Abi, provider);
+  usdcContract = new ethers.Contract(
+    USDC.addr,
+    erc20Abi,
+    provider
+  );
 }
 
 async function init() {
@@ -158,7 +148,6 @@ async function safeRpc(fn, attempt = 0) {
       return await fn();
     } catch {
       if (attempt >= 2) return null;
-      await sleep(150 * 2 ** attempt);
       return safeRpc(fn, attempt + 1);
     }
   });
@@ -167,26 +156,29 @@ async function safeRpc(fn, attempt = 0) {
 /* ================= BALANCE ================= */
 
 async function logBalances() {
-  const [matic, usdc] = await Promise.all([
-    safeRpc(() => provider.getBalance(wallet.address)),
-    safeRpc(() => usdcContract.balanceOf(wallet.address))
-  ]);
+  const bal = await safeRpc(() =>
+    usdcContract.balanceOf(wallet.address)
+  );
 
-  if (!matic || !usdc) return;
+  const matic = await safeRpc(() =>
+    provider.getBalance(wallet.address)
+  );
+
+  if (!bal || !matic) return;
 
   console.log(
-    `BALANCE | 0x${wallet.address.slice(2, 8)}... | MATIC: ${ethers.formatEther(
+    `BALANCE | ${wallet.address.slice(0, 10)}... | MATIC: ${ethers.formatEther(
       matic
-    )} | USDC: ${fmt(usdc)}`
+    )} | USDC: ${Number(bal) / 1e6}`
   );
 }
 
 /* ================= PATHS ================= */
 
-function paths(tokenAddr) {
+function paths(token) {
   return [
-    [USDC.addr, tokenAddr],
-    [tokenAddr, USDC.addr]
+    [USDC.addr, token],
+    [token, USDC.addr]
   ];
 }
 
@@ -197,36 +189,29 @@ async function quote(router, amount, path) {
     routerContracts[router].getAmountsOut(amount, path)
   );
 
-  return res ? res.at(-1) : null;
+  return res ? BigInt(res.at(-1).toString()) : null;
 }
 
-/* ================= DECIMAL NORMALIZATION ================= */
+/* ================= PROFIT SAFE (NO FLOATS EVER) ================= */
 
-function toUSDC(value, token) {
-  if (!value) return 0n;
-
-  const normalized = ethers.formatUnits(value, token.decimals);
-  return ethers.parseUnits(normalized, 6);
+function safeProfit(out) {
+  if (!out) return 0n;
+  return out;
 }
 
 /* ================= FIND TRADE ================= */
 
-async function findTrade(buy, sell, token) {
-  console.log(`CHECK ${buy} -> ${sell} | ${token.symbol}`);
+async function findTrade(buy, sell, tokenAddr) {
+  console.log(`CHECK ${buy} -> ${sell}`);
 
-  for (const p of paths(token.addr)) {
+  for (const p of paths(tokenAddr)) {
     const out = await quote(buy, TRADE_AMOUNT, p);
     if (!out) continue;
 
     const back = await quote(sell, out, p);
     if (!back) continue;
 
-    // FIXED DECIMAL SAFE PROFIT
-    const buyUSDC = TRADE_AMOUNT;
-    const sellUSDC = toUSDC(back, token);
-
-    const profit =
-      sellUSDC > buyUSDC ? sellUSDC - buyUSDC : 0n;
+    const profit = safeProfit(back) - TRADE_AMOUNT;
 
     if (profit > MIN_PROFIT) {
       return profit;
@@ -246,7 +231,11 @@ function buildTasks() {
       if (buy === sell) continue;
 
       for (const token of Object.values(TOKENS)) {
-        tasks.push({ buy, sell, token });
+        tasks.push({
+          buy,
+          sell,
+          token: token.addr
+        });
       }
     }
   }
@@ -269,13 +258,13 @@ async function worker(chunk, id) {
 
     local += profit;
 
-    console.log(`W${id} TRADE | ${fmt(profit)}`);
+    console.log(`W${id} TRADE | ${profit}`);
 
-    if (local >= MIN_BATCH_PROFIT / 2n) {
+    if (local >= MIN_BATCH_PROFIT) {
       runningProfit += local;
 
       console.log(
-        `W${id} FLUSH | ${fmt(local)} | TOTAL ${fmt(runningProfit)}`
+        `W${id} FLUSH | ${local} | TOTAL ${runningProfit}`
       );
 
       local = 0n;
@@ -283,7 +272,7 @@ async function worker(chunk, id) {
   }
 }
 
-/* ================= CONTINUOUS LOOP ================= */
+/* ================= LOOP ================= */
 
 async function scanLoop() {
   while (true) {
@@ -292,7 +281,7 @@ async function scanLoop() {
     await logBalances();
 
     const tasks = buildTasks();
-    const size = Math.ceil(tasks.length / WORKER_COUNT);
+    const size = Math.ceil(tasks.length / 10);
 
     const chunks = [];
     for (let i = 0; i < tasks.length; i += size) {
@@ -302,12 +291,10 @@ async function scanLoop() {
     await Promise.all(chunks.map((c, i) => worker(c, i)));
 
     console.log("SCAN COMPLETE → RESTARTING...\n");
-
-    await sleep(SCAN_INTERVAL_MS);
   }
 }
 
-/* ================= MAIN ================= */
+/* ================= START ================= */
 
 (async () => {
   await init();
