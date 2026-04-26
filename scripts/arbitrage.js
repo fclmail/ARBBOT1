@@ -51,7 +51,7 @@ const MIN_BATCH_PROFIT = ethers.parseUnits("0.02", 6);
 const MAX_BATCH_SIZE = 1000;
 const SCAN_INTERVAL_MS = 500;
 const DEADLINE_SECONDS = 60;
-const WORKER_COUNT = 128;
+const WORKER_COUNT = 32;
 
 const RPC_CALL_MAX_RETRIES = 2;
 const RPC_BACKOFF_BASE_MS = 150;
