@@ -1,3 +1,4 @@
+type h```js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -11,7 +12,12 @@ const PRIVATE_KEY =
 
 if (!PRIVATE_KEY) throw new Error("Missing PRIVATE KEY");
 
-/* ================= RPC (priority order) ================= */
+/* ================= CONTRACT ================= */
+
+const CONTRACT_ADDRESS =
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+
+/* ================= RPC ================= */
 
 const RPCS = [
   "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
@@ -23,59 +29,19 @@ const RPCS = [
 let rpcIndex = 0;
 let provider;
 let wallet;
-let routerContracts;
-let usdcContract;
-
-/* ================= LIMITER ================= */
-
-const MAX_CONCURRENT = 15;
-let active = 0;
-const queue = [];
-
-function limit(fn) {
-  return new Promise((resolve, reject) => {
-    const run = async () => {
-      active++;
-      try {
-        resolve(await fn());
-      } catch (e) {
-        reject(e);
-      } finally {
-        active--;
-        if (queue.length) queue.shift()();
-      }
-    };
-
-    if (active < MAX_CONCURRENT) run();
-    else queue.push(run);
-  });
-}
 
 /* ================= TOKENS ================= */
 
 const USDC = {
   addr: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-  decimals: 6,
-  symbol: "USDC"
+  decimals: 6
 };
 
 const TOKENS = {
-  WETH: {
-    addr: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-    decimals: 18
-  },
-  WMATIC: {
-    addr: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-    decimals: 18
-  },
-  DAI: {
-    addr: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-    decimals: 18
-  },
-  USDT: {
-    addr: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-    decimals: 6
-  }
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
 };
 
 /* ================= ROUTERS ================= */
@@ -97,13 +63,27 @@ const erc20Abi = [
   "function balanceOf(address) view returns (uint256)"
 ];
 
+const contractAbi = [
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256)"
+];
+
 /* ================= STATE ================= */
 
-const TRADE_AMOUNT = 10_000n; // 0.01 USDC in raw 6 decimals = 10_000
-const MIN_PROFIT = 100n;
+const TRADE_AMOUNT = 10n * 10n ** 6n; // 10 USDC
+const MIN_PROFIT = 50n;               // 0.00005 USDC
 const MIN_BATCH_PROFIT = 200n;
 
+let routerContracts = {};
+let usdcContract;
+let arbContract;
+
 let runningProfit = 0n;
+
+/* ================= FORMATTERS ================= */
+
+function formatUSDC(raw) {
+  return (Number(raw) / 1e6).toFixed(6);
+}
 
 /* ================= RPC ================= */
 
@@ -118,17 +98,24 @@ function newProvider() {
 function rebuild() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  routerContracts = Object.fromEntries(
-    Object.entries(routers).map(([k, v]) => [
-      k,
-      new ethers.Contract(v, routerAbi, provider)
-    ])
-  );
+  for (const [name, addr] of Object.entries(routers)) {
+    routerContracts[name] = new ethers.Contract(
+      addr,
+      routerAbi,
+      provider
+    );
+  }
 
   usdcContract = new ethers.Contract(
     USDC.addr,
     erc20Abi,
     provider
+  );
+
+  arbContract = new ethers.Contract(
+    CONTRACT_ADDRESS,
+    contractAbi,
+    wallet
   );
 }
 
@@ -137,20 +124,17 @@ async function init() {
   await provider.getNetwork();
   rebuild();
 
-  console.log(`WALLET -> 0x${wallet.address.slice(2, 8)}...`);
+  console.log(`WALLET -> ${wallet.address.slice(0, 8)}...`);
 }
 
 /* ================= SAFE RPC ================= */
 
-async function safeRpc(fn, attempt = 0) {
-  return limit(async () => {
-    try {
-      return await fn();
-    } catch {
-      if (attempt >= 2) return null;
-      return safeRpc(fn, attempt + 1);
-    }
-  });
+async function safeRpc(fn) {
+  try {
+    return await fn();
+  } catch {
+    return null;
+  }
 }
 
 /* ================= BALANCE ================= */
@@ -167,19 +151,19 @@ async function logBalances() {
   if (!bal || !matic) return;
 
   console.log(
-    `BALANCE | ${wallet.address.slice(0, 10)}... | MATIC: ${ethers.formatEther(
-      matic
-    )} | USDC: ${Number(bal) / 1e6}`
+    `\nBALANCE | ${wallet.address.slice(0, 10)}... | ` +
+    `MATIC: ${ethers.formatEther(matic)} | ` +
+    `USDC: ${formatUSDC(bal)}\n`
   );
 }
 
-/* ================= PATHS ================= */
+/* ================= PATH BUILDER ================= */
 
-function paths(token) {
-  return [
-    [USDC.addr, token],
-    [token, USDC.addr]
-  ];
+function buildPaths(token) {
+  return {
+    forward: [USDC.addr, token],
+    backward: [token, USDC.addr]
+  };
 }
 
 /* ================= QUOTE ================= */
@@ -192,36 +176,78 @@ async function quote(router, amount, path) {
   return res ? BigInt(res.at(-1).toString()) : null;
 }
 
-/* ================= PROFIT SAFE (NO FLOATS EVER) ================= */
-
-function safeProfit(out) {
-  if (!out) return 0n;
-  return out;
-}
-
 /* ================= FIND TRADE ================= */
 
-async function findTrade(buy, sell, tokenAddr) {
+async function findTrade(buy, sell, token) {
   console.log(`CHECK ${buy} -> ${sell}`);
 
-  for (const p of paths(tokenAddr)) {
-    const out = await quote(buy, TRADE_AMOUNT, p);
-    if (!out) continue;
+  const { forward, backward } = buildPaths(token);
 
-    const back = await quote(sell, out, p);
-    if (!back) continue;
+  const tokenOut = await quote(buy, TRADE_AMOUNT, forward);
+  if (!tokenOut) return null;
 
-    const profit = safeProfit(back) - TRADE_AMOUNT;
+  const usdcBack = await quote(sell, tokenOut, backward);
+  if (!usdcBack) return null;
 
-    if (profit > MIN_PROFIT) {
-      return profit;
-    }
+  const profit = usdcBack - TRADE_AMOUNT;
+
+  if (profit > MIN_PROFIT) {
+    console.log(
+      `ARB FOUND | ${buy} -> ${sell} | ` +
+      `IN: ${formatUSDC(TRADE_AMOUNT)} | ` +
+      `OUT: ${formatUSDC(usdcBack)} | ` +
+      `PROFIT: ${formatUSDC(profit)}`
+    );
+
+    return {
+      profit,
+      token,
+      buy,
+      sell,
+      forward,
+      backward
+    };
   }
 
   return null;
 }
 
-/* ================= TASKS ================= */
+/* ================= WORKER ================= */
+
+async function worker(tasks, id) {
+  let local = 0n;
+
+  for (const t of tasks) {
+    const result = await findTrade(
+      t.buy,
+      t.sell,
+      t.token
+    );
+
+    if (!result) {
+      console.log(`W${id} NO TRADE`);
+      continue;
+    }
+
+    local += result.profit;
+
+    console.log(
+      `W${id} TRADE | PROFIT: ${formatUSDC(result.profit)} USDC`
+    );
+
+    if (local >= MIN_BATCH_PROFIT) {
+      runningProfit += local;
+
+      console.log(
+        `W${id} FLUSH | ${formatUSDC(local)} | TOTAL ${formatUSDC(runningProfit)}`
+      );
+
+      local = 0n;
+    }
+  }
+}
+
+/* ================= TASK BUILDER ================= */
 
 function buildTasks() {
   const tasks = [];
@@ -231,11 +257,7 @@ function buildTasks() {
       if (buy === sell) continue;
 
       for (const token of Object.values(TOKENS)) {
-        tasks.push({
-          buy,
-          sell,
-          token: token.addr
-        });
+        tasks.push({ buy, sell, token });
       }
     }
   }
@@ -243,54 +265,27 @@ function buildTasks() {
   return tasks;
 }
 
-/* ================= WORKER ================= */
-
-async function worker(chunk, id) {
-  let local = 0n;
-
-  for (const t of chunk) {
-    const profit = await findTrade(t.buy, t.sell, t.token);
-
-    if (!profit) {
-      console.log(`W${id} NO TRADE`);
-      continue;
-    }
-
-    local += profit;
-
-    console.log(`W${id} TRADE | ${profit}`);
-
-    if (local >= MIN_BATCH_PROFIT) {
-      runningProfit += local;
-
-      console.log(
-        `W${id} FLUSH | ${local} | TOTAL ${runningProfit}`
-      );
-
-      local = 0n;
-    }
-  }
-}
-
 /* ================= LOOP ================= */
 
 async function scanLoop() {
   while (true) {
-    console.log("\nNEW SCAN (BATCH MODE)");
+    console.log("\nNEW SCAN (BATCH MODE)\n");
 
     await logBalances();
 
     const tasks = buildTasks();
-    const size = Math.ceil(tasks.length / 10);
+    const size = Math.ceil(tasks.length / 2);
 
     const chunks = [];
     for (let i = 0; i < tasks.length; i += size) {
       chunks.push(tasks.slice(i, i + size));
     }
 
-    await Promise.all(chunks.map((c, i) => worker(c, i)));
+    await Promise.all(
+      chunks.map((c, i) => worker(c, i))
+    );
 
-    console.log("SCAN COMPLETE → RESTARTING...\n");
+    console.log("\nSCAN COMPLETE → RESTARTING...\n");
   }
 }
 
@@ -300,3 +295,5 @@ async function scanLoop() {
   await init();
   await scanLoop();
 })();
+```
+ere
