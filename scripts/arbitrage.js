@@ -68,8 +68,8 @@ const contractAbi = [
 
 /* ================= STATE ================= */
 
-const TRADE_AMOUNT = 001n * 001n ** 6n; // 10 USDC
-const MIN_PROFIT = 5n;               // 0.00005 USDC
+const TRADE_AMOUNT = 10000n; // 10 USDC
+const MIN_PROFIT = 1n;               // 0.00005 USDC
 const MIN_BATCH_PROFIT = 200n;
 
 let routerContracts = {};
