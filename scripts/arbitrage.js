@@ -294,5 +294,3 @@ async function scanLoop() {
   await init();
   await scanLoop();
 })();
-```
-ere
