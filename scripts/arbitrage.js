@@ -1,4 +1,3 @@
-type h```js
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
