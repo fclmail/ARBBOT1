@@ -26,24 +26,25 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const TRADE_AMOUNT = ethers.parseUnits("0.02",6);
+// 🔥 BASE TRADE
+const BASE_TRADE = ethers.parseUnits("0.02",6);
 
+// 🔥 DYNAMIC MULTIPLIERS
+const LOW_MULT = 5n;
+const HIGH_MULT = 20n;
+
+// 🔥 PROFIT FILTERS
 const MIN_PROFIT = ethers.parseUnits("0.000001",6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.5",6);
 
-const MIN_BATCH_PROFIT =
-ethers.parseUnits("0.0004",6);
+// 🔥 GAS ESTIMATE
+const GAS_COST_USDC = ethers.parseUnits("0.03",6);
+
+// 🔥 FLASH LOAN
+const ENABLE_FLASH_LOAN = true;
+const FLASH_THRESHOLD_RATIO = 10020n;
 
 const WORKER_COUNT = 32;
-
-/* ================= GAS ================= */
-
-const WITHDRAW_THRESHOLD =
-ethers.parseUnits("0.25",6);
-
-const WITHDRAW_PERCENT = 10n;
-
-const MIN_POL_FOR_TX =
-ethers.parseEther("0.35");
 
 /* ================= CONTRACT ================= */
 
@@ -56,19 +57,16 @@ const USDC =
 /* ================= ABI ================= */
 
 const erc20Abi=[
-"function balanceOf(address) view returns(uint256)",
-"function approve(address,uint256)"
+"function balanceOf(address) view returns(uint256)"
 ];
 
 const contractAbi=[
 "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
-"function minimumProfitUSDC() view returns(uint256)",
-"function withdrawERC20(address,uint256)"
+"function minimumProfitUSDC() view returns(uint256)"
 ];
 
 const routerAbi=[
-"function getAmountsOut(uint,address[]) view returns(uint[])",
-"function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+"function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
 /* ================= ROUTERS ================= */
@@ -103,24 +101,12 @@ WETH:"0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 
 const fmt=x=>ethers.formatUnits(x,6);
 
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-
-/* ================= STATE ================= */
-
-let microTrades=[];
-let runningProfit=0n;
-let isExecuting=false;
-
 /* ================= PROVIDER ================= */
 
 function newProvider(){
-
 const url=RPCS[rpcIndex];
-
 rpcIndex=(rpcIndex+1)%RPCS.length;
-
 return new ethers.JsonRpcProvider(url);
-
 }
 
 function rebuildContracts(){
@@ -129,11 +115,7 @@ wallet=new ethers.Wallet(PRIVATE_KEY,provider);
 
 usdc=new ethers.Contract(USDC,erc20Abi,wallet);
 
-vault=new ethers.Contract(
-CONTRACT_ADDRESS,
-contractAbi,
-wallet
-);
+vault=new ethers.Contract(CONTRACT_ADDRESS,contractAbi,wallet);
 
 routerContracts=Object.fromEntries(
 Object.values(routers).map(a=>[
@@ -141,50 +123,22 @@ a,
 new ethers.Contract(a,routerAbi,provider)
 ])
 );
-
-}
-
-async function initProvider(){
-
-provider=newProvider();
-
-await provider.getNetwork();
-
-rebuildContracts();
-
-const onchainMin=
-await vault.minimumProfitUSDC();
-
-console.log(`ONCHAIN MIN PROFIT ${fmt(onchainMin)}\n`);
-
 }
 
 /* ================= QUOTE ================= */
 
 async function quote(router,amount,path){
-
 try{
-
-const out=
-await routerContracts[router].getAmountsOut(
-amount,
-path
-);
-
+const out=await routerContracts[router].getAmountsOut(amount,path);
 return out.at(-1);
-
 }catch{
-
 return null;
-
 }
-
 }
 
 /* ================= PATHS ================= */
 
 function buildBuyPaths(token){
-
 return[
 [USDC,token],
 [USDC,TOKENS.WETH,token],
@@ -192,11 +146,9 @@ return[
 [USDC,TOKENS.DAI,token],
 [USDC,TOKENS.USDT,token]
 ];
-
 }
 
 function buildSellPaths(token){
-
 return[
 [token,USDC],
 [token,TOKENS.WETH,USDC],
@@ -204,7 +156,21 @@ return[
 [token,TOKENS.DAI,USDC],
 [token,TOKENS.USDT,USDC]
 ];
+}
 
+/* ================= DYNAMIC SIZE ================= */
+
+function getTradeSize(amountIn, profit){
+
+const ratio = (profit * 10000n) / amountIn;
+
+// gas-aware reject
+if(profit < GAS_COST_USDC * 2n) return null;
+
+if(ratio > 10050n) return amountIn * HIGH_MULT;
+if(ratio > 10020n) return amountIn * LOW_MULT;
+
+return amountIn;
 }
 
 /* ================= FIND TRADE ================= */
@@ -213,30 +179,45 @@ async function findTrade(buy,sell,token){
 
 for(const bp of buildBuyPaths(token)){
 
-const buyOut=
-await quote(buy,TRADE_AMOUNT,bp);
-
-if(!buyOut) continue;
+const baseOut = await quote(buy,BASE_TRADE,bp);
+if(!baseOut) continue;
 
 for(const sp of buildSellPaths(token)){
 
-const sellOut=
-await quote(sell,buyOut,sp);
+const baseSell = await quote(sell,baseOut,sp);
+if(!baseSell) continue;
 
+let profit = baseSell - BASE_TRADE;
+
+if(profit < MIN_PROFIT) continue;
+
+// dynamic sizing
+const scaled = getTradeSize(BASE_TRADE,profit);
+if(!scaled) continue;
+
+// recompute with scaled
+const buyOut = await quote(buy,scaled,bp);
+if(!buyOut) continue;
+
+const sellOut = await quote(sell,buyOut,sp);
 if(!sellOut) continue;
 
-const profit=sellOut-TRADE_AMOUNT;
+profit = sellOut - scaled;
 
-if(profit<MIN_PROFIT) continue;
+// final gas filter
+if(profit < GAS_COST_USDC) continue;
+
+const ratio = (profit * 10000n) / scaled;
 
 return{
 buy,
 sell,
 token,
-amountIn:TRADE_AMOUNT,
-buyPath:bp,
-sellPath:sp,
-expectedProfit:profit
+amountIn: scaled,
+buyPath: bp,
+sellPath: sp,
+expectedProfit: profit,
+flash: ENABLE_FLASH_LOAN && ratio > FLASH_THRESHOLD_RATIO
 };
 
 }
@@ -244,252 +225,48 @@ expectedProfit:profit
 }
 
 return null;
-
-}
-
-/* ================= REQUOTE ================= */
-
-async function revalidateTrades(trades){
-
-const valid=[];
-
-for(const t of trades){
-
-const buyOut=
-await quote(t.buy,t.amountIn,t.buyPath);
-
-if(!buyOut) continue;
-
-const sellOut=
-await quote(t.sell,buyOut,t.sellPath);
-
-if(!sellOut) continue;
-
-const profit=sellOut-t.amountIn;
-
-if(profit<MIN_PROFIT) continue;
-
-t.expectedProfit=profit;
-
-valid.push(t);
-
-}
-
-return valid;
-
-}
-
-/* ================= MICRO AGGREGATION ================= */
-
-function aggregateTrades(trades){
-
-const map=new Map();
-
-for(const t of trades){
-
-const key =
-t.buy +
-t.sell +
-JSON.stringify(t.buyPath) +
-JSON.stringify(t.sellPath);
-
-if(!map.has(key)){
-
-map.set(key,{
-buy:t.buy,
-sell:t.sell,
-buyPath:t.buyPath,
-sellPath:t.sellPath,
-amountIn:0n,
-expectedProfit:0n
-});
-
-}
-
-const g=map.get(key);
-
-g.amountIn+=t.amountIn;
-g.expectedProfit+=t.expectedProfit;
-
-}
-
-return [...map.values()];
-
 }
 
 /* ================= EXECUTE ================= */
 
 async function executeBatch(trades){
 
-console.log("\nBATCH THRESHOLD REACHED");
+console.log("\n🔥 EXECUTING BATCH");
 
-console.log(`REBUILT TRADES ${trades.length}`);
+const before = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-const validRaw=
-await revalidateTrades(trades);
+let total=0n;
+let profit=0n;
 
-console.log(`VALID TRADES ${validRaw.length}`);
-
-const valid=
-aggregateTrades(validRaw);
-
-console.log(`\nMICRO AGGREGATED GROUPS ${valid.length}\n`);
-
-const beforeBal=
-await usdc.balanceOf(CONTRACT_ADDRESS);
-
-let usable=[];
-let usedCapital=0n;
-let usableProfit=0n;
-
-for(const t of valid){
-
-if(usedCapital+t.amountIn>beforeBal) break;
-
-usedCapital+=t.amountIn;
-
-usableProfit+=t.expectedProfit;
-
-usable.push(t);
-
+for(const t of trades){
+total+=t.amountIn;
+profit+=t.expectedProfit;
 }
 
-if(usable.length===0){
+console.log(`USED CAPITAL ${fmt(total)}`);
+console.log(`EXPECTED PROFIT ${fmt(profit)}`);
 
-isExecuting=false;
+const flashCount = trades.filter(t=>t.flash).length;
+console.log(`FLASH ${flashCount}/${trades.length}`);
 
-return;
-
-}
-
-console.log(`EXECUTING TRADES ${usable.length}`);
-
-console.log(`USED CAPITAL ${fmt(usedCapital)} USDC`);
-
-console.log(`EXPECTED PROFIT ${fmt(usableProfit)}\n`);
-
-const tx=
-await vault.executeFlashBatchArbitrage({
-
-buyRouters:usable.map(t=>t.buy),
-
-sellRouters:usable.map(t=>t.sell),
-
-amountsInUSDC:usable.map(t=>t.amountIn),
-
-pathsToToken:usable.map(t=>t.buyPath),
-
-pathsToUSDC:usable.map(t=>t.sellPath),
-
-deadline:Math.floor(Date.now()/1000)+30
-
+const tx = await vault.executeFlashBatchArbitrage({
+buyRouters: trades.map(t=>t.buy),
+sellRouters: trades.map(t=>t.sell),
+amountsInUSDC: trades.map(t=>t.amountIn),
+pathsToToken: trades.map(t=>t.buyPath),
+pathsToUSDC: trades.map(t=>t.sellPath),
+deadline: Math.floor(Date.now()/1000)+30
 });
 
-console.log(`TX SENT ${tx.hash}\n`);
+console.log(`TX ${tx.hash}`);
 
 await provider.waitForTransaction(tx.hash);
 
-const afterBal=
-await usdc.balanceOf(CONTRACT_ADDRESS);
+const after = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-const profit=
-afterBal>beforeBal
-?afterBal-beforeBal
-:0n;
+const real = after>before ? after-before : 0n;
 
-console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
-
-console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
-
-console.log(`REAL PROFIT     ${fmt(profit)}\n`);
-
-isExecuting=false;
-
-}
-
-/* ================= SCAN LOOP ================= */
-
-async function scanLoop(){
-
-const tasks=[];
-
-for(const b of Object.values(routers)){
-for(const s of Object.values(routers)){
-
-if(b===s) continue;
-
-for(const t of Object.values(TOKENS)){
-
-tasks.push({
-buy:b,
-sell:s,
-token:t
-});
-
-}
-
-}
-}
-
-let i=0;
-
-async function worker(){
-
-while(true){
-
-if(isExecuting){
-
-await sleep(5);
-
-continue;
-
-}
-
-const task=
-tasks[i++ % tasks.length];
-
-const trade=
-await findTrade(
-task.buy,
-task.sell,
-task.token
-);
-
-if(!trade) continue;
-
-microTrades.push(trade);
-
-runningProfit+=trade.expectedProfit;
-
-console.log(
-`RUNNING TOTAL ${fmt(runningProfit)}`
-);
-
-if(
-!isExecuting &&
-runningProfit>=MIN_BATCH_PROFIT
-){
-
-isExecuting=true;
-
-const batch=[...microTrades];
-
-microTrades=[];
-
-runningProfit=0n;
-
-await executeBatch(batch);
-
-}
-
-}
-
-}
-
-await Promise.all(
-Array.from({length:WORKER_COUNT},worker)
-);
-
+console.log(`REAL PROFIT ${fmt(real)}\n`);
 }
 
 /* ================= MAIN ================= */
@@ -498,15 +275,36 @@ Array.from({length:WORKER_COUNT},worker)
 
 console.log("🚀 BOT STARTED\n");
 
-await initProvider();
+provider=newProvider();
+rebuildContracts();
 
-const bal=
-await provider.getBalance(wallet.address);
+let batch=[];
 
-console.log(
-`STARTING POL BALANCE ${ethers.formatEther(bal)}\n`
-);
+while(true){
 
-await scanLoop();
+for(const b of Object.values(routers)){
+for(const s of Object.values(routers)){
+
+if(b===s) continue;
+
+for(const t of Object.values(TOKENS)){
+
+const trade = await findTrade(b,s,t);
+
+if(!trade) continue;
+
+batch.push(trade);
+
+if(batch.length>=3){
+await executeBatch(batch);
+batch=[];
+}
+
+}
+
+}
+}
+
+}
 
 })();
