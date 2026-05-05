@@ -69,7 +69,7 @@ const contractAbi = [
 
 /* ================= STATE ================= */
 
-const TRADE_AMOUNT = 10000n; // 10 USDC
+const TRADE_AMOUNT = 1000n; // 10 USDC
 const MIN_PROFIT = 1n;
 const MIN_BATCH_PROFIT = 200n;
 
