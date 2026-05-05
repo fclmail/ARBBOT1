@@ -40,7 +40,8 @@ const TOKENS = {
   WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
 /* ================= ROUTERS ================= */
@@ -69,7 +70,7 @@ const contractAbi = [
 /* ================= STATE ================= */
 
 const TRADE_AMOUNT = 10000n; // 10 USDC
-const MIN_PROFIT = 1n;               // 0.00005 USDC
+const MIN_PROFIT = 1n;
 const MIN_BATCH_PROFIT = 200n;
 
 let routerContracts = {};
@@ -78,7 +79,7 @@ let arbContract;
 
 let runningProfit = 0n;
 
-/* ================= FORMATTERS ================= */
+/* ================= FORMAT ================= */
 
 function formatUSDC(raw) {
   return (Number(raw) / 1e6).toFixed(6);
@@ -156,13 +157,36 @@ async function logBalances() {
   );
 }
 
-/* ================= PATH BUILDER ================= */
+/* ================= MULTI-HOP PATHS ================= */
 
-function buildPaths(token) {
-  return {
-    forward: [USDC.addr, token],
-    backward: [token, USDC.addr]
-  };
+function buildPaths() {
+  const tokens = Object.values(TOKENS);
+  const paths = [];
+
+  // 1-hop
+  for (const t of tokens) {
+    paths.push([USDC.addr, t, USDC.addr]);
+  }
+
+  // 2-hop
+  for (const a of tokens) {
+    for (const b of tokens) {
+      if (a === b) continue;
+      paths.push([USDC.addr, a, b, USDC.addr]);
+    }
+  }
+
+  // 3-hop
+  for (const a of tokens) {
+    for (const b of tokens) {
+      for (const c of tokens) {
+        if (a === b || b === c || a === c) continue;
+        paths.push([USDC.addr, a, b, c, USDC.addr]);
+      }
+    }
+  }
+
+  return paths.slice(0, 200); // limit
 }
 
 /* ================= QUOTE ================= */
@@ -177,34 +201,31 @@ async function quote(router, amount, path) {
 
 /* ================= FIND TRADE ================= */
 
-async function findTrade(buy, sell, token) {
+async function findTrade(buy, sell, path) {
   console.log(`CHECK ${buy} -> ${sell}`);
 
-  const { forward, backward } = buildPaths(token);
+  const out1 = await quote(buy, TRADE_AMOUNT, path);
+  if (!out1) return null;
 
-  const tokenOut = await quote(buy, TRADE_AMOUNT, forward);
-  if (!tokenOut) return null;
+  const reversePath = [...path].reverse();
 
-  const usdcBack = await quote(sell, tokenOut, backward);
-  if (!usdcBack) return null;
+  const out2 = await quote(sell, out1, reversePath);
+  if (!out2) return null;
 
-  const profit = usdcBack - TRADE_AMOUNT;
+  const profit = out2 - TRADE_AMOUNT;
 
   if (profit > MIN_PROFIT) {
     console.log(
-      `ARB FOUND | ${buy} -> ${sell} | ` +
-      `IN: ${formatUSDC(TRADE_AMOUNT)} | ` +
-      `OUT: ${formatUSDC(usdcBack)} | ` +
+      `ARB | ${buy}->${sell} | HOPS:${path.length - 2} | ` +
       `PROFIT: ${formatUSDC(profit)}`
     );
 
     return {
       profit,
-      token,
       buy,
       sell,
-      forward,
-      backward
+      path,
+      reversePath
     };
   }
 
@@ -220,7 +241,7 @@ async function worker(tasks, id) {
     const result = await findTrade(
       t.buy,
       t.sell,
-      t.token
+      t.path
     );
 
     if (!result) {
@@ -231,7 +252,7 @@ async function worker(tasks, id) {
     local += result.profit;
 
     console.log(
-      `W${id} TRADE | PROFIT: ${formatUSDC(result.profit)} USDC`
+      `W${id} TRADE | PROFIT: ${formatUSDC(result.profit)}`
     );
 
     if (local >= MIN_BATCH_PROFIT) {
@@ -250,13 +271,14 @@ async function worker(tasks, id) {
 
 function buildTasks() {
   const tasks = [];
+  const paths = buildPaths();
 
   for (const buy of Object.keys(routers)) {
     for (const sell of Object.keys(routers)) {
       if (buy === sell) continue;
 
-      for (const token of Object.values(TOKENS)) {
-        tasks.push({ buy, sell, token });
+      for (const path of paths) {
+        tasks.push({ buy, sell, path });
       }
     }
   }
@@ -268,7 +290,7 @@ function buildTasks() {
 
 async function scanLoop() {
   while (true) {
-    console.log("\nNEW SCAN (BATCH MODE)\n");
+    console.log("\nNEW SCAN (MULTI-HOP)\n");
 
     await logBalances();
 
