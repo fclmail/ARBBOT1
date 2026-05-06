@@ -27,17 +27,10 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const BASE_TRADE = ethers.parseUnits("0.02",6);
-
-const LOW_MULT = 5n;
-const HIGH_MULT = 20n;
-
 const MIN_PROFIT = ethers.parseUnits("0.000001",6);
 const GAS_COST_USDC = ethers.parseUnits("0.03",6);
 
-const FLASH_THRESHOLD_RATIO = 10005n;
-
-const BATCH_SIZE = 10;
-const INSTANT_PROFIT_TRIGGER = GAS_COST_USDC; // 🔥 instant execution threshold
+const BATCH_SIZE = 3;
 
 /* ================= CONTRACT ================= */
 
@@ -91,7 +84,7 @@ WETH:"0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 
 /* ================= HELPERS ================= */
 
-const fmt=x=>ethers.formatUnits(x,6);
+const fmt = x => ethers.formatUnits(x,6);
 
 /* ================= PROVIDER ================= */
 
@@ -102,11 +95,8 @@ return new ethers.JsonRpcProvider(url);
 }
 
 function rebuildContracts(){
-
 wallet=new ethers.Wallet(PRIVATE_KEY,provider);
-
 usdc=new ethers.Contract(USDC,erc20Abi,wallet);
-
 vault=new ethers.Contract(CONTRACT_ADDRESS,contractAbi,wallet);
 
 routerContracts=Object.fromEntries(
@@ -152,14 +142,16 @@ return[
 
 /* ================= SCALING ================= */
 
-function getScaledSize(amount,profit){
+function getScaledSize(amount, profit){
 
-const ratio = (profit * 10000n) / amount;
+const ratio = Number(profit) / Number(amount);
 
-if(ratio > 10050n) return amount * HIGH_MULT;
-if(ratio > 10005n) return amount * LOW_MULT;
+if (ratio < 0.0005) return amount;
+if (ratio < 0.001) return amount * 2n;
+if (ratio < 0.002) return amount * 5n;
+if (ratio < 0.005) return amount * 10n;
 
-return amount;
+return amount * 20n;
 }
 
 /* ================= FIND TRADE ================= */
@@ -176,46 +168,36 @@ for(const sp of buildSellPaths(token)){
 const sellOut = await quote(sell,baseOut,sp);
 if(!sellOut) continue;
 
-const profit = sellOut - BASE_TRADE;
+const baseProfit = sellOut - BASE_TRADE;
 
-if(profit < MIN_PROFIT) continue;
+if(baseProfit < MIN_PROFIT) continue;
 
-/* 🔥 MICRO LOG */
-console.log(`MICRO FOUND ${fmt(profit)}`);
+/* 🔥 SCALE EVERY TRADE */
+const scaledAmount = getScaledSize(BASE_TRADE, baseProfit);
 
+/* 🔥 REQUOTE */
+const buyOut2 = await quote(buy,scaledAmount,bp);
+if(!buyOut2) continue;
+
+const sellOut2 = await quote(sell,buyOut2,sp);
+if(!sellOut2) continue;
+
+const scaledProfit = sellOut2 - scaledAmount;
+
+/* 🔥 LOG EXACT FORMAT */
 console.log(
-`FOUND TRADE | PROFIT ${fmt(profit)} | SIZE ${fmt(BASE_TRADE)}`
+`MICRO FOUND ${fmt(baseProfit)} → SCALED SIZE ${fmt(scaledAmount)} → EXPECTED ${fmt(scaledProfit)}`
 );
 
-/* 🔥 SCALE */
-let finalAmount = BASE_TRADE;
-
-if(profit >= GAS_COST_USDC){
-
-finalAmount = getScaledSize(BASE_TRADE,profit);
-
-if(finalAmount > BASE_TRADE){
-
-console.log("\n🔥 SCALED TRADE");
-console.log(`NEW SIZE ${fmt(finalAmount)}`);
-
-const ratio = (profit * 10000n) / BASE_TRADE;
-
-if(ratio > FLASH_THRESHOLD_RATIO){
-console.log("FLASH ENABLED");
-}
-
-}
-
-}
+console.log(`FOUND TRADE | SIZE ${fmt(scaledAmount)}`);
 
 return{
 buy,
 sell,
-amountIn: finalAmount,
+amountIn: scaledAmount,
 buyPath: bp,
 sellPath: sp,
-expectedProfit: profit
+expectedProfit: scaledProfit
 };
 
 }
@@ -241,14 +223,13 @@ total+=t.amountIn;
 expected+=t.expectedProfit;
 }
 
-/* 🔥 GAS PROTECTION */
+console.log(`USED CAPITAL ${fmt(total)}`);
+console.log(`EXPECTED PROFIT ${fmt(expected)}`);
+
 if(expected < GAS_COST_USDC){
 console.log("❌ SKIPPED: BELOW GAS\n");
 return;
 }
-
-console.log(`USED CAPITAL ${fmt(total)}`);
-console.log(`EXPECTED PROFIT ${fmt(expected)}`);
 
 const tx = await vault.executeFlashBatchArbitrage({
 buyRouters: trades.map(t=>t.buy),
@@ -259,16 +240,10 @@ pathsToUSDC: trades.map(t=>t.sellPath),
 deadline: Math.floor(Date.now()/1000)+30
 });
 
-console.log(`TX ${tx.hash}`);
-
 await provider.waitForTransaction(tx.hash);
 
 const after = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-const real =
-after > before
-? after - before
-: 0n;
+const real = after>before ? after-before : 0n;
 
 console.log(`CONTRACT BEFORE ${fmt(before)}`);
 console.log(`CONTRACT AFTER  ${fmt(after)}`);
@@ -284,7 +259,6 @@ console.log("🚀 BOT STARTED\n");
 provider=newProvider();
 rebuildContracts();
 
-/* HEARTBEAT */
 setInterval(()=>{
 console.log("⏱ scanning...");
 },5000);
@@ -304,16 +278,6 @@ const trade = await findTrade(b,s,t);
 
 if(!trade) continue;
 
-/* ⚡ INSTANT EXECUTION */
-if(trade.expectedProfit >= INSTANT_PROFIT_TRIGGER){
-
-console.log("\n⚡ INSTANT EXECUTION TRIGGERED");
-
-await executeBatch([trade]);
-continue;
-}
-
-/* 📦 BATCH FLOW */
 batch.push(trade);
 
 if(batch.length>=BATCH_SIZE){
