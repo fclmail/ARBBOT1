@@ -153,10 +153,10 @@ const ratio = Number(profit) / Number(amount);
 
 let multiplier = 1.0001; // base safe growth
 
-if (ratio > 0.0005) multiplier = 1.05;
-if (ratio > 0.001)  multiplier = 1.1;
-if (ratio > 0.002)  multiplier = 1.2;
-if (ratio > 0.005)  multiplier = 1.5;
+if (ratio > 0.0005) multiplier = 1.5;
+if (ratio > 0.001)  multiplier = 2.1;
+if (ratio > 0.002)  multiplier = 3.1;
+if (ratio > 0.005)  multiplier = 4.1;
 
 /* cap scaling so it NEVER explodes */
 if (multiplier > 1.01) multiplier = 1.01;
