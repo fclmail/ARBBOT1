@@ -13,11 +13,11 @@ if(!PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= RPC ================= */
 
-const RPCS=[
+const RPCS = [
 "https://polygon-bor-rpc.publicnode.com"
 ];
 
-let rpcIndex=0;
+let rpcIndex = 0;
 let provider;
 let wallet;
 let usdc;
@@ -29,6 +29,7 @@ let routerContracts;
 const BASE_TRADE = ethers.parseUnits("0.02",6);
 const MIN_PROFIT = ethers.parseUnits("0.000001",6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003",6);
+const MIN_POL_BAL = ethers.parseEther("0.2");
 
 const BATCH_SIZE = 3;
 
@@ -42,21 +43,21 @@ const USDC =
 
 /* ================= ABI ================= */
 
-const erc20Abi=[
+const erc20Abi = [
 "function balanceOf(address) view returns(uint256)"
 ];
 
-const contractAbi=[
+const contractAbi = [
 "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
 ];
 
-const routerAbi=[
+const routerAbi = [
 "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
 /* ================= ROUTERS ================= */
 
-const routers={
+const routers = {
 QuickSwap:"0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
 SushiSwap:"0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
 Dfyn:"0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
@@ -67,19 +68,12 @@ Wault:"0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 
 /* ================= TOKENS ================= */
 
-const TOKENS={
-AAVE:"0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-APE:"0x4d224452801aced8b2f0aebe155379bb5d594381",
-CRV:"0x172370d5cd63279efa6d502dab29171933a610af",
-DAI:"0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-LINK:"0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-QUICK:"0x831753dd7087cac61ab5644b308642cc1c33dc13",
-SHIB:"0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
-UNI:"0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-USDT:"0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-WBTC:"0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+const TOKENS = {
+WETH:"0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
 WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-WETH:"0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
+USDT:"0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+DAI:"0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+WBTC:"0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
 /* ================= HELPERS ================= */
@@ -89,29 +83,30 @@ const fmt = x => ethers.formatUnits(x,6);
 /* ================= PROVIDER ================= */
 
 function newProvider(){
-const url=RPCS[rpcIndex];
-rpcIndex=(rpcIndex+1)%RPCS.length;
+const url = RPCS[rpcIndex];
+rpcIndex = (rpcIndex + 1) % RPCS.length;
 return new ethers.JsonRpcProvider(url);
 }
 
 function rebuildContracts(){
-wallet=new ethers.Wallet(PRIVATE_KEY,provider);
-usdc=new ethers.Contract(USDC,erc20Abi,wallet);
-vault=new ethers.Contract(CONTRACT_ADDRESS,contractAbi,wallet);
+wallet = new ethers.Wallet(PRIVATE_KEY,provider);
 
-routerContracts=Object.fromEntries(
-Object.values(routers).map(a=>[
-a,
-new ethers.Contract(a,routerAbi,provider)
+usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+
+routerContracts = Object.fromEntries(
+Object.values(routers).map(r => [
+r,
+new ethers.Contract(r, routerAbi, provider)
 ])
 );
 }
 
 /* ================= QUOTE ================= */
 
-async function quote(router,amount,path){
+async function quote(router, amount, path){
 try{
-const out=await routerContracts[router].getAmountsOut(amount,path);
+const out = await routerContracts[router].getAmountsOut(amount, path);
 return out.at(-1);
 }catch{
 return null;
@@ -121,97 +116,106 @@ return null;
 /* ================= PATHS ================= */
 
 function buildBuyPaths(token){
-return[
+return [
 [USDC,token],
 [USDC,TOKENS.WETH,token],
-[USDC,TOKENS.WMATIC,token],
-[USDC,TOKENS.DAI,token],
-[USDC,TOKENS.USDT,token]
+[USDC,TOKENS.WMATIC,token]
 ];
 }
 
 function buildSellPaths(token){
-return[
+return [
 [token,USDC],
 [token,TOKENS.WETH,USDC],
-[token,TOKENS.WMATIC,USDC],
-[token,TOKENS.DAI,USDC],
-[token,TOKENS.USDT,USDC]
+[token,TOKENS.WMATIC,USDC]
 ];
 }
 
-/* ================= SAFE SCALING (NEW MODEL) ================= */
+/* ================= LIQUIDITY CHECK ================= */
 
-function getScaledSize(amount, profit){
+function isDeepLiquidity(path){
+return path.includes(TOKENS.WETH) || path.includes(TOKENS.WMATIC);
+}
+
+/* ================= FIXED SCALING ENGINE ================= */
+
+function getScaledSize(amount, profit, path){
 
 if(profit <= 0n) return null;
 
 const ratio = Number(profit) / Number(amount);
 
-/* 🔥 VERY IMPORTANT:
-   we NEVER jump scale, only micro-adjust */
+/* base safe scaling */
+let multiplier = 1.0005;
 
-let multiplier = 1.9; // base safe growth
+/* micro edge */
+if (ratio > 0.0005) multiplier = 1.02;
 
-if (ratio > 0.0005) multiplier = 1.5;
-if (ratio > 0.001)  multiplier = 2.1;
-if (ratio > 0.002)  multiplier = 3.1;
-if (ratio > 0.005)  multiplier = 4.1;
+/* good edge */
+if (ratio > 0.001) multiplier = 1.08;
 
-/* cap scaling so it NEVER explodes */
-if (multiplier > 1.01) multiplier = 1.01;
+/* strong edge */
+if (ratio > 0.002) multiplier = 1.25;
 
-return BigInt(
-Math.floor(Number(amount) * multiplier)
-);
+/* very strong */
+if (ratio > 0.005) multiplier = 1.6;
+
+/* deep liquidity boost */
+if (isDeepLiquidity(path)) {
+multiplier *= 1.3;
+}
+
+/* hard cap */
+if (multiplier > 2.5) multiplier = 2.5;
+
+return BigInt(Math.floor(Number(amount) * multiplier));
 }
 
 /* ================= FIND TRADE ================= */
 
-async function findTrade(buy,sell,token){
+async function findTrade(buy, sell, token){
 
 for(const bp of buildBuyPaths(token)){
 
-const baseOut = await quote(buy,BASE_TRADE,bp);
+const baseOut = await quote(buy, BASE_TRADE, bp);
 if(!baseOut) continue;
 
 for(const sp of buildSellPaths(token)){
 
-const sellOut = await quote(sell,baseOut,sp);
+const sellOut = await quote(sell, baseOut, sp);
 if(!sellOut) continue;
 
 const baseProfit = sellOut - BASE_TRADE;
 
 if(baseProfit < MIN_PROFIT) continue;
 
-/* 🔥 APPLY SAFE SCALING */
-const scaledSize = getScaledSize(BASE_TRADE, baseProfit);
-if(!scaledSize) continue;
+/* SCALE */
+const scaled = getScaledSize(BASE_TRADE, baseProfit, bp);
+if(!scaled) continue;
 
-/* 🔥 REQUOTE AFTER SCALING (CRITICAL) */
-const buyOut2 = await quote(buy,scaledSize,bp);
-if(!buyOut2) continue;
+/* REQUOTE */
+const buy2 = await quote(buy, scaled, bp);
+if(!buy2) continue;
 
-const sellOut2 = await quote(sell,buyOut2,sp);
-if(!sellOut2) continue;
+const sell2 = await quote(sell, buy2, sp);
+if(!sell2) continue;
 
-const scaledProfit = sellOut2 - scaledSize;
+const scaledProfit = sell2 - scaled;
 
-/* ❌ prevent negative execution */
 if(scaledProfit <= 0n) continue;
 
-/* ================= LOG ================= */
+/* LOG FORMAT REQUIRED */
 
 console.log(
-`MICRO FOUND ${fmt(baseProfit)} → SCALED SIZE ${fmt(scaledSize)} → EXPECTED ${fmt(scaledProfit)}`
+`MICRO FOUND ${fmt(baseProfit)} → SCALED SIZE ${fmt(scaled)} → EXPECTED ${fmt(scaledProfit)}`
 );
 
-console.log(`FOUND TRADE | SIZE ${fmt(scaledSize)}\n`);
+console.log(`FOUND TRADE | SIZE ${fmt(scaled)}\n`);
 
-return{
+return {
 buy,
 sell,
-amountIn: scaledSize,
+amountIn: scaled,
 buyPath: bp,
 sellPath: sp,
 expectedProfit: scaledProfit
@@ -230,14 +234,20 @@ async function executeBatch(trades){
 
 console.log("\n🔥 EXECUTING BATCH");
 
+const polBal = await provider.getBalance(wallet.address);
+if(polBal < MIN_POL_BAL){
+console.log("❌ LOW GAS BALANCE\n");
+return;
+}
+
 const before = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-let total=0n;
-let expected=0n;
+let total = 0n;
+let expected = 0n;
 
 for(const t of trades){
-total+=t.amountIn;
-expected+=t.expectedProfit;
+total += t.amountIn;
+expected += t.expectedProfit;
 }
 
 console.log(`USED CAPITAL ${fmt(total)}`);
@@ -267,39 +277,35 @@ console.log(`CONTRACT AFTER  ${fmt(after)}`);
 console.log(`REAL PROFIT     ${fmt(real)}\n`);
 }
 
-/* ================= MAIN ================= */
+/* ================= MAIN LOOP ================= */
 
 (async function main(){
 
 console.log("🚀 BOT STARTED\n");
 
-provider=newProvider();
+provider = newProvider();
 rebuildContracts();
 
-setInterval(()=>{
-console.log("⏱ scanning...");
-},5000);
+setInterval(()=>console.log("⏱ scanning..."),5000);
 
-let batch=[];
+let batch = [];
 
 while(true){
 
 for(const b of Object.values(routers)){
 for(const s of Object.values(routers)){
-
 if(b===s) continue;
 
 for(const t of Object.values(TOKENS)){
 
 const trade = await findTrade(b,s,t);
-
 if(!trade) continue;
 
 batch.push(trade);
 
-if(batch.length>=BATCH_SIZE){
+if(batch.length >= BATCH_SIZE){
 await executeBatch(batch);
-batch=[];
+batch = [];
 }
 
 }
