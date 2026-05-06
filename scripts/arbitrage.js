@@ -37,6 +37,7 @@ const GAS_COST_USDC = ethers.parseUnits("0.03",6);
 const FLASH_THRESHOLD_RATIO = 10005n;
 
 const BATCH_SIZE = 3;
+const INSTANT_PROFIT_TRIGGER = GAS_COST_USDC; // 🔥 instant execution threshold
 
 /* ================= CONTRACT ================= */
 
@@ -149,7 +150,7 @@ return[
 ];
 }
 
-/* ================= DYNAMIC SIZE ================= */
+/* ================= SCALING ================= */
 
 function getScaledSize(amount,profit){
 
@@ -182,12 +183,11 @@ if(profit < MIN_PROFIT) continue;
 /* 🔥 MICRO LOG */
 console.log(`MICRO FOUND ${fmt(profit)}`);
 
-/* 🔥 FOUND TRADE */
 console.log(
 `FOUND TRADE | PROFIT ${fmt(profit)} | SIZE ${fmt(BASE_TRADE)}`
 );
 
-/* 🔥 SCALE IF STRONG */
+/* 🔥 SCALE */
 let finalAmount = BASE_TRADE;
 
 if(profit >= GAS_COST_USDC){
@@ -231,16 +231,24 @@ async function executeBatch(trades){
 
 console.log("\n🔥 EXECUTING BATCH");
 
+const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+
 let total=0n;
-let profit=0n;
+let expected=0n;
 
 for(const t of trades){
 total+=t.amountIn;
-profit+=t.expectedProfit;
+expected+=t.expectedProfit;
+}
+
+/* 🔥 GAS PROTECTION */
+if(expected < GAS_COST_USDC){
+console.log("❌ SKIPPED: BELOW GAS\n");
+return;
 }
 
 console.log(`USED CAPITAL ${fmt(total)}`);
-console.log(`EXPECTED PROFIT ${fmt(profit)}`);
+console.log(`EXPECTED PROFIT ${fmt(expected)}`);
 
 const tx = await vault.executeFlashBatchArbitrage({
 buyRouters: trades.map(t=>t.buy),
@@ -251,9 +259,20 @@ pathsToUSDC: trades.map(t=>t.sellPath),
 deadline: Math.floor(Date.now()/1000)+30
 });
 
-console.log(`TX ${tx.hash}\n`);
+console.log(`TX ${tx.hash}`);
 
 await provider.waitForTransaction(tx.hash);
+
+const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+const real =
+after > before
+? after - before
+: 0n;
+
+console.log(`CONTRACT BEFORE ${fmt(before)}`);
+console.log(`CONTRACT AFTER  ${fmt(after)}`);
+console.log(`REAL PROFIT     ${fmt(real)}\n`);
 }
 
 /* ================= MAIN ================= */
@@ -265,7 +284,7 @@ console.log("🚀 BOT STARTED\n");
 provider=newProvider();
 rebuildContracts();
 
-/* 🔥 HEARTBEAT */
+/* HEARTBEAT */
 setInterval(()=>{
 console.log("⏱ scanning...");
 },5000);
@@ -285,6 +304,16 @@ const trade = await findTrade(b,s,t);
 
 if(!trade) continue;
 
+/* ⚡ INSTANT EXECUTION */
+if(trade.expectedProfit >= INSTANT_PROFIT_TRIGGER){
+
+console.log("\n⚡ INSTANT EXECUTION TRIGGERED");
+
+await executeBatch([trade]);
+continue;
+}
+
+/* 📦 BATCH FLOW */
 batch.push(trade);
 
 if(batch.length>=BATCH_SIZE){
