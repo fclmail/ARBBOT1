@@ -140,18 +140,30 @@ return[
 ];
 }
 
-/* ================= SCALING ================= */
+/* ================= SAFE SCALING (NEW MODEL) ================= */
 
 function getScaledSize(amount, profit){
 
+if(profit <= 0n) return null;
+
 const ratio = Number(profit) / Number(amount);
 
-if (ratio < 0.0005) return amount;
-if (ratio < 0.001) return amount * 2n;
-if (ratio < 0.002) return amount * 5n;
-if (ratio < 0.005) return amount * 10n;
+/* 🔥 VERY IMPORTANT:
+   we NEVER jump scale, only micro-adjust */
 
-return amount * 20n;
+let multiplier = 1.0001; // base safe growth
+
+if (ratio > 0.0005) multiplier = 1.0005;
+if (ratio > 0.001)  multiplier = 1.001;
+if (ratio > 0.002)  multiplier = 1.003;
+if (ratio > 0.005)  multiplier = 1.005;
+
+/* cap scaling so it NEVER explodes */
+if (multiplier > 1.01) multiplier = 1.01;
+
+return BigInt(
+Math.floor(Number(amount) * multiplier)
+);
 }
 
 /* ================= FIND TRADE ================= */
@@ -172,29 +184,34 @@ const baseProfit = sellOut - BASE_TRADE;
 
 if(baseProfit < MIN_PROFIT) continue;
 
-/* 🔥 SCALE EVERY TRADE */
-const scaledAmount = getScaledSize(BASE_TRADE, baseProfit);
+/* 🔥 APPLY SAFE SCALING */
+const scaledSize = getScaledSize(BASE_TRADE, baseProfit);
+if(!scaledSize) continue;
 
-/* 🔥 REQUOTE */
-const buyOut2 = await quote(buy,scaledAmount,bp);
+/* 🔥 REQUOTE AFTER SCALING (CRITICAL) */
+const buyOut2 = await quote(buy,scaledSize,bp);
 if(!buyOut2) continue;
 
 const sellOut2 = await quote(sell,buyOut2,sp);
 if(!sellOut2) continue;
 
-const scaledProfit = sellOut2 - scaledAmount;
+const scaledProfit = sellOut2 - scaledSize;
 
-/* 🔥 LOG EXACT FORMAT */
+/* ❌ prevent negative execution */
+if(scaledProfit <= 0n) continue;
+
+/* ================= LOG ================= */
+
 console.log(
-`MICRO FOUND ${fmt(baseProfit)} → SCALED SIZE ${fmt(scaledAmount)} → EXPECTED ${fmt(scaledProfit)}`
+`MICRO FOUND ${fmt(baseProfit)} → SCALED SIZE ${fmt(scaledSize)} → EXPECTED ${fmt(scaledProfit)}`
 );
 
-console.log(`FOUND TRADE | SIZE ${fmt(scaledAmount)}`);
+console.log(`FOUND TRADE | SIZE ${fmt(scaledSize)}\n`);
 
 return{
 buy,
 sell,
-amountIn: scaledAmount,
+amountIn: scaledSize,
 buyPath: bp,
 sellPath: sp,
 expectedProfit: scaledProfit
@@ -226,7 +243,7 @@ expected+=t.expectedProfit;
 console.log(`USED CAPITAL ${fmt(total)}`);
 console.log(`EXPECTED PROFIT ${fmt(expected)}`);
 
-if(expected < GAS_COST_USDC){
+if(expected <= GAS_COST_USDC){
 console.log("❌ SKIPPED: BELOW GAS\n");
 return;
 }
@@ -243,7 +260,7 @@ deadline: Math.floor(Date.now()/1000)+30
 await provider.waitForTransaction(tx.hash);
 
 const after = await usdc.balanceOf(CONTRACT_ADDRESS);
-const real = after>before ? after-before : 0n;
+const real = after > before ? after - before : 0n;
 
 console.log(`CONTRACT BEFORE ${fmt(before)}`);
 console.log(`CONTRACT AFTER  ${fmt(after)}`);
