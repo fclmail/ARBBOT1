@@ -26,25 +26,17 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-// 🔥 BASE TRADE
 const BASE_TRADE = ethers.parseUnits("0.02",6);
 
-// 🔥 DYNAMIC MULTIPLIERS
 const LOW_MULT = 5n;
 const HIGH_MULT = 20n;
 
-// 🔥 PROFIT FILTERS
 const MIN_PROFIT = ethers.parseUnits("0.000001",6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.5",6);
-
-// 🔥 GAS ESTIMATE
 const GAS_COST_USDC = ethers.parseUnits("0.03",6);
 
-// 🔥 FLASH LOAN
-const ENABLE_FLASH_LOAN = true;
-const FLASH_THRESHOLD_RATIO = 10020n;
+const FLASH_THRESHOLD_RATIO = 10005n;
 
-const WORKER_COUNT = 32;
+const BATCH_SIZE = 3;
 
 /* ================= CONTRACT ================= */
 
@@ -61,8 +53,7 @@ const erc20Abi=[
 ];
 
 const contractAbi=[
-"function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
-"function minimumProfitUSDC() view returns(uint256)"
+"function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
 ];
 
 const routerAbi=[
@@ -160,17 +151,14 @@ return[
 
 /* ================= DYNAMIC SIZE ================= */
 
-function getTradeSize(amountIn, profit){
+function getScaledSize(amount,profit){
 
-const ratio = (profit * 10000n) / amountIn;
+const ratio = (profit * 10000n) / amount;
 
-// gas-aware reject
-if(profit < GAS_COST_USDC * 2n) return null;
+if(ratio > 10050n) return amount * HIGH_MULT;
+if(ratio > 10005n) return amount * LOW_MULT;
 
-if(ratio > 10050n) return amountIn * HIGH_MULT;
-if(ratio > 10020n) return amountIn * LOW_MULT;
-
-return amountIn;
+return amount;
 }
 
 /* ================= FIND TRADE ================= */
@@ -184,40 +172,50 @@ if(!baseOut) continue;
 
 for(const sp of buildSellPaths(token)){
 
-const baseSell = await quote(sell,baseOut,sp);
-if(!baseSell) continue;
+const sellOut = await quote(sell,baseOut,sp);
+if(!sellOut) continue;
 
-let profit = baseSell - BASE_TRADE;
+const profit = sellOut - BASE_TRADE;
 
 if(profit < MIN_PROFIT) continue;
 
-// dynamic sizing
-const scaled = getTradeSize(BASE_TRADE,profit);
-if(!scaled) continue;
+/* 🔥 MICRO LOG */
+console.log(`MICRO FOUND ${fmt(profit)}`);
 
-// recompute with scaled
-const buyOut = await quote(buy,scaled,bp);
-if(!buyOut) continue;
+/* 🔥 FOUND TRADE */
+console.log(
+`FOUND TRADE | PROFIT ${fmt(profit)} | SIZE ${fmt(BASE_TRADE)}`
+);
 
-const sellOut = await quote(sell,buyOut,sp);
-if(!sellOut) continue;
+/* 🔥 SCALE IF STRONG */
+let finalAmount = BASE_TRADE;
 
-profit = sellOut - scaled;
+if(profit >= GAS_COST_USDC){
 
-// final gas filter
-if(profit < GAS_COST_USDC) continue;
+finalAmount = getScaledSize(BASE_TRADE,profit);
 
-const ratio = (profit * 10000n) / scaled;
+if(finalAmount > BASE_TRADE){
+
+console.log("\n🔥 SCALED TRADE");
+console.log(`NEW SIZE ${fmt(finalAmount)}`);
+
+const ratio = (profit * 10000n) / BASE_TRADE;
+
+if(ratio > FLASH_THRESHOLD_RATIO){
+console.log("FLASH ENABLED");
+}
+
+}
+
+}
 
 return{
 buy,
 sell,
-token,
-amountIn: scaled,
+amountIn: finalAmount,
 buyPath: bp,
 sellPath: sp,
-expectedProfit: profit,
-flash: ENABLE_FLASH_LOAN && ratio > FLASH_THRESHOLD_RATIO
+expectedProfit: profit
 };
 
 }
@@ -233,8 +231,6 @@ async function executeBatch(trades){
 
 console.log("\n🔥 EXECUTING BATCH");
 
-const before = await usdc.balanceOf(CONTRACT_ADDRESS);
-
 let total=0n;
 let profit=0n;
 
@@ -246,9 +242,6 @@ profit+=t.expectedProfit;
 console.log(`USED CAPITAL ${fmt(total)}`);
 console.log(`EXPECTED PROFIT ${fmt(profit)}`);
 
-const flashCount = trades.filter(t=>t.flash).length;
-console.log(`FLASH ${flashCount}/${trades.length}`);
-
 const tx = await vault.executeFlashBatchArbitrage({
 buyRouters: trades.map(t=>t.buy),
 sellRouters: trades.map(t=>t.sell),
@@ -258,15 +251,9 @@ pathsToUSDC: trades.map(t=>t.sellPath),
 deadline: Math.floor(Date.now()/1000)+30
 });
 
-console.log(`TX ${tx.hash}`);
+console.log(`TX ${tx.hash}\n`);
 
 await provider.waitForTransaction(tx.hash);
-
-const after = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-const real = after>before ? after-before : 0n;
-
-console.log(`REAL PROFIT ${fmt(real)}\n`);
 }
 
 /* ================= MAIN ================= */
@@ -277,6 +264,11 @@ console.log("🚀 BOT STARTED\n");
 
 provider=newProvider();
 rebuildContracts();
+
+/* 🔥 HEARTBEAT */
+setInterval(()=>{
+console.log("⏱ scanning...");
+},5000);
 
 let batch=[];
 
@@ -295,7 +287,7 @@ if(!trade) continue;
 
 batch.push(trade);
 
-if(batch.length>=3){
+if(batch.length>=BATCH_SIZE){
 await executeBatch(batch);
 batch=[];
 }
