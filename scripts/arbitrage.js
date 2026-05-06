@@ -151,7 +151,7 @@ const ratio = Number(profit) / Number(amount);
 /* 🔥 VERY IMPORTANT:
    we NEVER jump scale, only micro-adjust */
 
-let multiplier = 1.0001; // base safe growth
+let multiplier = 1.9; // base safe growth
 
 if (ratio > 0.0005) multiplier = 1.5;
 if (ratio > 0.001)  multiplier = 2.1;
