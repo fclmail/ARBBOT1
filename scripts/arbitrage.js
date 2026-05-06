@@ -36,7 +36,7 @@ const GAS_COST_USDC = ethers.parseUnits("0.03",6);
 
 const FLASH_THRESHOLD_RATIO = 10005n;
 
-const BATCH_SIZE = 3;
+const BATCH_SIZE = 10;
 const INSTANT_PROFIT_TRIGGER = GAS_COST_USDC; // 🔥 instant execution threshold
 
 /* ================= CONTRACT ================= */
