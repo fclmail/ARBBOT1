@@ -109,10 +109,10 @@ ethers.parseUnits("50000",6)
 ========================================================= */
 
 const MIN_PROFIT =
-ethers.parseUnits("2.00",6);
+ethers.parseUnits("0.001",6);
 
 const MIN_BATCH_PROFIT =
-ethers.parseUnits("10.00",6);
+ethers.parseUnits("0.001",6);
 
 const WORKER_COUNT = 24;
 
