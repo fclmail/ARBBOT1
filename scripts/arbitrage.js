@@ -54,7 +54,7 @@ const routerAbi = [
   "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
-/* ================= ROUTERS ================= */
+/* ================= ROUTERS (RESTORED FULL SET) ================= */
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -65,13 +65,21 @@ const routers = {
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS ================= */
+/* ================= TOKENS (RESTORED FULL LIST) ================= */
 
 const TOKENS = {
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
+  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+  QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+  SHIB: "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
+  UNI: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 };
 
 /* ================= STATE ================= */
@@ -80,9 +88,9 @@ let microTrades = [];
 let runningProfit = 0n;
 let isExecuting = false;
 
-/* ================= CACHE (OPTION 4) ================= */
+/* ================= ROUTER CACHE (OPTIMIZATION 1) ================= */
 
-let routerCache = new Map();
+const routerCache = new Map();
 
 function getRouter(addr) {
   if (!routerCache.has(addr)) {
@@ -138,31 +146,41 @@ async function quote(router, amount, path) {
   }
 }
 
-/* ================= PATHS ================= */
+/* ================= FULL MULTI-HOP PATHS (RESTORED) ================= */
 
-const baseTokens = Object.values(TOKENS);
-
-function buildBuy(token) {
-  return baseTokens.map(t => [USDC, t, token]);
+function buildBuyPaths(token) {
+  return [
+    [USDC, token],
+    [USDC, TOKENS.WETH, token],
+    [USDC, TOKENS.WMATIC, token],
+    [USDC, TOKENS.DAI, token],
+    [USDC, TOKENS.USDT, token]
+  ];
 }
 
-function buildSell(token) {
-  return baseTokens.map(t => [token, t, USDC]);
+function buildSellPaths(token) {
+  return [
+    [token, USDC],
+    [token, TOKENS.WETH, USDC],
+    [token, TOKENS.WMATIC, USDC],
+    [token, TOKENS.DAI, USDC],
+    [token, TOKENS.USDT, USDC]
+  ];
 }
 
-/* ================= FIND TRADE (OPTION 2 PARALLEL) ================= */
+/* ================= FIND TRADE (PARALLEL OPTIMIZED) ================= */
 
 async function findTrade(buy, sell, token) {
-  const buyPaths = buildBuy(token);
-  const sellPaths = buildSell(token);
+  const buyPaths = buildBuyPaths(token);
+  const sellPaths = buildSellPaths(token);
 
   const results = await Promise.all(
-    buyPaths.map(async bp => {
+    buyPaths.map(async (bp) => {
       const buyOut = await quote(buy, TRADE_AMOUNT, bp);
       if (!buyOut) return null;
 
       const sells = await Promise.all(
-        sellPaths.map(async sp => {
+        sellPaths.map(async (sp) => {
           const sellOut = await quote(sell, buyOut, sp);
           if (!sellOut) return null;
 
@@ -205,6 +223,7 @@ async function executeBatch(trades) {
 
   for (const t of trades) {
     if (used + t.amountIn > beforeContract) break;
+
     used += t.amountIn;
     expected += t.expectedProfit;
     usable.push(t);
@@ -226,18 +245,16 @@ async function executeBatch(trades) {
 
   await provider.waitForTransaction(tx.hash);
 
-  const afterWallet = await usdc.balanceOf(wallet.address);
   const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
 
   console.log("\n================ AFTER ================");
-  console.log(`WALLET AFTER   ${ethers.formatUnits(afterWallet, 6)}`);
   console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
   console.log(`REAL PROFIT    ${ethers.formatUnits(afterContract - beforeContract, 6)}\n`);
 
   isExecuting = false;
 }
 
-/* ================= WORKERS (OPTION 3 OPTIMIZED) ================= */
+/* ================= WORKERS (16 PARALLEL OPTIMIZED) ================= */
 
 async function worker(id, tasks) {
   while (true) {
@@ -246,8 +263,7 @@ async function worker(id, tasks) {
     const batch = [];
 
     for (let i = 0; i < 5; i++) {
-      const t = tasks[(id + i) % tasks.length];
-      batch.push(t);
+      batch.push(tasks[(id + i) % tasks.length]);
     }
 
     const results = await Promise.all(
@@ -266,16 +282,16 @@ async function worker(id, tasks) {
     if (runningProfit >= MIN_BATCH_PROFIT) {
       isExecuting = true;
 
-      const batch = [...microTrades];
+      const batchCopy = [...microTrades];
       microTrades = [];
       runningProfit = 0n;
 
-      await executeBatch(batch);
+      await executeBatch(batchCopy);
     }
   }
 }
 
-/* ================= LOOP ================= */
+/* ================= SCAN ================= */
 
 async function scan() {
   const tasks = [];
@@ -300,7 +316,7 @@ async function scan() {
 /* ================= MAIN ================= */
 
 (async function main() {
-  console.log("BOT STARTED\n");
+  console.log("🚀 BOT STARTED\n");
 
   await init();
 
