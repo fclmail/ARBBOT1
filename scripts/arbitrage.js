@@ -54,7 +54,7 @@ const routerAbi = [
   "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
-/* ================= ROUTERS (RESTORED FULL SET) ================= */
+/* ================= ROUTERS ================= */
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -65,7 +65,7 @@ const routers = {
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS (RESTORED FULL LIST) ================= */
+/* ================= TOKENS ================= */
 
 const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
@@ -88,7 +88,35 @@ let microTrades = [];
 let runningProfit = 0n;
 let isExecuting = false;
 
-/* ================= ROUTER CACHE (OPTIMIZATION 1) ================= */
+/* ================= PROVIDER ================= */
+
+function newProvider() {
+  const url = RPCS[rpcIndex];
+  rpcIndex = (rpcIndex + 1) % RPCS.length;
+  return new ethers.JsonRpcProvider(url);
+}
+
+/* ================= INIT ================= */
+
+async function init() {
+  provider = newProvider();
+  await provider.getNetwork();
+
+  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+
+  vault = new ethers.Contract(
+    CONTRACT_ADDRESS,
+    contractAbi,
+    wallet
+  );
+
+  const min = await vault.minimumProfitUSDC();
+  console.log(`ONCHAIN MIN PROFIT ${ethers.formatUnits(min, 6)}\n`);
+}
+
+/* ================= ROUTER HELPER ================= */
 
 const routerCache = new Map();
 
@@ -100,37 +128,6 @@ function getRouter(addr) {
     );
   }
   return routerCache.get(addr);
-}
-
-/* ================= PROVIDER ================= */
-
-function newProvider() {
-  const url = RPCS[rpcIndex];
-  rpcIndex = (rpcIndex + 1) % RPCS.length;
-  return new ethers.JsonRpcProvider(url);
-}
-
-function rebuild() {
-  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
-
-  vault = new ethers.Contract(
-    CONTRACT_ADDRESS,
-    contractAbi,
-    wallet
-  );
-}
-
-/* ================= INIT ================= */
-
-async function init() {
-  provider = newProvider();
-  await provider.getNetwork();
-  rebuild();
-
-  const min = await vault.minimumProfitUSDC();
-  console.log(`ONCHAIN MIN PROFIT ${ethers.formatUnits(min, 6)}\n`);
 }
 
 /* ================= QUOTE ================= */
@@ -146,7 +143,7 @@ async function quote(router, amount, path) {
   }
 }
 
-/* ================= FULL MULTI-HOP PATHS (RESTORED) ================= */
+/* ================= PATHS ================= */
 
 function buildBuyPaths(token) {
   return [
@@ -168,7 +165,7 @@ function buildSellPaths(token) {
   ];
 }
 
-/* ================= FIND TRADE (PARALLEL OPTIMIZED) ================= */
+/* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
   const buyPaths = buildBuyPaths(token);
@@ -206,16 +203,12 @@ async function findTrade(buy, sell, token) {
   return results.find(Boolean);
 }
 
-/* ================= EXECUTION ================= */
+/* ================= EXECUTION (FIXED STALL SAFE) ================= */
 
 async function executeBatch(trades) {
   console.log("\n================ BATCH EXECUTION ================");
 
-  const beforeWallet = await usdc.balanceOf(wallet.address);
   const beforeContract = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-  console.log(`WALLET BEFORE   ${ethers.formatUnits(beforeWallet, 6)}`);
-  console.log(`CONTRACT BEFORE ${ethers.formatUnits(beforeContract, 6)}\n`);
 
   let usable = [];
   let used = 0n;
@@ -223,7 +216,6 @@ async function executeBatch(trades) {
 
   for (const t of trades) {
     if (used + t.amountIn > beforeContract) break;
-
     used += t.amountIn;
     expected += t.expectedProfit;
     usable.push(t);
@@ -241,9 +233,32 @@ async function executeBatch(trades) {
     deadline: Math.floor(Date.now() / 1000) + 30
   });
 
-  console.log(`TX ${tx.hash}`);
+  console.log(`TX SENT ${tx.hash}...`);
+  console.log("⏳ WAITING FOR CONFIRMATION...\n");
 
-  await provider.waitForTransaction(tx.hash);
+  /* ================= TIMEOUT SAFE WAIT ================= */
+
+  const receipt = await Promise.race([
+    provider.waitForTransaction(tx.hash),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("TIMEOUT")), 30000)
+    )
+  ]).catch(() => null);
+
+  let heartbeat = setInterval(() => {
+    if (isExecuting) {
+      console.log("⏳ EXECUTION IN PROGRESS...");
+    }
+  }, 4000);
+
+  if (!receipt) {
+    console.log("⚠️ TX TIMEOUT - RESUMING SCAN");
+    clearInterval(heartbeat);
+    isExecuting = false;
+    return;
+  }
+
+  clearInterval(heartbeat);
 
   const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
 
@@ -251,10 +266,12 @@ async function executeBatch(trades) {
   console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
   console.log(`REAL PROFIT    ${ethers.formatUnits(afterContract - beforeContract, 6)}\n`);
 
+  console.log("✅ BATCH COMPLETE - RESUMING SCAN\n");
+
   isExecuting = false;
 }
 
-/* ================= WORKERS (16 PARALLEL OPTIMIZED) ================= */
+/* ================= WORKERS ================= */
 
 async function worker(id, tasks) {
   while (true) {
