@@ -29,7 +29,11 @@ const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
 
-const WORKER_COUNT = 8; // Reduced from 16 to prevent RPC rate limiting
+const WORKER_COUNT = 16;
+
+/* ================= HELPERS ================= */
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /* ================= CONTRACT ================= */
 
@@ -116,7 +120,7 @@ async function init() {
   console.log(`ONCHAIN MIN PROFIT ${ethers.formatUnits(min, 6)}\n`);
 }
 
-/* ================= ROUTER HELPER ================= */
+/* ================= ROUTER CACHE ================= */
 
 const routerCache = new Map();
 
@@ -203,115 +207,98 @@ async function findTrade(buy, sell, token) {
   return results.find(Boolean);
 }
 
-/* ================= EXECUTION (FIXED STALL SAFE) ================= */
+/* ================= EXECUTION ================= */
 
 async function executeBatch(trades) {
   console.log("\n================ BATCH EXECUTION ================");
-  console.log(`Executing ${trades.length} trades`);
-  console.log(`Total expected profit: ${ethers.formatUnits(
-    trades.reduce((a, t) => a + t.expectedProfit, 0n), 6
-  )}\n`);
 
   const beforeContract = await usdc.balanceOf(CONTRACT_ADDRESS);
-  console.log(`Contract balance before: ${ethers.formatUnits(beforeContract, 6)}`);
 
   let usable = [];
   let used = 0n;
   let expected = 0n;
 
   for (const t of trades) {
-    if (used + t.amountIn > beforeContract) {
-      console.log(`⚠️ Skipping trade - insufficient contract balance`);
-      break;
-    }
+    if (used + t.amountIn > beforeContract) break;
     used += t.amountIn;
     expected += t.expectedProfit;
     usable.push(t);
   }
 
-  if (usable.length === 0) {
-    console.log("❌ No executable trades found\n");
+  console.log(`EXECUTING ${usable.length} TRADES`);
+  console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected, 6)}\n`);
+
+  const tx = await vault.executeFlashBatchArbitrage({
+    buyRouters: usable.map(t => t.buy),
+    sellRouters: usable.map(t => t.sell),
+    amountsInUSDC: usable.map(t => t.amountIn),
+    pathsToToken: usable.map(t => t.buyPath),
+    pathsToUSDC: usable.map(t => t.sellPath),
+    deadline: Math.floor(Date.now() / 1000) + 30
+  });
+
+  console.log(`TX SENT ${tx.hash}...`);
+  console.log("⏳ WAITING FOR CONFIRMATION...\n");
+
+  /* ================= FIXED NO-DEADLOCK WAIT ================= */
+
+  let receipt = null;
+
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject("TIMEOUT"), 30000)
+  );
+
+  try {
+    receipt = await Promise.race([
+      provider.waitForTransaction(tx.hash),
+      timeout
+    ]);
+  } catch {
+    receipt = null;
+  }
+
+  /* ================= HEARTBEAT (NO FREEZE) ================= */
+
+  const heartbeat = setInterval(() => {
+    if (isExecuting) {
+      console.log("⏳ EXECUTION IN PROGRESS...");
+    }
+  }, 4000);
+
+  if (!receipt) {
+    console.log("⚠️ TX TIMEOUT - RESUMING SCAN");
+    clearInterval(heartbeat);
     isExecuting = false;
     return;
   }
 
-  console.log(`EXECUTING ${usable.length} TRADES`);
-  console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected, 6)}\n`);
+  clearInterval(heartbeat);
 
-  try {
-    const tx = await vault.executeFlashBatchArbitrage({
-      buyRouters: usable.map(t => t.buy),
-      sellRouters: usable.map(t => t.sell),
-      amountsInUSDC: usable.map(t => t.amountIn),
-      pathsToToken: usable.map(t => t.buyPath),
-      pathsToUSDC: usable.map(t => t.sellPath),
-      deadline: Math.floor(Date.now() / 1000) + 30
-    });
+  const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-    console.log(`TX SENT ${tx.hash}...`);
-    console.log("⏳ WAITING FOR CONFIRMATION...\n");
-
-    /* ================= TIMEOUT SAFE WAIT ================= */
-
-    const receipt = await Promise.race([
-      provider.waitForTransaction(tx.hash),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("TIMEOUT")), 45000)
-      )
-    ]).catch(() => null);
-
-    if (!receipt) {
-      console.log("⚠️ TX TIMEOUT - Transaction may still be pending");
-      console.log("⚠️ Check explorer for tx:", tx.hash);
-    } else {
-      console.log(`✅ TX CONFIRMED in block ${receipt.blockNumber}`);
-      console.log(`Gas used: ${receipt.gasUsed.toString()}`);
-      
-      const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
-      const realProfit = afterContract - beforeContract;
-
-      console.log("\n================ RESULTS ================");
-      console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
-      console.log(`REAL PROFIT    ${ethers.formatUnits(realProfit, 6)}`);
-      
-      if (realProfit > 0) {
-        console.log("✅ PROFITABLE BATCH EXECUTION!\n");
-      } else {
-        console.log("⚠️ BATCH WAS NOT PROFITABLE\n");
-      }
-    }
-  } catch (error) {
-    console.log(`❌ TX FAILED: ${error.message}`);
-    
-    // Check if error is due to failing simulation
-    if (error.message.includes("execution reverted")) {
-      console.log("⚠️ Transaction was reverted - prices may have changed");
-    }
-  }
+  console.log("\n================ AFTER ================");
+  console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
+  console.log(`REAL PROFIT    ${ethers.formatUnits(afterContract - beforeContract, 6)}\n`);
 
   console.log("✅ BATCH COMPLETE - RESUMING SCAN\n");
 
   isExecuting = false;
 }
 
-/* ================= WORKERS (FIXED) ================= */
+/* ================= WORKERS (FIXED EVENT LOOP STALL) ================= */
 
 async function worker(id, tasks) {
-  let consecutiveEmptyScans = 0;
-
   while (true) {
-    // ⚡ FIX: Replace busy-wait with proper async delay
+
+    // ✅ FIX: NEVER BUSY SPIN
     if (isExecuting) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await sleep(50);
       continue;
     }
 
-    // Add delay between scans to prevent CPU saturation and RPC rate limiting
-    await new Promise(resolve => setTimeout(resolve, 100));
-
     const batch = [];
-    const batchSize = Math.min(3, tasks.length); // Reduced batch size per worker
-    for (let i = 0; i < batchSize; i++) {
+
+    for (let i = 0; i < 5; i++) {
       batch.push(tasks[(id + i) % tasks.length]);
     }
 
@@ -319,44 +306,27 @@ async function worker(id, tasks) {
       batch.map(t => findTrade(t.buy, t.sell, t.token))
     );
 
-    let foundTrades = 0;
     for (const r of results) {
       if (!r) continue;
 
-      // Double check we're still not executing (race condition protection)
-      if (isExecuting) break;
-
       microTrades.push(r);
       runningProfit += r.expectedProfit;
-      foundTrades++;
-      consecutiveEmptyScans = 0;
 
-      console.log(`[Worker ${id}] RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
+      console.log(`RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
     }
 
-    if (foundTrades === 0) {
-      consecutiveEmptyScans++;
-    }
-
-    // Check if we should execute
-    if (!isExecuting && runningProfit >= MIN_BATCH_PROFIT) {
+    if (runningProfit >= MIN_BATCH_PROFIT) {
       isExecuting = true;
 
       const batchCopy = [...microTrades];
       microTrades = [];
       runningProfit = 0n;
 
-      console.log(`\n🎯 Batch profit threshold reached! Executing ${batchCopy.length} trades...`);
       await executeBatch(batchCopy);
-      
-      // Small delay after execution to let things settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // If we've had many empty scans, add extra delay to prevent hammering RPC
-    if (consecutiveEmptyScans > 10) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+    // ✅ IMPORTANT: yield event loop
+    await sleep(1);
   }
 }
 
@@ -375,9 +345,6 @@ async function scan() {
     }
   }
 
-  console.log(`Total trading pairs to scan: ${tasks.length}`);
-  console.log(`Starting ${WORKER_COUNT} workers...\n`);
-
   await Promise.all(
     Array.from({ length: WORKER_COUNT }, (_, i) =>
       worker(i, tasks)
@@ -385,51 +352,15 @@ async function scan() {
   );
 }
 
-/* ================= SAFETY MONITOR ================= */
-
-async function safetyMonitor() {
-  while (true) {
-    await new Promise(resolve => setTimeout(resolve, 10000)); // Check every 10 seconds
-
-    if (isExecuting) {
-      const timeSinceLastLog = Date.now();
-      // If execution takes longer than 2 minutes, log a warning
-      console.log("⚠️ Execution still in progress...");
-    }
-
-    // Check wallet balance
-    try {
-      const bal = await provider.getBalance(wallet.address);
-      console.log(`💰 POL Balance: ${ethers.formatEther(bal)}`);
-    } catch {
-      // Provider might be busy, skip this check
-    }
-  }
-}
-
 /* ================= MAIN ================= */
 
 (async function main() {
-  console.log("🚀 ARBITRAGE BOT STARTED");
-  console.log("=".repeat(50));
-  console.log(`Trade Amount: ${ethers.formatUnits(TRADE_AMOUNT, 6)} USDC`);
-  console.log(`Min Profit: ${ethers.formatUnits(MIN_PROFIT, 6)} USDC`);
-  console.log(`Batch Min Profit: ${ethers.formatUnits(MIN_BATCH_PROFIT, 6)} USDC`);
-  console.log(`Workers: ${WORKER_COUNT}`);
-  console.log("=".repeat(50) + "\n");
+  console.log("🚀 BOT STARTED\n");
 
   await init();
 
   const bal = await provider.getBalance(wallet.address);
-  console.log(`💰 POL BALANCE: ${ethers.formatEther(bal)}`);
-  console.log(`📝 WALLET: ${wallet.address}\n`);
+  console.log(`POL BALANCE ${ethers.formatEther(bal)}\n`);
 
-  // Start safety monitor in background
-  safetyMonitor().catch(console.error);
-
-  // Start main scanning loop
   await scan();
-})().catch(error => {
-  console.error("❌ FATAL ERROR:", error);
-  process.exit(1);
-});
+})();
