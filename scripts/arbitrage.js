@@ -35,7 +35,6 @@ let rpcIndex=0;
 let provider;
 let wallet;
 let vault;
-let usdc;
 
 let routerContracts={};
 
@@ -63,7 +62,7 @@ DAI:
 
 };
 
-const USDC=TOKENS.USDC;
+const USDC = TOKENS.USDC;
 
 /* =========================================================
    ROUTERS
@@ -110,22 +109,16 @@ ethers.parseUnits("50000",6)
 ========================================================= */
 
 const MIN_PROFIT =
-ethers.parseUnits("0.15",6);
+ethers.parseUnits("0.01",6);
 
 const MIN_BATCH_PROFIT =
-ethers.parseUnits("1.00",6);
+ethers.parseUnits("0.05",6);
 
 const WORKER_COUNT = 32;
 
 /* =========================================================
    ABI
 ========================================================= */
-
-const erc20Abi=[
-
-"function balanceOf(address) view returns(uint256)"
-
-];
 
 const contractAbi=[
 
@@ -200,13 +193,6 @@ contractAbi,
 wallet
 );
 
-usdc=
-new ethers.Contract(
-USDC,
-erc20Abi,
-wallet
-);
-
 routerContracts=
 Object.fromEntries(
 
@@ -244,38 +230,70 @@ console.log(
 }
 
 /* =========================================================
-   STABLE PATHS
+   STABLE ROUTES
 ========================================================= */
 
-function buildPaths(){
+function buildRoutePairs(){
 
 return[
 
-[
+{
+
+buyPath:[
 USDC,
-TOKENS.DAI,
-USDC
+TOKENS.DAI
 ],
 
-[
-USDC,
-TOKENS.USDT,
-USDC
-],
-
-[
-USDC,
-TOKENS.DAI,
-TOKENS.USDT,
-USDC
-],
-
-[
-USDC,
-TOKENS.USDT,
+sellPath:[
 TOKENS.DAI,
 USDC
 ]
+
+},
+
+{
+
+buyPath:[
+USDC,
+TOKENS.USDT
+],
+
+sellPath:[
+TOKENS.USDT,
+USDC
+]
+
+},
+
+{
+
+buyPath:[
+USDC,
+TOKENS.DAI,
+TOKENS.USDT
+],
+
+sellPath:[
+TOKENS.USDT,
+USDC
+]
+
+},
+
+{
+
+buyPath:[
+USDC,
+TOKENS.USDT,
+TOKENS.DAI
+],
+
+sellPath:[
+TOKENS.DAI,
+USDC
+]
+
+}
 
 ];
 
@@ -313,7 +331,7 @@ return null;
 }
 
 /* =========================================================
-   CROSS ROUTER SIMULATION
+   SIMULATE CROSS ROUTER
 ========================================================= */
 
 async function simulateCrossRouter(
@@ -358,11 +376,9 @@ return{
 
 size,
 
-buyOut,
+profit,
 
-sellOut,
-
-profit
+sellOut
 
 };
 
@@ -375,7 +391,7 @@ return null;
 }
 
 /* =========================================================
-   FIND BEST SIZE
+   FIND BEST TRADE
 ========================================================= */
 
 async function findBestTrade(
@@ -439,7 +455,7 @@ console.log(
 );
 
 console.log(
-`SIZE ${fmt(best.size)}`
+`SIZE ${fmt(best.size)}\n`
 );
 
 return{
@@ -508,24 +524,36 @@ console.log(
 "\nFLASH LOAN EXECUTION\n"
 );
 
-console.log(
-`BUY ROUTER`
+const buyName=
+Object.keys(routers)
+.find(
+k=>routers[k]===t.buyRouter
+);
+
+const sellName=
+Object.keys(routers)
+.find(
+k=>routers[k]===t.sellRouter
 );
 
 console.log(
-t.buyRouter
+"BUY ROUTER"
 );
 
 console.log(
-`\nSELL ROUTER`
+buyName
 );
 
 console.log(
-t.sellRouter
+"\nSELL ROUTER"
 );
 
 console.log(
-`\nSIZE`
+sellName
+);
+
+console.log(
+"\nSIZE"
 );
 
 console.log(
@@ -533,27 +561,11 @@ fmt(t.amountIn)
 );
 
 console.log(
-`\nEXPECTED`
+"\nEXPECTED"
 );
 
 console.log(
 `${fmt(t.expectedProfit)} USDC`
-);
-
-console.log(
-`\nBUY PATH`
-);
-
-console.log(
-t.buyPath.join(" -> ")
-);
-
-console.log(
-`\nSELL PATH`
-);
-
-console.log(
-t.sellPath.join(" -> ")
 );
 
 const tx=
@@ -575,7 +587,7 @@ now()+30
 );
 
 console.log(
-`\nTX SENT`
+"\nTX SENT"
 );
 
 console.log(
@@ -586,19 +598,11 @@ const receipt=
 await tx.wait();
 
 console.log(
-`\nCONFIRMED`
+"\nCONFIRMED"
 );
 
 console.log(
-`BLOCK ${receipt.blockNumber}`
-);
-
-console.log(
-`\nNET EXPECTED`
-);
-
-console.log(
-`${fmt(t.expectedProfit)} USDC\n`
+`BLOCK ${receipt.blockNumber}\n`
 );
 
 }catch(err){
@@ -636,20 +640,7 @@ buyRouter===sellRouter
 )
 continue;
 
-for(const buyPath of buildPaths()){
-
-const token=
-buyPath[
-buyPath.length-2
-];
-
-const sellPath=[
-
-token,
-
-USDC
-
-];
+for(const route of buildRoutePairs()){
 
 tasks.push({
 
@@ -657,9 +648,9 @@ buyRouter,
 
 sellRouter,
 
-buyPath,
+buyPath:route.buyPath,
 
-sellPath
+sellPath:route.sellPath
 
 });
 
@@ -693,7 +684,7 @@ Date.now()-lastHeartbeat
 ){
 
 console.log(
-`\nHEARTBEAT`
+"\nHEARTBEAT\n"
 );
 
 console.log(
@@ -713,13 +704,17 @@ Date.now();
 
 }
 
-const task=
-tasks[
-i++ % tasks.length
-];
+const batch=
+tasks.slice(i,i+8);
 
-const trade=
-await findBestTrade(
+i=(i+8)%tasks.length;
+
+const trades=
+await Promise.all(
+
+batch.map(task=>
+
+findBestTrade(
 
 task.buyRouter,
 
@@ -729,7 +724,14 @@ task.buyPath,
 
 task.sellPath
 
+)
+
+)
+
 );
+
+const trade=
+trades.find(Boolean);
 
 if(!trade){
 
@@ -746,10 +748,6 @@ trade.expectedProfit;
 
 console.log(
 `MICRO FOUND ${fmt(trade.expectedProfit)}`
-);
-
-console.log(
-`SCALED SIZE ${fmt(trade.amountIn)}`
 );
 
 console.log(
@@ -798,7 +796,7 @@ valid
 
 }catch{
 
-await sleep(50);
+await sleep(25);
 
 }
 
