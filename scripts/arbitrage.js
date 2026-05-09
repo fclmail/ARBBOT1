@@ -6,9 +6,10 @@ dotenv.config();
 /* ================= ENV ================= */
 
 const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY;
 
-if (!PRIVATE_KEY) throw new Error("Missing PRIVATE KEY");
+if (!PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= RPC ================= */
 
@@ -19,21 +20,19 @@ const RPCS = [
 let rpcIndex = 0;
 let provider;
 let wallet;
-let vault;
 let usdc;
+let vault;
 
 /* ================= CONFIG ================= */
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.0004", 6);
-
 const WORKER_COUNT = 8;
 
-/* ================= CONTRACTS ================= */
+/* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
-  "0x2E4a715AA0a49075b8469ADF32b57942fDA47337";
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
 const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -44,15 +43,25 @@ const erc20Abi = [
   "function balanceOf(address) view returns(uint256)"
 ];
 
+/* ✅ ONLY VESTIGIAL FLASH REMOVED */
 const contractAbi = [
-  "function startAaveFlashArbitrage(address asset,uint256 amount,(address routerBuy,address routerSell,address token) route,uint256 minimumExpectedProfit)",
-  "function probeLiquidityDepth(address pair,uint256 testAmount) view returns (tuple(address pairAddress,uint256 reserveToken,uint256 reserveUSDC,uint256 optimalAmountIn,uint256 estimatedProfit,uint256 slippageBasisPoints))",
+  "function triggerFlashArbitrage((address routerBuy,address routerSell,address token) route,uint256 amountIn,uint256 minimumExpectedProfit)",
   "function minimumProfitUSDC() view returns(uint256)"
 ];
+
+/* ================= ROUTER ABI ================= */
 
 const routerAbi = [
   "function getAmountsOut(uint256,address[]) view returns(uint256[])"
 ];
+
+/* ================= ROUTERS ================= */
+
+const routers = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
+};
 
 /* ================= TOKENS ================= */
 
@@ -63,27 +72,20 @@ const TOKENS = {
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
 };
 
-/* ================= ROUTERS ================= */
-
-const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
-};
-
 /* ================= STATE ================= */
 
-let microTrades = [];
 let runningProfit = 0n;
 let isExecuting = false;
 
-/* ================= INIT ================= */
+/* ================= PROVIDER ================= */
 
 function newProvider() {
   const url = RPCS[rpcIndex];
   rpcIndex = (rpcIndex + 1) % RPCS.length;
   return new ethers.JsonRpcProvider(url);
 }
+
+/* ================= INIT ================= */
 
 async function init() {
   provider = newProvider();
@@ -121,7 +123,7 @@ async function quote(router, amount, path) {
   }
 }
 
-/* ================= PATHS ================= */
+/* ================= PATH BUILDERS ================= */
 
 function buildPaths(token) {
   return [
@@ -143,7 +145,7 @@ function buildSellPaths(token) {
   ];
 }
 
-/* ================= LIQUIDITY + TRADE FIND ================= */
+/* ================= TRADE FIND ================= */
 
 async function findTrade(buy, sell, token) {
   const buyPaths = buildPaths(token);
@@ -160,6 +162,7 @@ async function findTrade(buy, sell, token) {
       if (!sellOut) continue;
 
       const profit = sellOut - TRADE_AMOUNT;
+
       if (profit < MIN_PROFIT) continue;
 
       if (!best || profit > best.expectedProfit) {
@@ -179,28 +182,31 @@ async function findTrade(buy, sell, token) {
   return best;
 }
 
-/* ================= FLASH EXECUTION ================= */
+/* ================= EXECUTION (VAULT ONLY) ================= */
 
-async function executeFlash(trade) {
-  console.log("\n⚡ EXECUTING FLASH LOAN TRADE");
-  console.log("Token:", trade.token);
+async function executeTrade(trade) {
+  try {
+    console.log("\n⚡ EXECUTING VAULT TRADE");
+    console.log("Token:", trade.token);
 
-  const tx = await vault.startAaveFlashArbitrage(
-    USDC,
-    trade.amountIn,
-    {
-      routerBuy: trade.buy,
-      routerSell: trade.sell,
-      token: trade.token
-    },
-    MIN_PROFIT
-  );
+    const tx = await vault.triggerFlashArbitrage(
+      {
+        routerBuy: trade.buy,
+        routerSell: trade.sell,
+        token: trade.token
+      },
+      trade.amountIn,
+      MIN_PROFIT
+    );
 
-  console.log("TX SENT:", tx.hash);
+    console.log("TX SENT:", tx.hash);
 
-  const receipt = await provider.waitForTransaction(tx.hash);
+    const receipt = await provider.waitForTransaction(tx.hash);
 
-  console.log("CONFIRMED BLOCK:", receipt.blockNumber);
+    console.log("CONFIRMED BLOCK:", receipt.blockNumber);
+  } catch (e) {
+    console.log("❌ EXECUTION FAILED:", e.message);
+  }
 }
 
 /* ================= WORKER ================= */
@@ -223,32 +229,26 @@ async function worker(id, tasks) {
     for (const r of results) {
       if (!r) continue;
 
-      microTrades.push(r);
       runningProfit += r.expectedProfit;
 
       console.log(
         `[W${id}] RUNNING PROFIT: ${ethers.formatUnits(runningProfit, 6)}`
       );
-    }
 
-    if (runningProfit >= MIN_BATCH_PROFIT) {
-      isExecuting = true;
+      // EXECUTE IMMEDIATELY (NO FLASH LOAN, NO BATCH)
+      if (r.expectedProfit >= MIN_PROFIT && !isExecuting) {
+        isExecuting = true;
 
-      const best = microTrades.reduce((a, b) =>
-        b.expectedProfit > a.expectedProfit ? b : a
-      );
+        await executeTrade(r);
 
-      microTrades = [];
-      runningProfit = 0n;
-
-      await executeFlash(best);
-
-      isExecuting = false;
+        runningProfit = 0n;
+        isExecuting = false;
+      }
     }
   }
 }
 
-/* ================= TASKS ================= */
+/* ================= SCAN ================= */
 
 async function scan() {
   const tasks = [];
@@ -275,7 +275,7 @@ async function scan() {
 /* ================= MAIN ================= */
 
 (async function main() {
-  console.log("🚀 FLASH ARBITRAGE BOT STARTED\n");
+  console.log("🚀 VAULT ARBITRAGE BOT (NO FLASH LOAN)\n");
 
   await init();
 
