@@ -24,7 +24,9 @@ const RPCS=[
 
 "https://polygon.llamarpc.com",
 
-"https://rpc.ankr.com/polygon"
+"https://rpc.ankr.com/polygon",
+
+"https://1rpc.io/matic"
 
 ];
 
@@ -32,7 +34,6 @@ let rpcIndex=0;
 
 let provider;
 let wallet;
-
 let vault;
 let usdc;
 
@@ -62,7 +63,7 @@ DAI:
 
 };
 
-const USDC = TOKENS.USDC;
+const USDC=TOKENS.USDC;
 
 /* =========================================================
    ROUTERS
@@ -85,7 +86,7 @@ ApeSwap:
 };
 
 /* =========================================================
-   FLASH LOAN DYNAMIC SIZES
+   DYNAMIC FLASH SIZES
 ========================================================= */
 
 const FLASH_SIZES=[
@@ -105,16 +106,16 @@ ethers.parseUnits("50000",6)
 ];
 
 /* =========================================================
-   PROFIT FILTERS
+   FILTERS
 ========================================================= */
 
 const MIN_PROFIT =
-ethers.parseUnits("0.001",6);
+ethers.parseUnits("0.15",6);
 
 const MIN_BATCH_PROFIT =
-ethers.parseUnits("0.001",6);
+ethers.parseUnits("1.00",6);
 
-const WORKER_COUNT = 24;
+const WORKER_COUNT = 32;
 
 /* =========================================================
    ABI
@@ -130,9 +131,7 @@ const contractAbi=[
 
 "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
 
-"function minimumProfitUSDC() view returns(uint256)",
-
-"function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))"
+"function minimumProfitUSDC() view returns(uint256)"
 
 ];
 
@@ -146,7 +145,8 @@ const routerAbi=[
    HELPERS
 ========================================================= */
 
-const fmt=x=>ethers.formatUnits(x,6);
+const fmt=x=>
+ethers.formatUnits(x,6);
 
 const sleep=ms=>
 new Promise(r=>setTimeout(r,ms));
@@ -161,11 +161,15 @@ return Math.floor(Date.now()/1000);
    STATE
 ========================================================= */
 
-let isExecuting=false;
+let scans=0;
+
+let lastHeartbeat=Date.now();
+
+let queuedTrades=[];
 
 let runningProfit=0n;
 
-let queuedTrades=[];
+let isExecuting=false;
 
 /* =========================================================
    PROVIDER
@@ -189,17 +193,17 @@ PRIVATE_KEY,
 provider
 );
 
-usdc=
-new ethers.Contract(
-USDC,
-erc20Abi,
-wallet
-);
-
 vault=
 new ethers.Contract(
 CONTRACT_ADDRESS,
 contractAbi,
+wallet
+);
+
+usdc=
+new ethers.Contract(
+USDC,
+erc20Abi,
 wallet
 );
 
@@ -240,30 +244,16 @@ console.log(
 }
 
 /* =========================================================
-   STABLE MULTI-HOP PATHS
+   STABLE PATHS
 ========================================================= */
 
-function buildStablePaths(){
+function buildPaths(){
 
 return[
 
 [
 USDC,
 TOKENS.DAI,
-TOKENS.USDT,
-USDC
-],
-
-[
-USDC,
-TOKENS.USDT,
-TOKENS.DAI,
-USDC
-],
-
-[
-USDC,
-TOKENS.DAI,
 USDC
 ],
 
@@ -276,6 +266,12 @@ USDC
 [
 USDC,
 TOKENS.DAI,
+TOKENS.USDT,
+USDC
+],
+
+[
+USDC,
 TOKENS.USDT,
 TOKENS.DAI,
 USDC
@@ -317,29 +313,43 @@ return null;
 }
 
 /* =========================================================
-   SIMULATE SIZE
+   CROSS ROUTER SIMULATION
 ========================================================= */
 
-async function simulateSize(
+async function simulateCrossRouter(
 
-router,
-path,
-size
+buyRouter,
+sellRouter,
+size,
+buyPath,
+sellPath
 
 ){
 
-const out=
+try{
+
+const buyOut=
 await quote(
-router,
+buyRouter,
 size,
-path
+buyPath
 );
 
-if(!out)
+if(!buyOut)
+return null;
+
+const sellOut=
+await quote(
+sellRouter,
+buyOut,
+sellPath
+);
+
+if(!sellOut)
 return null;
 
 const profit=
-out-size;
+sellOut-size;
 
 if(profit<=0n)
 return null;
@@ -347,10 +357,20 @@ return null;
 return{
 
 size,
-finalOut:out,
+
+buyOut,
+
+sellOut,
+
 profit
 
 };
+
+}catch{
+
+return null;
+
+}
 
 }
 
@@ -358,35 +378,51 @@ profit
    FIND BEST SIZE
 ========================================================= */
 
-async function findBestStableTrade(
+async function findBestTrade(
 
-router,
-path
+buyRouter,
+sellRouter,
+buyPath,
+sellPath
 
 ){
 
+const results=
+await Promise.all(
+
+FLASH_SIZES.map(size=>
+
+simulateCrossRouter(
+
+buyRouter,
+
+sellRouter,
+
+size,
+
+buyPath,
+
+sellPath
+
+)
+
+)
+
+);
+
 let best=null;
 
-for(const size of FLASH_SIZES){
-
-const sim=
-await simulateSize(
-router,
-path,
-size
-);
+for(const sim of results){
 
 if(!sim)
 continue;
 
-if(
-sim.profit < MIN_PROFIT
-)
+if(sim.profit<MIN_PROFIT)
 continue;
 
 if(
 !best ||
-sim.profit > best.profit
+sim.profit>best.profit
 ){
 
 best=sim;
@@ -398,18 +434,27 @@ best=sim;
 if(!best)
 return null;
 
+console.log(
+`FOUND ${fmt(best.profit)}`
+);
+
+console.log(
+`SIZE ${fmt(best.size)}`
+);
+
 return{
 
-router,
+buyRouter,
 
-path,
+sellRouter,
+
+buyPath,
+
+sellPath,
 
 amountIn:best.size,
 
-expectedProfit:best.profit,
-
-estimatedFinal:
-best.finalOut
+expectedProfit:best.profit
 
 };
 
@@ -421,23 +466,29 @@ best.finalOut
 
 async function revalidateTrade(t){
 
-const out=
-await quote(
-t.router,
+const sim=
+await simulateCrossRouter(
+
+t.buyRouter,
+
+t.sellRouter,
+
 t.amountIn,
-t.path
+
+t.buyPath,
+
+t.sellPath
+
 );
 
-if(!out)
+if(!sim)
 return null;
 
-const profit=
-out-t.amountIn;
-
-if(profit<MIN_PROFIT)
+if(sim.profit<MIN_PROFIT)
 return null;
 
-t.expectedProfit=profit;
+t.expectedProfit=
+sim.profit;
 
 return t;
 
@@ -458,38 +509,66 @@ console.log(
 );
 
 console.log(
-`ROUTER ${t.router}`
+`BUY ROUTER`
 );
 
 console.log(
-`SIZE ${fmt(t.amountIn)}`
+t.buyRouter
 );
 
 console.log(
-`EXPECTED ${fmt(t.expectedProfit)} USDC`
+`\nSELL ROUTER`
 );
 
 console.log(
-`\nPATH`
+t.sellRouter
 );
 
 console.log(
-t.path.join(" -> ")
+`\nSIZE`
+);
+
+console.log(
+fmt(t.amountIn)
+);
+
+console.log(
+`\nEXPECTED`
+);
+
+console.log(
+`${fmt(t.expectedProfit)} USDC`
+);
+
+console.log(
+`\nBUY PATH`
+);
+
+console.log(
+t.buyPath.join(" -> ")
+);
+
+console.log(
+`\nSELL PATH`
+);
+
+console.log(
+t.sellPath.join(" -> ")
 );
 
 const tx=
 await vault
 .executeBestFlashLoanArbitrage(
 
-t.router,
+t.buyRouter,
 
-t.router,
+t.sellRouter,
 
 FLASH_SIZES,
 
-t.path,
+t.buyPath,
 
-t.path,
+t.sellPath,
 
 now()+30
 
@@ -515,7 +594,7 @@ console.log(
 );
 
 console.log(
-`\nEXPECTED NET`
+`\nNET EXPECTED`
 );
 
 console.log(
@@ -530,6 +609,7 @@ console.log(
 
 console.log(
 err.reason ||
+err.shortMessage ||
 err.message
 );
 
@@ -547,17 +627,43 @@ async function scanLoop(){
 
 const tasks=[];
 
-for(const r of Object.values(routers)){
+for(const buyRouter of Object.values(routers)){
 
-for(const p of buildStablePaths()){
+for(const sellRouter of Object.values(routers)){
+
+if(
+buyRouter===sellRouter
+)
+continue;
+
+for(const buyPath of buildPaths()){
+
+const token=
+buyPath[
+buyPath.length-2
+];
+
+const sellPath=[
+
+token,
+
+USDC
+
+];
 
 tasks.push({
 
-router:r,
+buyRouter,
 
-path:p
+sellRouter,
+
+buyPath,
+
+sellPath
 
 });
+
+}
 
 }
 
@@ -573,9 +679,37 @@ try{
 
 if(isExecuting){
 
-await sleep(25);
+await sleep(15);
 
 continue;
+
+}
+
+scans++;
+
+if(
+Date.now()-lastHeartbeat
+>5000
+){
+
+console.log(
+`\nHEARTBEAT`
+);
+
+console.log(
+`SCANS ${scans}`
+);
+
+console.log(
+`QUEUED ${queuedTrades.length}`
+);
+
+console.log(
+`RUNNING ${fmt(runningProfit)}\n`
+);
+
+lastHeartbeat=
+Date.now();
 
 }
 
@@ -585,11 +719,15 @@ i++ % tasks.length
 ];
 
 const trade=
-await findBestStableTrade(
+await findBestTrade(
 
-task.router,
+task.buyRouter,
 
-task.path
+task.sellRouter,
+
+task.buyPath,
+
+task.sellPath
 
 );
 
@@ -644,11 +782,15 @@ queuedTrades=[];
 runningProfit=0n;
 
 const valid=
-await revalidateTrade(best);
+await revalidateTrade(
+best
+);
 
 if(valid){
 
-await executeTrade(valid);
+await executeTrade(
+valid
+);
 
 }
 
@@ -682,7 +824,7 @@ worker
 (async function main(){
 
 console.log(
-"\nPURE STABLECOIN FLASH BOT STARTED\n"
+"\nPURE STABLECOIN CROSS-ROUTER FLASH BOT STARTED\n"
 );
 
 await initProvider();
@@ -697,7 +839,7 @@ console.log(
 );
 
 console.log(
-"SCANNING STABLE MULTI-HOP ROUTES...\n"
+"SCANNING CROSS-ROUTER STABLECOIN PATHS...\n"
 );
 
 await scanLoop();
