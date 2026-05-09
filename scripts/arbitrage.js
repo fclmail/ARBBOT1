@@ -1,845 +1,324 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-dotenv.config({ override:false });
+dotenv.config({ override: false });
 
-/* =========================================================
-   ENV
-========================================================= */
+/* ================= ENV ================= */
 
 const PRIVATE_KEY =
-process.env.WALLET_PRIVATE_KEY ||
-process.env.PRIVATE_KEY;
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY;
 
-if(!PRIVATE_KEY)
-throw new Error("PRIVATE KEY MISSING");
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE KEY");
 
-/* =========================================================
-   RPC
-========================================================= */
+/* ================= RPC ================= */
 
-const RPCS=[
-
-"https://polygon-bor-rpc.publicnode.com",
-
-"https://polygon.llamarpc.com",
-
-"https://rpc.ankr.com/polygon",
-
-"https://1rpc.io/matic"
-
+const RPCS = [
+  "https://polygon-bor-rpc.publicnode.com"
 ];
 
-let rpcIndex=0;
-
+let rpcIndex = 0;
 let provider;
 let wallet;
+let usdc;
 let vault;
+let routerContracts;
 
-let routerContracts={};
+/* ================= CONFIG ================= */
 
-/* =========================================================
-   CONTRACT
-========================================================= */
+const BASE_TRADE = ethers.parseUnits("0.04", 6);
+const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
+const GAS_COST_USDC = ethers.parseUnits("0.0003", 6);
+
+const BATCH_SIZE = 3;
+
+/* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
-"0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
-/* =========================================================
-   TOKENS
-========================================================= */
+const USDC =
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const TOKENS={
+/* ================= ABI ================= */
 
-USDC:
-"0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-
-USDT:
-"0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-
-DAI:
-"0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
-
-};
-
-const USDC = TOKENS.USDC;
-
-/* =========================================================
-   ROUTERS
-========================================================= */
-
-const routers={
-
-QuickSwap:
-"0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-
-SushiSwap:
-"0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-
-Dfyn:
-"0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-
-ApeSwap:
-"0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
-
-};
-
-/* =========================================================
-   DYNAMIC FLASH SIZES
-========================================================= */
-
-const FLASH_SIZES=[
-
-ethers.parseUnits("1000",6),
-
-ethers.parseUnits("2500",6),
-
-ethers.parseUnits("5000",6),
-
-ethers.parseUnits("10000",6),
-
-ethers.parseUnits("25000",6),
-
-ethers.parseUnits("50000",6)
-
+const erc20Abi = [
+  "function balanceOf(address) view returns(uint256)"
 ];
 
-/* =========================================================
-   FILTERS
-========================================================= */
-
-const MIN_PROFIT =
-ethers.parseUnits("0.01",6);
-
-const MIN_BATCH_PROFIT =
-ethers.parseUnits("0.05",6);
-
-const WORKER_COUNT = 32;
-
-/* =========================================================
-   ABI
-========================================================= */
-
-const contractAbi=[
-
-"function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
-
-"function minimumProfitUSDC() view returns(uint256)"
-
+const contractAbi = [
+  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
 ];
 
-const routerAbi=[
-
-"function getAmountsOut(uint,address[]) view returns(uint[])"
-
+const routerAbi = [
+  "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
-/* =========================================================
-   HELPERS
-========================================================= */
-
-const fmt=x=>
-ethers.formatUnits(x,6);
-
-const sleep=ms=>
-new Promise(r=>setTimeout(r,ms));
-
-function now(){
-
-return Math.floor(Date.now()/1000);
-
-}
-
-/* =========================================================
-   STATE
-========================================================= */
-
-let scans=0;
-
-let lastHeartbeat=Date.now();
-
-let queuedTrades=[];
-
-let runningProfit=0n;
-
-let isExecuting=false;
-
-/* =========================================================
-   PROVIDER
-========================================================= */
-
-function newProvider(){
-
-const url=RPCS[rpcIndex];
-
-rpcIndex=(rpcIndex+1)%RPCS.length;
-
-return new ethers.JsonRpcProvider(url);
-
-}
-
-function rebuildContracts(){
-
-wallet=
-new ethers.Wallet(
-PRIVATE_KEY,
-provider
-);
-
-vault=
-new ethers.Contract(
-CONTRACT_ADDRESS,
-contractAbi,
-wallet
-);
-
-routerContracts=
-Object.fromEntries(
-
-Object.values(routers).map(r=>[
-
-r,
-
-new ethers.Contract(
-r,
-routerAbi,
-provider
-)
-
-])
-
-);
-
-}
-
-async function initProvider(){
-
-provider=newProvider();
-
-await provider.getNetwork();
-
-rebuildContracts();
-
-const min=
-await vault.minimumProfitUSDC();
-
-console.log(
-`ONCHAIN MIN ${fmt(min)} USDC\n`
-);
-
-}
-
-/* =========================================================
-   STABLE ROUTES
-========================================================= */
-
-function buildRoutePairs(){
-
-return[
-
-{
-
-buyPath:[
-USDC,
-TOKENS.DAI
-],
-
-sellPath:[
-TOKENS.DAI,
-USDC
-]
-
-},
-
-{
-
-buyPath:[
-USDC,
-TOKENS.USDT
-],
-
-sellPath:[
-TOKENS.USDT,
-USDC
-]
-
-},
-
-{
-
-buyPath:[
-USDC,
-TOKENS.DAI,
-TOKENS.USDT
-],
-
-sellPath:[
-TOKENS.USDT,
-USDC
-]
-
-},
-
-{
-
-buyPath:[
-USDC,
-TOKENS.USDT,
-TOKENS.DAI
-],
-
-sellPath:[
-TOKENS.DAI,
-USDC
-]
-
-}
-
-];
-
-}
-
-/* =========================================================
-   QUOTE
-========================================================= */
-
-async function quote(
-
-router,
-amount,
-path
-
-){
-
-try{
-
-const out=
-await routerContracts[router]
-.getAmountsOut(
-amount,
-path
-);
-
-return out.at(-1);
-
-}catch{
-
-return null;
-
-}
-
-}
-
-/* =========================================================
-   SIMULATE CROSS ROUTER
-========================================================= */
-
-async function simulateCrossRouter(
-
-buyRouter,
-sellRouter,
-size,
-buyPath,
-sellPath
-
-){
-
-try{
-
-const buyOut=
-await quote(
-buyRouter,
-size,
-buyPath
-);
-
-if(!buyOut)
-return null;
-
-const sellOut=
-await quote(
-sellRouter,
-buyOut,
-sellPath
-);
-
-if(!sellOut)
-return null;
-
-const profit=
-sellOut-size;
-
-if(profit<=0n)
-return null;
-
-return{
-
-size,
-
-profit,
-
-sellOut
-
+/* ================= ROUTERS ================= */
+
+const routers = {
+  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
 };
 
-}catch{
+/* ================= TOKENS ================= */
 
-return null;
-
-}
-
-}
-
-/* =========================================================
-   FIND BEST TRADE
-========================================================= */
-
-async function findBestTrade(
-
-buyRouter,
-sellRouter,
-buyPath,
-sellPath
-
-){
-
-const results=
-await Promise.all(
-
-FLASH_SIZES.map(size=>
-
-simulateCrossRouter(
-
-buyRouter,
-
-sellRouter,
-
-size,
-
-buyPath,
-
-sellPath
-
-)
-
-)
-
-);
-
-let best=null;
-
-for(const sim of results){
-
-if(!sim)
-continue;
-
-if(sim.profit<MIN_PROFIT)
-continue;
-
-if(
-!best ||
-sim.profit>best.profit
-){
-
-best=sim;
-
-}
-
-}
-
-if(!best)
-return null;
-
-console.log(
-`FOUND ${fmt(best.profit)}`
-);
-
-console.log(
-`SIZE ${fmt(best.size)}\n`
-);
-
-return{
-
-buyRouter,
-
-sellRouter,
-
-buyPath,
-
-sellPath,
-
-amountIn:best.size,
-
-expectedProfit:best.profit
-
+const TOKENS = {
+  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
+/* ================= HELPERS ================= */
+
+const fmt = x => ethers.formatUnits(x, 6);
+
+function newProvider() {
+  const url = RPCS[rpcIndex];
+  rpcIndex = (rpcIndex + 1) % RPCS.length;
+  return new ethers.JsonRpcProvider(url);
 }
 
-/* =========================================================
-   REVALIDATE
-========================================================= */
+/* ================= INIT ================= */
 
-async function revalidateTrade(t){
+function rebuildContracts() {
+  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+  vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
 
-const sim=
-await simulateCrossRouter(
-
-t.buyRouter,
-
-t.sellRouter,
-
-t.amountIn,
-
-t.buyPath,
-
-t.sellPath
-
-);
-
-if(!sim)
-return null;
-
-if(sim.profit<MIN_PROFIT)
-return null;
-
-t.expectedProfit=
-sim.profit;
-
-return t;
-
+  routerContracts = Object.fromEntries(
+    Object.values(routers).map(a => [
+      a,
+      new ethers.Contract(a, routerAbi, provider)
+    ])
+  );
 }
 
-/* =========================================================
-   EXECUTE
-========================================================= */
+/* ================= QUOTE ================= */
 
-async function executeTrade(t){
-
-isExecuting=true;
-
-try{
-
-console.log(
-"\nFLASH LOAN EXECUTION\n"
-);
-
-const buyName=
-Object.keys(routers)
-.find(
-k=>routers[k]===t.buyRouter
-);
-
-const sellName=
-Object.keys(routers)
-.find(
-k=>routers[k]===t.sellRouter
-);
-
-console.log(
-"BUY ROUTER"
-);
-
-console.log(
-buyName
-);
-
-console.log(
-"\nSELL ROUTER"
-);
-
-console.log(
-sellName
-);
-
-console.log(
-"\nSIZE"
-);
-
-console.log(
-fmt(t.amountIn)
-);
-
-console.log(
-"\nEXPECTED"
-);
-
-console.log(
-`${fmt(t.expectedProfit)} USDC`
-);
-
-const tx=
-await vault
-.executeBestFlashLoanArbitrage(
-
-t.buyRouter,
-
-t.sellRouter,
-
-FLASH_SIZES,
-
-t.buyPath,
-
-t.sellPath,
-
-now()+30
-
-);
-
-console.log(
-"\nTX SENT"
-);
-
-console.log(
-tx.hash
-);
-
-const receipt=
-await tx.wait();
-
-console.log(
-"\nCONFIRMED"
-);
-
-console.log(
-`BLOCK ${receipt.blockNumber}\n`
-);
-
-}catch(err){
-
-console.log(
-"\nEXECUTION FAILED\n"
-);
-
-console.log(
-err.reason ||
-err.shortMessage ||
-err.message
-);
-
+async function quote(router, amount, path) {
+  try {
+    const out = await routerContracts[router].getAmountsOut(amount, path);
+    return out.at(-1);
+  } catch {
+    return null;
+  }
 }
 
-isExecuting=false;
+/* ================= LIQUIDITY DEPTH PROBING (NEW CORE FEATURE) ================= */
 
+async function probeLiquidityDepth(router, path) {
+
+  const testSizes = [
+    BASE_TRADE,
+    BASE_TRADE * 5n,
+    BASE_TRADE * 10n,
+    BASE_TRADE * 25n,
+    BASE_TRADE * 50n
+  ];
+
+  let maxSafe = BASE_TRADE;
+
+  for (const size of testSizes) {
+
+    const out = await quote(router, size, path);
+    if (!out) break;
+
+    const slippage = size > out ? size - out : 0n;
+
+    // reject if slippage exceeds 4%
+    const allowed = size * 4n / 100n;
+
+    if (slippage > allowed) break;
+
+    maxSafe = size;
+  }
+
+  return maxSafe;
 }
 
-/* =========================================================
-   SCAN LOOP
-========================================================= */
+/* ================= PATHS ================= */
 
-async function scanLoop(){
-
-const tasks=[];
-
-for(const buyRouter of Object.values(routers)){
-
-for(const sellRouter of Object.values(routers)){
-
-if(
-buyRouter===sellRouter
-)
-continue;
-
-for(const route of buildRoutePairs()){
-
-tasks.push({
-
-buyRouter,
-
-sellRouter,
-
-buyPath:route.buyPath,
-
-sellPath:route.sellPath
-
-});
-
+function buildBuyPaths(token) {
+  return [
+    [USDC, token],
+    [USDC, TOKENS.WETH, token],
+    [USDC, TOKENS.WMATIC, token]
+  ];
 }
 
+function buildSellPaths(token) {
+  return [
+    [token, USDC],
+    [token, TOKENS.WETH, USDC],
+    [token, TOKENS.WMATIC, USDC]
+  ];
 }
 
+/* ================= BEST SIZE (USES LIQUIDITY CAP) ================= */
+
+async function findBestSize(buy, sell, token, buyPath, sellPath) {
+
+  // 🔥 STEP 1: LIQUIDITY DEPTH PROBING BEFORE SCALING
+  const safeLimitBuy = await probeLiquidityDepth(buy, buyPath);
+  const safeLimitSell = await probeLiquidityDepth(sell, sellPath);
+
+  const maxSafe = safeLimitBuy < safeLimitSell ? safeLimitBuy : safeLimitSell;
+
+  const candidates = [
+    BASE_TRADE,
+    BASE_TRADE * 3n,
+    BASE_TRADE * 10n,
+    BASE_TRADE * 25n,
+    BASE_TRADE * 50n,
+    maxSafe
+  ];
+
+  let bestAmount = BASE_TRADE;
+  let bestProfit = 0n;
+
+  for (const amt of candidates) {
+
+    if (amt > maxSafe) continue;
+
+    const buyOut = await quote(buy, amt, buyPath);
+    if (!buyOut) continue;
+
+    const sellOut = await quote(sell, buyOut, sellPath);
+    if (!sellOut) continue;
+
+    const profit = sellOut - amt;
+
+    if (profit > bestProfit) {
+      bestProfit = profit;
+      bestAmount = amt;
+    }
+  }
+
+  return { amount: bestAmount, profit: bestProfit };
 }
 
-let i=0;
+/* ================= TRADE SEARCH ================= */
 
-async function worker(){
+async function findTrade(token) {
 
-while(true){
+  for (const buy of Object.values(routers)) {
+    for (const sell of Object.values(routers)) {
 
-try{
+      if (buy === sell) continue;
 
-if(isExecuting){
+      for (const bp of buildBuyPaths(token)) {
 
-await sleep(15);
+        const base = await quote(buy, BASE_TRADE, bp);
+        if (!base) continue;
 
-continue;
+        for (const sp of buildSellPaths(token)) {
 
+          const sellOut = await quote(sell, base, sp);
+          if (!sellOut) continue;
+
+          const baseProfit = sellOut - BASE_TRADE;
+          if (baseProfit <= 0n) continue;
+
+          const best = await findBestSize(buy, sell, token, bp, sp);
+
+          if (best.profit > MIN_PROFIT) {
+
+            console.log(
+              `MICRO FOUND ${fmt(baseProfit)} → SIZE ${fmt(best.amount)} → EXPECTED ${fmt(best.profit)}`
+            );
+
+            return {
+              buy,
+              sell,
+              amountIn: best.amount,
+              buyPath: bp,
+              sellPath: sp,
+              expectedProfit: best.profit
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
-scans++;
+/* ================= EXECUTE ================= */
 
-if(
-Date.now()-lastHeartbeat
->5000
-){
+async function executeBatch(trades) {
 
-console.log(
-"\nHEARTBEAT\n"
-);
+  console.log("\n🔥 EXEC BATCH");
 
-console.log(
-`SCANS ${scans}`
-);
+  const before = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-console.log(
-`QUEUED ${queuedTrades.length}`
-);
+  let total = 0n;
+  let expected = 0n;
 
-console.log(
-`RUNNING ${fmt(runningProfit)}\n`
-);
+  for (const t of trades) {
+    total += t.amountIn;
+    expected += t.expectedProfit;
+  }
 
-lastHeartbeat=
-Date.now();
+  console.log(`CAPITAL ${fmt(total)}`);
+  console.log(`EXPECTED ${fmt(expected)}`);
 
+  if (expected < GAS_COST_USDC) {
+    console.log("SKIP: LOW PROFIT\n");
+    return;
+  }
+
+  const tx = await vault.executeFlashBatchArbitrage({
+    buyRouters: trades.map(t => t.buy),
+    sellRouters: trades.map(t => t.sell),
+    amountsInUSDC: trades.map(t => t.amountIn),
+    pathsToToken: trades.map(t => t.buyPath),
+    pathsToUSDC: trades.map(t => t.sellPath),
+    deadline: Math.floor(Date.now() / 1000) + 30
+  });
+
+  await provider.waitForTransaction(tx.hash);
+
+  const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+  console.log(`BEFORE ${fmt(before)}`);
+  console.log(`AFTER  ${fmt(after)}`);
+  console.log(`REAL   ${fmt(after - before)}\n`);
 }
 
-const batch=
-tasks.slice(i,i+8);
+/* ================= MAIN ================= */
 
-i=(i+8)%tasks.length;
+(async function main() {
 
-const trades=
-await Promise.all(
+  console.log("BOT START\n");
 
-batch.map(task=>
+  provider = newProvider();
+  rebuildContracts();
 
-findBestTrade(
+  let batch = [];
 
-task.buyRouter,
+  setInterval(() => {
+    console.log("⏱ scanning...");
+  }, 5000);
 
-task.sellRouter,
+  while (true) {
 
-task.buyPath,
+    for (const token of Object.values(TOKENS)) {
 
-task.sellPath
+      const trade = await findTrade(token);
 
-)
+      if (!trade) continue;
 
-)
+      batch.push(trade);
 
-);
-
-const trade=
-trades.find(Boolean);
-
-if(!trade){
-
-await sleep(5);
-
-continue;
-
-}
-
-queuedTrades.push(trade);
-
-runningProfit+=
-trade.expectedProfit;
-
-console.log(
-`MICRO FOUND ${fmt(trade.expectedProfit)}`
-);
-
-console.log(
-`RUNNING ${fmt(runningProfit)}\n`
-);
-
-if(
-
-!isExecuting &&
-
-runningProfit >=
-MIN_BATCH_PROFIT
-
-){
-
-const best=
-queuedTrades.sort(
-
-(a,b)=>
-
-Number(
-b.expectedProfit-
-a.expectedProfit
-)
-
-)[0];
-
-queuedTrades=[];
-
-runningProfit=0n;
-
-const valid=
-await revalidateTrade(
-best
-);
-
-if(valid){
-
-await executeTrade(
-valid
-);
-
-}
-
-}
-
-}catch{
-
-await sleep(25);
-
-}
-
-}
-
-}
-
-await Promise.all(
-
-Array.from(
-{length:WORKER_COUNT},
-worker
-)
-
-);
-
-}
-
-/* =========================================================
-   MAIN
-========================================================= */
-
-(async function main(){
-
-console.log(
-"\nPURE STABLECOIN CROSS-ROUTER FLASH BOT STARTED\n"
-);
-
-await initProvider();
-
-const pol=
-await provider.getBalance(
-wallet.address
-);
-
-console.log(
-`POL ${ethers.formatEther(pol)}\n`
-);
-
-console.log(
-"SCANNING CROSS-ROUTER STABLECOIN PATHS...\n"
-);
-
-await scanLoop();
+      if (batch.length >= BATCH_SIZE) {
+        await executeBatch(batch);
+        batch = [];
+      }
+    }
+  }
 
 })();
