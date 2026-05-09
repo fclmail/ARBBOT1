@@ -26,9 +26,9 @@ let usdc;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.0004", 6);
 
-const WORKER_COUNT = 16;
+const WORKER_COUNT = 8;
 
 /* ================= CONTRACTS ================= */
 
