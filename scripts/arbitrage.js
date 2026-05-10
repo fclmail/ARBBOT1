@@ -12,7 +12,7 @@ const PRIVATE_KEY =
   process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {
-  throw new Error("Missing PK");
+  throw new Error("Missing private key");
 }
 
 const RPC =
@@ -28,18 +28,7 @@ const provider =
     }
   );
 
-/* =========================================================
-   FULL ENS DISABLE
-========================================================= */
-
 provider.ens = null;
-
-provider.resolveName =
-  async (name) => name;
-
-/* =========================================================
-   WALLET
-========================================================= */
 
 const wallet =
   new ethers.Wallet(
@@ -57,18 +46,11 @@ const CONTRACT_ADDRESS =
 const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-/* =========================================================
-   ROUTERS
-========================================================= */
-
 const QUICKSWAP =
   "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 
 const SUSHISWAP =
   "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
-
-const APESWAP =
-  "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607";
 
 /* =========================================================
    ABI
@@ -76,17 +58,13 @@ const APESWAP =
 
 const ABI = [
 
-  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
-
   "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
 
   "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
 
-  "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256)",
+  "function getContractUSDCBalance() view returns(uint256)",
 
-  "function withdraw(uint256)",
-
-  "function minimumProfitUSDC() view returns(uint256)"
+  "function withdraw(uint256)"
 ];
 
 const vault =
@@ -100,216 +78,48 @@ const vault =
    TOKENS
 ========================================================= */
 
-const TOKENS = {
-
-  WETH:
-    "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-
-  WMATIC:
-    "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-
-  DAI:
-    "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-
-  USDT:
-    "0xc2132D05D31c914a87C6611C10748AaCbC532Db",
-
-  WBTC:
-    "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
-
-  LINK:
-    "0x53E0bca35eC356BD5ddDFebbD1Fc0fFAeD03c9",
-
-  AAVE:
-    "0xD6DF932A45C0f255f85145f286ea0B292B21C90B",
-
-  CRV:
-    "0x172370d5Cd63279eFa6d502DAB29171933a610AF",
-
-  UNI:
-    "0xb33EaAd8d922B1083446DC23f610c2567fB5180f"
-};
-
-/* =========================================================
-   MULTI HOP PATHS
-========================================================= */
-
-const STRATEGIES = [
-
-  /* =====================================================
-     WETH
-  ===================================================== */
+const TOKENS = [
 
   {
-    token: TOKENS.WETH,
-
-    buyRouter: QUICKSWAP,
-    sellRouter: SUSHISWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.WMATIC,
-      TOKENS.WETH
-    ],
-
-    pathToUSDC: [
-      TOKENS.WETH,
-      TOKENS.WMATIC,
-      USDC
-    ]
+    symbol: "WETH",
+    address:
+      "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
   },
 
   {
-    token: TOKENS.WETH,
-
-    buyRouter: SUSHISWAP,
-    sellRouter: QUICKSWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.WETH
-    ],
-
-    pathToUSDC: [
-      TOKENS.WETH,
-      USDC
-    ]
+    symbol: "WBTC",
+    address:
+      "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6"
   },
 
-  /* =====================================================
-     WBTC
-  ===================================================== */
-
   {
-    token: TOKENS.WBTC,
-
-    buyRouter: QUICKSWAP,
-    sellRouter: SUSHISWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.WETH,
-      TOKENS.WBTC
-    ],
-
-    pathToUSDC: [
-      TOKENS.WBTC,
-      TOKENS.WETH,
-      USDC
-    ]
+    symbol: "DAI",
+    address:
+      "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"
   },
 
-  /* =====================================================
-     LINK
-  ===================================================== */
-
   {
-    token: TOKENS.LINK,
-
-    buyRouter: QUICKSWAP,
-    sellRouter: APESWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.WMATIC,
-      TOKENS.LINK
-    ],
-
-    pathToUSDC: [
-      TOKENS.LINK,
-      TOKENS.WMATIC,
-      USDC
-    ]
+    symbol: "LINK",
+    address:
+      "0x53E0bca35ec356bd5dddfebbd1fc0fd03fabad39"
   },
 
-  /* =====================================================
-     DAI
-  ===================================================== */
-
   {
-    token: TOKENS.DAI,
-
-    buyRouter: QUICKSWAP,
-    sellRouter: SUSHISWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.DAI
-    ],
-
-    pathToUSDC: [
-      TOKENS.DAI,
-      USDC
-    ]
+    symbol: "UNI",
+    address:
+      "0xb33EaAd8d922B1083446DC23f610c2567fB5180f"
   },
 
-  /* =====================================================
-     UNI
-  ===================================================== */
-
   {
-    token: TOKENS.UNI,
-
-    buyRouter: QUICKSWAP,
-    sellRouter: SUSHISWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.WETH,
-      TOKENS.UNI
-    ],
-
-    pathToUSDC: [
-      TOKENS.UNI,
-      TOKENS.WETH,
-      USDC
-    ]
+    symbol: "SUSHI",
+    address:
+      "0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a"
   },
 
-  /* =====================================================
-     AAVE
-  ===================================================== */
-
   {
-    token: TOKENS.AAVE,
-
-    buyRouter: QUICKSWAP,
-    sellRouter: SUSHISWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.WETH,
-      TOKENS.AAVE
-    ],
-
-    pathToUSDC: [
-      TOKENS.AAVE,
-      TOKENS.WETH,
-      USDC
-    ]
-  },
-
-  /* =====================================================
-     CRV
-  ===================================================== */
-
-  {
-    token: TOKENS.CRV,
-
-    buyRouter: QUICKSWAP,
-    sellRouter: SUSHISWAP,
-
-    pathToToken: [
-      USDC,
-      TOKENS.WMATIC,
-      TOKENS.CRV
-    ],
-
-    pathToUSDC: [
-      TOKENS.CRV,
-      TOKENS.WMATIC,
-      USDC
-    ]
+    symbol: "CRV",
+    address:
+      "0x172370d5Cd63279eFa6d502DAB29171933a610AF"
   }
 ];
 
@@ -317,11 +127,8 @@ const STRATEGIES = [
    CANDIDATE FLASH SIZES
 ========================================================= */
 
-const CANDIDATE_SIZES = [
+const SIZES = [
 
-  ethers.parseUnits("100", 6),
-  ethers.parseUnits("250", 6),
-  ethers.parseUnits("500", 6),
   ethers.parseUnits("1000", 6),
   ethers.parseUnits("2500", 6),
   ethers.parseUnits("5000", 6),
@@ -332,115 +139,84 @@ const CANDIDATE_SIZES = [
 ];
 
 /* =========================================================
-   GLOBALS
+   STATS
 ========================================================= */
 
-let executing = false;
-
-let totalScans = 0;
-
-let totalExecutions = 0;
-
-let totalProfit = 0n;
+let TOTAL_SCANS = 0;
+let TOTAL_EXECUTIONS = 0;
+let TOTAL_PROFIT = 0n;
+let LAST_BLOCK = 0;
 
 const queue = [];
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function sleep(ms) {
-  return new Promise(
-    (resolve) =>
-      setTimeout(resolve, ms)
-  );
-}
-
-function usdc(n) {
-  return ethers.formatUnits(n, 6);
-}
+let executing = false;
 
 /* =========================================================
    BALANCE
 ========================================================= */
 
-async function contractBalance() {
+async function checkBalance() {
 
   try {
 
-    const token =
-      new ethers.Contract(
-        USDC,
-        [
-          "function balanceOf(address) view returns(uint256)"
-        ],
-        provider
-      );
+    const bal =
+      await provider.call({
+        to: USDC,
+        data:
+          "0x70a08231000000000000000000000000" +
+          CONTRACT_ADDRESS
+            .substring(2)
+            .toLowerCase()
+      });
 
-    return await token.balanceOf(
-      CONTRACT_ADDRESS
+    const decoded =
+      ethers.toBigInt(bal);
+
+    console.log(
+      "CONTRACTUSDC:" +
+      ethers.formatUnits(decoded, 6)
     );
 
-  } catch {
+    return decoded;
+
+  } catch (e) {
+
+    console.log(
+      "BALANCEERROR:" +
+      e.message.substring(0, 120)
+    );
 
     return 0n;
   }
 }
 
 /* =========================================================
-   EXECUTE
+   EXECUTION
 ========================================================= */
 
-async function execute(strategy, size) {
+async function execute(job) {
 
   try {
 
     executing = true;
 
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      "FLASHLOANEXECUTIONSTART"
-    );
-
-    console.log(
-      "TOKEN:" +
-      strategy.token
-    );
-
-    console.log(
-      "SIZE:" +
-      usdc(size)
-    );
+    console.log("EXECMODE:FLASH");
+    console.log("AAVECALLBACKSTART");
 
     const before =
-      await contractBalance();
-
-    console.log(
-      "BALANCEBEFORE:" +
-      usdc(before)
-    );
-
-    const deadline =
-      Math.floor(Date.now() / 1000) +
-      120;
+      await checkBalance();
 
     const tx =
-      await vault.executeAaveFlashLoanArbitrage(
+      await vault.executeBestFlashLoanArbitrage(
 
-        strategy.buyRouter,
+        QUICKSWAP,
+        SUSHISWAP,
 
-        strategy.sellRouter,
+        SIZES,
 
-        size,
+        job.pathToToken,
+        job.pathToUSDC,
 
-        strategy.pathToToken,
-
-        strategy.pathToUSDC,
-
-        deadline
+        Math.floor(Date.now() / 1000) + 120
       );
 
     console.log(
@@ -450,63 +226,37 @@ async function execute(strategy, size) {
     const receipt =
       await tx.wait();
 
+    LAST_BLOCK =
+      receipt.blockNumber;
+
     console.log(
       "BLOCKCONFIRMED:" +
       receipt.blockNumber
     );
 
     const after =
-      await contractBalance();
-
-    console.log(
-      "BALANCEAFTER:" +
-      usdc(after)
-    );
+      await checkBalance();
 
     const profit =
       after - before;
 
     if (profit > 0n) {
 
-      totalProfit += profit;
+      TOTAL_PROFIT += profit;
 
       console.log(
         "NETPROFIT:" +
-        usdc(profit)
-      );
-
-      console.log(
-        "TOTALPROFIT:" +
-        usdc(totalProfit)
-      );
-
-    } else {
-
-      console.log(
-        "NOREALIZEDPROFIT"
+        ethers.formatUnits(profit, 6)
       );
     }
 
-    totalExecutions++;
-
-    console.log(
-      "EXECUTIONS:" +
-      totalExecutions
-    );
-
-    console.log(
-      "FLASHLOANEXECUTIONEND"
-    );
-
-    console.log(
-      "================================="
-    );
+    TOTAL_EXECUTIONS++;
 
   } catch (e) {
 
     console.log(
       "EXECUTIONERROR:" +
-      e.message.substring(0, 300)
+      e.message.substring(0, 200)
     );
 
   } finally {
@@ -534,95 +284,87 @@ async function processQueue() {
 
   while (queue.length > 0) {
 
-    const job =
-      queue.shift();
+    const job = queue.shift();
 
-    await execute(
-      job.strategy,
-      job.size
-    );
+    await execute(job);
   }
 }
 
 /* =========================================================
-   SCANNER
+   SCAN
 ========================================================= */
 
-async function scanStrategy(strategy) {
+async function scanToken(token) {
 
   try {
 
-    totalScans++;
+    TOTAL_SCANS++;
 
-    console.log(
-      "MICROSCANSTART"
-    );
+    console.log("MICROSCANSTART");
+    console.log("TOKEN:" + token.address);
 
-    console.log(
-      "TOKEN:" +
-      strategy.token
-    );
+    const pathToToken = [
+      USDC,
+      token.address
+    ];
+
+    const pathToUSDC = [
+      token.address,
+      USDC
+    ];
 
     const result =
       await vault.findBestFlashLoanSize(
 
-        strategy.buyRouter,
+        QUICKSWAP,
+        SUSHISWAP,
 
-        strategy.sellRouter,
+        SIZES,
 
-        CANDIDATE_SIZES,
-
-        strategy.pathToToken,
-
-        strategy.pathToUSDC
+        pathToToken,
+        pathToUSDC
       );
 
     const size =
       BigInt(result.amountIn);
 
-    const finalUSDC =
-      BigInt(
-        result.estimatedFinalUSDC
-      );
-
-    const profit =
+    const estimated =
       BigInt(
         result.estimatedProfit
       );
 
     console.log(
-      "MICROPROFIT:" +
-      usdc(profit)
+      "PROFITDENSITY:" +
+      ethers.formatUnits(
+        estimated,
+        6
+      )
     );
 
-    console.log(
-      "FINALUSDC:" +
-      usdc(finalUSDC)
-    );
-
-    console.log(
-      "OPTIMALSIZE:" +
-      usdc(size)
-    );
-
-    if (
-      profit > 0n &&
-      size > 0n
-    ) {
+    if (estimated > 0n) {
 
       console.log(
-        "PROFITABLEOPPORTUNITYFOUND"
+        "PROFITABLEPATHFOUND"
+      );
+
+      console.log(
+        "FINALCONTINUOUSSIZE:" +
+        ethers.formatUnits(
+          size,
+          6
+        )
       );
 
       enqueue({
-        strategy,
-        size
+        token: token.address,
+        pathToToken,
+        pathToUSDC
       });
 
     } else {
 
       console.log(
-        "NOPROFITFOUND"
+        "NOPROFIT"
       );
     }
 
@@ -630,48 +372,34 @@ async function scanStrategy(strategy) {
 
     console.log(
       "SCANERROR:" +
-      e.message.substring(0, 250)
+      e.message.substring(0, 200)
     );
   }
 }
 
 /* =========================================================
-   MAIN LOOP
+   LOOP
 ========================================================= */
 
 async function scannerLoop() {
 
-  console.log(
-    "MULTIHOPSCANNERSTARTED"
-  );
-
   while (true) {
 
-    try {
+    await Promise.all(
+      TOKENS.map(scanToken)
+    );
 
-      await Promise.all(
-        STRATEGIES.map(
-          scanStrategy
-        )
-      );
-
-    } catch (e) {
-
-      console.log(
-        "LOOPERROR:" +
-        e.message.substring(0, 200)
-      );
-    }
-
-    await sleep(800);
+    await new Promise(
+      r => setTimeout(r, 500)
+    );
   }
 }
 
 /* =========================================================
-   MONITOR
+   STATS
 ========================================================= */
 
-function monitor() {
+function statsLoop() {
 
   setInterval(() => {
 
@@ -681,12 +409,12 @@ function monitor() {
 
     console.log(
       "SCANS:" +
-      totalScans
+      TOTAL_SCANS
     );
 
     console.log(
       "EXECUTIONS:" +
-      totalExecutions
+      TOTAL_EXECUTIONS
     );
 
     console.log(
@@ -701,14 +429,22 @@ function monitor() {
 
     console.log(
       "TOTALPROFIT:" +
-      usdc(totalProfit)
+      ethers.formatUnits(
+        TOTAL_PROFIT,
+        6
+      )
+    );
+
+    console.log(
+      "LASTBLOCK:" +
+      LAST_BLOCK
     );
 
     console.log(
       "================================="
     );
 
-  }, 3000);
+  }, 5000);
 }
 
 /* =========================================================
@@ -718,19 +454,7 @@ function monitor() {
 async function start() {
 
   console.log(
-    "================================="
-  );
-
-  console.log(
-    "ARBBOTSTARTED"
-  );
-
-  console.log(
-    "MODE:MULTIHOPFLASH"
-  );
-
-  console.log(
-    "NETWORK:POLYGON"
+    "ARBITRAGEBOTSTARTED"
   );
 
   console.log(
@@ -743,26 +467,11 @@ async function start() {
     CONTRACT_ADDRESS
   );
 
-  console.log(
-    "STRATEGIES:" +
-    STRATEGIES.length
-  );
-
-  console.log(
-    "================================="
-  );
-
-  const minimum =
-    await vault.minimumProfitUSDC();
-
-  console.log(
-    "MINIMUMPROFIT:" +
-    usdc(minimum)
-  );
+  await checkBalance();
 
   scannerLoop();
 
-  monitor();
+  statsLoop();
 }
 
 start();
