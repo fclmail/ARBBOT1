@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -9,13 +8,48 @@ dotenv.config();
 ========================================================= */
 
 const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {
   throw new Error("Missing PK");
 }
 
-const RPC = "https://polygon-bor-rpc.publicnode.com";
+const RPC =
+  "https://polygon-bor-rpc.publicnode.com";
+
+const provider =
+  new ethers.JsonRpcProvider(
+    RPC,
+    {
+      name: "polygon",
+      chainId: 137,
+      ensAddress: null
+    }
+  );
+
+/* =========================================================
+   FULL ENS DISABLE
+========================================================= */
+
+provider.ens = null;
+
+provider.resolveName =
+  async (name) => name;
+
+/* =========================================================
+   WALLET
+========================================================= */
+
+const wallet =
+  new ethers.Wallet(
+    PRIVATE_KEY,
+    provider
+  );
+
+/* =========================================================
+   CONTRACT
+========================================================= */
 
 const CONTRACT_ADDRESS =
   "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
@@ -24,258 +58,430 @@ const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 /* =========================================================
-   PROVIDER
+   ROUTERS
 ========================================================= */
 
-const provider = new ethers.JsonRpcProvider(RPC, {
-  name: "polygon",
-  chainId: 137,
-  ensAddress: null
-});
+const QUICKSWAP =
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 
-provider.ens = null;
+const SUSHISWAP =
+  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const APESWAP =
+  "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607";
 
 /* =========================================================
-   CONTRACT
+   ABI
 ========================================================= */
 
 const ABI = [
-  "function findBestFlashLoanSize(address,uint256) view returns(uint256,uint256)",
-  "function triggerFlashArbitrage((address,address,address),uint256,uint256)",
-  "function startAaveFlashArbitrage(address,uint256,(address,address,address),uint256)",
-  "function getContractUSDCBalance() view returns(uint256)",
-  "function withdrawToken(address,uint256)"
+
+  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
+
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+
+  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
+
+  "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256)",
+
+  "function withdraw(uint256)",
+
+  "function minimumProfitUSDC() view returns(uint256)"
 ];
 
-const vault = new ethers.Contract(
-  CONTRACT_ADDRESS,
-  ABI,
-  wallet
-);
+const vault =
+  new ethers.Contract(
+    CONTRACT_ADDRESS,
+    ABI,
+    wallet
+  );
 
 /* =========================================================
-   TOKEN MAP
+   TOKENS
 ========================================================= */
 
-const TOKEN_MAP = {
-  // WETH
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619": {
-    pair: "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670",
-    routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
-  },
+const TOKENS = {
 
-  // WMATIC
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270": {
-    pair: "0x6e7a5fafc77265b8e0cc57b4f7f8fbd7f6a5c1f6",
-    routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
-  },
+  WETH:
+    "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
 
-  // DAI
-  "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063": {
-    pair: "0xf04adbf75cdfc5ed26eea4bbbb991db002036bdd",
-    routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
-  },
+  WMATIC:
+    "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
 
-  // USDT
-  "0xc2132D05D31c914a87C6611C10748AaCbC532Db": {
-    pair: "0xc4e595acdd997d644b9e539e3e7f7f8f7f4c1f6",
-    routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
-  }
+  DAI:
+    "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+
+  USDT:
+    "0xc2132D05D31c914a87C6611C10748AaCbC532Db",
+
+  WBTC:
+    "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
+
+  LINK:
+    "0x53E0bca35eC356BD5ddDFebbD1Fc0fFAeD03c9",
+
+  AAVE:
+    "0xD6DF932A45C0f255f85145f286ea0B292B21C90B",
+
+  CRV:
+    "0x172370d5Cd63279eFa6d502DAB29171933a610AF",
+
+  UNI:
+    "0xb33EaAd8d922B1083446DC23f610c2567fB5180f"
 };
 
 /* =========================================================
-   POOLS
+   MULTI HOP PATHS
 ========================================================= */
 
-const POOLS = Object.entries(TOKEN_MAP).map(
-  ([token, config]) => ({
-    token,
-    config
-  })
-);
+const STRATEGIES = [
+
+  /* =====================================================
+     WETH
+  ===================================================== */
+
+  {
+    token: TOKENS.WETH,
+
+    buyRouter: QUICKSWAP,
+    sellRouter: SUSHISWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.WMATIC,
+      TOKENS.WETH
+    ],
+
+    pathToUSDC: [
+      TOKENS.WETH,
+      TOKENS.WMATIC,
+      USDC
+    ]
+  },
+
+  {
+    token: TOKENS.WETH,
+
+    buyRouter: SUSHISWAP,
+    sellRouter: QUICKSWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.WETH
+    ],
+
+    pathToUSDC: [
+      TOKENS.WETH,
+      USDC
+    ]
+  },
+
+  /* =====================================================
+     WBTC
+  ===================================================== */
+
+  {
+    token: TOKENS.WBTC,
+
+    buyRouter: QUICKSWAP,
+    sellRouter: SUSHISWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.WETH,
+      TOKENS.WBTC
+    ],
+
+    pathToUSDC: [
+      TOKENS.WBTC,
+      TOKENS.WETH,
+      USDC
+    ]
+  },
+
+  /* =====================================================
+     LINK
+  ===================================================== */
+
+  {
+    token: TOKENS.LINK,
+
+    buyRouter: QUICKSWAP,
+    sellRouter: APESWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.WMATIC,
+      TOKENS.LINK
+    ],
+
+    pathToUSDC: [
+      TOKENS.LINK,
+      TOKENS.WMATIC,
+      USDC
+    ]
+  },
+
+  /* =====================================================
+     DAI
+  ===================================================== */
+
+  {
+    token: TOKENS.DAI,
+
+    buyRouter: QUICKSWAP,
+    sellRouter: SUSHISWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.DAI
+    ],
+
+    pathToUSDC: [
+      TOKENS.DAI,
+      USDC
+    ]
+  },
+
+  /* =====================================================
+     UNI
+  ===================================================== */
+
+  {
+    token: TOKENS.UNI,
+
+    buyRouter: QUICKSWAP,
+    sellRouter: SUSHISWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.WETH,
+      TOKENS.UNI
+    ],
+
+    pathToUSDC: [
+      TOKENS.UNI,
+      TOKENS.WETH,
+      USDC
+    ]
+  },
+
+  /* =====================================================
+     AAVE
+  ===================================================== */
+
+  {
+    token: TOKENS.AAVE,
+
+    buyRouter: QUICKSWAP,
+    sellRouter: SUSHISWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.WETH,
+      TOKENS.AAVE
+    ],
+
+    pathToUSDC: [
+      TOKENS.AAVE,
+      TOKENS.WETH,
+      USDC
+    ]
+  },
+
+  /* =====================================================
+     CRV
+  ===================================================== */
+
+  {
+    token: TOKENS.CRV,
+
+    buyRouter: QUICKSWAP,
+    sellRouter: SUSHISWAP,
+
+    pathToToken: [
+      USDC,
+      TOKENS.WMATIC,
+      TOKENS.CRV
+    ],
+
+    pathToUSDC: [
+      TOKENS.CRV,
+      TOKENS.WMATIC,
+      USDC
+    ]
+  }
+];
+
+/* =========================================================
+   CANDIDATE FLASH SIZES
+========================================================= */
+
+const CANDIDATE_SIZES = [
+
+  ethers.parseUnits("100", 6),
+  ethers.parseUnits("250", 6),
+  ethers.parseUnits("500", 6),
+  ethers.parseUnits("1000", 6),
+  ethers.parseUnits("2500", 6),
+  ethers.parseUnits("5000", 6),
+  ethers.parseUnits("10000", 6),
+  ethers.parseUnits("25000", 6),
+  ethers.parseUnits("50000", 6),
+  ethers.parseUnits("100000", 6)
+];
 
 /* =========================================================
    GLOBALS
 ========================================================= */
 
-const queue = [];
-
 let executing = false;
 
 let totalScans = 0;
+
 let totalExecutions = 0;
-let totalProfits = 0n;
-let lastBlock = 0;
+
+let totalProfit = 0n;
+
+const queue = [];
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(
+    (resolve) =>
+      setTimeout(resolve, ms)
+  );
 }
 
-function formatUSDC(value) {
-  try {
-    return ethers.formatUnits(value, 6);
-  } catch {
-    return "0";
-  }
+function usdc(n) {
+  return ethers.formatUnits(n, 6);
 }
 
 /* =========================================================
-   BALANCE CHECK
+   BALANCE
 ========================================================= */
 
-async function checkContractBalance() {
+async function contractBalance() {
+
   try {
-    const usdcContract = new ethers.Contract(
-      USDC,
-      [
-        "function balanceOf(address) view returns(uint256)"
-      ],
-      provider
+
+    const token =
+      new ethers.Contract(
+        USDC,
+        [
+          "function balanceOf(address) view returns(uint256)"
+        ],
+        provider
+      );
+
+    return await token.balanceOf(
+      CONTRACT_ADDRESS
     );
 
-    const balance =
-      await usdcContract.balanceOf(CONTRACT_ADDRESS);
-
-    console.log(
-      "CONTRACTUSDCBALANCE:" +
-        formatUSDC(balance)
-    );
-
-    return balance;
-  } catch (e) {
-    console.log(
-      "BALANCECHECKERROR:" +
-        e.message.substring(0, 120)
-    );
+  } catch {
 
     return 0n;
   }
 }
 
 /* =========================================================
-   EXECUTION
+   EXECUTE
 ========================================================= */
 
-async function execute(token, size, config) {
+async function execute(strategy, size) {
+
   try {
-    console.log("------------------------------------------------");
-    console.log("EXECMODE:FLASH");
-    console.log("AAVECALLBACKSTART");
 
-    const route = {
-      routerBuy: config.routerBuy,
-      routerSell: config.routerSell,
-      token
-    };
+    executing = true;
 
-    const balanceBefore =
-      await checkContractBalance();
+    console.log(
+      "================================="
+    );
+
+    console.log(
+      "FLASHLOANEXECUTIONSTART"
+    );
+
+    console.log(
+      "TOKEN:" +
+      strategy.token
+    );
+
+    console.log(
+      "SIZE:" +
+      usdc(size)
+    );
+
+    const before =
+      await contractBalance();
 
     console.log(
       "BALANCEBEFORE:" +
-        formatUSDC(balanceBefore)
+      usdc(before)
     );
 
-    console.log(
-      "FLASHSIZE:" +
-        formatUSDC(size)
-    );
+    const deadline =
+      Math.floor(Date.now() / 1000) +
+      120;
 
     const tx =
-      await vault.startAaveFlashArbitrage(
-        USDC,
+      await vault.executeAaveFlashLoanArbitrage(
+
+        strategy.buyRouter,
+
+        strategy.sellRouter,
+
         size,
-        route,
-        ethers.parseUnits("0.000001", 6)
+
+        strategy.pathToToken,
+
+        strategy.pathToUSDC,
+
+        deadline
       );
 
-    console.log("TXHASH:" + tx.hash);
-
-    const receipt = await tx.wait();
-
     console.log(
-      "TXSTATUS:" + receipt.status
+      "TXHASH:" + tx.hash
     );
+
+    const receipt =
+      await tx.wait();
 
     console.log(
       "BLOCKCONFIRMED:" +
-        receipt.blockNumber
+      receipt.blockNumber
     );
 
-    lastBlock = receipt.blockNumber;
-
-    const balanceAfter =
-      await checkContractBalance();
+    const after =
+      await contractBalance();
 
     console.log(
       "BALANCEAFTER:" +
-        formatUSDC(balanceAfter)
+      usdc(after)
     );
 
     const profit =
-      balanceAfter - balanceBefore;
+      after - before;
 
     if (profit > 0n) {
-      totalProfits += profit;
+
+      totalProfit += profit;
 
       console.log(
         "NETPROFIT:" +
-          formatUSDC(profit)
+        usdc(profit)
       );
 
       console.log(
         "TOTALPROFIT:" +
-          formatUSDC(totalProfits)
+        usdc(totalProfit)
       );
 
-      console.log(
-        "PROFITCAPTURED"
-      );
-
-      // OPTIONAL AUTO WITHDRAW
-      if (
-        profit >
-        ethers.parseUnits("100", 6)
-      ) {
-        try {
-          console.log(
-            "WITHDRAWINGPROFIT"
-          );
-
-          const withdrawTx =
-            await vault.withdrawToken(
-              USDC,
-              profit
-            );
-
-          console.log(
-            "WITHDRAWHASH:" +
-              withdrawTx.hash
-          );
-
-          await withdrawTx.wait();
-
-          console.log(
-            "PROFITWITHDRAWN"
-          );
-        } catch (e) {
-          console.log(
-            "WITHDRAWERROR:" +
-              e.message.substring(0, 120)
-          );
-        }
-      }
     } else {
+
       console.log(
         "NOREALIZEDPROFIT"
       );
@@ -284,15 +490,28 @@ async function execute(token, size, config) {
     totalExecutions++;
 
     console.log(
-      "EXECUTIONCOMPLETE"
+      "EXECUTIONS:" +
+      totalExecutions
     );
 
-    console.log("------------------------------------------------");
-  } catch (e) {
     console.log(
-      "EXECERROR:" +
-        e.message.substring(0, 200)
+      "FLASHLOANEXECUTIONEND"
     );
+
+    console.log(
+      "================================="
+    );
+
+  } catch (e) {
+
+    console.log(
+      "EXECUTIONERROR:" +
+      e.message.substring(0, 300)
+    );
+
+  } finally {
+
+    executing = false;
   }
 }
 
@@ -301,155 +520,150 @@ async function execute(token, size, config) {
 ========================================================= */
 
 function enqueue(job) {
-  queue.push(job);
 
-  console.log(
-    "QUEUEADD:" +
-      queue.length
-  );
+  queue.push(job);
 
   processQueue();
 }
 
 async function processQueue() {
+
   if (executing) {
     return;
   }
 
-  executing = true;
-
   while (queue.length > 0) {
-    const job = queue.shift();
 
-    try {
-      await execute(
-        job.token,
-        job.size,
-        job.config
-      );
-    } catch (e) {
-      console.log(
-        "QUEUEEXECERROR:" +
-          e.message.substring(0, 120)
-      );
-    }
+    const job =
+      queue.shift();
+
+    await execute(
+      job.strategy,
+      job.size
+    );
   }
-
-  executing = false;
 }
 
 /* =========================================================
    SCANNER
 ========================================================= */
 
-async function scanPool(pool) {
+async function scanStrategy(strategy) {
+
   try {
+
     totalScans++;
 
-    console.log("MICROSCANSTART");
-
-    const maxLoan =
-      ethers.parseUnits("100000", 6);
-
-    /* =====================================================
-       IMPORTANT FIX:
-       USE TOKEN ADDRESS NOT PAIR ADDRESS
-    ===================================================== */
-
-    const depth =
-      await vault.findBestFlashLoanSize(
-        pool.token,
-        maxLoan
-      );
-
-    const optimalSize =
-      BigInt(depth[0]);
-
-    const profit =
-      BigInt(depth[1]);
+    console.log(
+      "MICROSCANSTART"
+    );
 
     console.log(
       "TOKEN:" +
-        pool.token.substring(0, 10) +
-        "..."
+      strategy.token
     );
+
+    const result =
+      await vault.findBestFlashLoanSize(
+
+        strategy.buyRouter,
+
+        strategy.sellRouter,
+
+        CANDIDATE_SIZES,
+
+        strategy.pathToToken,
+
+        strategy.pathToUSDC
+      );
+
+    const size =
+      BigInt(result.amountIn);
+
+    const finalUSDC =
+      BigInt(
+        result.estimatedFinalUSDC
+      );
+
+    const profit =
+      BigInt(
+        result.estimatedProfit
+      );
 
     console.log(
       "MICROPROFIT:" +
-        formatUSDC(profit)
+      usdc(profit)
     );
 
     console.log(
-      "FINDINGOPTIMALFLASHLOANSIZE"
+      "FINALUSDC:" +
+      usdc(finalUSDC)
     );
 
     console.log(
-      "CONTRACTSIZE:" +
-        formatUSDC(optimalSize)
-    );
-
-    if (optimalSize > 0n) {
-      const density =
-        profit * 1000000n /
-        optimalSize;
-
-      console.log(
-        "PROFITDENSITY:" +
-          density.toString()
-      );
-    }
-
-    console.log(
-      "FINALCONTINUOUSSIZE:" +
-        formatUSDC(optimalSize)
+      "OPTIMALSIZE:" +
+      usdc(size)
     );
 
     if (
       profit > 0n &&
-      optimalSize > 0n
+      size > 0n
     ) {
+
       console.log(
         "PROFITABLEOPPORTUNITYFOUND"
       );
 
       enqueue({
-        token: pool.token,
-        size: optimalSize,
-        config: pool.config
+        strategy,
+        size
       });
+
     } else {
+
       console.log(
         "NOPROFITFOUND"
       );
     }
+
   } catch (e) {
+
     console.log(
       "SCANERROR:" +
-        e.message.substring(0, 150)
+      e.message.substring(0, 250)
     );
   }
 }
 
 /* =========================================================
-   SCANNER LOOP
+   MAIN LOOP
 ========================================================= */
 
 async function scannerLoop() {
-  console.log("SCANNERSTARTED");
+
+  console.log(
+    "MULTIHOPSCANNERSTARTED"
+  );
 
   while (true) {
+
     try {
+
       await Promise.all(
-        POOLS.map(scanPool)
+        STRATEGIES.map(
+          scanStrategy
+        )
       );
+
     } catch (e) {
+
       console.log(
         "LOOPERROR:" +
-          e.message.substring(0, 120)
+        e.message.substring(0, 200)
       );
     }
 
-    await sleep(500);
+    await sleep(800);
   }
 }
 
@@ -458,38 +672,43 @@ async function scannerLoop() {
 ========================================================= */
 
 function monitor() {
+
   setInterval(() => {
-    console.log("==============STATS==============");
 
     console.log(
-      "QUEUE:" + queue.length
+      "==============STATS=============="
     );
 
     console.log(
-      "EXECUTING:" + executing
+      "SCANS:" +
+      totalScans
     );
 
     console.log(
-      "TOTALSCANS:" + totalScans
+      "EXECUTIONS:" +
+      totalExecutions
     );
 
     console.log(
-      "TOTALEXECUTIONS:" +
-        totalExecutions
+      "QUEUE:" +
+      queue.length
     );
 
     console.log(
-      "TOTALPROFITS:" +
-        formatUSDC(totalProfits)
+      "EXECUTING:" +
+      executing
     );
 
     console.log(
-      "LASTBLOCK:" +
-        lastBlock
+      "TOTALPROFIT:" +
+      usdc(totalProfit)
     );
 
-    console.log("=================================");
-  }, 2000);
+    console.log(
+      "================================="
+    );
+
+  }, 3000);
 }
 
 /* =========================================================
@@ -497,29 +716,53 @@ function monitor() {
 ========================================================= */
 
 async function start() {
-  try {
-    console.log("=================================");
-    console.log("ARBITRAGEBOTSTARTED");
-    console.log("FLASHLOANMODE:AAVE");
-    console.log("NETWORK:POLYGON");
-    console.log("WALLET:" + wallet.address);
-    console.log("CONTRACT:" + CONTRACT_ADDRESS);
-    console.log(
-      "TOKENS:" + POOLS.length
-    );
-    console.log("=================================");
 
-    await checkContractBalance();
+  console.log(
+    "================================="
+  );
 
-    scannerLoop();
+  console.log(
+    "ARBBOTSTARTED"
+  );
 
-    monitor();
-  } catch (e) {
-    console.log(
-      "STARTERROR:" +
-        e.message.substring(0, 120)
-    );
-  }
+  console.log(
+    "MODE:MULTIHOPFLASH"
+  );
+
+  console.log(
+    "NETWORK:POLYGON"
+  );
+
+  console.log(
+    "WALLET:" +
+    wallet.address
+  );
+
+  console.log(
+    "CONTRACT:" +
+    CONTRACT_ADDRESS
+  );
+
+  console.log(
+    "STRATEGIES:" +
+    STRATEGIES.length
+  );
+
+  console.log(
+    "================================="
+  );
+
+  const minimum =
+    await vault.minimumProfitUSDC();
+
+  console.log(
+    "MINIMUMPROFIT:" +
+    usdc(minimum)
+  );
+
+  scannerLoop();
+
+  monitor();
 }
 
 start();
