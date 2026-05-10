@@ -1,3 +1,256 @@
+import dotenv from "dotenv";
+import { ethers } from "ethers";
+
+dotenv.config();
+
+/* ================= CONFIG ================= */
+
+const PRIVATE_KEY =
+  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+
+if (!PRIVATE_KEY) {
+  throw new Error("Missing private key");
+}
+
+const RPC = "https://polygon-bor-rpc.publicnode.com";
+
+/* ================= PROVIDER ================= */
+
+const provider = new ethers.JsonRpcProvider(RPC, {
+  name: "polygon",
+  chainId: 137
+});
+
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+/* ================= CONTRACT ================= */
+
+const CONTRACT_ADDRESS =
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+
+const USDC =
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+
+const ABI = [
+  "function findBestFlashLoanSize(address,uint256) view returns(uint256,uint256)",
+  "function triggerFlashArbitrage((address,address,address),uint256,uint256)",
+  "function startAaveFlashArbitrage(address,uint256,(address,address,address),uint256)",
+  "function getContractUSDCBalance() view returns(uint256)",
+  "function withdrawToken(address,uint256)",
+  "function owner() view returns(address)",
+  "function usdcToken() view returns(address)"
+];
+
+const vault = new ethers.Contract(
+  CONTRACT_ADDRESS,
+  ABI,
+  wallet
+);
+
+/* ================= TOKEN CONFIG ================= */
+
+const TOKEN_MAP = {
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619": {
+    pair: "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670",
+    routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+    routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+  }
+};
+
+/* ================= POOLS ================= */
+
+const POOLS = Object.entries(TOKEN_MAP).map(
+  ([token, cfg]) => ({
+    token,
+    config: cfg
+  })
+);
+
+/* ================= QUEUE ================= */
+
+const queue = [];
+let executing = false;
+
+/* ================= VERIFY CONTRACT ================= */
+
+async function verifyContract() {
+  console.log("VERIFYINGCONTRACT");
+
+  try {
+    const code = await provider.getCode(CONTRACT_ADDRESS);
+
+    if (code === "0x") {
+      console.log("NOCONTRACTFOUND");
+      return false;
+    }
+
+    console.log("CONTRACTFOUND");
+
+    try {
+      const owner = await vault.owner();
+
+      console.log("OWNER:" + owner);
+      console.log("WALLET:" + wallet.address);
+
+      if (
+        owner.toLowerCase() !==
+        wallet.address.toLowerCase()
+      ) {
+        console.log("WARNINGNOTOWNER");
+      }
+    } catch {
+      console.log("OWNERFUNCTIONFAILED");
+    }
+
+    try {
+      const contractUSDC =
+        await vault.usdcToken();
+
+      console.log("CONTRACTUSDC:" + contractUSDC);
+
+      if (
+        contractUSDC.toLowerCase() !==
+        USDC.toLowerCase()
+      ) {
+        console.log("USDCMISMATCH");
+      }
+    } catch {
+      console.log("USDCCHECKFAILED");
+    }
+
+    console.log("CONTRACTVERIFIED");
+
+    return true;
+  } catch (e) {
+    console.log(
+      "VERIFYERROR:" +
+        e.message.substring(0, 120)
+    );
+
+    return false;
+  }
+}
+
+/* ================= BALANCE CHECK ================= */
+
+async function checkContractBalance() {
+  try {
+    const usdcContract = new ethers.Contract(
+      USDC,
+      [
+        "function balanceOf(address) view returns(uint256)"
+      ],
+      provider
+    );
+
+    const balance =
+      await usdcContract.balanceOf(
+        CONTRACT_ADDRESS
+      );
+
+    console.log(
+      "CONTRACTUSDCBALANCE:" +
+        ethers.formatUnits(balance, 6)
+    );
+
+    return balance;
+  } catch (e) {
+    console.log(
+      "BALANCECHECKERROR:" +
+        e.message.substring(0, 100)
+    );
+
+    return 0n;
+  }
+}
+
+/* ================= EXECUTE ================= */
+
+async function execute(
+  token,
+  size,
+  config
+) {
+  const route = {
+    routerBuy: config.routerBuy,
+    routerSell: config.routerSell,
+    token
+  };
+
+  console.log("EXECMODE:FLASH");
+  console.log("AAVECALLBACKSTART");
+
+  const balanceBefore =
+    await checkContractBalance();
+
+  console.log(
+    "BALANCEBEFORE:" +
+      ethers.formatUnits(balanceBefore, 6)
+  );
+
+  try {
+    const tx =
+      await vault.startAaveFlashArbitrage(
+        USDC,
+        size,
+        route,
+        ethers.parseUnits("0.000001", 6)
+      );
+
+    console.log("TXHASH:" + tx.hash);
+
+    const receipt = await tx.wait();
+
+    console.log(
+      "TXSTATUS:" + receipt.status
+    );
+
+    if (receipt.status === 1) {
+      const balanceAfter =
+        await checkContractBalance();
+
+      console.log(
+        "BALANCEAFTER:" +
+          ethers.formatUnits(
+            balanceAfter,
+            6
+          )
+      );
+
+      const profit =
+        balanceAfter - balanceBefore;
+
+      if (profit > 0n) {
+        console.log(
+          "NETPROFIT:" +
+            ethers.formatUnits(profit, 6)
+        );
+
+        console.log(
+          "BLOCKCONFIRMED:" +
+            receipt.blockNumber
+        );
+
+        const withdrawalThreshold =
+          ethers.parseUnits("100", 6);
+
+        if (
+          profit >= withdrawalThreshold
+        ) {
+          try {
+            const withdrawTx =
+              await vault.withdrawToken(
+                USDC,
+                profit
+              );
+
+            await withdrawTx.wait();
+
+            console.log(
+              "PROFITWITHDRAWN:" +
+                ethers.formatUnits(
+                  profit,
+                  6
                 )
             );
           } catch (withdrawError) {
@@ -451,5 +704,4 @@ export {
   CONTRACT_ADDRESS,
   USDC,
   TOKEN_MAP
-};];
-
+};
