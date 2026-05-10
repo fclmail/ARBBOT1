@@ -1,170 +1,168 @@
-import dotenv from "dotenv";
 import { ethers } from "ethers";
+import abi from "./VaultArbitrageEnforcer.json" assert { type: "json" };
 
-dotenv.config();
-
-/* ================= ENV ================= */
-
-const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
-
-if (!PRIVATE_KEY) throw new Error("Missing PK");
-
-/* ================= CONFIG ================= */
-
-const RPC = "https://polygon-bor-rpc.publicnode.com";
+const RPC = process.env.RPC_URL;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const CONTRACT = process.env.CONTRACT;
 
 const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-/* ================= CONTRACT ================= */
+const contract = new ethers.Contract(CONTRACT, abi, wallet);
 
-const CONTRACT_ADDRESS =
-  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
-
-const abi = [
-  "function triggerFlashArbitrage(address[3] route,uint256 amountIn,uint256 minProfit)"
+// ---------------- CONFIG ----------------
+const TOKENS = [
+  { name: "WETH", address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
+  { name: "WMATIC", address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" },
+  { name: "DAI", address: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063" },
+  { name: "USDT", address: "0xc2132D05D31c914a87C6611C10748AaCBcFc1e8" },
+  { name: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" }
 ];
 
-const vault = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
-
-/* ================= TOKENS ================= */
-
-const TOKENS = {
-  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
-};
-
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
-/* ================= HELPERS ================= */
-
-const fmt = (x) => Number(ethers.formatUnits(x, 6)).toFixed(6);
+// ---------------- UTILS ----------------
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-/* ================= ROUTE ================= */
-
-function makeRoute(token) {
-  return [
-    USDC,
-    token,
-    USDC
-  ];
+function shortTx(tx) {
+  return tx.slice(0, 6) + "..." + tx.slice(-4);
 }
 
-/* ================= VAULT BALANCE ================= */
-
-async function getVaultBalance() {
-  const erc20 = new ethers.Contract(
-    USDC,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  );
-
-  return await erc20.balanceOf(CONTRACT_ADDRESS);
+function safeNum(x) {
+  return Number(x || 0);
 }
 
-/* ================= SIMULATED EDGE ================= */
+// MICRO→MACRO scaling (continuous curve, NOT fixed steps)
+function computeScale(profit, vault) {
+  if (!vault || vault <= 0) return 0.01;
 
-function simulateProfit() {
-  return BigInt(Math.floor(Math.random() * 5000));
+  const ratio = profit / vault;
+
+  // smooth scaling curve (sigmoid-like clamp)
+  let scale = Math.min(1, Math.max(0.01, ratio * 10));
+
+  return Number(scale.toFixed(3));
 }
 
-/* ================= MICRO SCAN ================= */
-
-async function scanToken(name, token) {
-
-  const vaultBal = await getVaultBalance();
-
-  const profit = simulateProfit();
-
-  const efficiency = (profit * 1_000_000n) / (vaultBal + 1n);
-
-  /* ================= CONTINUOUS SCALING ================= */
-
-  let scale = 5n;
-
-  if (efficiency > 3000000n) scale = 30n;
-  else if (efficiency > 1500000n) scale = 20n;
-  else if (efficiency > 800000n) scale = 10n;
-
-  const size = (vaultBal * scale) / 100n;
-
-  /* ================= LOG ================= */
-
-  console.log(`\n🔎 SCANNING ${name}`);
-  console.log(`💰 Vault: ${fmt(vaultBal)} USDC`);
-  console.log(`📊 Profit: ${fmt(profit)}`);
-  console.log(`⚡ Efficiency: ${efficiency}`);
-  console.log(`📐 SCALE: ${Number(scale) / 100}x`);
-  console.log(`🚀 SIZE: ${fmt(size)} USDC`);
-
-  return {
-    token,
-    profit,
-    size,
-    route: makeRoute(token)
-  };
+// dynamic trade size
+function computeSize(vault, scale) {
+  return Number((vault * scale).toFixed(6));
 }
 
-/* ================= EXECUTION ================= */
+// ---------------- SIMULATION ----------------
 
-async function execute(signal) {
+async function simulate(token, size) {
+  try {
+    const profit = Math.random() * size * 0.25; // mock profit curve
+    const efficiency = profit > 0 ? (profit / size) * 1000000 : 0;
 
-  console.log(`\n🔥 EXECUTING TRADE`);
-
-  const before = await getVaultBalance();
-
-  const tx = await vault.triggerFlashArbitrage(
-    signal.route,   // ✔ FIXED: tuple array (NOT object)
-    signal.size,
-    1n
-  );
-
-  console.log(`TX: ${tx.hash}`);
-
-  await tx.wait();
-
-  const after = await getVaultBalance();
-
-  const profit = after - before;
-
-  console.log(`\n💰 BEFORE: ${fmt(before)}`);
-  console.log(`💰 AFTER : ${fmt(after)}`);
-  console.log(`📈 PROFIT: ${fmt(profit)}`);
-}
-
-/* ================= MAIN LOOP ================= */
-
-async function main() {
-
-  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED");
-
-  while (true) {
-
-    const results = await Promise.all(
-      Object.entries(TOKENS).map(([n, t]) => scanToken(n, t))
-    );
-
-    const best = results.reduce((a, b) =>
-      b.profit > a.profit ? b : a
-    );
-
-    console.log(`\n🏆 BEST SIGNAL`);
-    console.log(`TOKEN: ${best.token}`);
-    console.log(`PROFIT: ${fmt(best.profit)}`);
-    console.log(`SIZE: ${fmt(best.size)}`);
-
-    if (best.profit > 2000n) {
-      await execute(best);
-    }
-
-    await sleep(2000);
+    return {
+      profit,
+      efficiency
+    };
+  } catch {
+    return { profit: 0, efficiency: 0 };
   }
 }
 
-main();
+// ---------------- EXECUTION ----------------
+
+async function executeTrade(token, size) {
+  try {
+    const tx = await contract.executeArbitrage(
+      token.address,
+      token.address,
+      ethers.parseUnits(size.toString(), 6),
+      [],
+      [],
+      Math.floor(Date.now() / 1000) + 60
+    );
+
+    const receipt = await tx.wait();
+
+    return receipt.hash;
+  } catch (e) {
+    console.log("⚠️ TRADE FAILED:", e.shortMessage || e.message);
+    return null;
+  }
+}
+
+// ---------------- VAULT ----------------
+
+async function getVaultBalance() {
+  const bal = await contract.usdc();
+  return Number(ethers.formatUnits(bal, 6));
+}
+
+// ---------------- ENGINE ----------------
+
+async function run() {
+  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
+
+  while (true) {
+    let vault = await getVaultBalance();
+
+    let best = {
+      token: null,
+      profit: 0,
+      size: 0,
+      scale: 0
+    };
+
+    for (let t of TOKENS) {
+      console.log(`🔎 SCANNING ${t.name}`);
+
+      let baseScale = 0.05 + Math.random() * 0.2;
+      let size = computeSize(vault, baseScale);
+
+      let sim = await simulate(t, size);
+
+      let scale = computeScale(sim.profit, vault);
+
+      size = computeSize(vault, scale);
+
+      console.log(`💰 Vault: ${vault.toFixed(6)} USDC`);
+      console.log(`📊 Profit: ${sim.profit.toFixed(6)}`);
+      console.log(`⚡ Efficiency: ${Math.floor(sim.efficiency)}`);
+      console.log(`📐 SCALE: ${scale}x`);
+      console.log(`🚀 SIZE: ${size} USDC\n`);
+
+      if (sim.profit > best.profit) {
+        best = {
+          token: t,
+          profit: sim.profit,
+          size,
+          scale
+        };
+      }
+    }
+
+    console.log("🏆 BEST SIGNAL");
+    console.log("TOKEN:", best.token.name);
+    console.log("PROFIT:", best.profit.toFixed(6));
+    console.log("SIZE:", best.size);
+
+    if (best.profit > 0) {
+      console.log("\n🔥 EXECUTING TRADE");
+
+      const before = vault;
+
+      const txHash = await executeTrade(best.token, best.size);
+
+      if (txHash) {
+        console.log("TX:", shortTx(txHash));
+
+        let after = await getVaultBalance();
+
+        console.log("\n💰 BEFORE:", before.toFixed(6));
+        console.log("💰 AFTER :", after.toFixed(6));
+        console.log("📈 PROFIT:", (after - before).toFixed(6));
+      }
+    }
+
+    console.log("\n-----------------------------\n");
+
+    await sleep(4000);
+  }
+}
+
+run();
