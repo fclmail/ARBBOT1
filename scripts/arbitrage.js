@@ -1,204 +1,224 @@
-const { ethers } = require("ethers")
+import dotenv from "dotenv";
+import { ethers } from "ethers";
 
-/* ================= CONFIG ================= */
+dotenv.config();
 
-const RPC = "https://polygon-rpc.com"
+/* ================= ENV ================= */
 
-const provider = new ethers.providers.JsonRpcProvider(RPC)
+const PRIVATE_KEY =
+  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+
+if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY");
+
+/* ================= PROVIDER ================= */
+
+const RPC = "https://polygon-bor-rpc.publicnode.com";
+const provider = new ethers.JsonRpcProvider(RPC);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const ARB_CONTRACT = "YOUR_CONTRACT_ADDRESS"
+const CONTRACT_ADDRESS = "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
-/* ================= TOKENS ================= */
+const ABI = [
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns (tuple(uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+  "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256)",
+  "function minimumProfitUSDC() view returns (uint256)"
+];
 
-const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-
-const TOKENS = [
-
-"0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH
-"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", // WMATIC
-"0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6", // WBTC
-"0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063", // DAI
-"0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
-"0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", // LINK
-"0xd6df932a45c0f255f85145f286ea0b292b21c90b"  // AAVE
-
-]
+const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
 /* ================= ROUTERS ================= */
 
-const QUICKSWAP = "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff"
-const SUSHISWAP = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+const QUICKSWAP = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHISWAP = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-const ROUTERS = [QUICKSWAP, SUSHISWAP]
+/* ================= TOKENS ================= */
 
-/* ================= SETTINGS ================= */
+const TOKENS = {
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+};
 
-const MIN_PROFIT = 0.000001
-const SIGNAL_THRESHOLD = 0.0001
+/* ================= CONFIG ================= */
 
-const TRADE_SIZE = ethers.utils.parseUnits("10", 6)
+const MIN_EXECUTE = ethers.parseUnits("0.000001", 6);
+const SIGNAL = ethers.parseUnits("0.0001", 6);
+const LOOP_DELAY = 2000;
 
-/* ================= ROUTER ABI ================= */
+/* ================= SIZE RANGE ================= */
 
-const ROUTER_ABI = [
-"function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"
-]
+const SIZES = [
+  ethers.parseUnits("500", 6),
+  ethers.parseUnits("1000", 6),
+  ethers.parseUnits("2500", 6),
+  ethers.parseUnits("5000", 6),
+  ethers.parseUnits("10000", 6),
+  ethers.parseUnits("25000", 6)
+];
 
-/* ================= SAFE PRICE CALL ================= */
+/* ================= HELPERS ================= */
 
-async function safeGetAmountsOut(router, amount, path) {
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-    try {
+/* ================= SAFE SIMULATION ================= */
 
-        const routerContract = new ethers.Contract(router, ROUTER_ABI, provider)
+async function safeSim(buy, sell, size, pathToToken, pathToUSDC) {
+  try {
+    const result = await contract.findBestFlashLoanSize(
+      buy,
+      sell,
+      SIZES,
+      pathToToken,
+      pathToUSDC
+    );
 
-        const amounts = await routerContract.getAmountsOut(amount, path)
-
-        return amounts
-
-    } catch (err) {
-
-        return null
-
-    }
-
+    return {
+      amount: result.amountIn,
+      profit: result.estimatedProfit
+    };
+  } catch (e) {
+    return {
+      amount: 0n,
+      profit: 0n
+    };
+  }
 }
 
-/* ================= PROFIT CHECK ================= */
+/* ================= ROUTE BUILDER ================= */
 
-function calculateProfit(finalAmount, startAmount) {
+function buildRoute(token, inter = null) {
+  if (inter) {
+    return {
+      buy: QUICKSWAP,
+      sell: SUSHISWAP,
+      pathToToken: [TOKENS.USDC, inter, token],
+      pathToUSDC: [token, inter, TOKENS.USDC],
+      deadline: Math.floor(Date.now() / 1000) + 60
+    };
+  }
 
-    const diff = finalAmount.sub(startAmount)
-
-    return Number(ethers.utils.formatUnits(diff, 6))
-
+  return {
+    buy: QUICKSWAP,
+    sell: SUSHISWAP,
+    pathToToken: [TOKENS.USDC, token],
+    pathToUSDC: [token, TOKENS.USDC],
+    deadline: Math.floor(Date.now() / 1000) + 60
+  };
 }
 
-/* ================= SCANNER ================= */
+/* ================= SCAN ENGINE ================= */
 
-async function scanPairs() {
+async function scan() {
+  console.log("\n🔎 Multi-hop scanning...");
 
-    console.log("🔎 Multi-hop scanning...")
+  const tokens = Object.entries(TOKENS).filter(([k]) => k !== "USDC");
 
-    for (const token of TOKENS) {
+  const inters = [
+    TOKENS.USDT,
+    TOKENS.DAI,
+    TOKENS.WETH,
+    TOKENS.WMATIC,
+    TOKENS.WBTC
+  ];
 
-        for (const buyRouter of ROUTERS) {
+  let best = { profit: 0n };
 
-            for (const sellRouter of ROUTERS) {
+  for (const [name, addr] of tokens) {
 
-                if (buyRouter === sellRouter) continue
+    // DIRECT
+    const d = buildRoute(addr);
+    const dSim = await safeSim(d.buy, d.sell, 0, d.pathToToken, d.pathToUSDC);
 
-                /* BUY TOKEN */
+    console.log(`${name} direct:`, ethers.formatUnits(dSim.profit, 6));
 
-                const buyQuote = await safeGetAmountsOut(
-                    buyRouter,
-                    TRADE_SIZE,
-                    [USDC, token]
-                )
-
-                if (!buyQuote) continue
-
-                const tokenAmount = buyQuote[1]
-
-                /* SELL TOKEN */
-
-                const sellQuote = await safeGetAmountsOut(
-                    sellRouter,
-                    tokenAmount,
-                    [token, USDC]
-                )
-
-                if (!sellQuote) continue
-
-                const finalUSDC = sellQuote[1]
-
-                const profit = calculateProfit(finalUSDC, TRADE_SIZE)
-
-                if (profit > SIGNAL_THRESHOLD) {
-
-                    console.log("")
-                    console.log("🚀 PROFITABLE ROUTE FOUND")
-                    console.log("Token:", token)
-                    console.log("Buy Router:", buyRouter)
-                    console.log("Sell Router:", sellRouter)
-                    console.log("Trade Size:", ethers.utils.formatUnits(TRADE_SIZE,6))
-                    console.log("Profit:", profit)
-                    console.log("")
-
-                    return {
-                        token,
-                        buyRouter,
-                        sellRouter,
-                        profit
-                    }
-
-                }
-
-            }
-
-        }
-
+    if (dSim.profit > best.profit) {
+      best = { token: addr, route: d, profit: dSim.profit, size: dSim.amount };
     }
 
-    console.log("⚠️ No profitable route")
+    // MULTI HOP
+    for (const i of inters) {
+      if (i === addr) continue;
 
-    return null
+      const r = buildRoute(addr, i);
+      const sim = await safeSim(r.buy, r.sell, 0, r.pathToToken, r.pathToUSDC);
 
+      console.log(`${name} via ${i.slice(0,6)}:`, ethers.formatUnits(sim.profit, 6));
+
+      if (sim.profit > best.profit) {
+        best = { token: addr, route: r, profit: sim.profit, size: sim.amount };
+      }
+    }
+  }
+
+  if (best.profit === 0n) {
+    console.log("⚠️ No profitable route");
+  }
+
+  return best;
 }
 
-/* ================= EXECUTION SIGNAL ================= */
+/* ================= EXECUTION ================= */
 
-async function executeIfProfitable(route) {
+async function execute(best) {
+  console.log("\n🔥 EXECUTING TRADE");
 
-    if (!route) {
+  console.log("Profit:", ethers.formatUnits(best.profit, 6));
 
-        console.log("💤 No trade")
-        return
+  const tx = await contract.executeAaveFlashLoanArbitrage(
+    best.route.buy,
+    best.route.sell,
+    best.size || ethers.parseUnits("1000", 6),
+    best.route.pathToToken,
+    best.route.pathToUSDC,
+    best.route.deadline
+  );
 
-    }
+  console.log("TX:", tx.hash);
 
-    if (route.profit < MIN_PROFIT) {
+  await tx.wait();
 
-        console.log("Profit below execution threshold")
-        return
-
-    }
-
-    console.log("⚡ EXECUTION SIGNAL")
-
-    console.log("Calling executeBestFlashLoanArbitrage()")
-
+  console.log("✅ CONFIRMED");
 }
 
 /* ================= MAIN LOOP ================= */
 
-async function startBot() {
+async function main() {
+  console.log("==================================");
+  console.log("POLYGON ARB BOT STARTED");
+  console.log("==================================");
 
-    console.log("==================================")
-    console.log("POLYGON ARBITRAGE BOT STARTED")
-    console.log("==================================")
+  console.log("Min Exec:", ethers.formatUnits(MIN_EXECUTE, 6));
+  console.log("Signal:", ethers.formatUnits(SIGNAL, 6));
 
-    console.log("Min Execute Profit:", MIN_PROFIT)
-    console.log("Signal Threshold:", SIGNAL_THRESHOLD)
+  let cycle = 0;
 
-    let cycle = 1
+  while (true) {
+    try {
+      cycle++;
+      console.log(`\n--- Cycle ${cycle} ---`);
 
-    while (true) {
+      const best = await scan();
 
-        console.log(`--- Cycle ${cycle} ---`)
+      console.log("Best Profit:", ethers.formatUnits(best.profit, 6));
 
-        const route = await scanPairs()
+      if (best.profit > SIGNAL) {
+        console.log("🔥 SIGNAL DETECTED");
+        await execute(best);
+      } else {
+        console.log("💤 No trade");
+      }
 
-        await executeIfProfitable(route)
-
-        cycle++
-
-        await new Promise(r => setTimeout(r, 3000))
-
+    } catch (e) {
+      console.log("Error:", e.reason || e.message);
     }
 
+    await sleep(LOOP_DELAY);
+  }
 }
 
-startBot()
+main();
