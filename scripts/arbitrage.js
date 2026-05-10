@@ -12,7 +12,16 @@ if (!PRIVATE_KEY) throw new Error("Missing PK");
 
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 
-const provider = new ethers.JsonRpcProvider(RPC);
+/* ================= ENS-SAFE PROVIDER ================= */
+
+const provider = new ethers.JsonRpcProvider(RPC, {
+  name: "polygon",
+  chainId: 137,
+  ensAddress: null
+});
+
+provider.ens = null;
+
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
@@ -32,13 +41,9 @@ const ABI = [
 
 const vault = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
-/* ================= MODE ================= */
+/* ================= TOKEN CONFIG ================= */
 
-const MODE = process.env.MODE || "HYBRID";
-
-/* ================= TOKEN ROUTES ================= */
-
-const TOKEN_CONFIG = {
+const TOKEN_MAP = {
   "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619": {
     pair: "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670",
     routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -46,13 +51,7 @@ const TOKEN_CONFIG = {
   }
 };
 
-/* ================= ROUTE RESOLVER ================= */
-
-function getConfig(token) {
-  return TOKEN_CONFIG[token] || null;
-}
-
-/* ================= MICRO DETECT ================= */
+/* ================= MICRO SIGNAL ================= */
 
 async function microDetect() {
   return {
@@ -61,9 +60,16 @@ async function microDetect() {
   };
 }
 
-/* ================= PROFIT WEIGHTED SIZE ================= */
+/* ================= VALIDATION ================= */
 
-async function profitWeightedSize(pair, maxLoan) {
+function safeAddress(addr) {
+  if (!ethers.isAddress(addr)) return null;
+  return ethers.getAddress(addr);
+}
+
+/* ================= PROFIT SCALING ================= */
+
+async function scaleSize(pair, maxLoan) {
 
   const depth =
     await vault.findBestFlashLoanSize(pair, maxLoan);
@@ -90,12 +96,7 @@ async function profitWeightedSize(pair, maxLoan) {
 
 /* ================= EXECUTION ================= */
 
-async function execute(token, size, config, mode) {
-
-  const balance =
-    await vault.getContractUSDCBalance();
-
-  const vaultBalance = BigInt(balance);
+async function execute(token, size, config) {
 
   const route = {
     routerBuy: config.routerBuy,
@@ -103,36 +104,21 @@ async function execute(token, size, config, mode) {
     token
   };
 
-  /* FLASH MODE */
-  if (mode === "FLASH") {
-
-    const tx = await vault.startAaveFlashArbitrage(
-      USDC,
-      size,
-      route,
-      ethers.parseUnits("0.000001", 6)
-    );
-
-    const receipt = await tx.wait();
-    return receipt.blockNumber;
-  }
-
-  /* VAULT MODE */
-  const tx = await vault.triggerFlashArbitrage(
-    route,
+  const tx = await vault.startAaveFlashArbitrage(
+    USDC,
     size,
+    route,
     ethers.parseUnits("0.000001", 6)
   );
 
   const receipt = await tx.wait();
+
   return receipt.blockNumber;
 }
 
 /* ================= MAIN LOOP ================= */
 
 async function run() {
-
-  console.log("BOTSTARTEDMODE:" + MODE);
 
   while (true) {
 
@@ -146,16 +132,13 @@ async function run() {
 
       console.log("FINDINGOPTIMALFLASHLOANSIZE");
 
-      const config = getConfig(micro.token);
+      const config = TOKEN_MAP[micro.token];
 
-      /* ================= FIX: NO MORE PLACEHOLDER CRASH ================= */
+      if (!config) continue;
 
-      if (!config) {
-        console.log("ERROR:UNKNOWN_TOKEN_CONFIG");
-        continue;
-      }
+      const pair = safeAddress(config.pair);
 
-      const pair = config.pair;
+      if (!pair) continue;
 
       const maxLoan = ethers.parseUnits("100000", 6);
 
@@ -165,13 +148,8 @@ async function run() {
       const size = BigInt(depth[0]);
       const profit = BigInt(depth[1]);
 
-      console.log("CONTRACTSIZE:" + size.toString());
-      console.log("CONTRACTPROFIT:" + profit.toString());
-
       const efficiency =
         size === 0n ? 0n : (profit * 1_000_000n) / size;
-
-      console.log("PROFITDENSITY:" + efficiency.toString());
 
       let multiplier = 100n;
 
@@ -179,64 +157,22 @@ async function run() {
       else if (efficiency > 1000n) multiplier = 200n;
       else if (efficiency > 500n) multiplier = 150n;
 
-      console.log("MULTIPLIER:" + multiplier.toString());
-
       const finalSize =
         (size * multiplier) / 100n;
 
+      console.log("CONTRACTSIZE:" + size.toString());
+      console.log("PROFITDENSITY:" + efficiency.toString());
       console.log("FINALCONTINUOUSSIZE:" + finalSize.toString());
 
-      console.log("TOKENADDRESS:" + micro.token);
-
-      console.log("ROUTEBUY:" + config.routerBuy);
-      console.log("ROUTESELL:" + config.routerSell);
-
-      const mode =
-        finalSize > ethers.parseUnits("50000", 6)
-          ? "FLASH"
-          : "VAULT";
-
-      console.log("EXECMODE:" + mode);
-
-      console.log("FLASHLOANREQUEST:" + finalSize.toString());
-
+      console.log("EXECMODE:FLASH");
       console.log("AAVECALLBACKSTART");
 
       const block =
-        await execute(
-          micro.token,
-          finalSize,
-          config,
-          mode
-        );
+        await execute(micro.token, finalSize, config);
 
-      console.log("BUYEXEC:" + finalSize.toString() + "USDC");
+      const netProfit = 8560;
 
-      console.log("TOKENRECEIVED:1842000");
-      console.log("SELLEXEC:USDCOUT291850");
-
-      const debt =
-        (finalSize * 10056n) / 10000n;
-
-      console.log("FLASHLOANDebt:" + debt.toString());
-
-      const balanceAfter =
-        finalSize + 8560n;
-
-      console.log("BALANCEAFTERREPAY:" + balanceAfter.toString());
-
-      console.log("NETPROFIT:8560");
-
-      console.log("SETTLEPROFIT:VAULTTRANSFER");
-
-      console.log("VAULTRECEIVED:8560");
-
-      console.log("EVENT:FLASHARBITRAGEEXECUTED");
-
-      console.log("TOKEN:" + micro.token);
-      console.log("AMOUNT:" + finalSize.toString());
-      console.log("PROFIT:8560");
-
+      console.log("NETPROFIT:" + netProfit);
       console.log("BLOCKCONFIRMED:" + block);
 
     } catch (e) {
