@@ -36,7 +36,8 @@ const ABI = [
   "function findBestFlashLoanSize(address,uint256) view returns(uint256,uint256)",
   "function triggerFlashArbitrage((address,address,address),uint256,uint256)",
   "function startAaveFlashArbitrage(address,uint256,(address,address,address),uint256)",
-  "function getContractUSDCBalance() view returns(uint256)"
+  "function getContractUSDCBalance() view returns(uint256)",
+  "function withdrawUSDC(address,uint256)"
 ];
 
 const vault = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
@@ -51,15 +52,6 @@ const TOKEN_MAP = {
   }
 };
 
-/* ================= MICRO SIGNAL ================= */
-
-async function microDetect() {
-  return {
-    profit: ethers.parseUnits("0.00052", 6),
-    token: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
-  };
-}
-
 /* ================= VALIDATION ================= */
 
 function safeAddress(addr) {
@@ -67,42 +59,31 @@ function safeAddress(addr) {
   return ethers.getAddress(addr);
 }
 
-/* ================= PROFIT SCALING ================= */
+/* ================= CHECK CONTRACT BALANCE ================= */
 
-async function scaleSize(pair, maxLoan) {
-
-  const depth =
-    await vault.findBestFlashLoanSize(pair, maxLoan);
-
-  const size = BigInt(depth[0]);
-  const profit = BigInt(depth[1]);
-
-  const efficiency =
-    size === 0n ? 0n : (profit * 1_000_000n) / size;
-
-  let multiplier = 100n;
-
-  if (efficiency > 2000n) multiplier = 300n;
-  else if (efficiency > 1000n) multiplier = 200n;
-  else if (efficiency > 500n) multiplier = 150n;
-
-  const finalSize =
-    (size * multiplier) / 100n;
-
-  return finalSize < BigInt(maxLoan)
-    ? finalSize
-    : BigInt(maxLoan);
+async function checkContractBalance() {
+  try {
+    const balance = await vault.getContractUSDCBalance();
+    console.log("CONTRACTUSDCBALANCE:" + ethers.formatUnits(balance, 6));
+    return balance;
+  } catch (e) {
+    console.log("BALANCECHECKERROR:" + e.message);
+    return 0n;
+  }
 }
 
 /* ================= EXECUTION ================= */
 
 async function execute(token, size, config) {
-
   const route = {
     routerBuy: config.routerBuy,
     routerSell: config.routerSell,
     token
   };
+
+  console.log("EXECMODE:FLASH");
+  console.log("AAVECALLBACKSTART");
+  console.log("SENDINGTRANSACTION");
 
   const tx = await vault.startAaveFlashArbitrage(
     USDC,
@@ -111,75 +92,122 @@ async function execute(token, size, config) {
     ethers.parseUnits("0.000001", 6)
   );
 
+  console.log("TXHASH:" + tx.hash);
+  
   const receipt = await tx.wait();
-
+  console.log("TXSTATUS:" + receipt.status);
+  
   return receipt.blockNumber;
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= MAIN EXECUTION ================= */
 
 async function run() {
-
-  while (true) {
-
-    try {
-
-      console.log("MICROSCANSTART");
-
-      const micro = await microDetect();
-
-      console.log("MICROPROFIT:" + micro.profit.toString());
-
-      console.log("FINDINGOPTIMALFLASHLOANSIZE");
-
-      const config = TOKEN_MAP[micro.token];
-
-      if (!config) continue;
-
-      const pair = safeAddress(config.pair);
-
-      if (!pair) continue;
-
-      const maxLoan = ethers.parseUnits("100000", 6);
-
-      const depth =
-        await vault.findBestFlashLoanSize(pair, maxLoan);
-
-      const size = BigInt(depth[0]);
-      const profit = BigInt(depth[1]);
-
-      const efficiency =
-        size === 0n ? 0n : (profit * 1_000_000n) / size;
-
-      let multiplier = 100n;
-
-      if (efficiency > 2000n) multiplier = 300n;
-      else if (efficiency > 1000n) multiplier = 200n;
-      else if (efficiency > 500n) multiplier = 150n;
-
-      const finalSize =
-        (size * multiplier) / 100n;
-
-      console.log("CONTRACTSIZE:" + size.toString());
-      console.log("PROFITDENSITY:" + efficiency.toString());
-      console.log("FINALCONTINUOUSSIZE:" + finalSize.toString());
-
-      console.log("EXECMODE:FLASH");
-      console.log("AAVECALLBACKSTART");
-
-      const block =
-        await execute(micro.token, finalSize, config);
-
-      const netProfit = 8560;
-
-      console.log("NETPROFIT:" + netProfit);
-      console.log("BLOCKCONFIRMED:" + block);
-
-    } catch (e) {
-
-      console.log("ERROR:" + e.message);
+  console.log("ARBITRAGEBOTSTARTED");
+  console.log("WALLET:" + wallet.address);
+  console.log("CONTRACT:" + CONTRACT_ADDRESS);
+  
+  try {
+    // Check initial contract balance
+    const initialBalance = await checkContractBalance();
+    console.log("INITIALCONTRACTBALANCE:" + initialBalance.toString());
+    
+    // Fixed token and config
+    const token = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+    const config = TOKEN_MAP[token];
+    
+    if (!config) {
+      console.log("ERROR:Invalid token configuration");
+      return;
     }
+    
+    const pair = safeAddress(config.pair);
+    if (!pair) {
+      console.log("ERROR:Invalid pair address");
+      return;
+    }
+    
+    console.log("TOKEN:" + token);
+    console.log("PAIR:" + pair);
+    console.log("BUYROUTER:" + config.routerBuy);
+    console.log("SELLROUTER:" + config.routerSell);
+    
+    // Check optimal loan size first
+    console.log("FINDINGOPTIMALFLASHLOANSIZE");
+    const maxLoan = ethers.parseUnits("100000", 6);
+    const depth = await vault.findBestFlashLoanSize(pair, maxLoan);
+    
+    const optimalSize = BigInt(depth[0]);
+    const expectedProfit = BigInt(depth[1]);
+    
+    console.log("OPTIMALSIZE:" + ethers.formatUnits(optimalSize, 6));
+    console.log("EXPECTEDPROFIT:" + ethers.formatUnits(expectedProfit, 6));
+    
+    // Use 10% of optimal size for first execution
+    const finalSize = optimalSize > 0n ? (optimalSize * 10n) / 100n : ethers.parseUnits("10000", 6);
+    console.log("FINALSIZE:" + ethers.formatUnits(finalSize, 6));
+    
+    // Execute the arbitrage
+    console.log("STARTINGARBITRAGE");
+    const block = await execute(token, finalSize, config);
+    
+    // Check balance after execution
+    console.log("ARBITRAGECOMPLETE");
+    const finalBalance = await checkContractBalance();
+    
+    const profitChange = finalBalance - initialBalance;
+    console.log("PROFITCHANGE:" + ethers.formatUnits(profitChange, 6));
+    console.log("BLOCKCONFIRMED:" + block);
+    
+    if (profitChange > 0n) {
+      console.log("SUCCESS:Profits retained in contract");
+      console.log("CONTRACTBALANCE:" + ethers.formatUnits(finalBalance, 6));
+    } else {
+      console.log("INFO:No additional profits detected");
+    }
+    
+  } catch (e) {
+    console.log("ERROR:" + e.message);
+    console.log("ERRORSTACK:" + e.stack);
+    
+    // Check balance even on error
+    console.log("CHECKINGBALANCEAFTERERROR");
+    await checkContractBalance();
   }
+  
+  console.log("EXECUTIONCOMPLETE");
 }
 
-run();
+/* ================= SCHEDULED EXECUTION ================= */
+
+// Run immediately
+run().then(() => {
+  console.log("NEXTEXECUTIONIN60SECONDS");
+}).catch(e => {
+  console.log("FATALERROR:" + e.message);
+});
+
+// Schedule next runs every 60 seconds
+setInterval(() => {
+  console.log("SCHEDULEDEXECUTION");
+  run().catch(e => {
+    console.log("SCHEDULEDERROR:" + e.message);
+  });
+}, 60000);
+
+/* ================= GRACEFUL SHUTDOWN ================= */
+
+process.on('SIGINT', () => {
+  console.log("SHUTTINGDOWN");
+  checkContractBalance().then(() => {
+    console.log("FINALBALANCERECORDED");
+    process.exit(0);
+  }).catch(() => {
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', () => {
+  console.log("TERMINATING");
+  process.exit(0);
+});
