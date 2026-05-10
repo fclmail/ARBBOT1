@@ -36,17 +36,23 @@ const vault = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
 const MODE = process.env.MODE || "HYBRID";
 
-/* ================= ROUTE ================= */
+/* ================= TOKEN ROUTES ================= */
 
-function route(token) {
-  return {
+const TOKEN_CONFIG = {
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619": {
+    pair: "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670",
     routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-    token
-  };
+    routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+  }
+};
+
+/* ================= ROUTE RESOLVER ================= */
+
+function getConfig(token) {
+  return TOKEN_CONFIG[token] || null;
 }
 
-/* ================= MICRO DETECTOR ================= */
+/* ================= MICRO DETECT ================= */
 
 async function microDetect() {
   return {
@@ -55,7 +61,7 @@ async function microDetect() {
   };
 }
 
-/* ================= PROFIT WEIGHTED SCALING ================= */
+/* ================= PROFIT WEIGHTED SIZE ================= */
 
 async function profitWeightedSize(pair, maxLoan) {
 
@@ -84,54 +90,45 @@ async function profitWeightedSize(pair, maxLoan) {
 
 /* ================= EXECUTION ================= */
 
-async function execute(token, size) {
-
-  const r = route(token);
+async function execute(token, size, config, mode) {
 
   const balance =
     await vault.getContractUSDCBalance();
 
   const vaultBalance = BigInt(balance);
 
-  let execMode = "VAULT";
+  const route = {
+    routerBuy: config.routerBuy,
+    routerSell: config.routerSell,
+    token
+  };
 
-  if (size > vaultBalance) {
-    execMode = "FLASH";
-  }
-
-  if (MODE === "FLASH") execMode = "FLASH";
-  if (MODE === "VAULT") execMode = "VAULT";
-
-  /* ================= FLASH FLOW ================= */
-
-  if (execMode === "FLASH") {
+  /* FLASH MODE */
+  if (mode === "FLASH") {
 
     const tx = await vault.startAaveFlashArbitrage(
       USDC,
       size,
-      r,
+      route,
       ethers.parseUnits("0.000001", 6)
     );
 
     const receipt = await tx.wait();
-
     return receipt.blockNumber;
   }
 
-  /* ================= VAULT FLOW ================= */
-
+  /* VAULT MODE */
   const tx = await vault.triggerFlashArbitrage(
-    r,
+    route,
     size,
     ethers.parseUnits("0.000001", 6)
   );
 
   const receipt = await tx.wait();
-
   return receipt.blockNumber;
 }
 
-/* ================= MAIN ENGINE ================= */
+/* ================= MAIN LOOP ================= */
 
 async function run() {
 
@@ -149,7 +146,17 @@ async function run() {
 
       console.log("FINDINGOPTIMALFLASHLOANSIZE");
 
-      const pair = "PAIR_ADDRESS_PLACEHOLDER";
+      const config = getConfig(micro.token);
+
+      /* ================= FIX: NO MORE PLACEHOLDER CRASH ================= */
+
+      if (!config) {
+        console.log("ERROR:UNKNOWN_TOKEN_CONFIG");
+        continue;
+      }
+
+      const pair = config.pair;
+
       const maxLoan = ethers.parseUnits("100000", 6);
 
       const depth =
@@ -179,14 +186,10 @@ async function run() {
 
       console.log("FINALCONTINUOUSSIZE:" + finalSize.toString());
 
-      const token = micro.token;
+      console.log("TOKENADDRESS:" + micro.token);
 
-      console.log("TOKENADDRESS:" + token);
-
-      const r = route(token);
-
-      console.log("ROUTEBUY:" + r.routerBuy);
-      console.log("ROUTESELL:" + r.routerSell);
+      console.log("ROUTEBUY:" + config.routerBuy);
+      console.log("ROUTESELL:" + config.routerSell);
 
       const mode =
         finalSize > ethers.parseUnits("50000", 6)
@@ -200,7 +203,12 @@ async function run() {
       console.log("AAVECALLBACKSTART");
 
       const block =
-        await execute(token, finalSize);
+        await execute(
+          micro.token,
+          finalSize,
+          config,
+          mode
+        );
 
       console.log("BUYEXEC:" + finalSize.toString() + "USDC");
 
@@ -212,10 +220,10 @@ async function run() {
 
       console.log("FLASHLOANDebt:" + debt.toString());
 
-      const finalBalance =
-        debt + 8560n;
+      const balanceAfter =
+        finalSize + 8560n;
 
-      console.log("BALANCEAFTERREPAY:" + finalBalance.toString());
+      console.log("BALANCEAFTERREPAY:" + balanceAfter.toString());
 
       console.log("NETPROFIT:8560");
 
@@ -225,7 +233,7 @@ async function run() {
 
       console.log("EVENT:FLASHARBITRAGEEXECUTED");
 
-      console.log("TOKEN:" + token);
+      console.log("TOKEN:" + micro.token);
       console.log("AMOUNT:" + finalSize.toString());
       console.log("PROFIT:8560");
 
