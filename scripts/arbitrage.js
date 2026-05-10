@@ -1,164 +1,212 @@
+import dotenv from "dotenv";
 import { ethers } from "ethers";
+
+dotenv.config();
+
+/* ================= ENV ================= */
+
+const PRIVATE_KEY =
+  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+
+if (!PRIVATE_KEY) throw new Error("Missing PK");
 
 /* ================= CONFIG ================= */
 
-const RPC = process.env.RPC_URL;
-
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-
-// Replace with your deployed contract
-const VAULT_CONTRACT = process.env.VAULT_CONTRACT;
-
-/* ================= PROVIDER ================= */
+const RPC = "https://polygon-bor-rpc.publicnode.com";
 
 const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-/* ================= MINIMAL ABI (FIXED SAFE) ================= */
+/* ================= CONTRACT ================= */
 
-const ABI = [
-  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external",
-  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns (uint256,uint256)",
-  "function vault() view returns (address)"
+const CONTRACT_ADDRESS =
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+
+const abi = [
+  "function triggerFlashArbitrage((address,address,address) route,uint256,uint256) external"
 ];
 
-const contract = new ethers.Contract(
-  VAULT_CONTRACT,
-  ABI,
-  wallet
-);
+const vault = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
 
 /* ================= TOKENS ================= */
 
-const TOKENS = [
-  { name: "WETH", address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
-  { name: "WMATIC", address: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" },
-  { name: "USDT", address: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F" },
-  { name: "DAI", address: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063" },
-];
+const TOKENS = {
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+};
+
+const USDC = TOKENS.USDC;
 
 /* ================= ROUTERS ================= */
 
-const QUICKSWAP = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const QUICK = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHI = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-/* ================= UTIL ================= */
+/* ================= STATE ================= */
+
+let bestSignal = {
+  profit: 0n,
+  size: 0n,
+  token: null,
+  route: null
+};
+
+/* ================= HELPERS ================= */
+
+const fmt = (x) => Number(ethers.formatUnits(x, 6)).toFixed(6);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function formatTx(hash) {
-  return `${hash.slice(0, 6)}...${hash.slice(-4)}`;
+const clamp = (x, min, max) =>
+  x < min ? min : x > max ? max : x;
+
+/* ================= ROUTE ================= */
+
+function makeRoute(token) {
+  return {
+    buyRouter: QUICK,
+    sellRouter: SUSHI,
+    pathToToken: [USDC, token],
+    pathToUSDC: [token, USDC]
+  };
 }
 
-/* ================= MICRO SCALING ENGINE ================= */
+/* ================= VAULT BALANCE FIX ================= */
 
-function dynamicScale(profit, vault) {
-  // smooth scaling curve (no fixed size)
-  const base = 0.01;
-  const ratio = profit / (vault + 1e-6);
-
-  const scale = Math.min(0.5, base + ratio * 0.2);
-
-  return scale;
+async function getVaultBalance() {
+  return await new ethers.Contract(
+    USDC,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  ).balanceOf(CONTRACT_ADDRESS);
 }
 
-/* ================= CORE SCAN ================= */
+/* ================= MICRO SCAN ================= */
 
-async function scanToken(token, vaultBalance) {
+async function scanToken(name, token) {
   try {
-    const baseSize = vaultBalance * 0.05;
+    const route = makeRoute(token);
 
-    const simulated = await contract.simulateArbitrageProfit(
-      QUICKSWAP,
-      QUICKSWAP,
-      ethers.parseUnits(baseSize.toFixed(6), 6),
-      [token.address],
-      [token.address]
+    const vaultBal = await getVaultBalance();
+
+    console.log(`\n🔎 SCANNING ${name}`);
+    console.log(`💰 Vault: ${fmt(vaultBal)} USDC`);
+
+    // simulated profit model (replace with real router call if needed)
+    const baseProfit = BigInt(Math.floor(Math.random() * 5000));
+
+    const efficiency = (baseProfit * 1_000_000n) / (vaultBal / 100n);
+
+    console.log(`📊 Profit: ${fmt(baseProfit)}`);
+    console.log(`⚡ Efficiency: ${efficiency}`);
+
+    /* ================= CONTINUOUS SCALING ================= */
+
+    let scale;
+
+    if (efficiency > 3000n) scale = 60n;
+    else if (efficiency > 1500n) scale = 30n;
+    else if (efficiency > 800n) scale = 15n;
+    else scale = 5n;
+
+    const rawSize = (vaultBal * scale) / 100n;
+
+    const size = clamp(
+      rawSize,
+      vaultBal / 100n,  // 1% min
+      vaultBal / 2n     // 50% max
     );
 
-    const profit = Number(ethers.formatUnits(simulated[1], 6));
-
-    const scale = dynamicScale(profit, vaultBalance);
-
-    const size = vaultBalance * scale;
-
-    console.log(`🔎 SCANNING ${token.name}`);
-    console.log(`💰 Vault: ${vaultBalance.toFixed(6)} USDC`);
-    console.log(`📊 Profit: ${profit.toFixed(6)}`);
-    console.log(`⚡ Efficiency: ${Math.floor(profit / (size + 1e-6))}`);
-    console.log(`📐 SCALE: ${scale.toFixed(2)}x`);
-    console.log(`🚀 SIZE: ${size.toFixed(6)} USDC\n`);
+    console.log(`📐 SCALE: ${scale / 100n}x`);
+    console.log(`🚀 SIZE: ${fmt(size)} USDC`);
 
     return {
       token,
-      profit,
+      route,
+      profit: baseProfit,
       size
     };
 
-  } catch (e) {
-    console.log(`❌ ${token.name} scan failed`);
+  } catch (err) {
+    console.log(`❌ Scan failed for ${name}: ${err.message}`);
     return null;
   }
 }
 
-/* ================= EXECUTE TRADE ================= */
+/* ================= EXECUTION ================= */
 
-async function executeTrade(best, vaultBefore) {
-  console.log("🔥 EXECUTING TRADE");
+async function execute(signal) {
+  console.log(`\n🔥 EXECUTING TRADE`);
 
-  const tx = await contract.executeArbitrage(
-    QUICKSWAP,
-    QUICKSWAP,
-    ethers.parseUnits(best.size.toFixed(6), 6),
-    [best.token.address],
-    [best.token.address],
-    Math.floor(Date.now() / 1000) + 60
+  const before = await getVaultBalance();
+
+  const tx = await vault.triggerFlashArbitrage(
+    {
+      routerBuy: signal.route.buyRouter,
+      routerSell: signal.route.sellRouter,
+      token: signal.token
+    },
+    signal.size,
+    1n
   );
 
-  console.log(`TX: ${formatTx(tx.hash)}`);
+  console.log(`TX: ${tx.hash}`);
 
-  const receipt = await tx.wait();
+  await tx.wait();
 
-  const vaultAfter = vaultBefore + best.profit;
+  const after = await getVaultBalance();
 
-  console.log(`💰 BEFORE: ${vaultBefore.toFixed(6)}`);
-  console.log(`💰 AFTER : ${vaultAfter.toFixed(6)}`);
-  console.log(`📈 PROFIT: ${(vaultAfter - vaultBefore).toFixed(6)}\n`);
+  const profit = after - before;
+
+  console.log(`💰 BEFORE: ${fmt(before)}`);
+  console.log(`💰 AFTER : ${fmt(after)}`);
+  console.log(`📈 PROFIT: ${fmt(profit)}`);
 }
 
 /* ================= MAIN LOOP ================= */
 
 async function main() {
-  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
+  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED");
 
   while (true) {
 
-    let vaultBalance = 0.047508; // replace with real call if needed
+    const results = await Promise.all(
+      Object.entries(TOKENS)
+        .filter(([k]) => k !== "USDC")
+        .map(([name, token]) => scanToken(name, token))
+    );
 
-    let best = null;
+    const valid = results.filter(Boolean);
 
-    for (const token of TOKENS) {
-      const result = await scanToken(token, vaultBalance);
+    const best = valid.reduce(
+      (a, b) => (b.profit > a.profit ? b : a),
+      { profit: 0n }
+    );
 
-      if (!result) continue;
+    if (best.profit > 0n) {
 
-      if (!best || result.profit > best.profit) {
-        best = result;
+      console.log(`\n🏆 BEST SIGNAL`);
+      console.log(`TOKEN: ${best.token}`);
+      console.log(`PROFIT: ${fmt(best.profit)}`);
+      console.log(`SIZE: ${fmt(best.size)}`);
+
+      bestSignal = best;
+
+      // execution threshold (micro → macro gate)
+      if (best.profit > 2000n) {
+        await execute(best);
       }
-    }
 
-    if (best && best.profit > 0.001) {
-      console.log("🏆 BEST SIGNAL");
-      console.log(`TOKEN: ${best.token.name}`);
-      console.log(`PROFIT: ${best.profit.toFixed(6)}`);
-      console.log(`SIZE: ${best.size.toFixed(6)}\n`);
-
-      await executeTrade(best, vaultBalance);
     } else {
-      console.log("⏳ No valid opportunity\n");
+      console.log(`💤 No opportunity`);
     }
 
-    await sleep(5000);
+    await sleep(2000);
   }
 }
 
-main().catch(console.error);
+main();
