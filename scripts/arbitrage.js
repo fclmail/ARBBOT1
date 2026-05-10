@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -13,7 +12,7 @@ if (!PRIVATE_KEY) throw new Error("Missing PK");
 
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 
-/* ================= ENS-SAFE PROVIDER ================= */
+/* ================= PROVIDER ================= */
 
 const provider = new ethers.JsonRpcProvider(RPC, {
   name: "polygon",
@@ -53,16 +52,28 @@ const TOKEN_MAP = {
   }
 };
 
-/* ================= CHECK CONTRACT BALANCE ================= */
+/* ================= CONVERT TO POOLS (MULTI-SCAN) ================= */
+
+const POOLS = Object.entries(TOKEN_MAP).map(([token, cfg]) => ({
+  token,
+  config: cfg
+}));
+
+/* ================= QUEUE SYSTEM ================= */
+
+const queue = [];
+let executing = false;
+
+/* ================= BALANCE CHECK ================= */
 
 async function checkContractBalance() {
   try {
-    // Try to call balanceOf directly on USDC token contract
     const usdcContract = new ethers.Contract(
       USDC,
       ["function balanceOf(address) view returns(uint256)"],
       provider
     );
+
     const balance = await usdcContract.balanceOf(CONTRACT_ADDRESS);
     console.log("CONTRACTUSDCBALANCE:" + ethers.formatUnits(balance, 6));
     return balance;
@@ -78,223 +89,122 @@ async function execute(token, size, config) {
   const route = {
     routerBuy: config.routerBuy,
     routerSell: config.routerSell,
-    token: token
+    token
   };
 
   console.log("EXECMODE:FLASH");
   console.log("AAVECALLBACKSTART");
-  console.log("SENDINGTRANSACTION");
-  console.log("ROUTE:", JSON.stringify(route));
 
   const tx = await vault.startAaveFlashArbitrage(
     USDC,
     size,
     route,
-    ethers.parseUnits("0.000001", 6)  // minimum profit in USDC
-  );
-
-  console.log("TXHASH:" + tx.hash);
-  
-  const receipt = await tx.wait();
-  console.log("TXSTATUS:" + receipt.status);
-  
-  return receipt.blockNumber;
-}
-
-/* ================= MAIN EXECUTION ================= */
-
-async function run() {
-  console.log("ARBITRAGEBOTSTARTED");
-  console.log("WALLET:" + wallet.address);
-  console.log("CONTRACT:" + CONTRACT_ADDRESS);
-
-async function run() {
-  console.log("ARBITRAGEBOTSTARTED");
-  console.log("WALLET:" + wallet.address);
-  console.log("CONTRACT:" + CONTRACT_ADDRESS);
-  console.log("CONTRACTDEPLOYER:" + await vault.owner());
-  
-  try {
-    // Check initial contract balance using direct USDC call
-    console.log("CHECKINGCONTRACTBALANCE");
-    const initialBalance = await checkContractBalance();
-    console.log("INITIALCONTRACTBALANCE:" + initialBalance.toString());
-    
-    // Fixed token and config
-    const token = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
-    const config = TOKEN_MAP[token];
-    
-    if (!config) {
-      console.log("ERROR:Invalid token configuration");
-      return;
-    }
-    
-    console.log("TOKEN:" + token);
-    console.log("PAIR:" + config.pair);
-    console.log("BUYROUTER:" + config.routerBuy);
-    console.log("SELLROUTER:" + config.routerSell);
-    
-    // Check optimal loan size first
-    console.log("FINDINGOPTIMALFLASHLOANSIZE");
-    const maxLoan = ethers.parseUnits("100000", 6);
-    
-    let optimalSize = ethers.parseUnits("10000", 6); // Default to 10k USDC
-    let expectedProfit = 0n;
-    
-    try {
-      const depth = await vault.findBestFlashLoanSize(config.pair, maxLoan);
-      optimalSize = BigInt(depth[0]);
-      expectedProfit = BigInt(depth[1]);
-      console.log("OPTIMALSIZE:" + ethers.formatUnits(optimalSize, 6));
-      console.log("EXPECTEDPROFIT:" + ethers.formatUnits(expectedProfit, 6));
-      
-      // Use optimal size if valid, otherwise use default
-      if (optimalSize > 0n) {
-        console.log("USINGOPTIMALSIZE");
-      } else {
-        console.log("OPTIMALSIZEZERO_USINGDEFAULT");
-        optimalSize = ethers.parseUnits("10000", 6);
-      }
-    } catch (e) {
-      console.log("FINDSIZEERROR:" + e.message.substring(0, 100));
-      console.log("USINGDEFAULTSIZE");
-      optimalSize = ethers.parseUnits("10000", 6);
-    }
-    
-    console.log("FINALSIZE:" + ethers.formatUnits(optimalSize, 6));
-    
-    // Execute the arbitrage
-    console.log("STARTINGARBITRAGE");
-    const block = await execute(token, optimalSize, config);
-    
-    // Check balance after execution
-    console.log("ARBITRAGECOMPLETE");
-    const finalBalance = await checkContractBalance();
-    
-    const profitChange = finalBalance - initialBalance;
-    console.log("PROFITCHANGE:" + ethers.formatUnits(profitChange, 6));
-    console.log("BLOCKCONFIRMED:" + block);
-    
-    if (profitChange > 0n) {
-      console.log("SUCCESS:Profits retained in contract");
-      console.log("CONTRACTBALANCE:" + ethers.formatUnits(finalBalance, 6));
-      console.log("PROFIT:" + ethers.formatUnits(profitChange, 6));
-    } else if (profitChange === 0n) {
-      console.log("INFO:No profit detected - check gas costs");
-      console.log("FINALBALANCE:" + ethers.formatUnits(finalBalance, 6));
-    } else {
-      console.log("WARNING:Balance decreased - possible loss");
-    }
-    
-  } catch (e) {
-    console.log("ERROR:" + e.message.substring(0, 200));
-    console.log("ERRORSTACK:" + e.stack?.substring(0, 300));
-    
-    // Check balance even on error
-    console.log("CHECKINGBALANCEAFTERERROR");
-    await checkContractBalance();
-  }
-  
-  console.log("EXECUTIONCOMPLETE");
-}
-
-/* ================= SCHEDULED EXECUTION ================= */
-
-// Run immediately
-console.log("STARTINGBOT");
-run().then(() => {
-  console.log("NEXTEXECUTIONIN120SECONDS");
-}).catch(e => {
-  console.log("FATALERROR:" + e.message);
-});
-
-// Run every 2 minutes instead of 1 minute
-setInterval(() => {
-  console.log("SCHEDULEDEXECUTION");
-  run().catch(e => {
-
-// SCHEDULEDEXECUTION");
-  run().catch(e => {
-    console.log("SCHEDULEDERROR:" + e.message);
-  });
-}, 120000);
-
-/* ================= GRACEFUL SHUTDOWN ================= */
-
-process.on('SIGINT', () => {
-  console.log("SHUTTINGDOWN");
-  checkContractBalance().then(() => {
-    console.log("FINALBALANCERECORDED");
-    process.exit(0);
-  }).catch(() => {
-    process.exit(0);
-  });
-});
-
-process.on('SIGTERM', () => {
-  console.log("TERMINATING");
-  process.exit(0);
-});
-
-// Check if wallet is owner of contract
-async function verifyOwner() {
-  try {
-    const contractOwner = await vault.owner();
-    console.log("CONTRACTOWNER:" + contractOwner);
-    console.log("WALLETADDRESS:" + wallet.address);
-    console.log("ISOWNER:" + (contractOwner.toLowerCase() === wallet.address.toLowerCase()));
-    return contractOwner.toLowerCase() === wallet.address.toLowerCase();
-  } catch (e) {
-    console.log("OWNERCHECKERROR:" + e.message.substring(0, 100));
-    return false;
-  }
-}
-
-// Additional execution modes
-async function executeDirectArbitrage(token, size, config) {
-  const route = {
-    routerBuy: config.routerBuy,
-    routerSell: config.routerSell,
-    token: token
-  };
-
-  console.log("EXECMODE:DIRECT");
-  console.log("SENDINGDIRECTTRANSACTION");
-
-  const tx = await vault.triggerFlashArbitrage(
-    route,
-    size,
     ethers.parseUnits("0.000001", 6)
   );
 
   console.log("TXHASH:" + tx.hash);
-  
+
   const receipt = await tx.wait();
   console.log("TXSTATUS:" + receipt.status);
-  
+
   return receipt.blockNumber;
 }
 
-// Withdraw function if needed
-async function withdrawProfits(token, amount) {
-  console.log("WITHDRAWINGPROFITS");
-  console.log("TOKEN:" + token);
-  console.log("AMOUNT:" + ethers.formatUnits(amount, 6));
-  
-  const tx = await vault.withdrawToken(token, amount);
-  console.log("WITHDRAWTX:" + tx.hash);
-  
-  const receipt = await tx.wait();
-  console.log("WITHDRAWSTATUS:" + receipt.status);
-  return receipt.blockNumber;
+/* ================= QUEUE EXECUTOR ================= */
+
+function enqueue(job) {
+  queue.push(job);
+  processQueue();
 }
 
-// Export for external use if needed
-export {
-  run,
-  checkContractBalance,
-  execute,
-  executeDirectArbitrage,
-  withdrawProfits,
-  verifyOwner
-};
+async function processQueue() {
+  if (executing) return;
+  executing = true;
+
+  while (queue.length > 0) {
+    const job = queue.shift();
+
+    try {
+      await execute(job.token, job.size, job.config);
+    } catch (e) {
+      console.log("EXECERROR:" + e.message);
+    }
+  }
+
+  executing = false;
+}
+
+/* ================= SCANNER ================= */
+
+async function scanPool(pool) {
+  try {
+    const maxLoan = ethers.parseUnits("100000", 6);
+
+    const depth = await vault.findBestFlashLoanSize(
+      pool.config.pair,
+      maxLoan
+    );
+
+    const optimalSize = BigInt(depth[0]);
+    const profit = BigInt(depth[1]);
+
+    console.log(
+      "SCAN:" +
+        pool.token +
+        " SIZE:" +
+        optimalSize +
+        " PROFIT:" +
+        profit
+    );
+
+    if (profit > 0n) {
+      enqueue({
+        token: pool.token,
+        size: optimalSize,
+        config: pool.config
+      });
+    }
+  } catch (e) {
+    console.log("SCANERROR:" + e.message.substring(0, 100));
+  }
+}
+
+/* ================= NON-BLOCKING LOOP ================= */
+
+async function scannerLoop() {
+  console.log("SCANNERSTARTED");
+
+  while (true) {
+    await Promise.all(POOLS.map(scanPool));
+
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/* ================= MONITOR ================= */
+
+function monitor() {
+  setInterval(() => {
+    console.log(
+      "QUEUE:" +
+        queue.length +
+        " EXEC:" +
+        executing
+    );
+  }, 2000);
+}
+
+/* ================= START ================= */
+
+async function start() {
+  console.log("ARBITRAGEBOTSTARTED");
+  console.log("WALLET:" + wallet.address);
+  console.log("CONTRACT:" + CONTRACT_ADDRESS);
+
+  checkContractBalance();
+
+  scannerLoop();
+  monitor();
+}
+
+start();
