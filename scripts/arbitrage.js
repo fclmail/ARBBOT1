@@ -4,7 +4,7 @@ import { ethers } from "ethers";
 dotenv.config();
 
 /* =========================================================
-   ENV
+   CONFIG
 ========================================================= */
 
 const PRIVATE_KEY =
@@ -15,21 +15,14 @@ if (!PRIVATE_KEY) {
   throw new Error("Missing private key");
 }
 
-/* =========================================================
-   RPC
-========================================================= */
-
 const RPC =
   "https://polygon-bor-rpc.publicnode.com";
 
 const provider =
-  new ethers.JsonRpcProvider(
-    RPC,
-    {
-      name: "polygon",
-      chainId: 137
-    }
-  );
+  new ethers.JsonRpcProvider(RPC, {
+    name: "polygon",
+    chainId: 137
+  });
 
 const wallet =
   new ethers.Wallet(
@@ -38,34 +31,11 @@ const wallet =
   );
 
 /* =========================================================
-   CONTRACT
+   ADDRESSES
 ========================================================= */
 
 const CONTRACT_ADDRESS =
   "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
-
-const ABI = [
-  "function owner() view returns(address)",
-
-  "function minimumProfitUSDC() view returns(uint256)",
-
-  "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256)",
-
-  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
-
-  "function withdraw(uint256)"
-];
-
-const vault =
-  new ethers.Contract(
-    CONTRACT_ADDRESS,
-    ABI,
-    wallet
-  );
-
-/* =========================================================
-   TOKENS
-========================================================= */
 
 const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -82,6 +52,9 @@ const WBTC =
 const DAI =
   "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063";
 
+const CRV =
+  "0x172370d5Cd63279eFa6d502DAB29171933a610AF";
+
 const LINK =
   "0x53E0bca35eC356BD5ddDFebBD1Fc0fD03FaBad39";
 
@@ -94,6 +67,45 @@ const QUICKSWAP =
 
 const SUSHISWAP =
   "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+
+/* =========================================================
+   ABI
+========================================================= */
+
+const ABI = [
+
+  "function owner() view returns(address)",
+
+  "function minimumProfitUSDC() view returns(uint256)",
+
+  "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256)",
+
+  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
+
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+
+  "function withdraw(uint256)"
+];
+
+const vault =
+  new ethers.Contract(
+    CONTRACT_ADDRESS,
+    ABI,
+    wallet
+  );
+
+/* =========================================================
+   ERC20
+========================================================= */
+
+const usdcContract =
+  new ethers.Contract(
+    USDC,
+    [
+      "function balanceOf(address) view returns(uint256)"
+    ],
+    provider
+  );
 
 /* =========================================================
    TOKEN MAP
@@ -209,30 +221,27 @@ const TOKEN_MAP = {
       USDC
     ]
   }
+
+  // CRV intentionally removed for stability
 };
 
 const POOLS =
   Object.entries(
     TOKEN_MAP
   ).map(
-    ([token, config]) => ({
+    ([token, cfg]) => ({
       token,
-      config
+      config: cfg
     })
   );
 
 /* =========================================================
-   ERC20
+   QUEUE
 ========================================================= */
 
-const usdcContract =
-  new ethers.Contract(
-    USDC,
-    [
-      "function balanceOf(address) view returns(uint256)"
-    ],
-    provider
-  );
+const queue = [];
+
+let executing = false;
 
 /* =========================================================
    SETTINGS
@@ -248,15 +257,7 @@ const SCAN_DELAY =
   7000;
 
 /* =========================================================
-   QUEUE
-========================================================= */
-
-const queue = [];
-
-let executing = false;
-
-/* =========================================================
-   VERIFY
+   VERIFY CONTRACT
 ========================================================= */
 
 async function verifyContract() {
@@ -318,10 +319,7 @@ async function verifyContract() {
 
     console.log(
       "VERIFYERROR:" +
-      e.message.substring(
-        0,
-        200
-      )
+      e.message.substring(0, 200)
     );
 
     return false;
@@ -355,10 +353,7 @@ async function checkContractBalance() {
 
     console.log(
       "BALANCECHECKERROR:" +
-      e.message.substring(
-        0,
-        150
-      )
+      e.message.substring(0, 200)
     );
 
     return 0n;
@@ -366,7 +361,7 @@ async function checkContractBalance() {
 }
 
 /* =========================================================
-   EXECUTE
+   EXECUTE FLASH LOAN
 ========================================================= */
 
 async function execute(
@@ -403,17 +398,11 @@ async function execute(
 
     const tx =
       await vault.executeAaveFlashLoanArbitrage(
-
         config.buyRouter,
-
         config.sellRouter,
-
         size,
-
         config.pathToToken,
-
         config.pathToUSDC,
-
         deadline
       );
 
@@ -448,7 +437,9 @@ async function execute(
       const profit =
         after - before;
 
-      if (profit > 0n) {
+      if (
+        profit > 0n
+      ) {
 
         console.log(
           "NETPROFIT:" +
@@ -475,10 +466,7 @@ async function execute(
 
     console.log(
       "EXECERROR:" +
-      e.message.substring(
-        0,
-        300
-      )
+      e.message.substring(0, 300)
     );
   }
 }
@@ -524,10 +512,7 @@ async function processQueue() {
 
       console.log(
         "QUEUEERROR:" +
-        e.message.substring(
-          0,
-          200
-        )
+        e.message.substring(0, 200)
       );
     }
   }
@@ -536,7 +521,7 @@ async function processQueue() {
 }
 
 /* =========================================================
-   SCAN
+   SCAN POOL
 ========================================================= */
 
 async function scanPool(pool) {
@@ -694,10 +679,7 @@ async function scanPool(pool) {
 
     console.log(
       "SCANERROR:" +
-      e.message.substring(
-        0,
-        300
-      )
+      e.message.substring(0, 300)
     );
   }
 }
@@ -738,7 +720,7 @@ async function scanPoolWithRetry(
         (r) =>
           setTimeout(
             r,
-            1000
+            1500
           )
       );
     }
@@ -812,7 +794,6 @@ function monitor() {
         executing +
 
         " BALANCE:" +
-
         ethers.formatUnits(
           balance,
           6
@@ -836,8 +817,21 @@ async function diagnostics() {
 
   try {
 
-    const test =
+    const testPool =
       POOLS[0];
+
+    const candidateSizes = [
+
+      ethers.parseUnits(
+        "1000",
+        6
+      ),
+
+      ethers.parseUnits(
+        "5000",
+        6
+      )
+    ];
 
     console.log(
       "TESTINGFINDBESTFLASHLOANSIZE"
@@ -846,25 +840,15 @@ async function diagnostics() {
     const result =
       await vault.findBestFlashLoanSize(
 
-        test.config.buyRouter,
+        testPool.config.buyRouter,
 
-        test.config.sellRouter,
+        testPool.config.sellRouter,
 
-        [
-          ethers.parseUnits(
-            "1000",
-            6
-          ),
+        candidateSizes,
 
-          ethers.parseUnits(
-            "5000",
-            6
-          )
-        ],
+        testPool.config.pathToToken,
 
-        test.config.pathToToken,
-
-        test.config.pathToUSDC
+        testPool.config.pathToUSDC
       );
 
     console.log(
@@ -887,10 +871,7 @@ async function diagnostics() {
 
     console.log(
       "DIAGNOSTICERROR:" +
-      e.message.substring(
-        0,
-        200
-      )
+      e.message.substring(0, 250)
     );
   }
 
@@ -953,13 +934,13 @@ async function start() {
 
   await diagnostics();
 
-  const balance =
+  const initialBalance =
     await checkContractBalance();
 
   console.log(
     "INITIALBALANCE:" +
     ethers.formatUnits(
-      balance,
+      initialBalance,
       6
     )
   );
