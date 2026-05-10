@@ -1,335 +1,204 @@
-import dotenv from "dotenv";
-import { ethers } from "ethers";
-
-dotenv.config();
-
-/* ================= ENV ================= */
-
-const PRIVATE_KEY =
- process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
-
-if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY");
-
-/* ================= NETWORK ================= */
-
-const RPC = "https://polygon-bor-rpc.publicnode.com";
-const provider = new ethers.JsonRpcProvider(RPC);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const { ethers } = require("ethers")
 
 /* ================= CONFIG ================= */
 
-const MODE = process.env.MODE || "FLASH";
+const RPC = "https://polygon-rpc.com"
 
-const MIN_PROFIT_EXECUTE = ethers.parseUnits("0.000001", 6);
-const SIGNAL_THRESHOLD = ethers.parseUnits("0.0001", 6);
-
-const POLL_INTERVAL = 2000;
+const provider = new ethers.providers.JsonRpcProvider(RPC)
 
 /* ================= CONTRACT ================= */
 
-const CONTRACT_ADDRESS = "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
-
-const ABI = [
-"function startAaveFlashArbitrage(address asset,uint256 amount,(address buyRouter,address sellRouter,address[] pathToToken,address[] pathToUSDC,uint256 deadline) route,uint256 minProfit)",
-"function findBestFlashLoanSize(address buyRouter,address sellRouter,uint256[] candidateSizes,address[] pathToToken,address[] pathToUSDC) view returns(uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit)"
-];
-
-const vault = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
-
-/* ================= ROUTERS ================= */
-
-const QUICKSWAP_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHISWAP_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const ARB_CONTRACT = "YOUR_CONTRACT_ADDRESS"
 
 /* ================= TOKENS ================= */
 
-const TOKENS = {
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 
-USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+const TOKENS = [
 
-WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+"0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH
+"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", // WMATIC
+"0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6", // WBTC
+"0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063", // DAI
+"0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
+"0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39", // LINK
+"0xd6df932a45c0f255f85145f286ea0b292b21c90b"  // AAVE
 
-WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+]
 
-USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+/* ================= ROUTERS ================= */
 
-DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+const QUICKSWAP = "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff"
+const SUSHISWAP = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 
-WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+const ROUTERS = [QUICKSWAP, SUSHISWAP]
 
-CRV: "0x172370d5Cd63279eFa6d502DAB29171933a610AF"
+/* ================= SETTINGS ================= */
 
-};
+const MIN_PROFIT = 0.000001
+const SIGNAL_THRESHOLD = 0.0001
 
-/* ================= HELPERS ================= */
+const TRADE_SIZE = ethers.utils.parseUnits("10", 6)
 
-function sleep(ms) {
- return new Promise(r => setTimeout(r, ms));
-}
+/* ================= ROUTER ABI ================= */
 
-/* ================= ROUTE BUILDER ================= */
+const ROUTER_ABI = [
+"function getAmountsOut(uint amountIn, address[] memory path) view returns (uint[] memory)"
+]
 
-function makeRoute(token, intermediate = null) {
+/* ================= SAFE PRICE CALL ================= */
 
- if (intermediate) {
+async function safeGetAmountsOut(router, amount, path) {
 
-  return {
+    try {
 
-   buyRouter: QUICKSWAP_ROUTER,
+        const routerContract = new ethers.Contract(router, ROUTER_ABI, provider)
 
-   sellRouter: SUSHISWAP_ROUTER,
+        const amounts = await routerContract.getAmountsOut(amount, path)
 
-   pathToToken: [TOKENS.USDC, intermediate, token],
+        return amounts
 
-   pathToUSDC: [token, intermediate, TOKENS.USDC],
+    } catch (err) {
 
-   deadline: Math.floor(Date.now()/1000)+60
+        return null
 
-  };
-
- }
-
- return {
-
-  buyRouter: QUICKSWAP_ROUTER,
-
-  sellRouter: SUSHISWAP_ROUTER,
-
-  pathToToken: [TOKENS.USDC, token],
-
-  pathToUSDC: [token, TOKENS.USDC],
-
-  deadline: Math.floor(Date.now()/1000)+60
-
- };
+    }
 
 }
 
-/* ================= SIZE TESTS ================= */
+/* ================= PROFIT CHECK ================= */
 
-const candidateSizes = [
+function calculateProfit(finalAmount, startAmount) {
 
- ethers.parseUnits("1000",6),
+    const diff = finalAmount.sub(startAmount)
 
- ethers.parseUnits("5000",6),
-
- ethers.parseUnits("10000",6),
-
- ethers.parseUnits("25000",6),
-
- ethers.parseUnits("50000",6),
-
- ethers.parseUnits("100000",6)
-
-];
-
-/* ================= PROFIT SCALER ================= */
-
-async function simulateRoute(route) {
-
- const result = await vault.findBestFlashLoanSize(
-
-  route.buyRouter,
-
-  route.sellRouter,
-
-  candidateSizes,
-
-  route.pathToToken,
-
-  route.pathToUSDC
-
- );
-
- return {
-
-  amountIn: BigInt(result.amountIn),
-
-  profit: BigInt(result.estimatedProfit)
-
- };
+    return Number(ethers.utils.formatUnits(diff, 6))
 
 }
 
 /* ================= SCANNER ================= */
 
-async function scanRoutes() {
+async function scanPairs() {
 
- console.log("🔎 Multi-hop scanning...");
+    console.log("🔎 Multi-hop scanning...")
 
- const tokens = Object.entries(TOKENS)
- .filter(([k]) => k !== "USDC");
+    for (const token of TOKENS) {
 
- const intermediates = [
-  TOKENS.USDT,
-  TOKENS.DAI,
-  TOKENS.WMATIC,
-  TOKENS.WETH,
-  TOKENS.WBTC
- ];
+        for (const buyRouter of ROUTERS) {
 
- let best = {
-  token:null,
-  route:null,
-  size:0n,
-  profit:0n
- };
+            for (const sellRouter of ROUTERS) {
 
- for (const [name,address] of tokens) {
+                if (buyRouter === sellRouter) continue
 
-  /* ===== DIRECT PATH ===== */
+                /* BUY TOKEN */
 
-  const direct = makeRoute(address);
+                const buyQuote = await safeGetAmountsOut(
+                    buyRouter,
+                    TRADE_SIZE,
+                    [USDC, token]
+                )
 
-  const directSim = await simulateRoute(direct);
+                if (!buyQuote) continue
 
-  console.log(
-   `${name} direct profit:`,
-   ethers.formatUnits(directSim.profit,6)
-  );
+                const tokenAmount = buyQuote[1]
 
-  if (directSim.profit > best.profit) {
+                /* SELL TOKEN */
 
-   best = {
-    token:address,
-    route:direct,
-    size:directSim.amountIn,
-    profit:directSim.profit
-   };
+                const sellQuote = await safeGetAmountsOut(
+                    sellRouter,
+                    tokenAmount,
+                    [token, USDC]
+                )
 
-  }
+                if (!sellQuote) continue
 
-  /* ===== MULTI HOP ===== */
+                const finalUSDC = sellQuote[1]
 
-  for (const inter of intermediates) {
+                const profit = calculateProfit(finalUSDC, TRADE_SIZE)
 
-   if (inter === address) continue;
+                if (profit > SIGNAL_THRESHOLD) {
 
-   const route = makeRoute(address, inter);
+                    console.log("")
+                    console.log("🚀 PROFITABLE ROUTE FOUND")
+                    console.log("Token:", token)
+                    console.log("Buy Router:", buyRouter)
+                    console.log("Sell Router:", sellRouter)
+                    console.log("Trade Size:", ethers.utils.formatUnits(TRADE_SIZE,6))
+                    console.log("Profit:", profit)
+                    console.log("")
 
-   const sim = await simulateRoute(route);
+                    return {
+                        token,
+                        buyRouter,
+                        sellRouter,
+                        profit
+                    }
 
-   console.log(
-    `${name} via ${inter.slice(0,6)} profit:`,
-    ethers.formatUnits(sim.profit,6)
-   );
+                }
 
-   if (sim.profit > best.profit) {
+            }
 
-    best = {
-     token:address,
-     route,
-     size:sim.amountIn,
-     profit:sim.profit
-    };
+        }
 
-   }
+    }
 
-  }
+    console.log("⚠️ No profitable route")
 
- }
-
- if (best.profit === 0n) {
-  console.log("⚠️ No profitable route");
- }
-
- return best;
+    return null
 
 }
 
-/* ================= EXECUTION ================= */
+/* ================= EXECUTION SIGNAL ================= */
 
-async function execute(best) {
+async function executeIfProfitable(route) {
 
- console.log("\n🔥 EXECUTING ARBITRAGE");
+    if (!route) {
 
- console.log("Token:",best.token);
+        console.log("💤 No trade")
+        return
 
- console.log(
- "Size:",
- ethers.formatUnits(best.size,6)
- );
+    }
 
- console.log(
- "Expected Profit:",
- ethers.formatUnits(best.profit,6)
- );
+    if (route.profit < MIN_PROFIT) {
 
- const tx = await vault.startAaveFlashArbitrage(
+        console.log("Profit below execution threshold")
+        return
 
-  TOKENS.USDC,
+    }
 
-  best.size,
+    console.log("⚡ EXECUTION SIGNAL")
 
-  best.route,
-
-  MIN_PROFIT_EXECUTE
-
- );
-
- console.log("TX:",tx.hash);
-
- const receipt = await tx.wait();
-
- console.log("Confirmed block:",receipt.blockNumber);
+    console.log("Calling executeBestFlashLoanArbitrage()")
 
 }
 
-/* ================= LOOP ================= */
+/* ================= MAIN LOOP ================= */
 
-async function main() {
+async function startBot() {
 
- console.log("\n==================================");
+    console.log("==================================")
+    console.log("POLYGON ARBITRAGE BOT STARTED")
+    console.log("==================================")
 
- console.log("POLYGON ARBITRAGE BOT STARTED");
+    console.log("Min Execute Profit:", MIN_PROFIT)
+    console.log("Signal Threshold:", SIGNAL_THRESHOLD)
 
- console.log("==================================");
+    let cycle = 1
 
- console.log("Min Execute Profit:",ethers.formatUnits(MIN_PROFIT_EXECUTE,6));
+    while (true) {
 
- console.log("Signal Threshold:",ethers.formatUnits(SIGNAL_THRESHOLD,6));
+        console.log(`--- Cycle ${cycle} ---`)
 
- let cycle = 0;
+        const route = await scanPairs()
 
- while(true){
+        await executeIfProfitable(route)
 
-  try{
+        cycle++
 
-   cycle++;
+        await new Promise(r => setTimeout(r, 3000))
 
-   console.log(`\n--- Cycle ${cycle} ---`);
-
-   const best = await scanRoutes();
-
-   if (best.profit > SIGNAL_THRESHOLD){
-
-    console.log(
-     "🔥 PROFIT SIGNAL:",
-     ethers.formatUnits(best.profit,6)
-    );
-
-    await execute(best);
-
-   } else {
-
-    console.log(
-     "💤 No trade (",
-     ethers.formatUnits(best.profit,6),
-     ")"
-    );
-
-   }
-
-  }catch(e){
-
-   console.log("Error:",e.message);
-
-  }
-
-  await sleep(POLL_INTERVAL);
-
- }
+    }
 
 }
 
-main();
+startBot()
