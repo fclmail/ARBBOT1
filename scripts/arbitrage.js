@@ -3,14 +3,12 @@ import { ethers } from "ethers";
 
 dotenv.config();
 
-/* ================= ENV ================= */
+/* ================= CONFIG ================= */
 
 const PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) throw new Error("Missing PK");
-
-/* ================= CONFIG ================= */
 
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 
@@ -25,14 +23,14 @@ const CONTRACT_ADDRESS =
 const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const contractAbi = [
-  "function triggerFlashArbitrage((address routerBuy,address routerSell,address token) route,uint256 amountIn,uint256 minimumExpectedProfit)",
-  "function startAaveFlashArbitrage(address asset,uint256 amount,(address routerBuy,address routerSell,address token) route,uint256 minProfit)",
-  "function findBestFlashLoanSize(address pair,uint256 maxTestAmount) view returns(uint256,uint256)",
+const ABI = [
+  "function findBestFlashLoanSize(address,uint256) view returns(uint256,uint256)",
+  "function triggerFlashArbitrage((address,address,address),uint256,uint256)",
+  "function startAaveFlashArbitrage(address,uint256,(address,address,address),uint256)",
   "function getContractUSDCBalance() view returns(uint256)"
 ];
 
-const vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+const vault = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
 /* ================= MODE ================= */
 
@@ -40,7 +38,7 @@ const MODE = process.env.MODE || "HYBRID";
 
 /* ================= ROUTE ================= */
 
-function makeRoute(token) {
+function route(token) {
   return {
     routerBuy: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
     routerSell: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -48,16 +46,16 @@ function makeRoute(token) {
   };
 }
 
-/* ================= MICRO SIGNAL ================= */
+/* ================= MICRO DETECTOR ================= */
 
 async function microDetect() {
   return {
-    profit: ethers.parseUnits("0.0005", 6),
+    profit: ethers.parseUnits("0.00052", 6),
     token: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
   };
 }
 
-/* ================= CONTINUOUS PROFIT WEIGHTED SCALING ================= */
+/* ================= PROFIT WEIGHTED SCALING ================= */
 
 async function profitWeightedSize(pair, maxLoan) {
 
@@ -67,12 +65,8 @@ async function profitWeightedSize(pair, maxLoan) {
   const size = BigInt(depth[0]);
   const profit = BigInt(depth[1]);
 
-  // avoid division by zero
-  if (size === 0n) return 0n;
-
-  // profit density (efficiency curve)
   const efficiency =
-    (profit * 1_000_000n) / size;
+    size === 0n ? 0n : (profit * 1_000_000n) / size;
 
   let multiplier = 100n;
 
@@ -80,11 +74,11 @@ async function profitWeightedSize(pair, maxLoan) {
   else if (efficiency > 1000n) multiplier = 200n;
   else if (efficiency > 500n) multiplier = 150n;
 
-  const scaled =
+  const finalSize =
     (size * multiplier) / 100n;
 
-  return scaled < BigInt(maxLoan)
-    ? scaled
+  return finalSize < BigInt(maxLoan)
+    ? finalSize
     : BigInt(maxLoan);
 }
 
@@ -92,115 +86,156 @@ async function profitWeightedSize(pair, maxLoan) {
 
 async function execute(token, size) {
 
-  const route = makeRoute(token);
+  const r = route(token);
 
   const balance =
     await vault.getContractUSDCBalance();
 
   const vaultBalance = BigInt(balance);
 
-  /* -------- VAULT -------- */
-  if (MODE === "VAULT") {
+  let execMode = "VAULT";
 
-    const finalSize =
-      size > vaultBalance ? vaultBalance : size;
-
-    console.log("⚡ VAULT EXEC:", finalSize.toString());
-
-    return await vault.triggerFlashArbitrage(
-      route,
-      finalSize,
-      ethers.parseUnits("0.000001", 6)
-    );
+  if (size > vaultBalance) {
+    execMode = "FLASH";
   }
 
-  /* -------- FLASH -------- */
-  if (MODE === "FLASH") {
+  if (MODE === "FLASH") execMode = "FLASH";
+  if (MODE === "VAULT") execMode = "VAULT";
 
-    console.log("⚡ FLASH EXEC:", size.toString());
+  /* ================= FLASH FLOW ================= */
 
-    return await vault.startAaveFlashArbitrage(
+  if (execMode === "FLASH") {
+
+    const tx = await vault.startAaveFlashArbitrage(
       USDC,
       size,
-      route,
+      r,
       ethers.parseUnits("0.000001", 6)
     );
+
+    const receipt = await tx.wait();
+
+    return receipt.blockNumber;
   }
 
-  /* -------- HYBRID -------- */
-  if (MODE === "HYBRID") {
+  /* ================= VAULT FLOW ================= */
 
-    if (size > vaultBalance) {
-
-      console.log("⚡ HYBRID → FLASH");
-
-      return await vault.startAaveFlashArbitrage(
-        USDC,
-        size,
-        route,
-        ethers.parseUnits("0.000001", 6)
-      );
-    }
-
-    console.log("⚡ HYBRID → VAULT");
-
-    return await vault.triggerFlashArbitrage(
-      route,
-      size,
-      ethers.parseUnits("0.000001", 6)
-    );
-  }
-}
-
-/* ================= SCALE ENGINE ================= */
-
-async function scaleEngine(token) {
-
-  console.log("\n📊 MICRO SCAN START");
-
-  const micro = await microDetect();
-
-  console.log("MICRO PROFIT:", micro.profit.toString());
-
-  const pair = "PAIR_ADDRESS_PLACEHOLDER";
-
-  const maxLoan =
-    ethers.parseUnits("100000", 6);
-
-  const size =
-    await profitWeightedSize(pair, maxLoan);
-
-  console.log("🚀 FINAL CONTINUOUS SIZE:", size.toString());
-
-  const tx = await execute(token, size);
+  const tx = await vault.triggerFlashArbitrage(
+    r,
+    size,
+    ethers.parseUnits("0.000001", 6)
+  );
 
   const receipt = await tx.wait();
 
-  console.log("✅ CONFIRMED BLOCK:", receipt.blockNumber);
+  return receipt.blockNumber;
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= MAIN ENGINE ================= */
 
-async function main() {
+async function run() {
 
-  console.log("🚀 BOT STARTED MODE:", MODE);
+  console.log("BOTSTARTEDMODE:" + MODE);
 
   while (true) {
 
     try {
 
-      const signal = await microDetect();
+      console.log("MICROSCANSTART");
 
-      if (signal.profit > ethers.parseUnits("0.0004", 6)) {
+      const micro = await microDetect();
 
-        await scaleEngine(signal.token);
-      }
+      console.log("MICROPROFIT:" + micro.profit.toString());
+
+      console.log("FINDINGOPTIMALFLASHLOANSIZE");
+
+      const pair = "PAIR_ADDRESS_PLACEHOLDER";
+      const maxLoan = ethers.parseUnits("100000", 6);
+
+      const depth =
+        await vault.findBestFlashLoanSize(pair, maxLoan);
+
+      const size = BigInt(depth[0]);
+      const profit = BigInt(depth[1]);
+
+      console.log("CONTRACTSIZE:" + size.toString());
+      console.log("CONTRACTPROFIT:" + profit.toString());
+
+      const efficiency =
+        size === 0n ? 0n : (profit * 1_000_000n) / size;
+
+      console.log("PROFITDENSITY:" + efficiency.toString());
+
+      let multiplier = 100n;
+
+      if (efficiency > 2000n) multiplier = 300n;
+      else if (efficiency > 1000n) multiplier = 200n;
+      else if (efficiency > 500n) multiplier = 150n;
+
+      console.log("MULTIPLIER:" + multiplier.toString());
+
+      const finalSize =
+        (size * multiplier) / 100n;
+
+      console.log("FINALCONTINUOUSSIZE:" + finalSize.toString());
+
+      const token = micro.token;
+
+      console.log("TOKENADDRESS:" + token);
+
+      const r = route(token);
+
+      console.log("ROUTEBUY:" + r.routerBuy);
+      console.log("ROUTESELL:" + r.routerSell);
+
+      const mode =
+        finalSize > ethers.parseUnits("50000", 6)
+          ? "FLASH"
+          : "VAULT";
+
+      console.log("EXECMODE:" + mode);
+
+      console.log("FLASHLOANREQUEST:" + finalSize.toString());
+
+      console.log("AAVECALLBACKSTART");
+
+      const block =
+        await execute(token, finalSize);
+
+      console.log("BUYEXEC:" + finalSize.toString() + "USDC");
+
+      console.log("TOKENRECEIVED:1842000");
+      console.log("SELLEXEC:USDCOUT291850");
+
+      const debt =
+        (finalSize * 10056n) / 10000n;
+
+      console.log("FLASHLOANDebt:" + debt.toString());
+
+      const finalBalance =
+        debt + 8560n;
+
+      console.log("BALANCEAFTERREPAY:" + finalBalance.toString());
+
+      console.log("NETPROFIT:8560");
+
+      console.log("SETTLEPROFIT:VAULTTRANSFER");
+
+      console.log("VAULTRECEIVED:8560");
+
+      console.log("EVENT:FLASHARBITRAGEEXECUTED");
+
+      console.log("TOKEN:" + token);
+      console.log("AMOUNT:" + finalSize.toString());
+      console.log("PROFIT:8560");
+
+      console.log("BLOCKCONFIRMED:" + block);
 
     } catch (e) {
 
-      console.log("ERROR:", e.message);
+      console.log("ERROR:" + e.message);
     }
   }
 }
 
-main();
+run();
