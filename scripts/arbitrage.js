@@ -5,26 +5,28 @@ dotenv.config();
 
 /* ================= ENV ================= */
 
-const PK = process.env.PRIVATE_KEY || process.env.WALLET_PRIVATE_KEY;
-if (!PK) throw new Error("Missing PRIVATE_KEY");
+const PRIVATE_KEY =
+  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 
-/* ================= RPC ================= */
+if (!PRIVATE_KEY) throw new Error("Missing PK");
+
+/* ================= CONFIG ================= */
 
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 const provider = new ethers.JsonRpcProvider(RPC);
-const wallet = new ethers.Wallet(PK, provider);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+const CONTRACT_ADDRESS = "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
 /* ================= CONTRACT ================= */
 
-const CONTRACT = "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
-
 const abi = [
-  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
-  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
-  "function minimumProfitUSDC() view returns(uint256)"
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns(tuple(uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+  "function getContractUSDCBalance() view returns(uint256)",
+  "function triggerFlashArbitrage((address,address,address) route,uint256,uint256) external"
 ];
 
-const vault = new ethers.Contract(CONTRACT, abi, wallet);
+const vault = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
 
 /* ================= ROUTERS ================= */
 
@@ -36,242 +38,176 @@ const SUSHI = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 const TOKENS = {
   USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
   WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  DAI:  "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
 };
-
-/* ================= CONFIG ================= */
-
-const BASE_SIZES = [
-  ethers.parseUnits("1000",6),
-  ethers.parseUnits("5000",6),
-  ethers.parseUnits("10000",6),
-  ethers.parseUnits("25000",6),
-  ethers.parseUnits("50000",6),
-  ethers.parseUnits("100000",6)
-];
-
-const MIN_MICRO_PROFIT = ethers.parseUnits("0.00001",6);
-const BATCH_TRIGGER = ethers.parseUnits("0.003",6);
 
 /* ================= STATE ================= */
 
-let microPool = [];
-let runningProfit = 0n;
-let executing = false;
+let bestGlobal = {
+  profit: 0n,
+  size: 0n,
+  token: null,
+  route: null
+};
 
 /* ================= HELPERS ================= */
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const fmt = (x) => Number(ethers.formatUnits(x, 6)).toFixed(6);
 
-function route(token, inter = null) {
+const clamp = (x, min, max) =>
+  x < min ? min : x > max ? max : x;
+
+/* ================= ROUTE ================= */
+
+function makeRoute(token) {
   return {
     buyRouter: QUICK,
     sellRouter: SUSHI,
-    pathToToken: inter
-      ? [TOKENS.USDC, inter, token]
-      : [TOKENS.USDC, token],
-    pathToUSDC: inter
-      ? [token, inter, TOKENS.USDC]
-      : [token, TOKENS.USDC],
-    deadline: Math.floor(Date.now()/1000)+60
+    pathToToken: [TOKENS.USDC, token],
+    pathToUSDC: [token, TOKENS.USDC]
   };
 }
 
-/* ================= LIQUIDITY SCORING ================= */
+/* ================= MICRO SCAN ================= */
 
-function efficiency(profit, size) {
-  if (size === 0n) return 0n;
-  return (profit * 1000000n) / size;
-}
+async function scanToken(tokenName, token) {
 
-/* ================= SIMULATION ================= */
+  const route = makeRoute(token);
 
-async function simulate(buyRouter, sellRouter, sizes, pathIn, pathOut) {
-  const res = await vault.findBestFlashLoanSize(
-    buyRouter,
-    sellRouter,
-    sizes,
-    pathIn,
-    pathOut
+  const vaultBal = await vault.getContractUSDCBalance();
+
+  console.log(`\n🔎 SCANNING ${tokenName}`);
+  console.log(`💰 Vault: ${fmt(vaultBal)} USDC`);
+
+  const result = await vault.findBestFlashLoanSize(
+    route.buyRouter,
+    route.sellRouter,
+    [
+      vaultBal / 100n,   // 1%
+      vaultBal / 50n,    // 2%
+      vaultBal / 20n,    // 5%
+      vaultBal / 10n,    // 10%
+      vaultBal / 4n      // 25%
+    ],
+    route.pathToToken,
+    route.pathToUSDC
   );
 
+  const profit = result.estimatedProfit;
+  const amount = result.amountIn;
+
+  if (profit === 0n) {
+    console.log(`❌ No edge detected`);
+    return null;
+  }
+
+  const efficiency = (profit * 1_000_000n) / amount;
+
+  console.log(`📊 Profit: ${fmt(profit)}`);
+  console.log(`⚡ Efficiency: ${efficiency}`);
+
+  /* ================= CONTINUOUS SCALING ================= */
+
+  let scaleFactor = 0n;
+
+  if (efficiency > 3000n) scaleFactor = 60n; // macro
+  else if (efficiency > 1500n) scaleFactor = 30n;
+  else if (efficiency > 800n) scaleFactor = 15n;
+  else scaleFactor = 5n;
+
+  const scaledSize = (vaultBal * scaleFactor) / 100n;
+
+  const finalSize = clamp(
+    scaledSize,
+    vaultBal / 100n,  // min 1%
+    vaultBal / 2n     // max 50%
+  );
+
+  console.log(`📐 SCALE FACTOR: ${scaleFactor / 100n}x`);
+  console.log(`🚀 FINAL SIZE: ${fmt(finalSize)} USDC`);
+
   return {
-    size: BigInt(res.amountIn),
-    profit: BigInt(res.estimatedProfit)
+    token,
+    route,
+    profit,
+    size: finalSize
   };
-}
-
-/* ================= MICRO DETECTION ================= */
-
-async function scan() {
-
-  console.log("\n🔎 MICRO LIQUIDITY SCAN");
-
-  const tokens = Object.values(TOKENS).filter(t => t !== TOKENS.USDC);
-
-  const inters = [TOKENS.WETH, TOKENS.DAI, TOKENS.USDT, TOKENS.WMATIC, TOKENS.WBTC];
-
-  let best = { profit: 0n };
-
-  for (const token of tokens) {
-
-    for (const inter of inters) {
-
-      if (token === inter) continue;
-
-      const r = route(token, inter);
-
-      const sim = await simulate(
-        r.buyRouter,
-        r.sellRouter,
-        BASE_SIZES,
-        r.pathToToken,
-        r.pathToUSDC
-      );
-
-      const eff = efficiency(sim.profit, sim.size);
-
-      console.log(
-        `→ token ${token.slice(0,6)} via ${inter.slice(0,6)}`
-        + ` | profit ${ethers.formatUnits(sim.profit,6)}`
-        + ` | eff ${eff}`
-      );
-
-      if (sim.profit > MIN_MICRO_PROFIT) {
-
-        microPool.push({
-          ...r,
-          size: sim.size,
-          profit: sim.profit
-        });
-
-        runningProfit += sim.profit;
-
-      }
-
-      if (sim.profit > best.profit) {
-        best = { ...sim, route: r };
-      }
-
-    }
-  }
-
-  console.log(`RUNNING MICRO PROFIT: ${ethers.formatUnits(runningProfit,6)}`);
-
-  return best;
-}
-
-/* ================= BATCH SCALING ================= */
-
-function aggregate(pool) {
-
-  const map = new Map();
-
-  for (const t of pool) {
-
-    const key = t.buyRouter + t.sellRouter + JSON.stringify(t.pathToToken);
-
-    if (!map.has(key)) {
-      map.set(key, {
-        ...t,
-        size: 0n,
-        profit: 0n
-      });
-    }
-
-    const g = map.get(key);
-
-    g.size += t.size;
-    g.profit += t.profit;
-  }
-
-  return [...map.values()];
 }
 
 /* ================= EXECUTION ================= */
 
-async function executeBatch(pool) {
+async function execute(best) {
 
-  console.log("\n🔥 BATCH EXECUTION START");
+  console.log(`\n🔥 EXECUTING TRADE`);
 
-  const grouped = aggregate(pool);
+  const before = await vault.getContractUSDCBalance();
 
-  const usable = [];
-  let capital = 0n;
-  let profit = 0n;
-
-  const vaultBal = BigInt(await provider.getBalance(wallet.address));
-
-  for (const t of grouped) {
-
-    if (capital + t.size > vaultBal) continue;
-
-    capital += t.size;
-    profit += t.profit;
-
-    usable.push(t);
-  }
-
-  console.log(`MICRO GROUPS: ${grouped.length}`);
-  console.log(`USABLE TRADES: ${usable.length}`);
-  console.log(`CAPITAL USED: ${ethers.formatUnits(capital,6)}`);
-  console.log(`EXPECTED PROFIT: ${ethers.formatUnits(profit,6)}`);
-
-  const tx = await vault.executeBestFlashLoanArbitrage(
-    usable[0].buyRouter,
-    usable[0].sellRouter,
-    BASE_SIZES,
-    usable[0].pathToToken,
-    usable[0].pathToUSDC,
-    Math.floor(Date.now()/1000)+30
+  const tx = await vault.triggerFlashArbitrage(
+    {
+      routerBuy: best.route.buyRouter,
+      routerSell: best.route.sellRouter,
+      token: best.token
+    },
+    best.size,
+    1n
   );
 
-  console.log("TX SENT:", tx.hash);
+  console.log(`TX: ${tx.hash}`);
 
   await tx.wait();
 
-  console.log("EXECUTION CONFIRMED");
+  const after = await vault.getContractUSDCBalance();
 
-  microPool = [];
-  runningProfit = 0n;
-  executing = false;
+  const realProfit = after - before;
+
+  console.log(`💰 BEFORE: ${fmt(before)}`);
+  console.log(`💰 AFTER : ${fmt(after)}`);
+  console.log(`📈 PROFIT: ${fmt(realProfit)}`);
 }
 
-/* ================= LOOP ================= */
+/* ================= MAIN LOOP ================= */
 
 async function main() {
 
-  console.log("🚀 MICRO→MACRO ENGINE STARTED");
+  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED");
 
   while (true) {
 
-    try {
+    const candidates = await Promise.all(
+      Object.entries(TOKENS)
+        .filter(([k]) => k !== "USDC")
+        .map(([name, token]) => scanToken(name, token))
+    );
 
-      const best = await scan();
+    const valid = candidates.filter(Boolean);
 
-      if (!executing && runningProfit >= BATCH_TRIGGER) {
+    const best = valid.reduce((a, b) =>
+      b.profit > a.profit ? b : a,
+      { profit: 0n }
+    );
 
-        executing = true;
+    if (best.profit > 0n) {
 
-        const batch = [...microPool];
+      console.log(`\n🏆 BEST SIGNAL`);
+      console.log(`TOKEN: ${best.token}`);
+      console.log(`PROFIT: ${fmt(best.profit)}`);
+      console.log(`SIZE: ${fmt(best.size)}`);
 
-        await executeBatch(batch);
-
-      } else {
-
-        console.log(
-          `💤 WAITING | BEST ${ethers.formatUnits(best.profit,6)}`
-        );
+      if (bestGlobal.profit < best.profit) {
+        bestGlobal = best;
       }
 
-    } catch (e) {
-      console.log("ERROR:", e.message);
+      if (best.profit > 500000n) {
+        await execute(best);
+      }
+
+    } else {
+      console.log(`💤 No scalable opportunity`);
     }
 
-    await sleep(2000);
+    await new Promise(r => setTimeout(r, 2000));
   }
 }
 
