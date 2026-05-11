@@ -12,7 +12,7 @@ const PRIVATE_KEY =
   process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY)
-  throw new Error("Missing private key");
+  throw new Error("Missing PRIVATE_KEY");
 
 /* =========================================================
    RPC
@@ -51,9 +51,7 @@ const abi = [
 
   "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
 
-  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external",
-
-  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"
+  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
 
 ];
 
@@ -114,45 +112,23 @@ const ERC20_ABI = [
    HELPERS
 ========================================================= */
 
+const sleep = (ms) =>
+  new Promise(r => setTimeout(r, ms));
+
 const fmt = (x) =>
   Number(
     ethers.formatUnits(x, 6)
   ).toFixed(6);
 
-const sleep = (ms) =>
-  new Promise(r => setTimeout(r, ms));
-
-function liquidityScore(profit, size) {
-
-  if (size === 0n)
-    return 0;
-
-  const score =
-    Number(
-      (profit * 10000n) / size
-    );
-
-  return Math.min(score, 99);
-}
-
-function slippageLabel(score) {
-
-  if (score >= 80)
-    return "LOW";
-
-  if (score >= 50)
-    return "MEDIUM";
-
-  return "HIGH";
-}
-
 function makeRoute(token) {
 
   return {
 
-    buyRouter: QUICK,
+    buyRouter:
+      QUICK,
 
-    sellRouter: SUSHI,
+    sellRouter:
+      SUSHI,
 
     pathToToken: [
       USDC,
@@ -166,8 +142,38 @@ function makeRoute(token) {
   };
 }
 
+function calcLiquidityScore(
+  profit,
+  size
+) {
+
+  if (size === 0n)
+    return 0;
+
+  const ratio =
+    Number(
+      (profit * 100000n) / size
+    );
+
+  return Math.min(
+    Math.max(ratio, 1),
+    99
+  );
+}
+
+function slippageLabel(score) {
+
+  if (score >= 80)
+    return "LOW";
+
+  if (score >= 50)
+    return "MEDIUM";
+
+  return "HIGH";
+}
+
 /* =========================================================
-   VAULT BALANCE
+   CONTRACT VAULT BALANCE
 ========================================================= */
 
 async function getVaultBalance() {
@@ -185,54 +191,119 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   SCAN TOKEN
+   FAST SPREAD DETECTION
 ========================================================= */
 
-async function scanToken(
+async function fastSpreadDetection(
+  token
+) {
+
+  try {
+
+    const route =
+      makeRoute(token);
+
+    const amount =
+      ethers.parseUnits("5", 6);
+
+    const result =
+      await arb.simulateArbitrageProfit.staticCall(
+
+        route.buyRouter,
+
+        route.sellRouter,
+
+        amount,
+
+        route.pathToToken,
+
+        route.pathToUSDC
+      );
+
+    return result[1] > 0n;
+
+  } catch {
+
+    return false;
+  }
+}
+
+/* =========================================================
+   DEPTH ANALYSIS
+========================================================= */
+
+async function runDepthAnalysis(
   name,
   token
 ) {
 
   try {
 
-    console.log(`\n🔎 SCANNING ${name}`);
+    console.log(
+      `\n🔎 SCANNING ${name}`
+    );
 
     const vaultBal =
       await getVaultBalance();
 
     console.log(
-      `💰 Vault: ${fmt(vaultBal)} USDC`
+      `\n💰 Vault: ${fmt(vaultBal)} USDC`
+    );
+
+    /* ==========================================
+       FAST DETECTION
+    ========================================== */
+
+    const spreadExists =
+      await fastSpreadDetection(
+        token
+      );
+
+    if (!spreadExists) {
+
+      console.log(
+        "\n💤 No spread"
+      );
+
+      return null;
+    }
+
+    console.log(
+      "\n📡 Fast spread detected..."
+    );
+
+    console.log(
+      "\n📡 Running contract depth analysis..."
     );
 
     const route =
       makeRoute(token);
 
     /* ==========================================
-       CANDIDATE SIZES
+       DYNAMIC CONTINUOUS CANDIDATES
     ========================================== */
 
     const candidateSizes = [
 
-      ethers.parseUnits("5", 6),
+      vaultBal / 2n,
 
-      ethers.parseUnits("10", 6),
+      vaultBal,
 
-      ethers.parseUnits("25", 6),
+      vaultBal * 2n,
 
-      ethers.parseUnits("50", 6),
+      vaultBal * 5n,
 
-      ethers.parseUnits("75", 6),
+      vaultBal * 10n,
 
-      ethers.parseUnits("100", 6),
+      vaultBal * 20n,
 
-      ethers.parseUnits("250", 6),
+      vaultBal * 50n
 
-      ethers.parseUnits("500", 6)
-
-    ];
+    ].filter(x => x > 0n);
 
     /* ==========================================
-       STATIC SIMULATION
+       STATIC PASS #1
+       CONTRACT PRIMARY SIGNAL
     ========================================== */
 
     const best =
@@ -249,7 +320,7 @@ async function scanToken(
         route.pathToUSDC
       );
 
-    const amountIn =
+    const bestSize =
       best.amountIn;
 
     const estimatedFinal =
@@ -263,39 +334,72 @@ async function scanToken(
     ) {
 
       console.log(
-        "💤 No profitable depth"
+        "\n❌ No profitable size"
       );
 
       return null;
     }
 
     const score =
-      liquidityScore(
+      calcLiquidityScore(
         estimatedProfit,
-        amountIn
+        bestSize
       );
 
-    const slip =
+    const slippage =
       slippageLabel(score);
 
     console.log(
-      `📊 Estimated Profit: ${fmt(estimatedProfit)}`
+      `\n📊 Contract Optimal Size:\n${fmt(bestSize)}`
     );
 
     console.log(
-      `📊 Best Size: ${fmt(amountIn)}`
+      `\n📊 Estimated Final:\n${fmt(estimatedFinal)}`
     );
 
     console.log(
-      `📊 Estimated Final: ${fmt(estimatedFinal)}`
+      `\n📊 Estimated Profit:\n${fmt(estimatedProfit)}`
     );
 
     console.log(
-      `⚡ Liquidity Depth Score: ${score}`
+      `\n⚡ Liquidity Depth Score: ${score}`
     );
 
     console.log(
-      `⚡ Slippage: ${slip}`
+      `\n⚡ Slippage: ${slippage}`
+    );
+
+    console.log(
+      "\n📡 Running execution simulation..."
+    );
+
+    /* ==========================================
+       STATIC PASS #2
+       FULL EXECUTION VALIDATION
+    ========================================== */
+
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 60;
+
+    await arb.executeBestFlashLoanArbitrage.staticCall(
+
+      route.buyRouter,
+
+      route.sellRouter,
+
+      [bestSize],
+
+      route.pathToToken,
+
+      route.pathToUSDC,
+
+      deadline
+    );
+
+    console.log(
+      "\n✅ Static simulation passed"
     );
 
     return {
@@ -304,24 +408,23 @@ async function scanToken(
 
       route,
 
-      profit:
-        estimatedProfit,
-
       size:
-        amountIn,
+        bestSize,
 
       estimatedFinal,
 
+      profit:
+        estimatedProfit,
+
       score,
 
-      slippage:
-        slip
+      slippage
     };
 
   } catch (err) {
 
     console.log(
-      `❌ Scan failed for ${name}`
+      "\n❌ DEPTH ANALYSIS FAILED"
     );
 
     console.log(
@@ -342,7 +445,7 @@ async function execute(signal) {
   try {
 
     console.log(
-      `\n🔥 EXECUTING FLASH LOAN`
+      "\n🔥 EXECUTING FLASH LOAN"
     );
 
     const before =
@@ -356,29 +459,6 @@ async function execute(signal) {
     console.log(
       "\n📡 Sending transaction..."
     );
-
-    /* ==========================================
-       CALL STATIC SAFETY CHECK
-    ========================================== */
-
-    await arb.executeBestFlashLoanArbitrage.staticCall(
-
-      signal.route.buyRouter,
-
-      signal.route.sellRouter,
-
-      [signal.size],
-
-      signal.route.pathToToken,
-
-      signal.route.pathToUSDC,
-
-      deadline
-    );
-
-    /* ==========================================
-       LIVE TX
-    ========================================== */
 
     const tx =
       await arb.executeBestFlashLoanArbitrage(
@@ -432,19 +512,19 @@ async function execute(signal) {
         : 0;
 
     console.log(
-      `\n💰 BEFORE: ${fmt(before)}`
+      `\n💰 BEFORE:\n${fmt(before)}`
     );
 
     console.log(
-      `💰 AFTER : ${fmt(after)}`
+      `\n💰 AFTER:\n${fmt(after)}`
     );
 
     console.log(
-      `\n📈 PROFIT: ${fmt(realizedProfit)}`
+      `\n📈 PROFIT:\n${fmt(realizedProfit)}`
     );
 
     console.log(
-      `\n🏦 CONTRACT VAULT GROWTH:`
+      "\n🏦 CONTRACT VAULT GROWTH:"
     );
 
     console.log(
@@ -478,11 +558,11 @@ async function main() {
     await arb.owner();
 
   console.log(
-    `\n👤 OWNER: ${owner}`
+    `\n👤 OWNER:\n${owner}`
   );
 
   console.log(
-    `👤 WALLET: ${wallet.address}`
+    `\n👤 WALLET:\n${wallet.address}`
   );
 
   if (
@@ -499,7 +579,7 @@ async function main() {
 
     try {
 
-      const results =
+      const scans =
         await Promise.all(
 
           Object.entries(TOKENS)
@@ -510,7 +590,7 @@ async function main() {
 
             .map(
               ([name, token]) =>
-                scanToken(
+                runDepthAnalysis(
                   name,
                   token
                 )
@@ -518,20 +598,24 @@ async function main() {
         );
 
       const valid =
-        results.filter(Boolean);
+        scans.filter(Boolean);
 
       if (
         valid.length === 0
       ) {
 
         console.log(
-          "\n💤 No opportunity"
+          "\n💤 No opportunities"
         );
 
         await sleep(2000);
 
         continue;
       }
+
+      /* ======================================
+         CONTRACT SIGNAL PRIMARY
+      ====================================== */
 
       const best =
         valid.reduce(
@@ -543,19 +627,25 @@ async function main() {
         );
 
       console.log(
-        `\n🏆 BEST SIGNAL`
+        "\n🏆 BEST SIGNAL"
       );
 
       console.log(
-        `TOKEN: ${best.token}`
+        `\nTOKEN:\n${
+          Object.entries(TOKENS)
+            .find(
+              ([, v]) =>
+                v === best.token
+            )?.[0] || best.token
+        }`
       );
 
       console.log(
-        `PROFIT: ${fmt(best.profit)}`
+        `\nPROFIT:\n${fmt(best.profit)}`
       );
 
       console.log(
-        `SIZE: ${fmt(best.size)}`
+        `\nSIZE:\n${fmt(best.size)}`
       );
 
       /* ======================================
@@ -578,7 +668,7 @@ async function main() {
       } else {
 
         console.log(
-          "\n🛑 Profit below execution threshold"
+          "\n🛑 Profit below threshold"
         );
       }
 
