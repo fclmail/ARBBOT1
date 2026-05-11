@@ -131,7 +131,7 @@ const MICRO_THRESHOLD =
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.000050",
+    "0.000010",
     6
   );
 
@@ -290,7 +290,7 @@ async function detectMicroSpread(
       */
 
       amount =
-        vaultBal / 5n;
+        vaultBal / 1n;
     }
 
     if (amount <= 0n)
