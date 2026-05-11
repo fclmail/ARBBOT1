@@ -654,7 +654,7 @@ async function main() {
 
       const MIN_EXECUTION_PROFIT =
         ethers.parseUnits(
-          "0.03",
+          "0.000003",
           6
         );
 
