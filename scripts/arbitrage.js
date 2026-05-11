@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 const provider = new ethers.JsonRpcProvider(RPC);
 
-/* ================= KEY ================= */
+/* ================= WALLET ================= */
 
 const PRIVATE_KEY =
   process.env.PRIVATE_KEY ||
@@ -15,7 +15,6 @@ const PRIVATE_KEY =
 
 if (!PRIVATE_KEY) {
   console.log("❌ PRIVATE KEY MISSING");
-  console.log("👉 Add PRIVATE_KEY in GitHub Secrets");
   process.exit(1);
 }
 
@@ -23,7 +22,7 @@ const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const CONTRACT = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
+const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 const ABI = [
   "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns (tuple(uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
@@ -31,7 +30,7 @@ const ABI = [
   "function minimumProfitUSDC() view returns (uint256)"
 ];
 
-const contract = new ethers.Contract(CONTRACT, ABI, wallet);
+const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
 /* ================= ROUTERS ================= */
 
@@ -50,59 +49,42 @@ const TOKENS = {
   WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
 };
 
-/* ================= SIZE GRID ================= */
+/* ================= DYNAMIC SIZES ================= */
 
-const candidateSizes = [
-  ethers.parseUnits("25", 6),
-  ethers.parseUnits("50", 6),
-  ethers.parseUnits("100", 6),
-  ethers.parseUnits("250", 6),
-  ethers.parseUnits("500", 6)
-];
+const candidateSizes = Array.from({ length: 6 }, (_, i) =>
+  ethers.parseUnits((50 * Math.pow(2, i)).toString(), 6)
+);
 
-/* ================= SAFETY CHECK ================= */
+/* ================= LOG FORMAT ================= */
 
-function safeToken(token) {
-  return (
-    token &&
-    token !== USDC &&
-    ethers.isAddress(token)
-  );
-}
-
-/* ================= LOGS ================= */
-
-function logScan(name, profit, size) {
-  console.log(`🔎 SCANNING ${name}`);
+function scanLog(token, profit, size) {
+  console.log(`🔎 SCANNING ${token}`);
   console.log(`📊 Profit: ${profit.toFixed(6)}`);
   console.log(`⚡ Efficiency: ${Math.floor(profit * 1e6)}`);
   console.log(`📐 SCALE: ${Math.floor(profit * 4)}x`);
   console.log(`🚀 SIZE: ${ethers.formatUnits(size, 6)} USDC\n`);
 }
 
-/* ================= MAIN ================= */
+/* ================= ENGINE ================= */
 
 async function start() {
   console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
 
   const minProfit = Number(await contract.minimumProfitUSDC()) / 1e6;
 
-  console.log(`📌 Minimum Profit Threshold: ${minProfit} USDC`);
-  console.log("✅ CONTRACT VERIFIED\n");
+  console.log("🧠 STATIC CHECK READY");
+  console.log(`📌 MIN PROFIT: ${minProfit} USDC\n`);
 
   while (true) {
     let best = null;
 
     for (const [name, token] of Object.entries(TOKENS)) {
-
-      if (!safeToken(token)) {
-        console.log(`⚠️ SKIP INVALID TOKEN: ${name}`);
-        continue;
-      }
-
       try {
-        const pathToToken = [USDC, token];
-        const pathToUSDC = [token, USDC];
+
+        /* ================= FIX: MULTI-HOP ROUTE ================= */
+
+        const pathToToken = [USDC, TOKENS.WETH, token];
+        const pathToUSDC = [token, TOKENS.WETH, USDC];
 
         const res = await contract.findBestFlashLoanSize(
           QUICKSWAP,
@@ -114,9 +96,10 @@ async function start() {
 
         const profit = Number(res.estimatedProfit) / 1e6;
 
-        if (profit <= 0) continue;
+        // FIX: ignore fake zero signals
+        if (!res || profit <= 0) continue;
 
-        logScan(name, profit, res.amountIn);
+        scanLog(name, profit, res.amountIn);
 
         if (!best || profit > best.profit) {
           best = {
@@ -130,29 +113,29 @@ async function start() {
         }
 
       } catch (e) {
-        console.log(`❌ SCAN ERROR ${name}`);
         continue;
       }
     }
 
     if (!best) {
-      console.log("❌ NO VALID SIGNAL");
-      console.log("🔎 CONTINUING SCAN...\n");
+      console.log("❌ NO VALID SIGNAL\n🔎 CONTINUING SCAN...\n");
       continue;
     }
 
     console.log("🏆 BEST SIGNAL");
     console.log(`TOKEN: ${best.name}`);
     console.log(`PROFIT: ${best.profit.toFixed(6)}`);
-    console.log(`SIZE: ${ethers.formatUnits(best.size, 6)}\n`);
+    console.log(`SIZE: ${ethers.formatUnits(best.size, 6)} USDC\n`);
+
+    /* ================= STATIC CHECK ================= */
 
     if (best.profit < minProfit) {
-      console.log("❌ STATIC CHECK FAILED\n");
+      console.log("❌ STATIC CHECK FAILED\n🔎 CONTINUING SCAN...\n");
       continue;
     }
 
     console.log("🧠 STATIC CHECK PASSED");
-    console.log("🔥 EXECUTING TRADE\n");
+    console.log("🔥 EXECUTING TRADE");
 
     try {
       const tx = await contract.executeBestFlashLoanArbitrage(
@@ -165,7 +148,7 @@ async function start() {
       );
 
       console.log("📡 TX SENT");
-      console.log(`TX: ${tx.hash}\n`);
+      console.log(`TX: ${tx.hash}`);
 
       const receipt = await tx.wait();
 
@@ -173,7 +156,7 @@ async function start() {
       console.log("🔁 SWAPS COMPLETE");
       console.log("💰 FLASH REPAID");
       console.log("🏦 PROFIT RETAINED");
-      console.log(`✅ CONFIRMED BLOCK ${receipt.blockNumber}\n`);
+      console.log(`BLOCK: ${receipt.blockNumber}\n`);
 
     } catch (err) {
       console.log("❌ TX FAILED");
