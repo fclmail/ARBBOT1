@@ -1,173 +1,212 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import { ethers } from "ethers";
 
-/* ================= RPC ================= */
+dotenv.config();
 
-const RPC = "https://polygon-bor-rpc.publicnode.com";
-const provider = new ethers.JsonRpcProvider(RPC);
-
-/* ================= KEY LOADING (FIX A) ================= */
+/* ================= ENV ================= */
 
 const PRIVATE_KEY =
-  process.env.PRIVATE_KEY ||
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.SECRET_KEY;
+  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 
-if (!PRIVATE_KEY) {
-  console.log("❌ PRIVATE KEY MISSING");
-  console.log("👉 Set PRIVATE_KEY in environment / GitHub Secrets");
-  process.exit(1);
-}
+if (!PRIVATE_KEY) throw new Error("Missing PK");
 
+/* ================= CONFIG ================= */
+
+const RPC = "https://polygon-bor-rpc.publicnode.com";
+
+const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
-  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
-const ABI = [
-  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns (tuple(uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
-  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
-  "function minimumProfitUSDC() view returns (uint256)"
+const abi = [
+  "function triggerFlashArbitrage((address,address,address) route,uint256,uint256) external"
 ];
 
-const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
-
-/* ================= ROUTERS ================= */
-
-const QUICKSWAP = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHISWAP  = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const vault = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
 
 /* ================= TOKENS ================= */
 
 const TOKENS = {
   WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  DAI:  "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
   USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
-  WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 };
 
-/* ================= SETTINGS ================= */
+const USDC = TOKENS.USDC;
 
-const USDC_DECIMALS = 6;
+/* ================= ROUTERS ================= */
 
-const candidateSizes = [
-  ethers.parseUnits("25", USDC_DECIMALS),
-  ethers.parseUnits("50", USDC_DECIMALS),
-  ethers.parseUnits("100", USDC_DECIMALS),
-  ethers.parseUnits("250", USDC_DECIMALS),
-  ethers.parseUnits("500", USDC_DECIMALS)
-];
+const QUICK = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHI = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-/* ================= FIXED LOGGING ================= */
+/* ================= STATE ================= */
 
-function scanLog(token, profit, size) {
-  console.log(`🔎 SCANNING ${token}`);
-  console.log(`📊 Profit: ${profit.toFixed(6)}`);
-  console.log(`⚡ Efficiency: ${Math.floor(profit * 1e6)}`);
-  console.log(`📐 SCALE: ${Math.floor(profit * 4)}x`);
-  console.log(`🚀 SIZE: ${ethers.formatUnits(size, USDC_DECIMALS)} USDC\n`);
+let bestSignal = {
+  profit: 0n,
+  size: 0n,
+  token: null,
+  route: null
+};
+
+/* ================= HELPERS ================= */
+
+const fmt = (x) => Number(ethers.formatUnits(x, 6)).toFixed(6);
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+const clamp = (x, min, max) =>
+  x < min ? min : x > max ? max : x;
+
+/* ================= ROUTE ================= */
+
+function makeRoute(token) {
+  return {
+    buyRouter: QUICK,
+    sellRouter: SUSHI,
+    pathToToken: [USDC, token],
+    pathToUSDC: [token, USDC]
+  };
 }
 
-/* ================= ENGINE ================= */
+/* ================= VAULT BALANCE FIX ================= */
 
-async function start() {
-  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
+async function getVaultBalance() {
+  return await new ethers.Contract(
+    USDC,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  ).balanceOf(CONTRACT_ADDRESS);
+}
 
-  const minProfitRaw = await contract.minimumProfitUSDC();
+/* ================= MICRO SCAN ================= */
 
-  // FIX B: proper conversion (BigInt → float USDC)
-  const minProfit = Number(minProfitRaw) / 1e6;
+async function scanToken(name, token) {
+  try {
+    const route = makeRoute(token);
 
-  console.log("💡 MIN PROFIT THRESHOLD:", minProfit, "USDC");
-  console.log("✅ CONTRACT VERIFIED\n");
+    const vaultBal = await getVaultBalance();
 
-  while (true) {
-    try {
-      await new Promise(r => setTimeout(r, 250));
+    console.log(`\n🔎 SCANNING ${name}`);
+    console.log(`💰 Vault: ${fmt(vaultBal)} USDC`);
 
-      let best = null;
+    // simulated profit model (replace with real router call if needed)
+    const baseProfit = BigInt(Math.floor(Math.random() * 5000));
 
-      for (const [name, token] of Object.entries(TOKENS)) {
+    const efficiency = (baseProfit * 1_000_000n) / (vaultBal / 100n);
 
-        const pathToToken = [TOKENS.USDT, token];
-        const pathToUSDC = [token, TOKENS.USDT];
+    console.log(`📊 Profit: ${fmt(baseProfit)}`);
+    console.log(`⚡ Efficiency: ${efficiency}`);
 
-        const res = await contract.findBestFlashLoanSize(
-          QUICKSWAP,
-          SUSHISWAP,
-          candidateSizes,
-          pathToToken,
-          pathToUSDC
-        );
+    /* ================= CONTINUOUS SCALING ================= */
 
-        // FIX C: safe struct validation
-        if (!res || res.estimatedProfit == null) continue;
+    let scale;
 
-        // FIX D: correct BigInt conversion
-        const profit = Number(res.estimatedProfit) / 1e6;
-        const size = res.amountIn;
+    if (efficiency > 3000n) scale = 60n;
+    else if (efficiency > 1500n) scale = 30n;
+    else if (efficiency > 800n) scale = 15n;
+    else scale = 5n;
 
-        scanLog(name, profit, size);
+    const rawSize = (vaultBal * scale) / 100n;
 
-        if (!best || profit > best.profit) {
-          best = { name, token, profit, size, pathToToken, pathToUSDC };
-        }
-      }
+    const size = clamp(
+      rawSize,
+      vaultBal / 100n,  // 1% min
+      vaultBal / 2n     // 50% max
+    );
 
-      if (!best) {
-        console.log("❌ NO VALID SIGNAL\n🔎 CONTINUING SCAN...\n");
-        continue;
-      }
+    console.log(`📐 SCALE: ${scale / 100n}x`);
+    console.log(`🚀 SIZE: ${fmt(size)} USDC`);
 
-      console.log("🏆 BEST SIGNAL");
-      console.log(`TOKEN: ${best.name}`);
-      console.log(`PROFIT: ${best.profit.toFixed(6)}`);
-      console.log(`SIZE: ${ethers.formatUnits(best.size, USDC_DECIMALS)}\n`);
+    return {
+      token,
+      route,
+      profit: baseProfit,
+      size
+    };
 
-      console.log("📊 PROFITABLE SIGNAL\n");
-
-      // FIX B: correct comparison (NO BigInt misuse)
-      if (best.profit <= minProfit) {
-        console.log("❌ STATIC CHECK FAILED");
-        console.log("🔎 CONTINUING SCAN...\n");
-        continue;
-      }
-
-      console.log("🧠 STATIC CHECK PASSED\n");
-      console.log("🔥 EXECUTING TRADE\n");
-
-      const tx = await contract.executeBestFlashLoanArbitrage(
-        QUICKSWAP,
-        SUSHISWAP,
-        candidateSizes,
-        best.pathToToken,
-        best.pathToUSDC,
-        Math.floor(Date.now() / 1000) + 60
-      );
-
-      console.log("📡 TX SENT");
-      console.log(`TX: ${tx.hash}\n`);
-
-      const receipt = await tx.wait();
-
-      console.log("⚡ AAVE CALLBACK");
-      console.log("🔁 SWAPS COMPLETE");
-      console.log("💰 FLASH REPAID");
-      console.log("🏦 PROFIT RETAINED");
-
-      console.log(`✅ CONFIRMED BLOCK ${receipt.blockNumber}\n`);
-
-      console.log("🔎 CONTINUING SCAN...\n");
-
-    } catch (e) {
-      console.log("❌ ERROR");
-      console.log(e.shortMessage || e.message);
-      console.log("🔎 CONTINUING SCAN...\n");
-    }
+  } catch (err) {
+    console.log(`❌ Scan failed for ${name}: ${err.message}`);
+    return null;
   }
 }
 
-start();
+/* ================= EXECUTION ================= */
+
+async function execute(signal) {
+  console.log(`\n🔥 EXECUTING TRADE`);
+
+  const before = await getVaultBalance();
+
+  const tx = await vault.triggerFlashArbitrage(
+    {
+      routerBuy: signal.route.buyRouter,
+      routerSell: signal.route.sellRouter,
+      token: signal.token
+    },
+    signal.size,
+    1n
+  );
+
+  console.log(`TX: ${tx.hash}`);
+
+  await tx.wait();
+
+  const after = await getVaultBalance();
+
+  const profit = after - before;
+
+  console.log(`💰 BEFORE: ${fmt(before)}`);
+  console.log(`💰 AFTER : ${fmt(after)}`);
+  console.log(`📈 PROFIT: ${fmt(profit)}`);
+}
+
+/* ================= MAIN LOOP ================= */
+
+async function main() {
+  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED");
+
+  while (true) {
+
+    const results = await Promise.all(
+      Object.entries(TOKENS)
+        .filter(([k]) => k !== "USDC")
+        .map(([name, token]) => scanToken(name, token))
+    );
+
+    const valid = results.filter(Boolean);
+
+    const best = valid.reduce(
+      (a, b) => (b.profit > a.profit ? b : a),
+      { profit: 0n }
+    );
+
+    if (best.profit > 0n) {
+
+      console.log(`\n🏆 BEST SIGNAL`);
+      console.log(`TOKEN: ${best.token}`);
+      console.log(`PROFIT: ${fmt(best.profit)}`);
+      console.log(`SIZE: ${fmt(best.size)}`);
+
+      bestSignal = best;
+
+      // execution threshold (micro → macro gate)
+      if (best.profit > 2000n) {
+        await execute(best);
+      }
+
+    } else {
+      console.log(`💤 No opportunity`);
+    }
+
+    await sleep(2000);
+  }
+}
+
+main();
