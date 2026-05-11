@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 const provider = new ethers.JsonRpcProvider(RPC);
 
-/* ================= KEY LOADING (FIX A) ================= */
+/* ================= KEY LOADING ================= */
 
 const PRIVATE_KEY =
   process.env.PRIVATE_KEY ||
@@ -49,9 +49,22 @@ const TOKENS = {
   WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
 };
 
-/* ================= SETTINGS ================= */
+// Token decimals mapping for proper display
+const TOKEN_DECIMALS = {
+  WETH: 18,
+  DAI: 18,
+  USDT: 6,
+  WBTC: 8,
+  WMATIC: 18
+};
 
+/* ================= USDC (for flash loan) ================= */
+
+// The flash loan token - assuming USDC on Polygon
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";  // Polygon USDC
 const USDC_DECIMALS = 6;
+
+/* ================= CANDIDATE SIZES ================= */
 
 const candidateSizes = [
   ethers.parseUnits("25", USDC_DECIMALS),
@@ -61,12 +74,12 @@ const candidateSizes = [
   ethers.parseUnits("500", USDC_DECIMALS)
 ];
 
-/* ================= FIXED LOGGING ================= */
+/* ================= LOGGING ================= */
 
-function scanLog(token, profit, size) {
+function scanLog(token, profit, size, profitRaw) {
   console.log(`🔎 SCANNING ${token}`);
-  console.log(`📊 Profit: ${profit.toFixed(6)}`);
-  console.log(`⚡ Efficiency: ${Math.floor(profit * 1e6)}`);
+  console.log(`📊 Profit: ${profit.toFixed(6)} USDC`);
+  console.log(`⚡ Raw Profit: ${profitRaw.toString()}`);
   console.log(`📐 SCALE: ${Math.floor(profit * 4)}x`);
   console.log(`🚀 SIZE: ${ethers.formatUnits(size, USDC_DECIMALS)} USDC\n`);
 }
@@ -75,96 +88,118 @@ function scanLog(token, profit, size) {
 
 async function start() {
   console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
+  console.log("📋 Configuration:");
+  console.log(`   Flash Loan Token: USDC (${USDC})`);
+  console.log(`   QuickSwap: ${QUICKSWAP}`);
+  console.log(`   SushiSwap: ${SUSHISWAP}\n`);
 
-  const minProfitRaw = await contract.minimumProfitUSDC();
-
-  // FIX B: proper conversion (BigInt → float USDC)
-  const minProfit = Number(minProfitRaw) / 1e6;
-
-  console.log("💡 MIN PROFIT THRESHOLD:", minProfit, "USDC");
-  console.log("✅ CONTRACT VERIFIED\n");
+  try {
+    const minProfitRaw = await contract.minimumProfitUSDC();
+    const minProfit = Number(minProfitRaw) / 1e6;
+    console.log("💡 MIN PROFIT THRESHOLD:", minProfit, "USDC");
+    console.log("✅ CONTRACT VERIFIED\n");
+  } catch (err) {
+    console.log("❌ FAILED TO READ CONTRACT:", err.message);
+    process.exit(1);
+  }
 
   while (true) {
     try {
-      await new Promise(r => setTimeout(r, 250));
+      await new Promise(r => setTimeout(r, 500));  // Increased delay
 
       let best = null;
 
       for (const [name, token] of Object.entries(TOKENS)) {
+        try {
+          // The path from flash loan token to target token
+          // USDC → targetToken (on DEX A)
+          const pathToToken = [USDC, token];
+          
+          // The path from target token back to flash loan token
+          // targetToken → USDC (on DEX B)
+          const pathToUSDC = [token, USDC];
 
-        const pathToToken = [TOKENS.USDT, token];
-        const pathToUSDC = [token, TOKENS.USDT];
+          console.log(`📡 Checking ${name}...`);
+          console.log(`   Path A (QuickSwap): ${pathToToken[0].slice(0,10)}... → ${pathToToken[1].slice(0,10)}...`);
+          console.log(`   Path B (SushiSwap): ${pathToUSDC[0].slice(0,10)}... → ${pathToUSDC[1].slice(0,10)}...`);
 
-        const res = await contract.findBestFlashLoanSize(
-          QUICKSWAP,
-          SUSHISWAP,
-          candidateSizes,
-          pathToToken,
-          pathToUSDC
-        );
+          const res = await contract.findBestFlashLoanSize(
+            QUICKSWAP,
+            SUSHISWAP,
+            candidateSizes,
+            pathToToken,
+            pathToUSDC
+          );
 
-        // FIX C: safe struct validation
-        if (!res || res.estimatedProfit == null) continue;
+          if (!res || res.amountIn === 0n) {
+            console.log(`   ⚠️ No valid pool found for ${name}\n`);
+            continue;
+          }
 
-        // FIX D: correct BigInt conversion
-        const profit = Number(res.estimatedProfit) / 1e6;
-        const size = res.amountIn;
+          const profit = Number(res.estimatedProfit) / 1e6;
+          const size = res.amountIn;
 
-        scanLog(name, profit, size);
+          scanLog(name, profit, size, res.estimatedProfit);
 
-        if (!best || profit > best.profit) {
-          best = { name, token, profit, size, pathToToken, pathToUSDC };
+          if (!best || profit > best.profit) {
+            best = { name, token, profit, size, pathToToken, pathToUSDC };
+          }
+        } catch (err) {
+          console.log(`   ❌ Error checking ${name}: ${err.shortMessage || err.message}\n`);
         }
       }
 
       if (!best) {
-        console.log("❌ NO VALID SIGNAL\n🔎 CONTINUING SCAN...\n");
+        console.log("❌ NO VALID SIGNALS FOUND THIS ROUND");
+        console.log("🔎 CONTINUING SCAN...\n");
         continue;
       }
 
       console.log("🏆 BEST SIGNAL");
       console.log(`TOKEN: ${best.name}`);
-      console.log(`PROFIT: ${best.profit.toFixed(6)}`);
-      console.log(`SIZE: ${ethers.formatUnits(best.size, USDC_DECIMALS)}\n`);
+      console.log(`PROFIT: ${best.profit.toFixed(6)} USDC`);
+      console.log(`SIZE: ${ethers.formatUnits(best.size, USDC_DECIMALS)} USDC\n`);
 
-      console.log("📊 PROFITABLE SIGNAL\n");
-
-      // FIX B: correct comparison (NO BigInt misuse)
       if (best.profit <= minProfit) {
-        console.log("❌ STATIC CHECK FAILED");
+        console.log("❌ PROFIT BELOW THRESHOLD");
+        console.log(`   Required: ${minProfit.toFixed(6)} USDC`);
+        console.log(`   Got: ${best.profit.toFixed(6)} USDC`);
         console.log("🔎 CONTINUING SCAN...\n");
         continue;
       }
 
-      console.log("🧠 STATIC CHECK PASSED\n");
-      console.log("🔥 EXECUTING TRADE\n");
+      console.log("✅ PROFIT ABOVE THRESHOLD");
+      console.log("🔥 EXECUTING ARBITRAGE\n");
 
-      const tx = await contract.executeBestFlashLoanArbitrage(
-        QUICKSWAP,
-        SUSHISWAP,
-        candidateSizes,
-        best.pathToToken,
-        best.pathToUSDC,
-        Math.floor(Date.now() / 1000) + 60
-      );
+      try {
+        const tx = await contract.executeBestFlashLoanArbitrage(
+          QUICKSWAP,
+          SUSHISWAP,
+          candidateSizes,
+          best.pathToToken,
+          best.pathToUSDC,
+          Math.floor(Date.now() / 1000) + 120  // 2 minute deadline
+        );
 
-      console.log("📡 TX SENT");
-      console.log(`TX: ${tx.hash}\n`);
+        console.log("📡 TRANSACTION SENT");
+        console.log(`TX HASH: ${tx.hash}\n`);
 
-      const receipt = await tx.wait();
+        const receipt = await tx.wait();
 
-      console.log("⚡ AAVE CALLBACK");
-      console.log("🔁 SWAPS COMPLETE");
-      console.log("💰 FLASH REPAID");
-      console.log("🏦 PROFIT RETAINED");
+        console.log("✅ TRANSACTION CONFIRMED");
+        console.log(`   BLOCK: ${receipt.blockNumber}`);
+        console.log(`   GAS USED: ${receipt.gasUsed.toString()}`);
+        console.log("🔎 CONTINUING SCAN...\n");
 
-      console.log(`✅ CONFIRMED BLOCK ${receipt.blockNumber}\n`);
-
-      console.log("🔎 CONTINUING SCAN...\n");
+      } catch (txError) {
+        console.log("❌ TRANSACTION FAILED");
+        console.log(`   ${txError.shortMessage || txError.message}`);
+        console.log("🔎 CONTINUING SCAN...\n");
+      }
 
     } catch (e) {
-      console.log("❌ ERROR");
-      console.log(e.shortMessage || e.message);
+      console.log("❌ CYCLE ERROR");
+      console.log(`   ${e.shortMessage || e.message}`);
       console.log("🔎 CONTINUING SCAN...\n");
     }
   }
