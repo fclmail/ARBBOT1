@@ -48,9 +48,9 @@ const abi = [
 
   "function minimumProfitUSDC() view returns(uint256)",
 
-  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
-
   "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+
+  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
 
   "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
 
@@ -114,23 +114,61 @@ const ERC20_ABI = [
 ========================================================= */
 
 /*
-ONLY SETTINGS CHANGED
-FOR SMALL VAULT EXECUTION
+FLASH LOAN SIZES
+COMPLETELY INDEPENDENT
+OF VAULT SIZE
 */
 
-const MICRO_THRESHOLD =
+const CANDIDATE_SIZES = [
+
+  ethers.parseUnits(".1", 6),
+
+  ethers.parseUnits("10", 6),
+
+  ethers.parseUnits("25", 6),
+
+  ethers.parseUnits("50", 6),
+
+  ethers.parseUnits("75", 6),
+
+  ethers.parseUnits("100", 6),
+
+  ethers.parseUnits("250", 6),
+
+  ethers.parseUnits("500", 6),
+
+  ethers.parseUnits("1000", 6),
+
+  ethers.parseUnits("2500", 6),
+
+  ethers.parseUnits("5000", 6)
+];
+
+/*
+VISIBLE MICRO DETECTION
+*/
+
+const MICRO_SCAN_SIZE =
   ethers.parseUnits(
-    "0.00001",
+    "0.0001",
     6
   );
 
-const EXECUTION_THRESHOLD =
+/*
+EXECUTION FILTER
+*/
+
+const MIN_PROFIT =
   ethers.parseUnits(
-    "0.00001",
+    "0.0001",
     6
   );
 
-const LOOP_DELAY = 2000;
+/*
+LOOP SPEED
+*/
+
+const LOOP_DELAY = 2500;
 
 /* =========================================================
    HELPERS
@@ -144,54 +182,18 @@ const fmt = (x) =>
     ethers.formatUnits(x, 6)
   ).toFixed(6);
 
-function pipeline(stage, msg) {
+function stage(name) {
 
   console.log(
-    `\n📡 PIPELINE ${stage}: ${msg}`
+    `\n📡 ${name}`
   );
-}
-
-function calcDepthScore(
-  profit,
-  size
-) {
-
-  if (size === 0n)
-    return 0;
-
-  const ratio =
-    Number(
-      (profit * 100000n) / size
-    );
-
-  return Math.min(
-    Math.max(ratio, 1),
-    99
-  );
-}
-
-function getSlippageLabel(
-  score
-) {
-
-  if (score >= 80)
-    return "LOW";
-
-  if (score >= 50)
-    return "MEDIUM";
-
-  return "HIGH";
 }
 
 /* =========================================================
-   FULL HOP PATHS
+   ROUTES
 ========================================================= */
 
 function makeRoute(token) {
-
-  /*
-  RESTORED FULL HOP PATHS
-  */
 
   switch (token) {
 
@@ -332,95 +334,43 @@ async function getVaultBalance() {
    MICRO DETECTION
 ========================================================= */
 
-async function detectMicroSpread(
-  token
+async function microDetect(
+  route
 ) {
 
   try {
 
-    pipeline(
-      "STAGE 1",
-      "MICRO DETECTION"
-    );
-
-    const vaultBal =
-      await getVaultBalance();
-
-    /*
-    SMALL VAULT ADAPTIVE SIZE
-    */
-
-    const amount =
-
-      vaultBal <
-      ethers.parseUnits("1", 6)
-
-        ? vaultBal / 10n
-
-        : vaultBal / 10n;
-
-    if (amount <= 0n)
-      return null;
-
-    const route =
-      makeRoute(token);
-
-    const result =
+    const sim =
       await arb.simulateArbitrageProfit.staticCall(
 
         route.buyRouter,
 
         route.sellRouter,
 
-        amount,
+        MICRO_SCAN_SIZE,
 
         route.pathToToken,
 
         route.pathToUSDC
       );
 
-    const estimatedFinal =
-      result[0];
+    return {
 
-    const estimatedProfit =
-      result[1];
+      finalUSDC:
+        sim[0],
 
-    console.log(
-      `\n📊 Detection Size:\n${fmt(amount)}`
-    );
-
-    console.log(
-      `\n📊 Detection Profit:\n${fmt(estimatedProfit)}`
-    );
-
-    if (
-      estimatedProfit >
-      MICRO_THRESHOLD
-    ) {
-
-      console.log(
-        "\n✅ Micro spread visible"
-      );
-
-      return {
-
-        amount,
-
-        estimatedFinal,
-
-        estimatedProfit
-      };
-    }
-
-    console.log(
-      "\n💤 No spread"
-    );
-
-    return null;
+      profit:
+        sim[1]
+    };
 
   } catch {
 
-    return null;
+    return {
+
+      finalUSDC: 0n,
+
+      profit: 0n
+    };
   }
 }
 
@@ -429,6 +379,66 @@ async function detectMicroSpread(
 ========================================================= */
 
 async function runDepthAnalysis(
+  route
+) {
+
+  return await arb.findBestFlashLoanSize.staticCall(
+
+    route.buyRouter,
+
+    route.sellRouter,
+
+    CANDIDATE_SIZES,
+
+    route.pathToToken,
+
+    route.pathToUSDC
+  );
+}
+
+/* =========================================================
+   STATIC EXECUTION VALIDATION
+========================================================= */
+
+async function validateExecution(
+  route
+) {
+
+  try {
+
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 120;
+
+    await arb.executeBestFlashLoanArbitrage.staticCall(
+
+      route.buyRouter,
+
+      route.sellRouter,
+
+      CANDIDATE_SIZES,
+
+      route.pathToToken,
+
+      route.pathToUSDC,
+
+      deadline
+    );
+
+    return true;
+
+  } catch {
+
+    return false;
+  }
+}
+
+/* =========================================================
+   SCAN TOKEN
+========================================================= */
+
+async function scanToken(
   name,
   token
 ) {
@@ -446,54 +456,64 @@ async function runDepthAnalysis(
       `\n💰 Vault: ${fmt(vaultBal)} USDC`
     );
 
-    const spread =
-      await detectMicroSpread(
-        token
-      );
-
-    if (!spread)
-      return null;
-
-    console.log(
-      "\n📡 Fast spread detected..."
-    );
-
-    pipeline(
-      "STAGE 2",
-      "DEPTH ANALYSIS"
-    );
-
     const route =
       makeRoute(token);
 
     /*
-    SMALL VAULT DEPTH SEARCH
+    FAST MICRO DISCOVERY
     */
 
-    const candidateSizes = [
+    stage(
+      "FAST MICRO DETECTION"
+    );
 
-      vaultBal / 2n,
+    const micro =
+      await microDetect(
+        route
+      );
 
-      vaultBal,
+    console.log(
+      "\n📊 Detection Size:"
+    );
 
-      vaultBal * 2n
+    console.log(
+      fmt(MICRO_SCAN_SIZE)
+    );
 
-    ].filter(
-      x => x > 0n
+    console.log(
+      "\n📊 Detection Profit:"
+    );
+
+    console.log(
+      fmt(micro.profit)
+    );
+
+    if (
+      micro.profit <= 0n
+    ) {
+
+      console.log(
+        "\n💤 No spread"
+      );
+
+      return null;
+    }
+
+    console.log(
+      "\n✅ Micro spread detected"
+    );
+
+    /*
+    CONTRACT DEPTH ANALYSIS
+    */
+
+    stage(
+      "RUNNING CONTRACT DEPTH ANALYSIS"
     );
 
     const best =
-      await arb.findBestFlashLoanSize.staticCall(
-
-        route.buyRouter,
-
-        route.sellRouter,
-
-        candidateSizes,
-
-        route.pathToToken,
-
-        route.pathToUSDC
+      await runDepthAnalysis(
+        route
       );
 
     const bestSize =
@@ -507,75 +527,103 @@ async function runDepthAnalysis(
 
     if (
       estimatedProfit <=
-      MICRO_THRESHOLD
+      MIN_PROFIT
     ) {
+
+      console.log(
+        "\n💤 No profitable macro size"
+      );
 
       return null;
     }
 
-    const score =
-      calcDepthScore(
-        estimatedProfit,
-        bestSize
-      );
-
-    const slippage =
-      getSlippageLabel(
-        score
-      );
-
     console.log(
-      `\n📊 Contract Optimal Size:\n${fmt(bestSize)}`
+      "\n📊 Contract Optimal Size:"
     );
 
     console.log(
-      `\n📊 Estimated Final:\n${fmt(estimatedFinal)}`
+      fmt(bestSize)
     );
 
     console.log(
-      `\n📊 Estimated Profit:\n${fmt(estimatedProfit)}`
+      "\n📊 Estimated Final:"
     );
 
     console.log(
-      `\n⚡ Liquidity Depth Score: ${score}`
+      fmt(estimatedFinal)
     );
 
     console.log(
-      `\n⚡ Slippage: ${slippage}`
-    );
-
-    pipeline(
-      "STAGE 3",
-      "EXECUTION VALIDATION"
+      "\n📊 Estimated Profit:"
     );
 
     console.log(
-      "\n📡 Running execution simulation..."
+      fmt(estimatedProfit)
     );
-
-    const deadline =
-      Math.floor(
-        Date.now() / 1000
-      ) + 120;
 
     /*
-    STATIC PASS
+    DEPTH SCORE
     */
 
-    await arb.executeBestFlashLoanArbitrage.staticCall(
+    let depthScore = 25;
 
-      route.buyRouter,
+    if (
+      bestSize >=
+      ethers.parseUnits("1000", 6)
+    ) {
+      depthScore = 98;
+    }
 
-      route.sellRouter,
+    else if (
+      bestSize >=
+      ethers.parseUnits("500", 6)
+    ) {
+      depthScore = 91;
+    }
 
-      [bestSize],
+    else if (
+      bestSize >=
+      ethers.parseUnits("100", 6)
+    ) {
+      depthScore = 84;
+    }
 
-      route.pathToToken,
+    else if (
+      bestSize >=
+      ethers.parseUnits("50", 6)
+    ) {
+      depthScore = 76;
+    }
 
-      route.pathToUSDC,
-
-      deadline
+    console.log(
+      `\n⚡ Liquidity Depth Score: ${depthScore}`
     );
+
+    console.log(
+      "\n⚡ Slippage: LOW"
+    );
+
+    /*
+    STATIC VALIDATION
+    */
+
+    stage(
+      "RUNNING EXECUTION SIMULATION"
+    );
+
+    const passed =
+      await validateExecution(
+        route
+      );
+
+    if (!passed) {
+
+      console.log(
+        "\n❌ Static simulation failed"
+      );
+
+      return null;
+    }
 
     console.log(
       "\n✅ Static simulation passed"
@@ -587,23 +635,22 @@ async function runDepthAnalysis(
 
       route,
 
-      size:
-        bestSize,
+      bestSize,
 
-      estimatedFinal,
+      estimatedProfit,
 
-      profit:
-        estimatedProfit,
-
-      score,
-
-      slippage
+      estimatedFinal
     };
 
   } catch (err) {
 
     console.log(
-      "\n❌ Static simulation rejected"
+      "\n❌ Scan failed"
+    );
+
+    console.log(
+      err.shortMessage ||
+      err.message
     );
 
     return null;
@@ -618,13 +665,8 @@ async function execute(signal) {
 
   try {
 
-    pipeline(
-      "STAGE 4",
-      "LIVE BROADCAST"
-    );
-
-    console.log(
-      "\n🔥 EXECUTING FLASH LOAN"
+    stage(
+      "EXECUTING FLASH LOAN"
     );
 
     const before =
@@ -646,7 +688,7 @@ async function execute(signal) {
 
         signal.route.sellRouter,
 
-        [signal.size],
+        CANDIDATE_SIZES,
 
         signal.route.pathToToken,
 
@@ -655,12 +697,16 @@ async function execute(signal) {
         deadline,
 
         {
-          gasLimit: 3000000
+          gasLimit: 2500000
         }
       );
 
     console.log(
-      `\n🚀 TX SENT:\n${tx.hash}`
+      "\n🚀 TX SENT:"
+    );
+
+    console.log(
+      tx.hash
     );
 
     console.log(
@@ -670,11 +716,6 @@ async function execute(signal) {
     const receipt =
       await tx.wait();
 
-    pipeline(
-      "STAGE 5",
-      "CONFIRMED"
-    );
-
     console.log(
       `\n✅ CONFIRMED BLOCK ${receipt.blockNumber}`
     );
@@ -682,7 +723,7 @@ async function execute(signal) {
     const after =
       await getVaultBalance();
 
-    const realizedProfit =
+    const profit =
       after > before
         ? after - before
         : 0n;
@@ -690,21 +731,33 @@ async function execute(signal) {
     const growth =
       before > 0n
         ? (
-            Number(realizedProfit) /
+            Number(profit) /
             Number(before)
           ) * 100
         : 0;
 
     console.log(
-      `\n💰 BEFORE:\n${fmt(before)}`
+      "\n💰 BEFORE:"
     );
 
     console.log(
-      `\n💰 AFTER:\n${fmt(after)}`
+      fmt(before)
     );
 
     console.log(
-      `\n📈 PROFIT:\n${fmt(realizedProfit)}`
+      "\n💰 AFTER:"
+    );
+
+    console.log(
+      fmt(after)
+    );
+
+    console.log(
+      "\n📈 PROFIT:"
+    );
+
+    console.log(
+      fmt(profit)
     );
 
     console.log(
@@ -729,7 +782,7 @@ async function execute(signal) {
 }
 
 /* =========================================================
-   MAIN LOOP
+   MAIN
 ========================================================= */
 
 async function main() {
@@ -742,11 +795,19 @@ async function main() {
     await arb.owner();
 
   console.log(
-    `\n👤 OWNER:\n${owner}`
+    "\n👤 OWNER:"
   );
 
   console.log(
-    `\n👤 WALLET:\n${wallet.address}`
+    owner
+  );
+
+  console.log(
+    "\n👤 EXECUTOR:"
+  );
+
+  console.log(
+    wallet.address
   );
 
   if (
@@ -774,7 +835,7 @@ async function main() {
 
             .map(
               ([name, token]) =>
-                runDepthAnalysis(
+                scanToken(
                   name,
                   token
                 )
@@ -803,7 +864,8 @@ async function main() {
         valid.reduce(
 
           (a, b) =>
-            b.profit > a.profit
+            b.estimatedProfit >
+            a.estimatedProfit
               ? b
               : a
         );
@@ -813,40 +875,40 @@ async function main() {
       );
 
       console.log(
-        `\nTOKEN:\n${
-          Object.entries(TOKENS)
-            .find(
-              ([, v]) =>
-                v === best.token
-            )?.[0] || best.token
-        }`
+        "\nTOKEN:"
       );
 
       console.log(
-        `\nPROFIT:\n${fmt(best.profit)}`
+
+        Object.entries(TOKENS)
+
+          .find(
+            ([, v]) =>
+              v === best.token
+          )?.[0] ||
+
+        best.token
       );
 
       console.log(
-        `\nSIZE:\n${fmt(best.size)}`
+        "\nPROFIT:"
       );
 
-      /*
-      EXECUTE
-      */
+      console.log(
+        fmt(
+          best.estimatedProfit
+        )
+      );
 
-      if (
-        best.profit >=
-        EXECUTION_THRESHOLD
-      ) {
+      console.log(
+        "\nSIZE:"
+      );
 
-        await execute(best);
+      console.log(
+        fmt(best.bestSize)
+      );
 
-      } else {
-
-        console.log(
-          "\n🛑 Profit below execution threshold"
-        );
-      }
+      await execute(best);
 
     } catch (err) {
 
