@@ -355,9 +355,9 @@ async function detectMicroSpread(
       vaultBal <
       ethers.parseUnits("1", 6)
 
-        ? vaultBal / 2n
+        ? vaultBal / 10n
 
-        : vaultBal / 5n;
+        : vaultBal / 10n;
 
     if (amount <= 0n)
       return null;
