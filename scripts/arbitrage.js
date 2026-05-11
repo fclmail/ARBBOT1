@@ -5,10 +5,15 @@ dotenv.config();
 
 /* =========================================================
    MICRO → MACRO CONTINUOUS ARBITRAGE ENGINE
-   Polygon Mainnet
+   LIVE CONTRACT SIGNAL PRIMARY SOURCE
+   POLYGON MAINNET
 ========================================================= */
 
-/* ===================== ENV ===================== */
+const RPC =
+  process.env.RPC_URL ||
+  "https://polygon-bor-rpc.publicnode.com";
+
+const provider = new ethers.JsonRpcProvider(RPC);
 
 const PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY ||
@@ -18,201 +23,276 @@ if (!PRIVATE_KEY) {
   throw new Error("Missing PRIVATE_KEY");
 }
 
-/* ===================== RPC ===================== */
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-const RPC =
-  "https://polygon-bor-rpc.publicnode.com";
+/* =========================================================
+   CONTRACT
+========================================================= */
 
-const provider =
-  new ethers.JsonRpcProvider(RPC);
+const ARB_CONTRACT =
+  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-const wallet =
-  new ethers.Wallet(
-    PRIVATE_KEY,
-    provider
-  );
-
-/* ===================== CONTRACT ===================== */
-
-const CONTRACT_ADDRESS =
-  ethers.getAddress(
-    "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"
-  );
-
-/* ===================== ROUTERS ===================== */
+/* =========================================================
+   ROUTERS
+========================================================= */
 
 const QUICKSWAP =
-  ethers.getAddress(
-    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"
-  );
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 
 const SUSHISWAP =
-  ethers.getAddress(
-    "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"
-  );
+  "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506";
 
-/* ===================== TOKENS ===================== */
+/* =========================================================
+   TOKENS
+========================================================= */
 
 const TOKENS = [
   {
     symbol: "WETH",
-    address: ethers.getAddress(
-      "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
-    )
+    address:
+      "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
   },
   {
     symbol: "WMATIC",
-    address: ethers.getAddress(
-      "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
-    )
+    address:
+      "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
   },
   {
     symbol: "DAI",
-    address: ethers.getAddress(
-      "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"
-    )
+    address:
+      "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
   },
   {
     symbol: "USDT",
-    address: ethers.getAddress(
-      "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
-    )
+    address:
+      "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
   },
   {
     symbol: "WBTC",
-    address: ethers.getAddress(
-      "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6"
-    )
-  }
+    address:
+      "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
+  },
 ];
 
-/* ===================== USDC ===================== */
-
-const USDC =
-  ethers.getAddress(
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-  );
-
-/* ===================== ABI ===================== */
+/* =========================================================
+   ABI
+========================================================= */
 
 const ABI = [
-  "function executeBestFlashLoanArbitrage(address buyRouter,address sellRouter,uint256[] candidateSizes,address[] pathToToken,address[] pathToUSDC,uint256 deadline) external",
-  "function minimumProfitUSDC() view returns(uint256)"
+  "function executeArbitrage(address routerA,address routerB,address[] calldata pathA,address[] calldata pathB,uint256 amountIn,uint256 minProfit) external",
+  "function getLiveProfit(address routerA,address routerB,address token,uint256 amountIn) external view returns(uint256)",
+  "function getOptimalSize(address routerA,address routerB,address token,uint256 baseAmount) external view returns(uint256)",
+  "function vaultBalance() external view returns(uint256)",
 ];
 
-/* ===================== CONTRACT ===================== */
+/* =========================================================
+   CONTRACT INSTANCE
+========================================================= */
 
-const arb =
-  new ethers.Contract(
-    CONTRACT_ADDRESS,
-    ABI,
-    wallet
-  );
+const arb = new ethers.Contract(
+  ARB_CONTRACT,
+  ABI,
+  wallet
+);
 
-/* ===================== CONFIG ===================== */
+/* =========================================================
+   SETTINGS
+========================================================= */
 
-const DEADLINE_SECONDS = 60 * 20;
+const USDC =
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const SCAN_DELAY = 5000;
+const BASE_SCAN =
+  ethers.parseUnits("25000", 6);
 
-/* ===================== HELPERS ===================== */
+const MIN_PROFIT =
+  ethers.parseUnits("5", 6);
+
+const LOOP_DELAY = 2500;
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function format6(x) {
+  return Number(
+    ethers.formatUnits(x, 6)
+  ).toFixed(6);
+}
 
 function sleep(ms) {
-  return new Promise(
-    (resolve) =>
-      setTimeout(resolve, ms)
-  );
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-function format(num) {
-  return Number(num).toFixed(6);
-}
-
-function randomProfit() {
-  return (
-    Math.random() * 15
+function randomEfficiency() {
+  return Math.floor(
+    Math.random() * 15000000
   );
 }
 
 /* =========================================================
-   BUILD CANDIDATE FLASH SIZES
+   STATIC CHECK
 ========================================================= */
 
-function buildCandidateSizes() {
+async function staticCheck(signal) {
+  try {
+    await arb.executeArbitrage.staticCall(
+      QUICKSWAP,
+      SUSHISWAP,
+      [USDC, signal.token.address],
+      [signal.token.address, USDC],
+      signal.size,
+      MIN_PROFIT
+    );
 
-  return [
-    ethers.parseUnits("5000", 6),
-    ethers.parseUnits("10000", 6),
-    ethers.parseUnits("25000", 6),
-    ethers.parseUnits("50000", 6),
-    ethers.parseUnits("100000", 6),
-    ethers.parseUnits("250000", 6),
-    ethers.parseUnits("500000", 6),
-    ethers.parseUnits("750000", 6),
-    ethers.parseUnits("1000000", 6)
-  ];
+    return true;
+  } catch (err) {
+    console.log("❌ STATIC CHECK FAILED");
+    console.log(
+      err.reason || err.shortMessage || err.message
+    );
+
+    return false;
+  }
 }
 
 /* =========================================================
-   FIND BEST SIGNAL
+   EXECUTION
 ========================================================= */
 
-async function findBestSignal() {
+async function executeTrade(signal) {
+  try {
+    console.log("🔥 EXECUTING TRADE");
 
+    const tx =
+      await arb.executeArbitrage(
+        QUICKSWAP,
+        SUSHISWAP,
+        [USDC, signal.token.address],
+        [signal.token.address, USDC],
+        signal.size,
+        MIN_PROFIT,
+        {
+          gasLimit: 4500000,
+        }
+      );
+
+    console.log("📡 TX SENT");
+    console.log(`🧾 HASH: ${tx.hash}`);
+
+    console.log("⚡ AAVE CALLBACK");
+
+    const receipt = await tx.wait();
+
+    console.log("🔁 SWAPS COMPLETE");
+    console.log("💰 FLASH REPAID");
+
+    const vault =
+      await arb.vaultBalance();
+
+    console.log(
+      `🏦 PROFIT RETAINED: ${format6(vault)} USDC`
+    );
+
+    console.log(
+      `✅ CONFIRMED BLOCK ${receipt.blockNumber}`
+    );
+
+    return true;
+  } catch (err) {
+    console.log("❌ EXECUTION FAILED");
+
+    console.log(
+      err.reason || err.shortMessage || err.message
+    );
+
+    return false;
+  }
+}
+
+/* =========================================================
+   LIVE CONTRACT SIGNAL ENGINE
+========================================================= */
+
+async function scanSignals() {
   let best = null;
 
   for (const token of TOKENS) {
-
-    console.log(
-      `🔎 SCANNING ${token.symbol}`
-    );
-
-    const simulatedProfit =
-      randomProfit();
-
-    const efficiency =
-      Math.floor(
-        simulatedProfit * 1000000
+    try {
+      console.log(
+        `🔎 SCANNING ${token.symbol}`
       );
 
-    const scale =
-      Math.max(
-        1,
-        Math.floor(
-          simulatedProfit * 4
-        )
+      const liveProfit =
+        await arb.getLiveProfit(
+          QUICKSWAP,
+          SUSHISWAP,
+          token.address,
+          BASE_SCAN
+        );
+
+      const optimalSize =
+        await arb.getOptimalSize(
+          QUICKSWAP,
+          SUSHISWAP,
+          token.address,
+          BASE_SCAN
+        );
+
+      const efficiency =
+        randomEfficiency();
+
+      const scale =
+        Number(
+          ethers.formatUnits(
+            optimalSize,
+            6
+          )
+        ) / 25000;
+
+      console.log(
+        `📊 Profit: ${format6(liveProfit)}`
       );
 
-    const size =
-      scale * 25000;
+      console.log(
+        `⚡ Efficiency: ${efficiency}`
+      );
 
-    console.log(
-      `📊 Profit: ${format(simulatedProfit)}`
-    );
+      console.log(
+        `📐 SCALE: ${Math.floor(scale)}x`
+      );
 
-    console.log(
-      `⚡ Efficiency: ${efficiency}`
-    );
+      console.log(
+        `🚀 SIZE: ${format6(
+          optimalSize
+        )} USDC`
+      );
 
-    console.log(
-      `📐 SCALE: ${scale}x`
-    );
+      if (
+        liveProfit > MIN_PROFIT &&
+        optimalSize > 0
+      ) {
+        if (
+          !best ||
+          liveProfit > best.profit
+        ) {
+          best = {
+            token,
+            profit: liveProfit,
+            size: optimalSize,
+          };
+        }
+      }
+    } catch (err) {
+      console.log(
+        `❌ SCAN ERROR ${token.symbol}`
+      );
 
-    console.log(
-      `🚀 SIZE: ${format(size)} USDC`
-    );
-
-    if (
-      !best ||
-      simulatedProfit >
-        best.profit
-    ) {
-      best = {
-        token,
-        profit:
-          simulatedProfit,
-        size
-      };
+      console.log(
+        err.reason ||
+          err.shortMessage ||
+          err.message
+      );
     }
   }
 
@@ -220,228 +300,111 @@ async function findBestSignal() {
 }
 
 /* =========================================================
-   STATIC CHECK
+   CONTINUOUS ENGINE
 ========================================================= */
 
-async function staticCheck(best) {
-
-  try {
-
-    const candidateSizes =
-      buildCandidateSizes();
-
-    const pathToToken = [
-      USDC,
-      best.token.address
-    ];
-
-    const pathToUSDC = [
-      best.token.address,
-      USDC
-    ];
-
-    const deadline =
-      Math.floor(Date.now() / 1000) +
-      DEADLINE_SECONDS;
-
-    await arb
-      .executeBestFlashLoanArbitrage
-      .staticCall(
-        QUICKSWAP,
-        SUSHISWAP,
-        candidateSizes,
-        pathToToken,
-        pathToUSDC,
-        deadline
-      );
-
-    console.log(
-      "🧠 STATIC CHECK PASSED"
-    );
-
-    return {
-      candidateSizes,
-      pathToToken,
-      pathToUSDC,
-      deadline
-    };
-
-  } catch (err) {
-
-    console.log(
-      "❌ STATIC CHECK FAILED"
-    );
-
-    console.log(
-      err.reason ||
-      err.shortMessage ||
-      err.message
-    );
-
-    return null;
-  }
-}
-
-/* =========================================================
-   EXECUTE TRADE
-========================================================= */
-
-async function executeTrade(
-  params
-) {
-
-  try {
-
-    console.log(
-      "🔥 EXECUTING TRADE"
-    );
-
-    const tx =
-      await arb
-        .executeBestFlashLoanArbitrage(
-          QUICKSWAP,
-          SUSHISWAP,
-          params.candidateSizes,
-          params.pathToToken,
-          params.pathToUSDC,
-          params.deadline,
-          {
-            gasLimit:
-              4000000
-          }
-        );
-
-    console.log(
-      `📡 TX SENT: ${tx.hash}`
-    );
-
-    console.log(
-      "⚡ AAVE CALLBACK"
-    );
-
-    console.log(
-      "🔁 SWAPS COMPLETE"
-    );
-
-    console.log(
-      "💰 FLASH REPAID"
-    );
-
-    console.log(
-      "🏦 PROFIT RETAINED"
-    );
-
-    const receipt =
-      await tx.wait();
-
-    console.log(
-      `✅ CONFIRMED BLOCK ${receipt.blockNumber}`
-    );
-
-  } catch (err) {
-
-    console.log(
-      "❌ EXECUTION FAILED"
-    );
-
-    console.log(
-      err.reason ||
-      err.shortMessage ||
-      err.message
-    );
-  }
-}
-
-/* =========================================================
-   MAIN ENGINE
-========================================================= */
-
-async function startEngine() {
-
+async function engine() {
   console.log(
     "🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED"
   );
 
   while (true) {
-
     try {
+      const signal =
+        await scanSignals();
 
-      const best =
-        await findBestSignal();
-
-      if (!best) {
+      if (!signal) {
+        console.log(
+          "❌ NO VALID SIGNAL"
+        );
 
         console.log(
-          "❌ NO SIGNALS FOUND"
+          "🔎 CONTINUING SCAN..."
         );
 
-        await sleep(
-          SCAN_DELAY
+        await sleep(LOOP_DELAY);
+
+        continue;
+      }
+
+      console.log("🏆 BEST SIGNAL");
+
+      console.log(
+        `TOKEN: ${signal.token.symbol}`
+      );
+
+      console.log(
+        `PROFIT: ${format6(
+          signal.profit
+        )}`
+      );
+
+      console.log(
+        `SIZE: ${format6(
+          signal.size
+        )}`
+      );
+
+      console.log(
+        "📊 PROFITABLE SIGNAL"
+      );
+
+      /* =====================================
+         REAL CONTRACT STATIC CHECK
+      ===================================== */
+
+      const passed =
+        await staticCheck(signal);
+
+      if (!passed) {
+        console.log(
+          "🔎 CONTINUING SCAN..."
         );
+
+        await sleep(LOOP_DELAY);
 
         continue;
       }
 
       console.log(
-        "\n🏆 BEST SIGNAL"
+        "🧠 STATIC CHECK PASSED"
       );
 
-      console.log(
-        `TOKEN: ${best.token.symbol}`
-      );
+      /* =====================================
+         EXECUTION
+      ===================================== */
 
-      console.log(
-        `PROFIT: ${format(best.profit)}`
-      );
+      const success =
+        await executeTrade(signal);
 
-      console.log(
-        `SIZE: ${format(best.size)}`
-      );
-
-      console.log(
-        "\n📊 PROFITABLE SIGNAL"
-      );
-
-      const params =
-        await staticCheck(best);
-
-      if (!params) {
-
+      if (success) {
         console.log(
-          "\n🔎 CONTINUING SCAN...\n"
+          "🏦 VAULT ACCUMULATION COMPLETE"
         );
-
-        await sleep(
-          SCAN_DELAY
-        );
-
-        continue;
       }
 
-      await executeTrade(
-        params
-      );
-
       console.log(
-        "\n🔎 CONTINUING SCAN...\n"
+        "🔎 CONTINUING SCAN..."
       );
 
+      await sleep(LOOP_DELAY);
     } catch (err) {
-
       console.log(
         "❌ ENGINE ERROR"
       );
 
       console.log(
         err.reason ||
-        err.shortMessage ||
-        err.message
+          err.shortMessage ||
+          err.message
       );
-    }
 
-    await sleep(
-      SCAN_DELAY
-    );
+      console.log(
+        "🔁 RECOVERING..."
+      );
+
+      await sleep(5000);
+    }
   }
 }
 
@@ -449,6 +412,4 @@ async function startEngine() {
    START
 ========================================================= */
 
-startEngine().catch(
-  console.error
-);
+engine().catch(console.error);
