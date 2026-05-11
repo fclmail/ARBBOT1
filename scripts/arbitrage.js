@@ -4,27 +4,22 @@ import { ethers } from "ethers";
 dotenv.config();
 
 /* =========================================================
-   MICRO → MACRO CONTINUOUS ARBITRAGE ENGINE
-   FIXED FOR:
-   - ethers v6 ABI encoding
-   - proper struct handling
-   - async scanning
-   - non-blocking execution
-   - scaling math
-   - flash loan execution
-   ========================================================= */
-
-/* ===================== CONFIG ===================== */
-
-const RPC =
-  "https://polygon-bor-rpc.publicnode.com";
+   ENV
+========================================================= */
 
 const PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY ||
   process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY)
-  throw new Error("Missing PRIVATE_KEY");
+  throw new Error("Missing private key");
+
+/* =========================================================
+   RPC
+========================================================= */
+
+const RPC =
+  "https://polygon-bor-rpc.publicnode.com";
 
 const provider =
   new ethers.JsonRpcProvider(RPC);
@@ -35,399 +30,425 @@ const wallet =
     provider
   );
 
-/* ===================== CONTRACT ===================== */
+/* =========================================================
+   CONTRACT
+========================================================= */
 
 const CONTRACT_ADDRESS =
   "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 /* =========================================================
-   IMPORTANT:
-   FULL ABI ONLY
-   DO NOT USE ERC20 ABI
-   ========================================================= */
+   ABI
+========================================================= */
 
-const ABI = [
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "buyRouter",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "sellRouter",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256[]",
-        "name": "candidateSizes",
-        "type": "uint256[]"
-      },
-      {
-        "internalType": "address[]",
-        "name": "pathToToken",
-        "type": "address[]"
-      },
-      {
-        "internalType": "address[]",
-        "name": "pathToUSDC",
-        "type": "address[]"
-      },
-      {
-        "internalType": "uint256",
-        "name": "deadline",
-        "type": "uint256"
-      }
-    ],
-    "name":
-      "executeBestFlashLoanArbitrage",
-    "outputs": [],
-    "stateMutability":
-      "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "components": [
-          {
-            "internalType":
-              "address[]",
-            "name":
-              "buyRouters",
-            "type":
-              "address[]"
-          },
-          {
-            "internalType":
-              "address[]",
-            "name":
-              "sellRouters",
-            "type":
-              "address[]"
-          },
-          {
-            "internalType":
-              "uint256[]",
-            "name":
-              "amountsInUSDC",
-            "type":
-              "uint256[]"
-          },
-          {
-            "internalType":
-              "address[][]",
-            "name":
-              "pathsToToken",
-            "type":
-              "address[][]"
-          },
-          {
-            "internalType":
-              "address[][]",
-            "name":
-              "pathsToUSDC",
-            "type":
-              "address[][]"
-          },
-          {
-            "internalType":
-              "uint256",
-            "name":
-              "deadline",
-            "type":
-              "uint256"
-          }
-        ],
-        "internalType":
-          "struct VaultArbitrageEnforcer.BatchParams",
-        "name":
-          "batch",
-        "type":
-          "tuple"
-      }
-    ],
-    "name":
-      "executeFlashBatchArbitrage",
-    "outputs": [],
-    "stateMutability":
-      "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name":
-      "minimumProfitUSDC",
-    "outputs": [
-      {
-        "internalType":
-          "uint256",
-        "name": "",
-        "type":
-          "uint256"
-      }
-    ],
-    "stateMutability":
-      "view",
-    "type":
-      "function"
-  }
+const abi = [
+
+  "function owner() view returns(address)",
+
+  "function minimumProfitUSDC() view returns(uint256)",
+
+  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
+
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+
+  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external",
+
+  "function executeArbitrage(address,address,uint256,address[],address[],uint256) external"
+
 ];
 
 const arb =
   new ethers.Contract(
     CONTRACT_ADDRESS,
-    ABI,
+    abi,
     wallet
   );
 
-/* ===================== TOKENS ===================== */
+/* =========================================================
+   TOKENS
+========================================================= */
 
-const TOKENS = [
-  {
-    symbol: "WETH",
-    address:
-      "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
-  },
-  {
-    symbol: "WMATIC",
-    address:
-      "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
-  },
-  {
-    symbol: "DAI",
-    address:
-      "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"
-  },
-  {
-    symbol: "USDT",
-    address:
-      "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
-  },
-  {
-    symbol: "WBTC",
-    address:
-      "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6"
-  }
-];
+const TOKENS = {
 
-/* ===================== ROUTERS ===================== */
+  WETH:
+    "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
 
-const QUICKSWAP =
-  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+  WMATIC:
+    "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
 
-const SUSHISWAP =
-  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+  DAI:
+    "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+
+  USDT:
+    "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+
+  WBTC:
+    "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+
+  USDC:
+    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+};
 
 const USDC =
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+  TOKENS.USDC;
 
-/* ===================== HELPERS ===================== */
+/* =========================================================
+   ROUTERS
+========================================================= */
 
-function formatUSDC(v) {
-  return Number(
-    ethers.formatUnits(v, 6)
+const QUICK =
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+
+const SUSHI =
+  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+
+/* =========================================================
+   ERC20
+========================================================= */
+
+const ERC20_ABI = [
+  "function balanceOf(address) view returns(uint256)"
+];
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const fmt = (x) =>
+  Number(
+    ethers.formatUnits(x, 6)
   ).toFixed(6);
+
+const sleep = (ms) =>
+  new Promise(r => setTimeout(r, ms));
+
+function liquidityScore(profit, size) {
+
+  if (size === 0n)
+    return 0;
+
+  const score =
+    Number(
+      (profit * 10000n) / size
+    );
+
+  return Math.min(score, 99);
 }
 
-function now() {
-  return Math.floor(Date.now() / 1000);
+function slippageLabel(score) {
+
+  if (score >= 80)
+    return "LOW";
+
+  if (score >= 50)
+    return "MEDIUM";
+
+  return "HIGH";
 }
 
-function delay(ms) {
-  return new Promise(
-    resolve => setTimeout(resolve, ms)
+function makeRoute(token) {
+
+  return {
+
+    buyRouter: QUICK,
+
+    sellRouter: SUSHI,
+
+    pathToToken: [
+      USDC,
+      token
+    ],
+
+    pathToUSDC: [
+      token,
+      USDC
+    ]
+  };
+}
+
+/* =========================================================
+   VAULT BALANCE
+========================================================= */
+
+async function getVaultBalance() {
+
+  const usdc =
+    new ethers.Contract(
+      USDC,
+      ERC20_ABI,
+      provider
+    );
+
+  return await usdc.balanceOf(
+    CONTRACT_ADDRESS
   );
 }
 
-/* ===================== ENGINE ===================== */
+/* =========================================================
+   SCAN TOKEN
+========================================================= */
 
-let isExecuting = false;
-
-async function scanToken(token) {
-
-  console.log(
-    `🔎 SCANNING ${token.symbol}`
-  );
+async function scanToken(
+  name,
+  token
+) {
 
   try {
 
-    const vault =
-      ethers.parseUnits("25", 6);
+    console.log(`\n🔎 SCANNING ${name}`);
 
-    const microProfit =
-      Math.random() * 15;
+    const vaultBal =
+      await getVaultBalance();
 
-    const gasEstimate =
-      0.25;
+    console.log(
+      `💰 Vault: ${fmt(vaultBal)} USDC`
+    );
 
-    const scale =
-      Math.max(
-        microProfit / gasEstimate,
-        1
+    const route =
+      makeRoute(token);
+
+    /* ==========================================
+       CANDIDATE SIZES
+    ========================================== */
+
+    const candidateSizes = [
+
+      ethers.parseUnits("5", 6),
+
+      ethers.parseUnits("10", 6),
+
+      ethers.parseUnits("25", 6),
+
+      ethers.parseUnits("50", 6),
+
+      ethers.parseUnits("75", 6),
+
+      ethers.parseUnits("100", 6),
+
+      ethers.parseUnits("250", 6),
+
+      ethers.parseUnits("500", 6)
+
+    ];
+
+    /* ==========================================
+       STATIC SIMULATION
+    ========================================== */
+
+    const best =
+      await arb.findBestFlashLoanSize.staticCall(
+
+        route.buyRouter,
+
+        route.sellRouter,
+
+        candidateSizes,
+
+        route.pathToToken,
+
+        route.pathToUSDC
       );
 
-    const scaleRounded =
-      Number(scale.toFixed(0));
+    const amountIn =
+      best.amountIn;
 
-    const optimalSize =
-      ethers.parseUnits(
-        (
-          25000 * scaleRounded
-        ).toFixed(0),
-        6
+    const estimatedFinal =
+      best.estimatedFinalUSDC;
+
+    const estimatedProfit =
+      best.estimatedProfit;
+
+    if (
+      estimatedProfit <= 0n
+    ) {
+
+      console.log(
+        "💤 No profitable depth"
       );
 
+      return null;
+    }
+
+    const score =
+      liquidityScore(
+        estimatedProfit,
+        amountIn
+      );
+
+    const slip =
+      slippageLabel(score);
+
     console.log(
-      `💰 Vault: ${formatUSDC(vault)} USDC`
+      `📊 Estimated Profit: ${fmt(estimatedProfit)}`
     );
 
     console.log(
-      `📊 Profit: ${microProfit.toFixed(6)}`
+      `📊 Best Size: ${fmt(amountIn)}`
     );
 
     console.log(
-      `⚡ Efficiency: ${Math.floor(
-        microProfit * 1000000
-      )}`
+      `📊 Estimated Final: ${fmt(estimatedFinal)}`
     );
 
     console.log(
-      `📐 SCALE: ${scaleRounded}x`
+      `⚡ Liquidity Depth Score: ${score}`
     );
 
     console.log(
-      `🚀 SIZE: ${formatUSDC(
-        optimalSize
-      )} USDC`
+      `⚡ Slippage: ${slip}`
     );
 
     return {
+
       token,
-      profit: microProfit,
-      scale: scaleRounded,
-      size: optimalSize
+
+      route,
+
+      profit:
+        estimatedProfit,
+
+      size:
+        amountIn,
+
+      estimatedFinal,
+
+      score,
+
+      slippage:
+        slip
     };
 
   } catch (err) {
 
     console.log(
-      `❌ SCAN FAIL ${token.symbol}`
+      `❌ Scan failed for ${name}`
     );
 
-    console.log(err);
+    console.log(
+      err.shortMessage ||
+      err.message
+    );
 
     return null;
   }
 }
 
-/* ===================== EXECUTION ===================== */
+/* =========================================================
+   EXECUTION
+========================================================= */
 
-async function executeTrade(best) {
-
-  if (isExecuting)
-    return;
-
-  isExecuting = true;
+async function execute(signal) {
 
   try {
 
     console.log(
-      "\n🏆 BEST SIGNAL"
+      `\n🔥 EXECUTING FLASH LOAN`
     );
 
-    console.log(
-      `TOKEN: ${best.token.address}`
-    );
-
-    console.log(
-      `PROFIT: ${best.profit.toFixed(6)}`
-    );
-
-    console.log(
-      `SIZE: ${formatUSDC(best.size)}`
-    );
-
-    console.log(
-      "\n🔥 EXECUTING TRADE"
-    );
-
-    const candidateSizes = [
-      ethers.parseUnits("25000", 6),
-      ethers.parseUnits("50000", 6),
-      ethers.parseUnits("100000", 6),
-      best.size
-    ];
-
-    const pathToToken = [
-      USDC,
-      best.token.address
-    ];
-
-    const pathToUSDC = [
-      best.token.address,
-      USDC
-    ];
+    const before =
+      await getVaultBalance();
 
     const deadline =
-      now() + 600;
+      Math.floor(
+        Date.now() / 1000
+      ) + 60;
 
-    /* =====================================================
-       FIXED:
-       POSITIONAL ARGUMENTS
-       NOT OBJECT ARGUMENTS
-       ===================================================== */
+    console.log(
+      "\n📡 Sending transaction..."
+    );
+
+    /* ==========================================
+       CALL STATIC SAFETY CHECK
+    ========================================== */
+
+    await arb.executeBestFlashLoanArbitrage.staticCall(
+
+      signal.route.buyRouter,
+
+      signal.route.sellRouter,
+
+      [signal.size],
+
+      signal.route.pathToToken,
+
+      signal.route.pathToUSDC,
+
+      deadline
+    );
+
+    /* ==========================================
+       LIVE TX
+    ========================================== */
 
     const tx =
       await arb.executeBestFlashLoanArbitrage(
-        QUICKSWAP,
-        SUSHISWAP,
-        candidateSizes,
-        pathToToken,
-        pathToUSDC,
-        deadline
+
+        signal.route.buyRouter,
+
+        signal.route.sellRouter,
+
+        [signal.size],
+
+        signal.route.pathToToken,
+
+        signal.route.pathToUSDC,
+
+        deadline,
+
+        {
+          gasLimit: 3000000
+        }
       );
 
     console.log(
-      "\n📡 TX SENT"
+      `\n🚀 TX SENT:\n${tx.hash}`
     );
 
-    console.log(tx.hash);
-
     console.log(
-      "\n⚡ FLASH LOAN REQUESTED"
+      "\n⛓ Waiting confirmation..."
     );
 
     const receipt =
       await tx.wait();
 
     console.log(
-      "\n🔁 BUY SWAP COMPLETE"
+      `\n✅ CONFIRMED BLOCK ${receipt.blockNumber}`
+    );
+
+    const after =
+      await getVaultBalance();
+
+    const realizedProfit =
+      after > before
+        ? after - before
+        : 0n;
+
+    const growth =
+      before > 0n
+        ? (
+            Number(realizedProfit) /
+            Number(before)
+          ) * 100
+        : 0;
+
+    console.log(
+      `\n💰 BEFORE: ${fmt(before)}`
     );
 
     console.log(
-      "🔁 SELL SWAP COMPLETE"
+      `💰 AFTER : ${fmt(after)}`
     );
 
     console.log(
-      "\n💰 FLASH LOAN REPAID"
+      `\n📈 PROFIT: ${fmt(realizedProfit)}`
     );
 
     console.log(
-      "🏦 PROFITS RETAINED IN CONTRACT"
+      `\n🏦 CONTRACT VAULT GROWTH:`
     );
 
     console.log(
-      "\n✅ BLOCK CONFIRMED"
-    );
-
-    console.log(
-      `BLOCK: ${receipt.blockNumber}`
-    );
-
-    console.log(
-      `GAS USED: ${receipt.gasUsed}`
+      `+${growth.toFixed(4)}%`
     );
 
   } catch (err) {
@@ -436,79 +457,149 @@ async function executeTrade(best) {
       "\n❌ EXECUTION FAILED"
     );
 
-    if (err.shortMessage)
-      console.log(err.shortMessage);
-
-    if (err.reason)
-      console.log(err.reason);
-
-    console.log(err);
-
-  } finally {
-
-    isExecuting = false;
+    console.log(
+      err.shortMessage ||
+      err.message
+    );
   }
 }
 
-/* ===================== MAIN LOOP ===================== */
+/* =========================================================
+   MAIN LOOP
+========================================================= */
 
-async function engine() {
+async function main() {
 
   console.log(
-    "🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n"
+    "\n🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED"
   );
+
+  const owner =
+    await arb.owner();
+
+  console.log(
+    `\n👤 OWNER: ${owner}`
+  );
+
+  console.log(
+    `👤 WALLET: ${wallet.address}`
+  );
+
+  if (
+    owner.toLowerCase() !==
+    wallet.address.toLowerCase()
+  ) {
+
+    throw new Error(
+      "Wallet is not contract owner"
+    );
+  }
 
   while (true) {
 
     try {
 
-      const scans =
+      const results =
         await Promise.all(
-          TOKENS.map(scanToken)
+
+          Object.entries(TOKENS)
+
+            .filter(
+              ([k]) => k !== "USDC"
+            )
+
+            .map(
+              ([name, token]) =>
+                scanToken(
+                  name,
+                  token
+                )
+            )
         );
 
       const valid =
-        scans.filter(Boolean);
+        results.filter(Boolean);
 
-      if (!valid.length) {
+      if (
+        valid.length === 0
+      ) {
 
-        await delay(3000);
+        console.log(
+          "\n💤 No opportunity"
+        );
+
+        await sleep(2000);
 
         continue;
       }
 
-      valid.sort(
-        (a, b) =>
-          b.profit - a.profit
+      const best =
+        valid.reduce(
+
+          (a, b) =>
+            b.profit > a.profit
+              ? b
+              : a
+        );
+
+      console.log(
+        `\n🏆 BEST SIGNAL`
       );
 
-      const best =
-        valid[0];
+      console.log(
+        `TOKEN: ${best.token}`
+      );
+
+      console.log(
+        `PROFIT: ${fmt(best.profit)}`
+      );
+
+      console.log(
+        `SIZE: ${fmt(best.size)}`
+      );
+
+      /* ======================================
+         EXECUTION THRESHOLD
+      ====================================== */
+
+      const MIN_EXECUTION_PROFIT =
+        ethers.parseUnits(
+          "0.03",
+          6
+        );
 
       if (
-        best.profit > 1
+        best.profit >=
+        MIN_EXECUTION_PROFIT
       ) {
-        await executeTrade(best);
+
+        await execute(best);
+
       } else {
 
         console.log(
-          "\n⚠️ NO HIGH QUALITY SIGNALS\n"
+          "\n🛑 Profit below execution threshold"
         );
       }
 
     } catch (err) {
 
       console.log(
-        "\n❌ ENGINE FAILURE"
+        "\n❌ LOOP ERROR"
       );
 
-      console.log(err);
+      console.log(
+        err.shortMessage ||
+        err.message
+      );
     }
 
-    await delay(5000);
+    await sleep(2000);
   }
 }
 
-/* ===================== START ===================== */
+/* =========================================================
+   START
+========================================================= */
 
-engine().catch(console.error);
+main().catch(console.error);
