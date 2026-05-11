@@ -1,3 +1,4 @@
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -26,7 +27,10 @@ const provider =
     new ethers.JsonRpcProvider(RPC);
 
 const wallet =
-    new ethers.Wallet(PRIVATE_KEY, provider);
+    new ethers.Wallet(
+        PRIVATE_KEY,
+        provider
+    );
 
 /* =========================================================
    CONTRACT
@@ -106,26 +110,26 @@ const ERC20_ABI = [
 ========================================================= */
 
 /*
-    RAW SPREAD ONLY
-    NO GAS
-    NO FEES
-    NO SLIPPAGE
+    EXECUTE ALL SPREADS
+    ABOVE 0.00001 USDC
 */
-
-const MICRO_THRESHOLD =
-    ethers.parseUnits("0.00001", 6);
 
 const EXECUTION_THRESHOLD =
     ethers.parseUnits("0.00001", 6);
 
-const LOOP_DELAY = 2000;
+/*
+    FAST LOOP
+*/
+
+const LOOP_DELAY = 1000;
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
 const sleep =
-    (ms) => new Promise(r => setTimeout(r, ms));
+    (ms) =>
+        new Promise(r => setTimeout(r, ms));
 
 const fmt =
     (x) =>
@@ -136,11 +140,10 @@ const fmt =
 function stage(name) {
 
     console.log(`\n📡 ${name}`);
-
 }
 
 /* =========================================================
-   FULL ROUTES
+   FULL HOP PATHS
 ========================================================= */
 
 function makeRoute(token) {
@@ -274,11 +277,16 @@ async function getVaultBalance() {
    SCAN TOKEN
 ========================================================= */
 
-async function scanToken(name, token) {
+async function scanToken(
+    name,
+    token
+) {
 
     try {
 
-        console.log(`\n🔎 SCANNING ${name}`);
+        console.log(
+            `\n🔎 SCANNING ${name}`
+        );
 
         const vaultBal =
             await getVaultBalance();
@@ -288,31 +296,27 @@ async function scanToken(name, token) {
         );
 
         /*
-            USE VAULT FUNDS ONLY
-            NO FLASH LOAN
+            USE 100% OF VAULT
+            NO FLASH LOANS
         */
 
         const amount =
-            vaultBal < ethers.parseUnits("1", 6)
-                ? vaultBal / 100n
-                : vaultBal / 100n;
+            vaultBal;
 
         if (amount <= 0n) {
             return null;
         }
 
         stage(
-            "PIPELINE STAGE 1: RAW SPREAD DETECTION"
+            "PIPELINE STAGE 1: LIQUIDITY DEPTH SCAN"
         );
 
         const route =
             makeRoute(token);
 
         /*
-            PURE RAW SIMULATION
-            NO GAS CALCULATION
-            NO SLIPPAGE CALCULATION
-            NO FEES CALCULATION
+            SMART CONTRACT LIQUIDITY DEPTH
+            REAL ON-CHAIN ROUTER SIMULATION
         */
 
         const sim =
@@ -340,7 +344,7 @@ async function scanToken(name, token) {
         );
 
         console.log(
-            `\n📊 FINAL:\n${fmt(estimatedFinal)} USDC`
+            `\n📊 OUTPUT:\n${fmt(estimatedFinal)} USDC`
         );
 
         console.log(
@@ -355,17 +359,20 @@ async function scanToken(name, token) {
             `\n📈 SPREAD %:\n${spreadPct.toFixed(6)}%`
         );
 
-        if (rawProfit <= MICRO_THRESHOLD) {
+        if (
+            rawProfit <
+            EXECUTION_THRESHOLD
+        ) {
 
             console.log(
-                "\n💤 NO MICRO SPREAD"
+                "\n💤 BELOW THRESHOLD"
             );
 
             return null;
         }
 
         console.log(
-            "\n✅ MICRO SPREAD FOUND"
+            "\n✅ EXECUTABLE SPREAD FOUND"
         );
 
         stage(
@@ -376,7 +383,7 @@ async function scanToken(name, token) {
             Math.floor(Date.now() / 1000) + 120;
 
         /*
-            VALIDATE EXECUTION
+            STATIC EXECUTION TEST
         */
 
         await arb.executeArbitrage.staticCall(
@@ -405,8 +412,6 @@ async function scanToken(name, token) {
             route,
 
             amount,
-
-            estimatedFinal,
 
             rawProfit
         };
@@ -437,12 +442,12 @@ async function execute(signal) {
             "PIPELINE STAGE 3: LIVE EXECUTION"
         );
 
-        console.log(
-            "\n🔥 EXECUTING VAULT ARBITRAGE"
-        );
-
         const before =
             await getVaultBalance();
+
+        console.log(
+            `\n💰 BEFORE:\n${fmt(before)} USDC`
+        );
 
         const deadline =
             Math.floor(Date.now() / 1000) + 120;
@@ -453,7 +458,7 @@ async function execute(signal) {
 
         /*
             VAULT ONLY
-            NO FLASH LOAN
+            NO FLASH LOANS
         */
 
         const tx =
@@ -498,35 +503,24 @@ async function execute(signal) {
         const after =
             await getVaultBalance();
 
-        /*
-            PURE VAULT GROWTH
-            NO GAS
-            NO FEES
-            NO SLIPPAGE
-        */
-
-        const vaultProfit =
+        const profit =
             after > before
                 ? after - before
                 : 0n;
-
-        const growth =
-            before > 0n
-                ? (Number(vaultProfit) /
-                   Number(before)) * 100
-                : 0;
-
-        console.log(
-            `\n💰 BEFORE:\n${fmt(before)} USDC`
-        );
 
         console.log(
             `\n💰 AFTER:\n${fmt(after)} USDC`
         );
 
         console.log(
-            `\n🧮 RAW VAULT PROFIT:\n${fmt(vaultProfit)} USDC`
+            `\n🧮 VAULT PROFIT:\n${fmt(profit)} USDC`
         );
+
+        const growth =
+            before > 0n
+                ? (Number(profit) /
+                   Number(before)) * 100
+                : 0;
 
         console.log(
             `\n📈 VAULT GROWTH:\n+${growth.toFixed(6)}%`
@@ -551,7 +545,7 @@ async function execute(signal) {
 async function main() {
 
     console.log(
-        "\n🚀 RAW SPREAD VAULT ENGINE STARTED"
+        "\n🚀 FULL VAULT ARBITRAGE ENGINE STARTED"
     );
 
     const owner =
@@ -566,7 +560,7 @@ async function main() {
     );
 
     /*
-        OWNER CHECK
+        OWNER VALIDATION
     */
 
     if (
@@ -594,7 +588,10 @@ async function main() {
 
                         .map(
                             ([name, token]) =>
-                                scanToken(name, token)
+                                scanToken(
+                                    name,
+                                    token
+                                )
                         )
                 );
 
@@ -613,7 +610,7 @@ async function main() {
             }
 
             /*
-                BEST SIGNAL
+                BEST SPREAD
             */
 
             const best =
@@ -631,41 +628,18 @@ async function main() {
             );
 
             console.log(
-                `\nTOKEN:\n${
-                    Object.entries(TOKENS)
-
-                        .find(
-                            ([, v]) =>
-                                v === best.token
-                        )?.[0] || best.token
-                }`
+                `\n💵 SIZE:\n${fmt(best.amount)} USDC`
             );
 
             console.log(
-                `\n🧮 RAW PROFIT:\n${fmt(best.rawProfit)} USDC`
-            );
-
-            console.log(
-                `\n💵 TRADE SIZE:\n${fmt(best.amount)} USDC`
+                `\n🧮 PROFIT:\n${fmt(best.rawProfit)} USDC`
             );
 
             /*
-                EXECUTION THRESHOLD
+                EXECUTE IMMEDIATELY
             */
 
-            if (
-                best.rawProfit >=
-                EXECUTION_THRESHOLD
-            ) {
-
-                await execute(best);
-
-            } else {
-
-                console.log(
-                    "\n🛑 BELOW EXECUTION THRESHOLD"
-                );
-            }
+            await execute(best);
 
         } catch (err) {
 
