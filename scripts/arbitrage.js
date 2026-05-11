@@ -150,7 +150,7 @@ VISIBLE MICRO DETECTION
 
 const MICRO_SCAN_SIZE =
   ethers.parseUnits(
-    "0.0001",
+    "0.031",
     6
   );
 
@@ -160,7 +160,7 @@ EXECUTION FILTER
 
 const MIN_PROFIT =
   ethers.parseUnits(
-    "0.0001",
+    "0.000001",
     6
   );
 
