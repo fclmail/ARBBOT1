@@ -294,8 +294,8 @@ async function scanToken(name, token) {
 
         const amount =
             vaultBal < ethers.parseUnits("1", 6)
-                ? vaultBal / 2n
-                : vaultBal / 5n;
+                ? vaultBal / 100n
+                : vaultBal / 100n;
 
         if (amount <= 0n) {
             return null;
