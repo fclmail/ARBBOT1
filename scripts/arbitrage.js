@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 const provider = new ethers.JsonRpcProvider(RPC);
 
-/* ================= RESTORED KEY LOADING ================= */
+/* ================= KEY LOADING (FIX A) ================= */
 
 const PRIVATE_KEY =
   process.env.PRIVATE_KEY ||
@@ -15,7 +15,7 @@ const PRIVATE_KEY =
 
 if (!PRIVATE_KEY) {
   console.log("❌ PRIVATE KEY MISSING");
-  console.log("👉 Set PRIVATE_KEY or WALLET_PRIVATE_KEY in GitHub Secrets");
+  console.log("👉 Set PRIVATE_KEY in environment / GitHub Secrets");
   process.exit(1);
 }
 
@@ -27,7 +27,7 @@ const CONTRACT_ADDRESS =
   "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 const ABI = [
-  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns ((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns (tuple(uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
   "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
   "function minimumProfitUSDC() view returns (uint256)"
 ];
@@ -36,11 +36,8 @@ const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
 /* ================= ROUTERS ================= */
 
-const QUICKSWAP =
-  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // FIXED CHECKSUM
-
-const SUSHISWAP =
-  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const QUICKSWAP = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHISWAP  = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
 /* ================= TOKENS ================= */
 
@@ -64,12 +61,12 @@ const candidateSizes = [
   ethers.parseUnits("500", USDC_DECIMALS)
 ];
 
-/* ================= LOG STYLE ================= */
+/* ================= FIXED LOGGING ================= */
 
 function scanLog(token, profit, size) {
   console.log(`🔎 SCANNING ${token}`);
   console.log(`📊 Profit: ${profit.toFixed(6)}`);
-  console.log(`⚡ Efficiency: ${Math.floor(profit * 1000000)}`);
+  console.log(`⚡ Efficiency: ${Math.floor(profit * 1e6)}`);
   console.log(`📐 SCALE: ${Math.floor(profit * 4)}x`);
   console.log(`🚀 SIZE: ${ethers.formatUnits(size, USDC_DECIMALS)} USDC\n`);
 }
@@ -79,13 +76,18 @@ function scanLog(token, profit, size) {
 async function start() {
   console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
 
-  const minProfit = await contract.minimumProfitUSDC();
+  const minProfitRaw = await contract.minimumProfitUSDC();
 
-  console.log("Information smart contract minimum profit 🙂 s set to 1 = 0.000001 .\n");
+  // FIX B: proper conversion (BigInt → float USDC)
+  const minProfit = Number(minProfitRaw) / 1e6;
+
+  console.log("💡 MIN PROFIT THRESHOLD:", minProfit, "USDC");
   console.log("✅ CONTRACT VERIFIED\n");
 
   while (true) {
     try {
+      await new Promise(r => setTimeout(r, 250));
+
       let best = null;
 
       for (const [name, token] of Object.entries(TOKENS)) {
@@ -101,7 +103,11 @@ async function start() {
           pathToUSDC
         );
 
-        const profit = Number(res.estimatedProfit);
+        // FIX C: safe struct validation
+        if (!res || res.estimatedProfit == null) continue;
+
+        // FIX D: correct BigInt conversion
+        const profit = Number(res.estimatedProfit) / 1e6;
         const size = res.amountIn;
 
         scanLog(name, profit, size);
@@ -111,8 +117,8 @@ async function start() {
         }
       }
 
-      if (!best || best.profit <= 0) {
-        console.log("❌ NO SIGNAL\n🔎 CONTINUING SCAN...\n");
+      if (!best) {
+        console.log("❌ NO VALID SIGNAL\n🔎 CONTINUING SCAN...\n");
         continue;
       }
 
@@ -123,8 +129,10 @@ async function start() {
 
       console.log("📊 PROFITABLE SIGNAL\n");
 
-      if (BigInt(best.profit) <= BigInt(minProfit)) {
-        console.log("❌ STATIC CHECK FAILED\n🔎 CONTINUING SCAN...\n");
+      // FIX B: correct comparison (NO BigInt misuse)
+      if (best.profit <= minProfit) {
+        console.log("❌ STATIC CHECK FAILED");
+        console.log("🔎 CONTINUING SCAN...\n");
         continue;
       }
 
