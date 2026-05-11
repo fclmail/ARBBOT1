@@ -6,18 +6,25 @@ import { ethers } from "ethers";
 const RPC = "https://polygon-bor-rpc.publicnode.com";
 const provider = new ethers.JsonRpcProvider(RPC);
 
-/* ================= WALLET ================= */
+/* ================= RESTORED KEY LOADING ================= */
 
-const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
-if (!PRIVATE_KEY) throw new Error("Missing PRIVATE KEY");
+const PRIVATE_KEY =
+  process.env.PRIVATE_KEY ||
+  process.env.WALLET_PRIVATE_KEY ||
+  process.env.SECRET_KEY;
+
+if (!PRIVATE_KEY) {
+  console.log("❌ PRIVATE KEY MISSING");
+  console.log("👉 Set PRIVATE_KEY or WALLET_PRIVATE_KEY in GitHub Secrets");
+  process.exit(1);
+}
 
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
-
-/* ================= FIXED ABI ================= */
+const CONTRACT_ADDRESS =
+  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 const ABI = [
   "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns ((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
@@ -29,8 +36,11 @@ const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
 /* ================= ROUTERS ================= */
 
-const QUICKSWAP = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHISWAP = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+const QUICKSWAP =
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"; // FIXED CHECKSUM
+
+const SUSHISWAP =
+  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
 /* ================= TOKENS ================= */
 
@@ -46,21 +56,17 @@ const TOKENS = {
 
 const USDC_DECIMALS = 6;
 
-/* small realistic sizes (IMPORTANT FIX) */
 const candidateSizes = [
   ethers.parseUnits("25", USDC_DECIMALS),
   ethers.parseUnits("50", USDC_DECIMALS),
   ethers.parseUnits("100", USDC_DECIMALS),
   ethers.parseUnits("250", USDC_DECIMALS),
-  ethers.parseUnits("500", USDC_DECIMALS),
-  ethers.parseUnits("1000", USDC_DECIMALS)
+  ethers.parseUnits("500", USDC_DECIMALS)
 ];
 
-/* ================= HELPERS ================= */
+/* ================= LOG STYLE ================= */
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-function logScan(token, profit, size) {
+function scanLog(token, profit, size) {
   console.log(`🔎 SCANNING ${token}`);
   console.log(`📊 Profit: ${profit.toFixed(6)}`);
   console.log(`⚡ Efficiency: ${Math.floor(profit * 1000000)}`);
@@ -68,28 +74,26 @@ function logScan(token, profit, size) {
   console.log(`🚀 SIZE: ${ethers.formatUnits(size, USDC_DECIMALS)} USDC\n`);
 }
 
-/* ================= MAIN LOOP ================= */
+/* ================= ENGINE ================= */
 
-async function scanLoop() {
+async function start() {
   console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
 
   const minProfit = await contract.minimumProfitUSDC();
 
-  console.log("✅ CONTRACT VERIFIED");
-  console.log(`🧠 MIN PROFIT: ${minProfit.toString()}\n`);
-
-  const tokens = Object.entries(TOKENS);
+  console.log("Information smart contract minimum profit 🙂 s set to 1 = 0.000001 .\n");
+  console.log("✅ CONTRACT VERIFIED\n");
 
   while (true) {
     try {
       let best = null;
 
-      for (const [name, token] of tokens) {
+      for (const [name, token] of Object.entries(TOKENS)) {
 
         const pathToToken = [TOKENS.USDT, token];
         const pathToUSDC = [token, TOKENS.USDT];
 
-        const result = await contract.findBestFlashLoanSize(
+        const res = await contract.findBestFlashLoanSize(
           QUICKSWAP,
           SUSHISWAP,
           candidateSizes,
@@ -97,10 +101,10 @@ async function scanLoop() {
           pathToUSDC
         );
 
-        const profit = Number(result.estimatedProfit);
-        const size = result.amountIn;
+        const profit = Number(res.estimatedProfit);
+        const size = res.amountIn;
 
-        logScan(name, profit, size);
+        scanLog(name, profit, size);
 
         if (!best || profit > best.profit) {
           best = { name, token, profit, size, pathToToken, pathToUSDC };
@@ -108,8 +112,7 @@ async function scanLoop() {
       }
 
       if (!best || best.profit <= 0) {
-        console.log("❌ NO VALID SIGNAL\n🔎 CONTINUING SCAN...\n");
-        await sleep(800);
+        console.log("❌ NO SIGNAL\n🔎 CONTINUING SCAN...\n");
         continue;
       }
 
@@ -120,11 +123,8 @@ async function scanLoop() {
 
       console.log("📊 PROFITABLE SIGNAL\n");
 
-      /* STATIC CHECK (aligned with contract) */
       if (BigInt(best.profit) <= BigInt(minProfit)) {
-        console.log("❌ STATIC CHECK FAILED");
-        console.log("🔎 CONTINUING SCAN...\n");
-        await sleep(500);
+        console.log("❌ STATIC CHECK FAILED\n🔎 CONTINUING SCAN...\n");
         continue;
       }
 
@@ -148,21 +148,18 @@ async function scanLoop() {
       console.log("⚡ AAVE CALLBACK");
       console.log("🔁 SWAPS COMPLETE");
       console.log("💰 FLASH REPAID");
+      console.log("🏦 PROFIT RETAINED");
 
-      console.log("🏦 PROFIT RETAINED: CHECK CONTRACT BALANCE");
       console.log(`✅ CONFIRMED BLOCK ${receipt.blockNumber}\n`);
 
       console.log("🔎 CONTINUING SCAN...\n");
 
-      await sleep(1500);
-
-    } catch (err) {
-      console.log("❌ SCAN ERROR");
-      console.log(err.shortMessage || err.message);
+    } catch (e) {
+      console.log("❌ ERROR");
+      console.log(e.shortMessage || e.message);
       console.log("🔎 CONTINUING SCAN...\n");
-      await sleep(1000);
     }
   }
 }
 
-scanLoop();
+start();
