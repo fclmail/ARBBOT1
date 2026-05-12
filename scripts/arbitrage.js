@@ -1,3 +1,4 @@
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -78,20 +79,19 @@ const arbAbi = [
 
 ];
 
-const ROUTER_ABI = [
+const routerAbi = [
 
   "function getAmountsOut(uint,address[]) view returns(uint[])"
 
 ];
 
-const ERC20_ABI = [
+const erc20Abi = [
 
   "function balanceOf(address) view returns(uint256)"
-
 ];
 
 /* =========================================================
-   CONTRACT
+   CONTRACT INSTANCE
 ========================================================= */
 
 const arb =
@@ -131,14 +131,14 @@ const TOKENS = {
   UNI:
     "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
 
+  CRV:
+    "0x172370d5cd63279efa6d502dab29171933a610af",
+
   QUICK:
     "0x831753dd7087cac61ab5644b308642cc1c33dc13",
 
   SHIB:
     "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
-
-  CRV:
-    "0x172370d5cd63279efa6d502dab29171933a610af",
 
   USDC:
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -167,7 +167,6 @@ const routers = {
 
   Wault:
     "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
-
 };
 
 const routerContracts =
@@ -175,13 +174,13 @@ const routerContracts =
 
     Object.values(routers).map(
 
-      r => [
+      router => [
 
-        r,
+        router,
 
         new ethers.Contract(
-          r,
-          ROUTER_ABI,
+          router,
+          routerAbi,
           provider
         )
       ]
@@ -192,31 +191,27 @@ const routerContracts =
    SETTINGS
 ========================================================= */
 
-const MICRO_THRESHOLD =
-  ethers.parseUnits(
-    "0.000005",
-    6
-  );
-
-const EXECUTION_THRESHOLD =
-  ethers.parseUnits(
-    "0.00003",
-    6
-  );
-
 const MICRO_PROBE =
   ethers.parseUnits(
     "0.02",
     6
   );
 
+const MICRO_THRESHOLD =
+  ethers.parseUnits(
+    "0.00005",
+    6
+  );
+
+const EXECUTION_THRESHOLD =
+  ethers.parseUnits(
+    "0.00010",
+    6
+  );
+
 const WORKER_COUNT = 32;
 
 const LOOP_DELAY = 5;
-
-/* =========================================================
-   GLOBAL STATE
-========================================================= */
 
 let EXECUTING = false;
 
@@ -225,7 +220,9 @@ let EXECUTING = false;
 ========================================================= */
 
 const sleep = (ms) =>
-  new Promise(r => setTimeout(r, ms));
+  new Promise(
+    r => setTimeout(r, ms)
+  );
 
 const fmt = (x) =>
   Number(
@@ -329,14 +326,14 @@ async function quote(
 
     return out.at(-1);
 
-  } catch (err) {
+  } catch {
 
     return null;
   }
 }
 
 /* =========================================================
-   VAULT
+   VAULT BALANCE
 ========================================================= */
 
 async function getVaultBalance() {
@@ -344,7 +341,7 @@ async function getVaultBalance() {
   const usdc =
     new ethers.Contract(
       USDC,
-      ERC20_ABI,
+      erc20Abi,
       provider
     );
 
@@ -354,88 +351,84 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   FAST MICRO FINDER
+   FAST MICRO DETECTOR
 ========================================================= */
 
-async function fastMicroFinder(
+async function detectFastSpread(
   token
 ) {
 
-  try {
+  for (
+    const buy
+    of Object.values(routers)
+  ) {
 
-    for (const buy of Object.values(routers)) {
+    for (
+      const sell
+      of Object.values(routers)
+    ) {
 
-      for (const sell of Object.values(routers)) {
+      if (buy === sell)
+        continue;
 
-        if (buy === sell)
+      for (
+        const buyPath
+        of buildBuyPaths(token)
+      ) {
+
+        const buyOut =
+          await quote(
+            buy,
+            MICRO_PROBE,
+            buyPath
+          );
+
+        if (!buyOut)
           continue;
 
-        for (const buyPath of buildBuyPaths(token)) {
+        for (
+          const sellPath
+          of buildSellPaths(token)
+        ) {
 
-          const buyOut =
+          const sellOut =
             await quote(
-              buy,
-              MICRO_PROBE,
-              buyPath
+              sell,
+              buyOut,
+              sellPath
             );
 
-          if (!buyOut)
+          if (!sellOut)
             continue;
 
-          for (const sellPath of buildSellPaths(token)) {
+          const profit =
+            sellOut -
+            MICRO_PROBE;
 
-            const sellOut =
-              await quote(
-                sell,
-                buyOut,
-                sellPath
-              );
+          if (
+            profit >
+            MICRO_THRESHOLD
+          ) {
 
-            if (!sellOut)
-              continue;
+            return {
 
-            const profit =
-              sellOut -
-              MICRO_PROBE;
+              buy,
 
-            if (
-              profit >
-              MICRO_THRESHOLD
-            ) {
+              sell,
 
-              return {
+              buyPath,
 
-                profit,
+              sellPath,
 
-                buy,
-
-                sell,
-
-                buyPath,
-
-                sellPath
-              };
-            }
+              profit
+            };
           }
         }
       }
     }
-
-    return null;
-
-  } catch (err) {
-
-    console.log(
-      "\n❌ MICRO FINDER ERROR"
-    );
-
-    console.log(
-      err.shortMessage ||
-      err.message
-    );
-
-    return null;
   }
+
+  return null;
 }
 
 /* =========================================================
@@ -453,25 +446,20 @@ async function runDepthAnalysis(
       `\n🔎 SCANNING ${name}`
     );
 
-    const vaultBal =
-      await getVaultBalance();
-
-    const micro =
-      await fastMicroFinder(
+    const spread =
+      await detectFastSpread(
         token
       );
 
-    if (!micro) {
-
+    if (!spread)
       return null;
-    }
 
     console.log(
       "\n⚡ FAST MICRO SPREAD FOUND"
     );
 
     console.log(
-      `\n📊 Micro Profit:\n${fmt(micro.profit)}`
+      `\n📊 Micro Profit:\n${fmt(spread.profit)}`
     );
 
     pipeline(
@@ -479,71 +467,27 @@ async function runDepthAnalysis(
       "DEPTH ANALYSIS"
     );
 
-    const route = {
-
-      buyRouter:
-        micro.buy,
-
-      sellRouter:
-        micro.sell,
-
-      pathToToken:
-        micro.buyPath,
-
-      pathToUSDC:
-        micro.sellPath
-    };
-
-    let candidateSizes = [
+    const candidateSizes = [
 
       MICRO_PROBE,
 
       MICRO_PROBE * 2n,
 
-      MICRO_PROBE * 5n,
-
-      MICRO_PROBE * 10n
-
+      MICRO_PROBE * 5n
     ];
 
-    if (
-
-      micro.profit >
-
-      ethers.parseUnits(
-        "0.001",
-        6
-      )
-
-    ) {
-
-      candidateSizes.push(
-
-        vaultBal,
-
-        vaultBal * 2n,
-
-        vaultBal * 5n,
-
-        ethers.parseUnits(
-          "125",
-          6
-        )
-      );
-    }
-
     const best =
-      await arb.findBestFlashLoanSize.staticCall(
+      await arb.findBestFlashLoanSize(
 
-        route.buyRouter,
+        spread.buy,
 
-        route.sellRouter,
+        spread.sell,
 
         candidateSizes,
 
-        route.pathToToken,
+        spread.buyPath,
 
-        route.pathToUSDC
+        spread.sellPath
       );
 
     const bestSize =
@@ -556,7 +500,7 @@ async function runDepthAnalysis(
       best.estimatedProfit;
 
     if (
-      estimatedProfit <=
+      estimatedProfit <
       EXECUTION_THRESHOLD
     ) {
 
@@ -599,37 +543,62 @@ async function runDepthAnalysis(
       "EXECUTION VALIDATION"
     );
 
-    const deadline =
-      Math.floor(
-        Date.now() / 1000
-      ) + 120;
+    /*
+    JS-ONLY PRECHECK
+    NO STATICCALL FLASHLOAN
+    */
 
-    await arb
-      .executeBestFlashLoanArbitrage
-      .staticCall(
+    const recheck =
+      await arb.simulateArbitrageProfit(
 
-        route.buyRouter,
+        spread.buy,
 
-        route.sellRouter,
+        spread.sell,
 
-        [bestSize],
+        bestSize,
 
-        route.pathToToken,
+        spread.buyPath,
 
-        route.pathToUSDC,
-
-        deadline
+        spread.sellPath
       );
 
+    const liveProfit =
+      recheck[1];
+
+    if (
+      liveProfit <
+      EXECUTION_THRESHOLD
+    ) {
+
+      console.log(
+        "\n❌ Spread vanished"
+      );
+
+      return null;
+    }
+
     console.log(
-      "\n✅ Static simulation passed"
+      "\n✅ Execution precheck passed"
     );
 
     return {
 
       token,
 
-      route,
+      route: {
+
+        buyRouter:
+          spread.buy,
+
+        sellRouter:
+          spread.sell,
+
+        pathToToken:
+          spread.buyPath,
+
+        pathToUSDC:
+          spread.sellPath
+      },
 
       size:
         bestSize,
@@ -637,11 +606,7 @@ async function runDepthAnalysis(
       estimatedFinal,
 
       profit:
-        estimatedProfit,
-
-      score,
-
-      slippage
+        estimatedProfit
     };
 
   } catch (err) {
@@ -787,7 +752,7 @@ async function execute(
 }
 
 /* =========================================================
-   SCAN TASKS
+   TASKS
 ========================================================= */
 
 const scanTasks = [];
@@ -845,6 +810,13 @@ async function main() {
 
       try {
 
+        if (EXECUTING) {
+
+          await sleep(1);
+
+          continue;
+        }
+
         const task =
           scanTasks[
             taskIndex++
@@ -859,47 +831,37 @@ async function main() {
             task.token
           );
 
-        if (
+        if (!signal)
+          continue;
 
-          signal &&
+        console.log(
+          "\n🏆 BEST SIGNAL"
+        );
 
-          signal.profit >=
-          EXECUTION_THRESHOLD
+        console.log(
+          `\nTOKEN:\n${task.name}`
+        );
 
-        ) {
+        console.log(
+          `\nPROFIT:\n${fmt(signal.profit)}`
+        );
 
-          console.log(
-            "\n🏆 BEST SIGNAL"
+        console.log(
+          `\nSIZE:\n${fmt(signal.size)}`
+        );
+
+        EXECUTING = true;
+
+        try {
+
+          await execute(
+            signal,
+            task.name
           );
 
-          console.log(
-            `\nTOKEN:\n${task.name}`
-          );
+        } finally {
 
-          console.log(
-            `\nPROFIT:\n${fmt(signal.profit)}`
-          );
-
-          console.log(
-            `\nSIZE:\n${fmt(signal.size)}`
-          );
-
-          if (!EXECUTING) {
-
-            EXECUTING = true;
-
-            try {
-
-              await execute(
-                signal,
-                task.name
-              );
-
-            } finally {
-
-              EXECUTING = false;
-            }
-          }
+          EXECUTING = false;
         }
 
       } catch (err) {
