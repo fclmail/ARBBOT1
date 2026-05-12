@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -20,11 +19,30 @@ if (!PRIVATE_KEY) {
    RPC
 ========================================================= */
 
-const RPC =
-  "https://polygon-bor-rpc.publicnode.com";
+const RPCS = [
+
+  "https://polygon-bor-rpc.publicnode.com"
+
+];
+
+let rpcIndex = 0;
+
+function nextRPC() {
+
+  const rpc =
+    RPCS[rpcIndex];
+
+  rpcIndex =
+    (rpcIndex + 1) %
+    RPCS.length;
+
+  return rpc;
+}
 
 const provider =
-  new ethers.JsonRpcProvider(RPC);
+  new ethers.JsonRpcProvider(
+    nextRPC()
+  );
 
 const wallet =
   new ethers.Wallet(
@@ -43,7 +61,7 @@ const CONTRACT_ADDRESS =
    ABI
 ========================================================= */
 
-const abi = [
+const arbAbi = [
 
   "function owner() view returns(address)",
 
@@ -57,10 +75,26 @@ const abi = [
 
 ];
 
+const ROUTER_ABI = [
+
+  "function getAmountsOut(uint,address[]) view returns(uint[])"
+
+];
+
+const ERC20_ABI = [
+
+  "function balanceOf(address) view returns(uint256)"
+
+];
+
+/* =========================================================
+   CONTRACT
+========================================================= */
+
 const arb =
   new ethers.Contract(
     CONTRACT_ADDRESS,
-    abi,
+    arbAbi,
     wallet
   );
 
@@ -85,6 +119,24 @@ const TOKENS = {
   WBTC:
     "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
 
+  AAVE:
+    "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+
+  LINK:
+    "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+
+  UNI:
+    "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
+
+  QUICK:
+    "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+
+  SHIB:
+    "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
+
+  CRV:
+    "0x172370d5cd63279efa6d502dab29171933a610af",
+
   USDC:
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 };
@@ -96,42 +148,68 @@ const USDC =
    ROUTERS
 ========================================================= */
 
-const QUICK =
-  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const routers = {
 
-const SUSHI =
-  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+  QuickSwap:
+    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
 
-/* =========================================================
-   ERC20
-========================================================= */
+  SushiSwap:
+    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
 
-const ERC20_ABI = [
-  "function balanceOf(address) view returns(uint256)"
-];
+  Dfyn:
+    "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+
+  ApeSwap:
+    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+
+  Wault:
+    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+
+};
+
+const routerContracts =
+  Object.fromEntries(
+
+    Object.values(routers).map(
+
+      r => [
+
+        r,
+
+        new ethers.Contract(
+          r,
+          ROUTER_ABI,
+          provider
+        )
+      ]
+    )
+  );
 
 /* =========================================================
    SETTINGS
 ========================================================= */
 
-/*
-ONLY SETTINGS CHANGED
-FOR SMALL VAULT EXECUTION
-*/
-
 const MICRO_THRESHOLD =
   ethers.parseUnits(
-    "0.00001",
+    "0.0000001",
     6
   );
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.00001",
+    "0.0000001",
     6
   );
 
-const LOOP_DELAY = 2000;
+const MICRO_PROBE =
+  ethers.parseUnits(
+    "0.02",
+    6
+  );
+
+const WORKER_COUNT = 32;
+
+const LOOP_DELAY = 5;
 
 /* =========================================================
    HELPERS
@@ -185,134 +263,71 @@ function getSlippageLabel(
 }
 
 /* =========================================================
-   FULL HOP PATHS
+   PATH BUILDERS
 ========================================================= */
 
-function makeRoute(token) {
+function buildBuyPaths(token) {
 
-  /*
-  RESTORED FULL HOP PATHS
-  */
+  return [
 
-  switch (token) {
+    [USDC, token],
 
-    case TOKENS.WETH:
+    [USDC, TOKENS.WETH, token],
 
-      return {
+    [USDC, TOKENS.WMATIC, token],
 
-        buyRouter:
-          QUICK,
+    [USDC, TOKENS.DAI, token],
 
-        sellRouter:
-          SUSHI,
+    [USDC, TOKENS.USDT, token]
+  ];
+}
 
-        pathToToken: [
-          USDC,
-          TOKENS.WMATIC,
-          TOKENS.WETH
-        ],
+function buildSellPaths(token) {
 
-        pathToUSDC: [
-          TOKENS.WETH,
-          TOKENS.WMATIC,
-          USDC
-        ]
-      };
+  return [
 
-    case TOKENS.WBTC:
+    [token, USDC],
 
-      return {
+    [token, TOKENS.WETH, USDC],
 
-        buyRouter:
-          QUICK,
+    [token, TOKENS.WMATIC, USDC],
 
-        sellRouter:
-          SUSHI,
+    [token, TOKENS.DAI, USDC],
 
-        pathToToken: [
-          USDC,
-          TOKENS.WETH,
-          TOKENS.WBTC
-        ],
+    [token, TOKENS.USDT, USDC]
+  ];
+}
 
-        pathToUSDC: [
-          TOKENS.WBTC,
-          TOKENS.WETH,
-          USDC
-        ]
-      };
+/* =========================================================
+   QUOTE
+========================================================= */
 
-    case TOKENS.DAI:
+async function quote(
+  router,
+  amount,
+  path
+) {
 
-      return {
+  try {
 
-        buyRouter:
-          QUICK,
+    const out =
+      await routerContracts[
+        router
+      ].getAmountsOut(
+        amount,
+        path
+      );
 
-        sellRouter:
-          SUSHI,
+    return out.at(-1);
 
-        pathToToken: [
-          USDC,
-          TOKENS.USDT,
-          TOKENS.DAI
-        ],
+  } catch {
 
-        pathToUSDC: [
-          TOKENS.DAI,
-          TOKENS.USDT,
-          USDC
-        ]
-      };
-
-    case TOKENS.USDT:
-
-      return {
-
-        buyRouter:
-          QUICK,
-
-        sellRouter:
-          SUSHI,
-
-        pathToToken: [
-          USDC,
-          TOKENS.WMATIC,
-          TOKENS.USDT
-        ],
-
-        pathToUSDC: [
-          TOKENS.USDT,
-          TOKENS.WMATIC,
-          USDC
-        ]
-      };
-
-    default:
-
-      return {
-
-        buyRouter:
-          QUICK,
-
-        sellRouter:
-          SUSHI,
-
-        pathToToken: [
-          USDC,
-          token
-        ],
-
-        pathToUSDC: [
-          token,
-          USDC
-        ]
-      };
+    return null;
   }
 }
 
 /* =========================================================
-   VAULT BALANCE
+   VAULT
 ========================================================= */
 
 async function getVaultBalance() {
@@ -330,92 +345,72 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   MICRO DETECTION
+   FAST MICRO FINDER
 ========================================================= */
 
-async function detectMicroSpread(
+async function fastMicroFinder(
   token
 ) {
 
   try {
 
-    pipeline(
-      "STAGE 1",
-      "MICRO DETECTION"
-    );
+    for (const buy of Object.values(routers)) {
 
-    const vaultBal =
-      await getVaultBalance();
+      for (const sell of Object.values(routers)) {
 
-    /*
-    SMALL VAULT ADAPTIVE SIZE
-    */
+        if (buy === sell)
+          continue;
 
-    const amount =
+        for (const buyPath of buildBuyPaths(token)) {
 
-      vaultBal <
-      ethers.parseUnits("1", 6)
+          const buyOut =
+            await quote(
+              buy,
+              MICRO_PROBE,
+              buyPath
+            );
 
-        ? vaultBal / 2n
+          if (!buyOut)
+            continue;
 
-        : vaultBal / 5n;
+          for (const sellPath of buildSellPaths(token)) {
 
-    if (amount <= 0n)
-      return null;
+            const sellOut =
+              await quote(
+                sell,
+                buyOut,
+                sellPath
+              );
 
-    const route =
-      makeRoute(token);
+            if (!sellOut)
+              continue;
 
-    const result =
-      await arb.simulateArbitrageProfit.staticCall(
+            const profit =
+              sellOut -
+              MICRO_PROBE;
 
-        route.buyRouter,
+            if (
+              profit >
+              MICRO_THRESHOLD
+            ) {
 
-        route.sellRouter,
+              return {
 
-        amount,
+                profit,
 
-        route.pathToToken,
+                buy,
 
-        route.pathToUSDC
-      );
+                sell,
 
-    const estimatedFinal =
-      result[0];
+                buyPath,
 
-    const estimatedProfit =
-      result[1];
-
-    console.log(
-      `\n📊 Detection Size:\n${fmt(amount)}`
-    );
-
-    console.log(
-      `\n📊 Detection Profit:\n${fmt(estimatedProfit)}`
-    );
-
-    if (
-      estimatedProfit >
-      MICRO_THRESHOLD
-    ) {
-
-      console.log(
-        "\n✅ Micro spread visible"
-      );
-
-      return {
-
-        amount,
-
-        estimatedFinal,
-
-        estimatedProfit
-      };
+                sellPath
+              };
+            }
+          }
+        }
+      }
     }
-
-    console.log(
-      "\n💤 No spread"
-    );
 
     return null;
 
@@ -443,17 +438,23 @@ async function runDepthAnalysis(
     const vaultBal =
       await getVaultBalance();
 
-    console.log(
-      `\n💰 Vault: ${fmt(vaultBal)} USDC`
-    );
-
-    const spread =
-      await detectMicroSpread(
+    const micro =
+      await fastMicroFinder(
         token
       );
 
-    if (!spread)
+    if (!micro) {
+
       return null;
+    }
+
+    console.log(
+      "\n⚡ FAST MICRO SPREAD FOUND"
+    );
+
+    console.log(
+      `\n📊 Micro Profit:\n${fmt(micro.profit)}`
+    );
 
     console.log(
       "\n📡 Fast spread detected..."
@@ -464,12 +465,20 @@ async function runDepthAnalysis(
       "DEPTH ANALYSIS"
     );
 
-    const route =
-      makeRoute(token);
+    const route = {
 
-    /*
-    SMALL VAULT DEPTH SEARCH
-    */
+      buyRouter:
+        micro.buy,
+
+      sellRouter:
+        micro.sell,
+
+      pathToToken:
+        micro.buyPath,
+
+      pathToUSDC:
+        micro.sellPath
+    };
 
     const candidateSizes = [
 
@@ -477,7 +486,16 @@ async function runDepthAnalysis(
 
       vaultBal,
 
-      vaultBal * 2n
+      vaultBal * 5n,
+
+      vaultBal * 20n,
+
+      vaultBal * 100n,
+
+      ethers.parseUnits(
+        "125",
+        6
+      )
 
     ].filter(
       x => x > 0n
@@ -550,33 +568,27 @@ async function runDepthAnalysis(
       "EXECUTION VALIDATION"
     );
 
-    console.log(
-      "\n📡 Running execution simulation..."
-    );
-
     const deadline =
       Math.floor(
         Date.now() / 1000
       ) + 120;
 
-    /*
-    STATIC PASS
-    */
+    await arb
+      .executeBestFlashLoanArbitrage
+      .staticCall(
 
-    await arb.executeBestFlashLoanArbitrage.staticCall(
+        route.buyRouter,
 
-      route.buyRouter,
+        route.sellRouter,
 
-      route.sellRouter,
+        [bestSize],
 
-      [bestSize],
+        route.pathToToken,
 
-      route.pathToToken,
+        route.pathToUSDC,
 
-      route.pathToUSDC,
-
-      deadline
-    );
+        deadline
+      );
 
     console.log(
       "\n✅ Static simulation passed"
@@ -601,11 +613,7 @@ async function runDepthAnalysis(
       slippage
     };
 
-  } catch (err) {
-
-    console.log(
-      "\n❌ Static simulation rejected"
-    );
+  } catch {
 
     return null;
   }
@@ -615,7 +623,10 @@ async function runDepthAnalysis(
    EXECUTION
 ========================================================= */
 
-async function execute(signal) {
+async function execute(
+  signal,
+  tokenName
+) {
 
   try {
 
@@ -690,10 +701,12 @@ async function execute(signal) {
 
     const growth =
       before > 0n
+
         ? (
             Number(realizedProfit) /
             Number(before)
           ) * 100
+
         : 0;
 
     console.log(
@@ -730,7 +743,27 @@ async function execute(signal) {
 }
 
 /* =========================================================
-   MAIN LOOP
+   SCAN TASKS
+========================================================= */
+
+const scanTasks = [];
+
+for (
+  const [name, token]
+  of Object.entries(TOKENS)
+) {
+
+  if (name === "USDC")
+    continue;
+
+  scanTasks.push({
+    name,
+    token
+  });
+}
+
+/* =========================================================
+   MAIN
 ========================================================= */
 
 async function main() {
@@ -760,111 +793,73 @@ async function main() {
     );
   }
 
-  while (true) {
+  let taskIndex = 0;
 
-    try {
+  async function worker() {
 
-      const scans =
-        await Promise.all(
+    while (true) {
 
-          Object.entries(TOKENS)
+      try {
 
-            .filter(
-              ([k]) => k !== "USDC"
-            )
+        const task =
+          scanTasks[
+            taskIndex++
+            % scanTasks.length
+          ];
 
-            .map(
-              ([name, token]) =>
-                runDepthAnalysis(
-                  name,
-                  token
-                )
-            )
-        );
+        const signal =
+          await runDepthAnalysis(
 
-      const valid =
-        scans.filter(Boolean);
+            task.name,
 
-      if (
-        valid.length === 0
-      ) {
+            task.token
+          );
 
-        console.log(
-          "\n💤 No opportunities"
-        );
+        if (
+          signal &&
+          signal.profit >=
+          EXECUTION_THRESHOLD
+        ) {
 
-        await sleep(
-          LOOP_DELAY
-        );
+          console.log(
+            "\n🏆 BEST SIGNAL"
+          );
 
-        continue;
-      }
+          console.log(
+            `\nTOKEN:\n${task.name}`
+          );
 
-      const best =
-        valid.reduce(
+          console.log(
+            `\nPROFIT:\n${fmt(signal.profit)}`
+          );
 
-          (a, b) =>
-            b.profit > a.profit
-              ? b
-              : a
-        );
+          console.log(
+            `\nSIZE:\n${fmt(signal.size)}`
+          );
 
-      console.log(
-        "\n🏆 BEST SIGNAL"
-      );
+          await execute(
+            signal,
+            task.name
+          );
+        }
 
-      console.log(
-        `\nTOKEN:\n${
-          Object.entries(TOKENS)
-            .find(
-              ([, v]) =>
-                v === best.token
-            )?.[0] || best.token
-        }`
-      );
+      } catch {}
 
-      console.log(
-        `\nPROFIT:\n${fmt(best.profit)}`
-      );
-
-      console.log(
-        `\nSIZE:\n${fmt(best.size)}`
-      );
-
-      /*
-      EXECUTE
-      */
-
-      if (
-        best.profit >=
-        EXECUTION_THRESHOLD
-      ) {
-
-        await execute(best);
-
-      } else {
-
-        console.log(
-          "\n🛑 Profit below execution threshold"
-        );
-      }
-
-    } catch (err) {
-
-      console.log(
-        "\n❌ LOOP ERROR"
-      );
-
-      console.log(
-        err.shortMessage ||
-        err.message
+      await sleep(
+        LOOP_DELAY
       );
     }
-
-    await sleep(
-      LOOP_DELAY
-    );
   }
+
+  await Promise.all(
+
+    Array.from(
+
+      { length: WORKER_COUNT },
+
+      worker
+    )
+  );
 }
 
 /* =========================================================
