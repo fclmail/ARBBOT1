@@ -1,863 +1,208 @@
-import dotenv from "dotenv";
+import "dotenv/config";
 import { ethers } from "ethers";
 
-dotenv.config();
+/* ================= RPC ================= */
 
-/* =========================================================
-   ENV
-========================================================= */
+const RPC = "https://polygon-bor-rpc.publicnode.com";
+const provider = new ethers.JsonRpcProvider(RPC);
+
+/* ================= KEY LOADING ================= */
 
 const PRIVATE_KEY =
+  process.env.PRIVATE_KEY ||
   process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY;
+  process.env.SECRET_KEY;
 
 if (!PRIVATE_KEY) {
-  throw new Error("Missing PRIVATE_KEY");
+  console.log("❌ PRIVATE KEY MISSING");
+  console.log("👉 Set PRIVATE_KEY in environment / GitHub Secrets");
+  process.exit(1);
 }
 
-/* =========================================================
-   RPC
-========================================================= */
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-const RPC =
-  "https://polygon-bor-rpc.publicnode.com";
-
-const provider =
-  new ethers.JsonRpcProvider(RPC);
-
-const wallet =
-  new ethers.Wallet(
-    PRIVATE_KEY,
-    provider
-  );
-
-/* =========================================================
-   CONTRACT
-========================================================= */
+/* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
   "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-/* =========================================================
-   ABI
-========================================================= */
-
-const abi = [
-
-  "function owner() view returns(address)",
-
-  "function minimumProfitUSDC() view returns(uint256)",
-
-  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
-
-  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
-
-  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
-
+const ABI = [
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns (tuple(uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
+  "function minimumProfitUSDC() view returns (uint256)"
 ];
 
-const arb =
-  new ethers.Contract(
-    CONTRACT_ADDRESS,
-    abi,
-    wallet
-  );
+const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
 
-/* =========================================================
-   TOKENS
-========================================================= */
+/* ================= ROUTERS ================= */
+
+const QUICKSWAP = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHISWAP  = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+
+/* ================= TOKENS ================= */
 
 const TOKENS = {
-
-  WETH:
-    "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-
-  WMATIC:
-    "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-
-  DAI:
-    "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-
-  USDT:
-    "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-
-  WBTC:
-    "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-
-  USDC:
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  DAI:  "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
+  WMATIC:"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
 };
 
-const USDC =
-  TOKENS.USDC;
+// Token decimals mapping for proper display
+const TOKEN_DECIMALS = {
+  WETH: 18,
+  DAI: 18,
+  USDT: 6,
+  WBTC: 8,
+  WMATIC: 18
+};
 
-/* =========================================================
-   ROUTERS
-========================================================= */
+/* ================= USDC (for flash loan) ================= */
 
-const QUICK =
-  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+// The flash loan token - assuming USDC on Polygon
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";  // Polygon USDC
+const USDC_DECIMALS = 6;
 
-const SUSHI =
-  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+/* ================= CANDIDATE SIZES ================= */
 
-/* =========================================================
-   ERC20 ABI
-========================================================= */
-
-const ERC20_ABI = [
-  "function balanceOf(address) view returns(uint256)"
+const candidateSizes = [
+  ethers.parseUnits("25", USDC_DECIMALS),
+  ethers.parseUnits("50", USDC_DECIMALS),
+  ethers.parseUnits("100", USDC_DECIMALS),
+  ethers.parseUnits("250", USDC_DECIMALS),
+  ethers.parseUnits("500", USDC_DECIMALS)
 ];
 
-/* =========================================================
-   SETTINGS
-========================================================= */
+/* ================= LOGGING ================= */
 
-/*
-CURRENT VAULT:
-~0.05 USDC
-
-SETTINGS BELOW ARE TUNED
-FOR MICRO DETECTION VISIBILITY
-AND SUCCESSFUL STATIC VALIDATION
-WITH VERY SMALL CAPITAL
-*/
-
-const MICRO_THRESHOLD =
-  ethers.parseUnits(
-    "0.000001",
-    6
-  );
-
-const EXECUTION_THRESHOLD =
-  ethers.parseUnits(
-    "0.000001",
-    6
-  );
-
-const LOOP_DELAY =
-  2000;
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-const sleep = (ms) =>
-  new Promise(r => setTimeout(r, ms));
-
-const fmt = (x) =>
-  Number(
-    ethers.formatUnits(x, 6)
-  ).toFixed(6);
-
-function makeRoute(token) {
-
-  return {
-
-    buyRouter:
-      QUICK,
-
-    sellRouter:
-      SUSHI,
-
-    pathToToken: [
-      USDC,
-      token
-    ],
-
-    pathToUSDC: [
-      token,
-      USDC
-    ]
-  };
+function scanLog(token, profit, size, profitRaw) {
+  console.log(`🔎 SCANNING ${token}`);
+  console.log(`📊 Profit: ${profit.toFixed(6)} USDC`);
+  console.log(`⚡ Raw Profit: ${profitRaw.toString()}`);
+  console.log(`📐 SCALE: ${Math.floor(profit * 4)}x`);
+  console.log(`🚀 SIZE: ${ethers.formatUnits(size, USDC_DECIMALS)} USDC\n`);
 }
 
-function calcDepthScore(
-  profit,
-  size
-) {
+/* ================= ENGINE ================= */
 
-  if (size === 0n)
-    return 0;
-
-  const ratio =
-    Number(
-      (profit * 100000n) / size
-    );
-
-  return Math.min(
-    Math.max(ratio, 1),
-    99
-  );
-}
-
-function getSlippageLabel(
-  score
-) {
-
-  if (score >= 80)
-    return "LOW";
-
-  if (score >= 50)
-    return "MEDIUM";
-
-  return "HIGH";
-}
-
-/* =========================================================
-   VAULT BALANCE
-========================================================= */
-
-async function getVaultBalance() {
-
-  const usdc =
-    new ethers.Contract(
-      USDC,
-      ERC20_ABI,
-      provider
-    );
-
-  return await usdc.balanceOf(
-    CONTRACT_ADDRESS
-  );
-}
-
-/* =========================================================
-   PIPELINE LOGS
-========================================================= */
-
-function pipeline(stage, msg) {
-
-  console.log(
-    `\n📡 PIPELINE ${stage}: ${msg}`
-  );
-}
-
-/* =========================================================
-   ADAPTIVE MICRO DETECTION
-========================================================= */
-
-async function detectMicroSpread(
-  token
-) {
+async function start() {
+  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED\n");
+  console.log("📋 Configuration:");
+  console.log(`   Flash Loan Token: USDC (${USDC})`);
+  console.log(`   QuickSwap: ${QUICKSWAP}`);
+  console.log(`   SushiSwap: ${SUSHISWAP}\n`);
 
   try {
-
-    pipeline(
-      "STAGE 1",
-      "MICRO DETECTION"
-    );
-
-    const vaultBal =
-      await getVaultBalance();
-
-    /*
-    ADAPTIVE DETECTION SIZE
-
-    Small vault:
-    tiny scan
-
-    Large vault:
-    larger scan
-    */
-
-    let amount;
-
-    if (
-      vaultBal >
-      ethers.parseUnits("10", 6)
-    ) {
-
-      amount =
-        ethers.parseUnits("1", 6);
-
-    } else if (
-      vaultBal >
-      ethers.parseUnits("1", 6)
-    ) {
-
-      amount =
-        ethers.parseUnits(
-          "0.25",
-          6
-        );
-
-    } else {
-
-      /*
-      MICRO DETECTION
-      RESTORED
-      */
-
-      amount =
-        vaultBal / 100n;
-    }
-
-    if (amount <= 0n)
-      return null;
-
-    const route =
-      makeRoute(token);
-
-    const result =
-      await arb.simulateArbitrageProfit.staticCall(
-
-        route.buyRouter,
-
-        route.sellRouter,
-
-        amount,
-
-        route.pathToToken,
-
-        route.pathToUSDC
-      );
-
-    const estimatedFinal =
-      result[0];
-
-    const estimatedProfit =
-      result[1];
-
-    console.log(
-      `\n📊 Detection Size:\n${fmt(amount)}`
-    );
-
-    console.log(
-      `\n📊 Detection Profit:\n${fmt(estimatedProfit)}`
-    );
-
-    /*
-    MICRO VISIBILITY
-    */
-
-    if (
-      estimatedProfit >
-      MICRO_THRESHOLD
-    ) {
-
-      console.log(
-        "\n✅ Micro spread visible"
-      );
-
-      return {
-
-        amount,
-
-        estimatedFinal,
-
-        estimatedProfit
-      };
-    }
-
-    console.log(
-      "\n💤 No spread"
-    );
-
-    return null;
-
+    const minProfitRaw = await contract.minimumProfitUSDC();
+    const minProfit = Number(minProfitRaw) / 1e6;
+    console.log("💡 MIN PROFIT THRESHOLD:", minProfit, "USDC");
+    console.log("✅ CONTRACT VERIFIED\n");
   } catch (err) {
-
-    console.log(
-      "\n❌ Detection failed"
-    );
-
-    return null;
-  }
-}
-
-/* =========================================================
-   DEPTH ANALYSIS
-========================================================= */
-
-async function runDepthAnalysis(
-  name,
-  token
-) {
-
-  try {
-
-    console.log(
-      `\n🔎 SCANNING ${name}`
-    );
-
-    const vaultBal =
-      await getVaultBalance();
-
-    console.log(
-      `\n💰 Vault: ${fmt(vaultBal)} USDC`
-    );
-
-    /*
-    FAST DETECTION
-    */
-
-    const spread =
-      await detectMicroSpread(
-        token
-      );
-
-    if (!spread)
-      return null;
-
-    console.log(
-      "\n📡 Fast spread detected..."
-    );
-
-    pipeline(
-      "STAGE 2",
-      "DEPTH ANALYSIS"
-    );
-
-    console.log(
-      "\n📡 Running contract depth analysis..."
-    );
-
-    const route =
-      makeRoute(token);
-
-    /*
-    CONTINUOUS CONTRACT SIZING
-
-    NO FAKE MULTIPLIERS
-    */
-
-    const candidateSizes = [
-
-      vaultBal / 100n,
-
-      vaultBal / 2n,
-
-      vaultBal,
-
-      vaultBal * 2n,
-
-      vaultBal * 3n,
-
-      vaultBal * 5n
-
-    ].filter(
-      x => x > 0n
-    );
-
-    /*
-    CONTRACT PRIMARY SIGNAL
-    */
-
-    const best =
-      await arb.findBestFlashLoanSize.staticCall(
-
-        route.buyRouter,
-
-        route.sellRouter,
-
-        candidateSizes,
-
-        route.pathToToken,
-
-        route.pathToUSDC
-      );
-
-    const bestSize =
-      best.amountIn;
-
-    const estimatedFinal =
-      best.estimatedFinalUSDC;
-
-    const estimatedProfit =
-      best.estimatedProfit;
-
-    if (
-      estimatedProfit <=
-      MICRO_THRESHOLD
-    ) {
-
-      console.log(
-        "\n❌ No profitable depth"
-      );
-
-      return null;
-    }
-
-    const score =
-      calcDepthScore(
-        estimatedProfit,
-        bestSize
-      );
-
-    const slippage =
-      getSlippageLabel(
-        score
-      );
-
-    console.log(
-      `\n📊 Contract Optimal Size:\n${fmt(bestSize)}`
-    );
-
-    console.log(
-      `\n📊 Estimated Final:\n${fmt(estimatedFinal)}`
-    );
-
-    console.log(
-      `\n📊 Estimated Profit:\n${fmt(estimatedProfit)}`
-    );
-
-    console.log(
-      `\n⚡ Liquidity Depth Score: ${score}`
-    );
-
-    console.log(
-      `\n⚡ Slippage: ${slippage}`
-    );
-
-    /*
-    STATIC PASS #2
-    */
-
-    pipeline(
-      "STAGE 3",
-      "EXECUTION VALIDATION"
-    );
-
-    console.log(
-      "\n📡 Running execution simulation..."
-    );
-
-    const deadline =
-      Math.floor(
-        Date.now() / 1000
-      ) + 60;
-
-    try {
-
-      await arb.executeBestFlashLoanArbitrage.staticCall(
-
-        route.buyRouter,
-
-        route.sellRouter,
-
-        [bestSize],
-
-        route.pathToToken,
-
-        route.pathToUSDC,
-
-        deadline
-      );
-
-      console.log(
-        "\n✅ Static simulation passed"
-      );
-
-    } catch (err) {
-
-      console.log(
-        "\n❌ Static simulation rejected"
-      );
-
-      console.log(
-        "\nReason:"
-      );
-
-      console.log(
-        err.shortMessage ||
-        err.message
-      );
-
-      return null;
-    }
-
-    return {
-
-      token,
-
-      route,
-
-      size:
-        bestSize,
-
-      estimatedFinal,
-
-      profit:
-        estimatedProfit,
-
-      score,
-
-      slippage
-    };
-
-  } catch (err) {
-
-    console.log(
-      "\n❌ Depth analysis failed"
-    );
-
-    return null;
-  }
-}
-
-/* =========================================================
-   EXECUTION
-========================================================= */
-
-async function execute(signal) {
-
-  try {
-
-    pipeline(
-      "STAGE 4",
-      "LIVE BROADCAST"
-    );
-
-    console.log(
-      "\n🔥 EXECUTING FLASH LOAN"
-    );
-
-    const before =
-      await getVaultBalance();
-
-    const deadline =
-      Math.floor(
-        Date.now() / 1000
-      ) + 60;
-
-    console.log(
-      "\n📡 Sending transaction..."
-    );
-
-    const tx =
-      await arb.executeBestFlashLoanArbitrage(
-
-        signal.route.buyRouter,
-
-        signal.route.sellRouter,
-
-        [signal.size],
-
-        signal.route.pathToToken,
-
-        signal.route.pathToUSDC,
-
-        deadline,
-
-        {
-          gasLimit: 3000000
-        }
-      );
-
-    console.log(
-      `\n🚀 TX SENT:\n${tx.hash}`
-    );
-
-    console.log(
-      "\n⛓ Waiting confirmation..."
-    );
-
-    const receipt =
-      await tx.wait();
-
-    pipeline(
-      "STAGE 5",
-      "CONFIRMED"
-    );
-
-    console.log(
-      `\n✅ CONFIRMED BLOCK ${receipt.blockNumber}`
-    );
-
-    const after =
-      await getVaultBalance();
-
-    const realizedProfit =
-      after > before
-        ? after - before
-        : 0n;
-
-    const growth =
-      before > 0n
-        ? (
-            Number(realizedProfit) /
-            Number(before)
-          ) * 100
-        : 0;
-
-    console.log(
-      `\n💰 BEFORE:\n${fmt(before)}`
-    );
-
-    console.log(
-      `\n💰 AFTER:\n${fmt(after)}`
-    );
-
-    console.log(
-      `\n📈 PROFIT:\n${fmt(realizedProfit)}`
-    );
-
-    console.log(
-      "\n🏦 CONTRACT VAULT GROWTH:"
-    );
-
-    console.log(
-      `+${growth.toFixed(4)}%`
-    );
-
-  } catch (err) {
-
-    console.log(
-      "\n❌ EXECUTION FAILED"
-    );
-
-    console.log(
-      err.shortMessage ||
-      err.message
-    );
-  }
-}
-
-/* =========================================================
-   MAIN LOOP
-========================================================= */
-
-async function main() {
-
-  console.log(
-    "\n🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED"
-  );
-
-  const owner =
-    await arb.owner();
-
-  console.log(
-    `\n👤 OWNER:\n${owner}`
-  );
-
-  console.log(
-    `\n👤 WALLET:\n${wallet.address}`
-  );
-
-  if (
-    owner.toLowerCase() !==
-    wallet.address.toLowerCase()
-  ) {
-
-    throw new Error(
-      "Wallet is not contract owner"
-    );
+    console.log("❌ FAILED TO READ CONTRACT:", err.message);
+    process.exit(1);
   }
 
   while (true) {
-
     try {
+      await new Promise(r => setTimeout(r, 500));  // Increased delay
 
-      const scans =
-        await Promise.all(
+      let best = null;
 
-          Object.entries(TOKENS)
+      for (const [name, token] of Object.entries(TOKENS)) {
+        try {
+          // The path from flash loan token to target token
+          // USDC → targetToken (on DEX A)
+          const pathToToken = [USDC, token];
+          
+          // The path from target token back to flash loan token
+          // targetToken → USDC (on DEX B)
+          const pathToUSDC = [token, USDC];
 
-            .filter(
-              ([k]) => k !== "USDC"
-            )
+          console.log(`📡 Checking ${name}...`);
+          console.log(`   Path A (QuickSwap): ${pathToToken[0].slice(0,10)}... → ${pathToToken[1].slice(0,10)}...`);
+          console.log(`   Path B (SushiSwap): ${pathToUSDC[0].slice(0,10)}... → ${pathToUSDC[1].slice(0,10)}...`);
 
-            .map(
-              ([name, token]) =>
-                runDepthAnalysis(
-                  name,
-                  token
-                )
-            )
-        );
+          const res = await contract.findBestFlashLoanSize(
+            QUICKSWAP,
+            SUSHISWAP,
+            candidateSizes,
+            pathToToken,
+            pathToUSDC
+          );
 
-      const valid =
-        scans.filter(Boolean);
+          if (!res || res.amountIn === 0n) {
+            console.log(`   ⚠️ No valid pool found for ${name}\n`);
+            continue;
+          }
 
-      if (
-        valid.length === 0
-      ) {
+          const profit = Number(res.estimatedProfit) / 1e6;
+          const size = res.amountIn;
 
-        console.log(
-          "\n💤 No opportunities"
-        );
+          scanLog(name, profit, size, res.estimatedProfit);
 
-        await sleep(
-          LOOP_DELAY
-        );
+          if (!best || profit > best.profit) {
+            best = { name, token, profit, size, pathToToken, pathToUSDC };
+          }
+        } catch (err) {
+          console.log(`   ❌ Error checking ${name}: ${err.shortMessage || err.message}\n`);
+        }
+      }
 
+      if (!best) {
+        console.log("❌ NO VALID SIGNALS FOUND THIS ROUND");
+        console.log("🔎 CONTINUING SCAN...\n");
         continue;
       }
 
-      /*
-      CONTRACT PRIMARY SIGNAL
-      */
+      console.log("🏆 BEST SIGNAL");
+      console.log(`TOKEN: ${best.name}`);
+      console.log(`PROFIT: ${best.profit.toFixed(6)} USDC`);
+      console.log(`SIZE: ${ethers.formatUnits(best.size, USDC_DECIMALS)} USDC\n`);
 
-      const best =
-        valid.reduce(
-
-          (a, b) =>
-            b.profit > a.profit
-              ? b
-              : a
-        );
-
-      console.log(
-        "\n🏆 BEST SIGNAL"
-      );
-
-      console.log(
-        `\nTOKEN:\n${
-          Object.entries(TOKENS)
-            .find(
-              ([, v]) =>
-                v === best.token
-            )?.[0] || best.token
-        }`
-      );
-
-      console.log(
-        `\nPROFIT:\n${fmt(best.profit)}`
-      );
-
-      console.log(
-        `\nSIZE:\n${fmt(best.size)}`
-      );
-
-      /*
-      EXECUTION FILTER
-      */
-
-      if (
-        best.profit >=
-        EXECUTION_THRESHOLD
-      ) {
-
-        await execute(best);
-
-      } else {
-
-        console.log(
-          "\n🛑 Spread visible but below execution threshold"
-        );
+      if (best.profit <= minProfit) {
+        console.log("❌ PROFIT BELOW THRESHOLD");
+        console.log(`   Required: ${minProfit.toFixed(6)} USDC`);
+        console.log(`   Got: ${best.profit.toFixed(6)} USDC`);
+        console.log("🔎 CONTINUING SCAN...\n");
+        continue;
       }
 
-    } catch (err) {
+      console.log("✅ PROFIT ABOVE THRESHOLD");
+      console.log("🔥 EXECUTING ARBITRAGE\n");
 
-      console.log(
-        "\n❌ LOOP ERROR"
-      );
+      try {
+        const tx = await contract.executeBestFlashLoanArbitrage(
+          QUICKSWAP,
+          SUSHISWAP,
+          candidateSizes,
+          best.pathToToken,
+          best.pathToUSDC,
+          Math.floor(Date.now() / 1000) + 120  // 2 minute deadline
+        );
 
-      console.log(
-        err.shortMessage ||
-        err.message
-      );
+        console.log("📡 TRANSACTION SENT");
+        console.log(`TX HASH: ${tx.hash}\n`);
+
+        const receipt = await tx.wait();
+
+        console.log("✅ TRANSACTION CONFIRMED");
+        console.log(`   BLOCK: ${receipt.blockNumber}`);
+        console.log(`   GAS USED: ${receipt.gasUsed.toString()}`);
+        console.log("🔎 CONTINUING SCAN...\n");
+
+      } catch (txError) {
+        console.log("❌ TRANSACTION FAILED");
+        console.log(`   ${txError.shortMessage || txError.message}`);
+        console.log("🔎 CONTINUING SCAN...\n");
+      }
+
+    } catch (e) {
+      console.log("❌ CYCLE ERROR");
+      console.log(`   ${e.shortMessage || e.message}`);
+      console.log("🔎 CONTINUING SCAN...\n");
     }
-
-    await sleep(
-      LOOP_DELAY
-    );
   }
 }
 
-/* =========================================================
-   START
-========================================================= */
-
-main().catch(console.error);
+start();
