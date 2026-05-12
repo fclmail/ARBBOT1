@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -91,7 +90,7 @@ const erc20Abi = [
 ];
 
 /* =========================================================
-   CONTRACT INSTANCE
+   CONTRACT
 ========================================================= */
 
 const arb =
@@ -122,8 +121,8 @@ const TOKENS = {
   WBTC:
     "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
 
-  AAVE:
-    "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+  QUICK:
+    "0x831753dd7087cac61ab5644b308642cc1c33dc13",
 
   LINK:
     "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
@@ -134,8 +133,8 @@ const TOKENS = {
   CRV:
     "0x172370d5cd63279efa6d502dab29171933a610af",
 
-  QUICK:
-    "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+  AAVE:
+    "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
 
   SHIB:
     "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
@@ -209,9 +208,9 @@ const EXECUTION_THRESHOLD =
     6
   );
 
-const WORKER_COUNT = 32;
-
 const LOOP_DELAY = 5;
+
+const WORKER_COUNT = 24;
 
 let EXECUTING = false;
 
@@ -351,7 +350,7 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   FAST MICRO DETECTOR
+   FAST MICRO DETECTION
 ========================================================= */
 
 async function detectFastSpread(
@@ -432,6 +431,117 @@ async function detectFastSpread(
 }
 
 /* =========================================================
+   LIQUIDITY CURVE SCALER
+========================================================= */
+
+async function testLiquidityCurve(
+  spread
+) {
+
+  console.log(
+    "\n📊 Testing Liquidity Curve..."
+  );
+
+  const candidateSizes = [];
+
+  let size =
+    ethers.parseUnits(
+      "0.02",
+      6
+    );
+
+  for(let i=0;i<16;i++){
+
+    candidateSizes.push(size);
+
+    size = size * 2n;
+  }
+
+  let best = {
+
+    amountIn: 0n,
+
+    estimatedFinalUSDC: 0n,
+
+    estimatedProfit: 0n
+  };
+
+  for(
+    const testSize
+    of candidateSizes
+  ){
+
+    try {
+
+      const result =
+        await arb
+        .simulateArbitrageProfit(
+
+          spread.buy,
+
+          spread.sell,
+
+          testSize,
+
+          spread.buyPath,
+
+          spread.sellPath
+        );
+
+      const estimatedFinal =
+        result[0];
+
+      const estimatedProfit =
+        result[1];
+
+      console.log(
+
+        `SIZE ${fmt(testSize)} → PROFIT ${fmt(estimatedProfit)}`
+      );
+
+      if(
+        estimatedProfit >
+        best.estimatedProfit
+      ){
+
+        best = {
+
+          amountIn:
+            testSize,
+
+          estimatedFinalUSDC:
+            estimatedFinal,
+
+          estimatedProfit:
+            estimatedProfit
+        };
+      }
+
+      /*
+      LIQUIDITY COLLAPSE STOP
+      */
+
+      if(
+
+        best.estimatedProfit > 0n &&
+
+        estimatedProfit <
+        best.estimatedProfit / 2n
+      ){
+
+        break;
+      }
+
+    } catch {
+
+      break;
+    }
+  }
+
+  return best;
+}
+
+/* =========================================================
    DEPTH ANALYSIS
 ========================================================= */
 
@@ -467,28 +577,26 @@ async function runDepthAnalysis(
       "DEPTH ANALYSIS"
     );
 
-    const candidateSizes = [
-
-      MICRO_PROBE,
-
-      MICRO_PROBE * 2n,
-
-      MICRO_PROBE * 5n
-    ];
+    /*
+    CONTINUOUS LIQUIDITY CURVE
+    */
 
     const best =
-      await arb.findBestFlashLoanSize(
-
-        spread.buy,
-
-        spread.sell,
-
-        candidateSizes,
-
-        spread.buyPath,
-
-        spread.sellPath
+      await testLiquidityCurve(
+        spread
       );
+
+    if(
+      best.estimatedProfit <
+      EXECUTION_THRESHOLD
+    ){
+
+      return null;
+    }
+
+    console.log(
+      "\n🏆 OPTIMAL DEPTH FOUND"
+    );
 
     const bestSize =
       best.amountIn;
@@ -498,25 +606,6 @@ async function runDepthAnalysis(
 
     const estimatedProfit =
       best.estimatedProfit;
-
-    if (
-      estimatedProfit <
-      EXECUTION_THRESHOLD
-    ) {
-
-      return null;
-    }
-
-    const score =
-      calcDepthScore(
-        estimatedProfit,
-        bestSize
-      );
-
-    const slippage =
-      getSlippageLabel(
-        score
-      );
 
     console.log(
       `\n📊 Contract Optimal Size:\n${fmt(bestSize)}`
@@ -529,6 +618,17 @@ async function runDepthAnalysis(
     console.log(
       `\n📊 Estimated Profit:\n${fmt(estimatedProfit)}`
     );
+
+    const score =
+      calcDepthScore(
+        estimatedProfit,
+        bestSize
+      );
+
+    const slippage =
+      getSlippageLabel(
+        score
+      );
 
     console.log(
       `\n⚡ Liquidity Depth Score: ${score}`
@@ -543,13 +643,9 @@ async function runDepthAnalysis(
       "EXECUTION VALIDATION"
     );
 
-    /*
-    JS-ONLY PRECHECK
-    NO STATICCALL FLASHLOAN
-    */
-
     const recheck =
-      await arb.simulateArbitrageProfit(
+      await arb
+      .simulateArbitrageProfit(
 
         spread.buy,
 
@@ -565,10 +661,10 @@ async function runDepthAnalysis(
     const liveProfit =
       recheck[1];
 
-    if (
+    if(
       liveProfit <
       EXECUTION_THRESHOLD
-    ) {
+    ){
 
       console.log(
         "\n❌ Spread vanished"
@@ -657,7 +753,8 @@ async function execute(
     );
 
     const tx =
-      await arb.executeBestFlashLoanArbitrage(
+      await arb
+      .executeBestFlashLoanArbitrage(
 
         signal.route.buyRouter,
 
@@ -672,7 +769,7 @@ async function execute(
         deadline,
 
         {
-          gasLimit: 3000000
+          gasLimit: 5000000
         }
       );
 
