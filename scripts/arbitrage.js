@@ -121,13 +121,13 @@ FOR SMALL VAULT EXECUTION
 
 const MICRO_THRESHOLD =
   ethers.parseUnits(
-    "0.0000001",
+    "0.00001",
     6
   );
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.0000001",
+    "0.00001",
     6
   );
 
