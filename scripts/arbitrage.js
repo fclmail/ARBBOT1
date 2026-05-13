@@ -18,7 +18,9 @@ if (!PRIVATE_KEY) {
 }
 
 const provider = new ethers.JsonRpcProvider(RPC);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+const wallet =
+  new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* =========================================================
    TOKENS
@@ -34,73 +36,53 @@ const TOKENS = {
 };
 
 /* =========================================================
-   PAIRS
+   TOKEN DECIMALS
+========================================================= */
+
+const TOKEN_DECIMALS = {
+  [TOKENS.USDC.toLowerCase()]: 6,
+  [TOKENS.WETH.toLowerCase()]: 18,
+  [TOKENS.WBTC.toLowerCase()]: 8,
+  [TOKENS.USDT.toLowerCase()]: 6,
+  [TOKENS.DAI.toLowerCase()]: 18,
+  [TOKENS.WMATIC.toLowerCase()]: 18
+};
+
+/* =========================================================
+   VALID PAIRS ONLY
 ========================================================= */
 
 const PAIRS = [
   {
     name: "USDC/WETH",
-    quickswap: "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670d",
-    sushiswap: "0x34965ba0ac2451A34a0471F04CCa3F990b8dea27",
-    token0: TOKENS.USDC,
-    token1: TOKENS.WETH
-  },
-
-  {
-    name: "USDC/WBTC",
-    quickswap: "0xf6Ae9970b1cdb55A3A1F5cfA6D36Bf6BfD4BAF2D",
-    sushiswap: "0x4B1F1e2435A9C96f7330FAea190Ef6A7C8D70001",
-    token0: TOKENS.USDC,
-    token1: TOKENS.WBTC
-  },
-
-  {
-    name: "USDC/USDT",
-    quickswap: "0x2CF7252E74036d1Da831d11089D326296e64a728",
-    sushiswap: "0x4B1F1e2435A9C96f7330FAea190Ef6A7C8D70002",
-    token0: TOKENS.USDC,
-    token1: TOKENS.USDT
-  },
-
-  {
-    name: "USDC/DAI",
-    quickswap: "0xf04adBF75cDFc5eD26eeA4bbbb991DB002036Bdd",
-    sushiswap: "0x4B1F1e2435A9C96f7330FAea190Ef6A7C8D70003",
-    token0: TOKENS.USDC,
-    token1: TOKENS.DAI
-  },
-
-  {
-    name: "USDC/WMATIC",
-    quickswap: "0x6e7a5FAFCEC6Bb1e78bAE2A1F0B612012BF14827",
-    sushiswap: "0x4B1F1e2435A9C96f7330FAea190Ef6A7C8D70004",
-    token0: TOKENS.USDC,
-    token1: TOKENS.WMATIC
+    quickswap:
+      "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670d",
+    sushiswap:
+      "0x34965ba0ac2451A34a0471F04CCa3F990b8dea27"
   }
 ];
 
 /* =========================================================
-   ABI
+   ABIs
 ========================================================= */
 
 const PAIR_ABI = [
-  "function token0() external view returns (address)",
-  "function token1() external view returns (address)",
-  "function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)"
+  "function token0() external view returns(address)",
+  "function token1() external view returns(address)",
+  "function getReserves() external view returns(uint112 reserve0,uint112 reserve1,uint32 blockTimestampLast)"
 ];
 
 const ERC20_ABI = [
-  "function balanceOf(address) external view returns (uint256)",
-  "function decimals() external view returns (uint8)"
+  "function balanceOf(address) external view returns(uint256)"
 ];
 
 /* =========================================================
    SETTINGS
 ========================================================= */
 
-const FLASH_LOAN_SIZE_USDC = 100;
-const MIN_SPREAD = 0.15;
-const MIN_PROFIT_USDC = 0.05;
+const MIN_SPREAD = 0.05;
+const FLASH_LOAN_USDC = 100;
+const LOOP_DELAY = 5000;
 
 let totalProfit = 0;
 
@@ -109,7 +91,7 @@ let totalProfit = 0;
 ========================================================= */
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function format(num) {
@@ -117,142 +99,266 @@ function format(num) {
 }
 
 function randomHash() {
-  const chars = "abcdef0123456789";
+
+  const chars =
+    "abcdef0123456789";
+
   let out = "0x";
 
   for (let i = 0; i < 64; i++) {
-    out += chars[Math.floor(Math.random() * chars.length)];
+
+    out +=
+      chars[
+        Math.floor(
+          Math.random() * chars.length
+        )
+      ];
   }
 
   return out;
 }
 
 /* =========================================================
-   SAFE RESERVES
+   VALIDATE PAIR
+========================================================= */
+
+async function isValidPair(address) {
+
+  try {
+
+    const code =
+      await provider.getCode(address);
+
+    return code !== "0x";
+
+  } catch {
+
+    return false;
+  }
+}
+
+/* =========================================================
+   RESERVES
 ========================================================= */
 
 async function getReserves(pairAddress) {
+
   try {
-    const pair = new ethers.Contract(
-      pairAddress,
-      PAIR_ABI,
-      provider
-    );
 
-    const token0 = await pair.token0();
-    const token1 = await pair.token1();
+    const pair =
+      new ethers.Contract(
+        pairAddress,
+        PAIR_ABI,
+        provider
+      );
 
-    const reserves = await pair.getReserves();
+    const token0 =
+      await pair.token0();
+
+    const token1 =
+      await pair.token1();
+
+    const reserves =
+      await pair.getReserves();
 
     return {
-      token0,
-      token1,
+      token0: token0.toLowerCase(),
+      token1: token1.toLowerCase(),
       r0: BigInt(reserves.reserve0),
       r1: BigInt(reserves.reserve1)
     };
 
-  } catch (e) {
+  } catch {
 
-    console.log(`⚠️ BAD PAIR: ${pairAddress}`);
+    console.log(
+      `⚠️ BAD PAIR: ${pairAddress}`
+    );
+
     return null;
   }
 }
 
 /* =========================================================
-   PRICE ENGINE
+   DECIMAL-NORMALIZED PRICE
 ========================================================= */
 
-function computePrice(reserve0, reserve1) {
+function computePrice(
+  reserve0,
+  reserve1,
+  decimals0,
+  decimals1
+) {
 
-  if (reserve0 === 0n || reserve1 === 0n) {
-    return 0;
-  }
+  const r0 =
+    Number(reserve0) /
+    10 ** decimals0;
 
-  return Number(reserve1) / Number(reserve0);
+  const r1 =
+    Number(reserve1) /
+    10 ** decimals1;
+
+  if (r0 === 0) return 0;
+
+  return r1 / r0;
 }
 
 /* =========================================================
-   AMM MATH
+   AMM SWAP
 ========================================================= */
 
-function getAmountOut(amountIn, reserveIn, reserveOut) {
+function getAmountOut(
+  amountIn,
+  reserveIn,
+  reserveOut
+) {
 
-  const amountInWithFee = amountIn * 997n;
+  const amountInWithFee =
+    amountIn * 997n;
 
   const numerator =
-    amountInWithFee * reserveOut;
+    amountInWithFee *
+    reserveOut;
 
   const denominator =
-    reserveIn * 1000n + amountInWithFee;
+    reserveIn * 1000n +
+    amountInWithFee;
 
   return numerator / denominator;
 }
 
 /* =========================================================
-   REALISTIC STATIC SIM
+   BOTH DIRECTIONS
 ========================================================= */
 
-function simulateArbitrage(
+function simulateBothDirections(
   amountIn,
-  reserveA0,
-  reserveA1,
-  reserveB0,
-  reserveB1
+  A0,
+  A1,
+  B0,
+  B1
 ) {
 
   try {
 
-    const buyToken =
+    /* =====================================
+       DIRECTION 1
+       BUY A -> SELL B
+    ===================================== */
+
+    const tokenOut1 =
       getAmountOut(
         amountIn,
-        reserveA0,
-        reserveA1
+        A0,
+        A1
       );
 
-    const sellBack =
+    const finalOut1 =
       getAmountOut(
-        buyToken,
-        reserveB1,
-        reserveB0
+        tokenOut1,
+        B1,
+        B0
       );
 
-    return sellBack;
+    const profit1 =
+      finalOut1 - amountIn;
+
+    /* =====================================
+       DIRECTION 2
+       BUY B -> SELL A
+    ===================================== */
+
+    const tokenOut2 =
+      getAmountOut(
+        amountIn,
+        B0,
+        B1
+      );
+
+    const finalOut2 =
+      getAmountOut(
+        tokenOut2,
+        A1,
+        A0
+      );
+
+    const profit2 =
+      finalOut2 - amountIn;
+
+    if (profit1 > profit2) {
+
+      return {
+        direction: "QUICKSWAP_TO_SUSHI",
+        profit: profit1
+      };
+    }
+
+    return {
+      direction: "SUSHI_TO_QUICKSWAP",
+      profit: profit2
+    };
 
   } catch {
-    return 0n;
+
+    return {
+      direction: "NONE",
+      profit: 0n
+    };
   }
 }
 
 /* =========================================================
-   SCORE ENGINE
+   SCORE
 ========================================================= */
 
-function computeScore(spread, liquidity) {
+function computeScore(
+  spread,
+  liquidity
+) {
 
   return Math.floor(
-    spread * Math.log10(liquidity + 1)
+    spread *
+    Math.log10(liquidity + 1)
   );
 }
 
 /* =========================================================
-   VAULT
+   CONFIDENCE
+========================================================= */
+
+function computeConfidence(score) {
+
+  if (score > 900) return 90;
+  if (score > 600) return 80;
+  if (score > 300) return 50;
+
+  return 25;
+}
+
+/* =========================================================
+   BALANCE
 ========================================================= */
 
 async function getVaultBalance() {
 
   try {
 
-    const usdc = new ethers.Contract(
-      TOKENS.USDC,
-      ERC20_ABI,
-      provider
-    );
+    const usdc =
+      new ethers.Contract(
+        TOKENS.USDC,
+        ERC20_ABI,
+        provider
+      );
 
-    const bal =
-      await usdc.balanceOf(wallet.address);
+    const balance =
+      await usdc.balanceOf(
+        wallet.address
+      );
 
     return Number(
-      ethers.formatUnits(bal, 6)
+      ethers.formatUnits(
+        balance,
+        6
+      )
     );
 
   } catch {
@@ -265,18 +371,19 @@ async function getVaultBalance() {
    EXECUTION MOCK
 ========================================================= */
 
-async function executeFlashLoan(profit) {
+async function executeTrade(
+  expectedProfit
+) {
 
-  const txHash = randomHash();
-
-  const currentBlock =
+  const block =
     await provider.getBlockNumber();
 
   return {
-    txHash,
-    block: currentBlock,
+    txHash: randomHash(),
+    block,
     realizedProfit:
-      profit * (0.96 + Math.random() * 0.03)
+      expectedProfit *
+      (0.95 + Math.random() * 0.04)
   };
 }
 
@@ -284,39 +391,86 @@ async function executeFlashLoan(profit) {
    SINGLE PAIR SCAN
 ========================================================= */
 
-async function scanPair(pairInfo) {
+async function scanPair(pairData) {
+
+  const validA =
+    await isValidPair(
+      pairData.quickswap
+    );
+
+  const validB =
+    await isValidPair(
+      pairData.sushiswap
+    );
+
+  if (!validA || !validB) {
+
+    console.log(
+      `⚠️ INVALID PAIR SET: ${pairData.name}`
+    );
+
+    return null;
+  }
 
   const pairA =
-    await getReserves(pairInfo.quickswap);
+    await getReserves(
+      pairData.quickswap
+    );
 
   const pairB =
-    await getReserves(pairInfo.sushiswap);
+    await getReserves(
+      pairData.sushiswap
+    );
 
   if (!pairA || !pairB) {
     return null;
   }
 
+  const decimals0 =
+    TOKEN_DECIMALS[
+      pairA.token0
+    ];
+
+  const decimals1 =
+    TOKEN_DECIMALS[
+      pairA.token1
+    ];
+
   const priceA =
-    computePrice(pairA.r0, pairA.r1);
+    computePrice(
+      pairA.r0,
+      pairA.r1,
+      decimals0,
+      decimals1
+    );
 
   const priceB =
-    computePrice(pairB.r0, pairB.r1);
-
-  if (!priceA || !priceB) {
-    return null;
-  }
+    computePrice(
+      pairB.r0,
+      pairB.r1,
+      decimals0,
+      decimals1
+    );
 
   const spread =
-    Math.abs(priceA - priceB);
+    Math.abs(
+      priceA - priceB
+    );
 
   const liquidity =
-    Number(pairA.r0 + pairA.r1);
+    Number(
+      pairA.r0 +
+      pairA.r1
+    );
 
   const score =
-    computeScore(spread, liquidity);
+    computeScore(
+      spread,
+      liquidity
+    );
 
   return {
-    pairInfo,
+    pairData,
     pairA,
     pairB,
     priceA,
@@ -332,75 +486,113 @@ async function scanPair(pairInfo) {
 
 async function runEngine() {
 
-  console.log("\n🚀 VAULT ENGINE STARTED");
+  console.log(
+    "\n🚀 VAULT ENGINE STARTED"
+  );
 
-  console.log("\n🔎 SCANNING ALL PAIRS...\n");
+  console.log(
+    "\n🔎 SCANNING ALL PAIRS..."
+  );
 
-  let bestOpportunity = null;
+  let best = null;
 
   for (const pair of PAIRS) {
 
-    const result = await scanPair(pair);
+    const result =
+      await scanPair(pair);
 
     if (!result) continue;
 
-    console.log(`PAIR: ${pair.name}`);
-    console.log(`DEXA_PRICE: ${format(result.priceA)}`);
-    console.log(`DEXB_PRICE: ${format(result.priceB)}`);
-    console.log(`SPREAD: ${format(result.spread)}\n`);
+    console.log(`\nPAIR: ${pair.name}`);
+
+    console.log(
+      `DEXA_PRICE: ${format(result.priceA)}`
+    );
+
+    console.log(
+      `DEXB_PRICE: ${format(result.priceB)}`
+    );
+
+    console.log(
+      `SPREAD: ${format(result.spread)}`
+    );
 
     if (
-      !bestOpportunity ||
-      result.score > bestOpportunity.score
+      !best ||
+      result.score > best.score
     ) {
-      bestOpportunity = result;
+      best = result;
     }
   }
 
-  if (!bestOpportunity) {
+  if (!best) {
 
-    console.log("❌ NO VALID PAIRS\n");
+    console.log(
+      "\n❌ NO VALID OPPORTUNITIES\n"
+    );
+
     return;
   }
 
-  const best = bestOpportunity;
+  console.log(
+    "\n🏆 BEST OPPORTUNITY FOUND"
+  );
 
-  console.log("🏆 BEST OPPORTUNITY FOUND\n");
-
-  console.log("PAIR_A:");
-  console.log(best.pairInfo.quickswap);
+  console.log("\nPAIR_A:");
+  console.log(
+    best.pairData.quickswap
+  );
 
   console.log("\nPAIR_B:");
-  console.log(best.pairInfo.sushiswap);
+  console.log(
+    best.pairData.sushiswap
+  );
 
-  console.log(`\nDEXA_PRICE: ${format(best.priceA)}`);
-  console.log(`DEXB_PRICE: ${format(best.priceB)}`);
+  console.log(
+    `\nDEXA_PRICE: ${format(best.priceA)}`
+  );
 
-  console.log(`\nSPREAD: ${format(best.spread)}`);
+  console.log(
+    `DEXB_PRICE: ${format(best.priceB)}`
+  );
 
-  console.log(`\n📊 PROFIT_SCORE: ${best.score}`);
+  console.log(
+    `\nSPREAD: ${format(best.spread)}`
+  );
+
+  console.log(
+    `\n📊 PROFIT_SCORE: ${best.score}`
+  );
 
   if (best.spread < MIN_SPREAD) {
 
-    console.log("\n❌ SPREAD TOO LOW\n");
+    console.log(
+      "\n❌ SPREAD TOO LOW\n"
+    );
+
     return;
   }
 
   const confidence =
-    best.score > 800 ? 80 :
-    best.score > 400 ? 50 :
-    25;
+    computeConfidence(
+      best.score
+    );
 
-  console.log(`\n🎯 CONFIDENCE: ${confidence}%`);
+  console.log(
+    `\n🎯 CONFIDENCE: ${confidence}%`
+  );
 
   const allocation =
-    FLASH_LOAN_SIZE_USDC * (confidence / 100);
+    FLASH_LOAN_USDC *
+    (confidence / 100);
 
   console.log(
     `\n💰 ALLOCATION: ${format(allocation)} USDC`
   );
 
-  console.log("\n🧪 STATIC SIMULATION\n");
+  console.log(
+    "\n🧪 STATIC SIMULATION"
+  );
 
   const amountIn =
     ethers.parseUnits(
@@ -408,8 +600,8 @@ async function runEngine() {
       6
     );
 
-  const simulated =
-    simulateArbitrage(
+  const sim =
+    simulateBothDirections(
       amountIn,
       best.pairA.r0,
       best.pairA.r1,
@@ -420,64 +612,90 @@ async function runEngine() {
   const simulatedProfit =
     Number(
       ethers.formatUnits(
-        simulated > amountIn
-          ? simulated - amountIn
+        sim.profit > 0n
+          ? sim.profit
           : 0n,
         6
       )
     );
 
   console.log(
+    `\nBEST_DIRECTION: ${sim.direction}`
+  );
+
+  console.log(
     `SIMULATED_PROFIT: ${format(simulatedProfit)}`
   );
 
-  if (simulatedProfit <= MIN_PROFIT_USDC) {
+  if (simulatedProfit <= 0) {
 
-    console.log("\n❌ STATIC FAILED\n");
+    console.log(
+      "\n❌ STATIC FAILED"
+    );
+
     return;
   }
 
-  console.log("\n✅ STATIC PASSED");
+  console.log(
+    "\n✅ STATIC PASSED"
+  );
 
-  console.log("\n🔥 EXECUTING FLASH LOAN\n");
+  console.log(
+    "\n🔥 EXECUTING FLASH LOAN"
+  );
 
   const vaultBefore =
     await getVaultBalance();
 
   const tx =
-    await executeFlashLoan(simulatedProfit);
+    await executeTrade(
+      simulatedProfit
+    );
 
   const vaultAfter =
-    vaultBefore + tx.realizedProfit;
+    vaultBefore +
+    tx.realizedProfit;
 
-  totalProfit += tx.realizedProfit;
+  totalProfit +=
+    tx.realizedProfit;
 
-  console.log("📡 TX:");
+  console.log("\n📡 TX:");
   console.log(tx.txHash);
 
   console.log("\n✅ BLOCK:");
   console.log(tx.block);
 
   console.log("\n🏦 VAULT_BEFORE:");
-  console.log(format(vaultBefore));
+  console.log(
+    format(vaultBefore)
+  );
 
   console.log("\n🏦 VAULT_AFTER:");
-  console.log(format(vaultAfter));
+  console.log(
+    format(vaultAfter)
+  );
 
   console.log("\n📈 NET_PROFIT:");
-  console.log(`${format(tx.realizedProfit)} USDC`);
+  console.log(
+    `${format(tx.realizedProfit)} USDC`
+  );
 
-  console.log("\n🏆 PROFITS ACCUMULATED");
-  console.log(`${format(totalProfit)} USDC\n`);
+  console.log(
+    "\n🏆 PROFITS ACCUMULATED"
+  );
+
+  console.log(
+    `${format(totalProfit)} USDC\n`
+  );
 }
 
 /* =========================================================
-   START
+   MAIN LOOP
 ========================================================= */
 
 async function main() {
 
-  console.log("👤 OWNER:");
+  console.log("\n👤 OWNER:");
   console.log(wallet.address);
 
   console.log("\n👤 WALLET:");
@@ -491,11 +709,14 @@ async function main() {
 
     } catch (e) {
 
-      console.log("\n❌ ENGINE ERROR:");
+      console.log(
+        "\n❌ ENGINE ERROR:"
+      );
+
       console.log(e.message);
     }
 
-    await sleep(5000);
+    await sleep(LOOP_DELAY);
   }
 }
 
