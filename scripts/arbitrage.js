@@ -215,7 +215,7 @@ const MAX_SIZE =
 
 const LOOP_DELAY = 750;
 
-const WORKER_COUNT = 1;
+const WORKER_COUNT = 16;
 
 let EXECUTING = false;
 
