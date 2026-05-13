@@ -12,10 +12,7 @@ const PRIVATE_KEY =
   process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {
-
-  throw new Error(
-    "Missing PRIVATE_KEY"
-  );
+  throw new Error("Missing PRIVATE_KEY");
 }
 
 /* =========================================================
@@ -34,23 +31,16 @@ const RPCS = [
 
 ];
 
-let rpcIndex = 0;
-
-function nextRPC() {
-
-  const rpc =
-    RPCS[rpcIndex];
-
-  rpcIndex =
-    (rpcIndex + 1) %
-    RPCS.length;
-
-  return rpc;
-}
-
 const provider =
-  new ethers.JsonRpcProvider(
-    nextRPC()
+  new ethers.FallbackProvider(
+
+    RPCS.map(
+
+      rpc =>
+        new ethers.JsonRpcProvider(
+          rpc
+        )
+    )
   );
 
 const wallet =
@@ -79,14 +69,15 @@ const arbAbi = [
   "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256) external",
 
   "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)"
-
 ];
 
 const routerAbi = [
 
   "function getAmountsOut(uint,address[]) view returns(uint[])",
 
-  "function factory() view returns(address)"
+  "function factory() view returns(address)",
+
+  "function swapExactTokensForTokens(uint,uint,address[],address,uint) returns(uint[])"
 ];
 
 const pairAbi = [
@@ -105,9 +96,7 @@ const factoryAbi = [
 
 const erc20Abi = [
 
-  "function balanceOf(address) view returns(uint256)",
-
-  "function decimals() view returns(uint8)"
+  "function balanceOf(address) view returns(uint256)"
 ];
 
 /* =========================================================
@@ -131,23 +120,11 @@ const TOKENS = {
   WBTC:
     "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
 
-  QUICK:
-    "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-
   LINK:
     "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
 
-  UNI:
-    "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-
   CRV:
     "0x172370d5cd63279efa6d502dab29171933a610af",
-
-  AAVE:
-    "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-
-  SHIB:
-    "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
 
   USDC:
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -166,16 +143,7 @@ const routers = {
     "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
 
   SushiSwap:
-    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-
-  Dfyn:
-    "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-
-  ApeSwap:
-    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-
-  Wault:
-    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
 const routerContracts =
@@ -208,30 +176,46 @@ const arb =
   );
 
 /* =========================================================
-   SETTINGS
+   SPOOKY CONSERVATIVE SETTINGS
 ========================================================= */
 
 const MICRO_PROBE =
   ethers.parseUnits(
-    "0.02",
+    "1",
     6
   );
 
 const MICRO_THRESHOLD =
   ethers.parseUnits(
-    "0.00005",
+    "0.01",
     6
   );
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.00010",
+    "0.02",
     6
   );
 
-const LOOP_DELAY = 25;
+/*
+VERY SMALL SAFE SIZE CAPS
+*/
 
-const WORKER_COUNT = 16;
+const MIN_SIZE =
+  ethers.parseUnits(
+    "1",
+    6
+  );
+
+const MAX_SIZE =
+  ethers.parseUnits(
+    "25",
+    6
+  );
+
+const LOOP_DELAY = 750;
+
+const WORKER_COUNT = 1;
 
 let EXECUTING = false;
 
@@ -266,9 +250,7 @@ function buildBuyPaths(token) {
 
     [USDC, token],
 
-    [USDC, TOKENS.WETH, token],
-
-    [USDC, TOKENS.WMATIC, token]
+    [USDC, TOKENS.WETH, token]
   ];
 }
 
@@ -278,14 +260,12 @@ function buildSellPaths(token) {
 
     [token, USDC],
 
-    [token, TOKENS.WETH, USDC],
-
-    [token, TOKENS.WMATIC, USDC]
+    [token, TOKENS.WETH, USDC]
   ];
 }
 
 /* =========================================================
-   CONSTANT PRODUCT MODEL
+   CONSTANT PRODUCT FORMULA
 ========================================================= */
 
 function getAmountOut(
@@ -310,7 +290,7 @@ function getAmountOut(
 }
 
 /* =========================================================
-   GET PAIR RESERVES
+   GET RESERVES
 ========================================================= */
 
 async function getPairReserves(
@@ -400,7 +380,7 @@ async function getPairReserves(
 }
 
 /* =========================================================
-   REAL RESERVE DEPTH MODELING
+   REAL RESERVE MODEL
 ========================================================= */
 
 async function reserveBasedQuote(
@@ -453,21 +433,60 @@ async function reserveBasedQuote(
 }
 
 /* =========================================================
-   VAULT BALANCE
+   ROUTER STATIC VALIDATION
 ========================================================= */
 
-async function getVaultBalance() {
+async function validateRouterExecution(
+  routerAddress,
+  amountIn,
+  path
+) {
 
-  const usdc =
-    new ethers.Contract(
-      USDC,
-      erc20Abi,
-      provider
+  try {
+
+    const router =
+      new ethers.Contract(
+        routerAddress,
+        routerAbi,
+        provider
+      );
+
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 300;
+
+    await router
+      .swapExactTokensForTokens
+      .staticCall(
+
+        amountIn,
+        0,
+        path,
+        CONTRACT_ADDRESS,
+        deadline
+      );
+
+    console.log(
+      "\n✅ ROUTER STATIC PASSED"
     );
 
-  return await usdc.balanceOf(
-    CONTRACT_ADDRESS
-  );
+    return true;
+
+  } catch (err) {
+
+    console.log(
+      "\n❌ ROUTER STATIC FAILED"
+    );
+
+    console.log(
+      err.shortMessage ||
+      err.reason ||
+      err.message
+    );
+
+    return false;
+  }
 }
 
 /* =========================================================
@@ -500,9 +519,7 @@ async function detectFastSpread(
           await reserveBasedQuote(
 
             buy,
-
             MICRO_PROBE,
-
             buyPath
           );
 
@@ -518,9 +535,7 @@ async function detectFastSpread(
             await reserveBasedQuote(
 
               sell,
-
               buyOut,
-
               sellPath
             );
 
@@ -539,13 +554,9 @@ async function detectFastSpread(
             return {
 
               buy,
-
               sell,
-
               buyPath,
-
               sellPath,
-
               profit
             };
           }
@@ -558,7 +569,7 @@ async function detectFastSpread(
 }
 
 /* =========================================================
-   LIQUIDITY CURVE
+   SAFE LIQUIDITY CURVE
 ========================================================= */
 
 async function testLiquidityCurve(
@@ -566,27 +577,25 @@ async function testLiquidityCurve(
 ) {
 
   console.log(
-    "\n📊 Testing Liquidity Curve..."
+    "\n📊 Testing Conservative Curve..."
   );
 
-  const candidateSizes = [];
+  const candidateSizes = [
 
-  let size =
-    ethers.parseUnits(
-      "0.02",
-      6
-    );
+    ethers.parseUnits("1", 6),
 
-  for (
-    let i = 0;
-    i < 20;
-    i++
-  ) {
+    ethers.parseUnits("2", 6),
 
-    candidateSizes.push(size);
+    ethers.parseUnits("5", 6),
 
-    size = size * 2n;
-  }
+    ethers.parseUnits("10", 6),
+
+    ethers.parseUnits("15", 6),
+
+    ethers.parseUnits("20", 6),
+
+    ethers.parseUnits("25", 6)
+  ];
 
   let best = {
 
@@ -598,9 +607,12 @@ async function testLiquidityCurve(
   };
 
   for (
-    const testSize
+    const size
     of candidateSizes
   ) {
+
+    if (size > MAX_SIZE)
+      continue;
 
     try {
 
@@ -608,9 +620,7 @@ async function testLiquidityCurve(
         await reserveBasedQuote(
 
           spread.buy,
-
-          testSize,
-
+          size,
           spread.buyPath
         );
 
@@ -621,9 +631,7 @@ async function testLiquidityCurve(
         await reserveBasedQuote(
 
           spread.sell,
-
           buyOut,
-
           spread.sellPath
         );
 
@@ -631,12 +639,11 @@ async function testLiquidityCurve(
         continue;
 
       const estimatedProfit =
-        finalOut -
-        testSize;
+        finalOut - size;
 
       console.log(
 
-        `SIZE ${fmt(testSize)} → PROFIT ${fmt(estimatedProfit)}`
+        `SIZE ${fmt(size)} → PROFIT ${fmt(estimatedProfit)}`
       );
 
       if (
@@ -648,8 +655,7 @@ async function testLiquidityCurve(
 
         best = {
 
-          amountIn:
-            testSize,
+          amountIn: size,
 
           estimatedFinalUSDC:
             finalOut,
@@ -658,20 +664,9 @@ async function testLiquidityCurve(
         };
       }
 
-      if (
-
-        best.estimatedProfit > 0n &&
-
-        estimatedProfit <
-        best.estimatedProfit / 2n
-      ) {
-
-        break;
-      }
-
     } catch {
 
-      break;
+      continue;
     }
   }
 
@@ -679,7 +674,7 @@ async function testLiquidityCurve(
 }
 
 /* =========================================================
-   FULL STATIC CHECK + REQUIRE DEBUG
+   FULL STATIC CHECK
 ========================================================= */
 
 async function fullStaticCheck(
@@ -688,59 +683,74 @@ async function fullStaticCheck(
 
   try {
 
-    const deadline =
-      Math.floor(
-        Date.now() / 1000
-      ) + 120;
-
     pipeline(
       "STAGE 3.5",
       "FULL STATIC EXECUTION"
     );
 
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 300;
+
     /*
-    ESTIMATE GAS FIRST
+    ROUTER VALIDATION
     */
 
-    try {
+    const buyValid =
+      await validateRouterExecution(
 
-      const gas =
-        await arb
-        .executeAaveFlashLoanArbitrage
-        .estimateGas(
+        signal.route.buyRouter,
 
-          signal.route.buyRouter,
+        signal.size,
 
-          signal.route.sellRouter,
-
-          signal.size,
-
-          signal.route.pathToToken,
-
-          signal.route.pathToUSDC,
-
-          deadline
-        );
-
-      console.log(
-        `\n⛽ ESTIMATED GAS:\n${gas}`
+        signal.route.pathToToken
       );
 
-    } catch (gasErr) {
+    if (!buyValid)
+      return false;
 
-      console.log(
-        "\n❌ GAS ESTIMATION FAILED"
+    const sellValid =
+      await validateRouterExecution(
+
+        signal.route.sellRouter,
+
+        signal.size,
+
+        signal.route.pathToUSDC
       );
 
-      console.log(
-        gasErr.shortMessage ||
-        gasErr.reason ||
-        gasErr.message
-      );
-    }
+    if (!sellValid)
+      return false;
 
     /*
-    STATIC CALL
+    GAS ESTIMATION
+    */
+
+    const gas =
+      await arb
+      .executeAaveFlashLoanArbitrage
+      .estimateGas(
+
+        signal.route.buyRouter,
+
+        signal.route.sellRouter,
+
+        signal.size,
+
+        signal.route.pathToToken,
+
+        signal.route.pathToUSDC,
+
+        deadline
+      );
+
+    console.log(
+      `\n⛽ GAS:\n${gas}`
+    );
+
+    /*
+    FULL STATIC
     */
 
     await arb
@@ -778,80 +788,6 @@ async function fullStaticCheck(
       err.message
     );
 
-    /*
-    REQUIRE DEBUGGING
-    */
-
-    const msg =
-      (
-        err.shortMessage ||
-        err.reason ||
-        err.message ||
-        ""
-      ).toLowerCase();
-
-    if (
-      msg.includes(
-        "profit below minimum"
-      )
-    ) {
-
-      console.log(
-        "\n🧠 FAILED REQUIRE: Profit below minimum"
-      );
-    }
-
-    else if (
-      msg.includes(
-        "flash loan unprofitable"
-      )
-    ) {
-
-      console.log(
-        "\n🧠 FAILED REQUIRE: Flash loan unprofitable"
-      );
-    }
-
-    else if (
-      msg.includes(
-        "insufficient vault balance"
-      )
-    ) {
-
-      console.log(
-        "\n🧠 FAILED REQUIRE: Insufficient vault balance"
-      );
-    }
-
-    else if (
-      msg.includes(
-        "invalid asset"
-      )
-    ) {
-
-      console.log(
-        "\n🧠 FAILED REQUIRE: Invalid asset"
-      );
-    }
-
-    else if (
-      msg.includes(
-        "only aave pool"
-      )
-    ) {
-
-      console.log(
-        "\n🧠 FAILED REQUIRE: Only Aave Pool"
-      );
-    }
-
-    else {
-
-      console.log(
-        "\n🧠 UNKNOWN REQUIRE FAILURE"
-      );
-    }
-
     return false;
   }
 }
@@ -883,11 +819,11 @@ async function runDepthAnalysis(
       return null;
 
     console.log(
-      "\n⚡ FAST MICRO SPREAD FOUND"
+      "\n⚡ MICRO SPREAD FOUND"
     );
 
     console.log(
-      `\n📊 Micro Profit:\n${fmt(spread.profit)}`
+      `\n📊 MICRO PROFIT:\n${fmt(spread.profit)}`
     );
 
     pipeline(
@@ -907,6 +843,10 @@ async function runDepthAnalysis(
 
     ) {
 
+      console.log(
+        "\n❌ BELOW EXECUTION THRESHOLD"
+      );
+
       return null;
     }
 
@@ -915,15 +855,11 @@ async function runDepthAnalysis(
     );
 
     console.log(
-      `\n📊 Contract Optimal Size:\n${fmt(best.amountIn)}`
+      `\n📊 SIZE:\n${fmt(best.amountIn)}`
     );
 
     console.log(
-      `\n📊 Estimated Final:\n${fmt(best.estimatedFinalUSDC)}`
-    );
-
-    console.log(
-      `\n📊 Estimated Profit:\n${fmt(best.estimatedProfit)}`
+      `\n📊 ESTIMATED PROFIT:\n${fmt(best.estimatedProfit)}`
     );
 
     pipeline(
@@ -959,12 +895,12 @@ async function runDepthAnalysis(
         best.estimatedProfit
     };
 
-    const staticPassed =
+    const passed =
       await fullStaticCheck(
         signal
       );
 
-    if (!staticPassed)
+    if (!passed)
       return null;
 
     return signal;
@@ -972,7 +908,7 @@ async function runDepthAnalysis(
   } catch (err) {
 
     console.log(
-      "\n❌ DEPTH ANALYSIS ERROR"
+      "\n❌ DEPTH ERROR"
     );
 
     console.log(
@@ -1010,7 +946,7 @@ async function execute(
     const deadline =
       Math.floor(
         Date.now() / 1000
-      ) + 120;
+      ) + 300;
 
     const tx =
       await arb
@@ -1029,7 +965,7 @@ async function execute(
         deadline,
 
         {
-          gasLimit: 5000000
+          gasLimit: 3000000
         }
       );
 
@@ -1076,6 +1012,24 @@ async function execute(
 }
 
 /* =========================================================
+   VAULT
+========================================================= */
+
+async function getVaultBalance() {
+
+  const usdc =
+    new ethers.Contract(
+      USDC,
+      erc20Abi,
+      provider
+    );
+
+  return await usdc.balanceOf(
+    CONTRACT_ADDRESS
+  );
+}
+
+/* =========================================================
    TASKS
 ========================================================= */
 
@@ -1102,7 +1056,7 @@ for (
 async function main() {
 
   console.log(
-    "\n🚀 RESERVE MODELER ENGINE STARTED"
+    "\n🚀 SPOOKY CONSERVATIVE ENGINE STARTED"
   );
 
   const owner =
@@ -1134,7 +1088,6 @@ async function main() {
           await runDepthAnalysis(
 
             task.name,
-
             task.token
           );
 
@@ -1196,11 +1149,8 @@ async function main() {
   }
 
   await Promise.all(
-
     Array.from(
-
       { length: WORKER_COUNT },
-
       worker
     )
   );
