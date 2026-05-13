@@ -21,13 +21,13 @@ if (!PRIVATE_KEY) {
 
 const RPCS = [
 
-  "https://polygon-bor-rpc.publicnode.com",
+  "https://polygon-bor-rpc.publicnode.com"
 
-  "https://polygon-rpc.com",
+//  "https://polygon-rpc.com",
 
-  "https://rpc.ankr.com/polygon",
+//  "https://rpc.ankr.com/polygon",
 
-  "https://1rpc.io/matic"
+//  "https://1rpc.io/matic"
 
 ];
 
