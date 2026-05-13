@@ -5,7 +5,7 @@ dotenv.config();
 
 /* ========================= CONFIG ========================= */
 
-const RPC = process.env.RPC || "https://polygon-rpc.com";
+const RPC = process.env.RPC || "https://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) throw new Error("Missing PRIVATE_KEY");
