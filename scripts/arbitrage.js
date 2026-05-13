@@ -7,8 +7,7 @@ dotenv.config();
    CONFIG
 ========================================================= */
 
-const RPC =   "https://polygon-bor-rpc.publicnode.com";
-
+const RPC = "https://polygon-rpc.com";
 const provider = new ethers.JsonRpcProvider(RPC);
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
