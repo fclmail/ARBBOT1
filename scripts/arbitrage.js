@@ -220,7 +220,7 @@ const EXECUTION_THRESHOLD =
 
 const LOOP_DELAY = 25;
 
-const WORKER_COUNT = 1;
+const WORKER_COUNT = 16;
 
 let EXECUTING = false;
 
