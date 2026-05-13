@@ -4,22 +4,36 @@ import { ethers } from "ethers";
 dotenv.config();
 
 /* =========================================================
-   CONFIG
+   RPC FAILOVER
 ========================================================= */
 
-const RPC =
-  process.env.RPC ||
-  "https://polygon-bor-rpc.publicnode.com";
+const RPCS = [
+  process.env.RPC_1 || "https://polygon-bor-rpc.publicnode.com",
+  process.env.RPC_2 || "https://polygon-rpc.com",
+  process.env.RPC_3 || "https://rpc-mainnet.matic.quiknode.pro"
+];
+
+let rpcIndex = 0;
+
+function createProvider() {
+  return new ethers.JsonRpcProvider(
+    RPCS[rpcIndex]
+  );
+}
+
+let provider = createProvider();
+
+/* =========================================================
+   WALLET
+========================================================= */
 
 const PRIVATE_KEY =
+  process.env.WALLET_PRIVATE_KEY ||
   process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {
   throw new Error("Missing PRIVATE_KEY");
 }
-
-const provider =
-  new ethers.JsonRpcProvider(RPC);
 
 const wallet =
   new ethers.Wallet(
@@ -28,49 +42,13 @@ const wallet =
   );
 
 /* =========================================================
-   ADDRESSES
+   CONTRACT
 ========================================================= */
-
-const USDC =
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
-const WETH =
-  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
-
-/*
-  REAL POLYGON LP PAIRS
-*/
-
-/* QUICKSWAP USDC/WETH */
-const PAIR_A =
-  "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670d";
-
-/* SUSHISWAP USDC/WETH */
-const PAIR_B =
-  "0x34965ba0ac2451A34a0471F04CCa3F990b8dea27";
-
-/*
-  DEPLOYED CONTRACT
-*/
 
 const CONTRACT_ADDRESS =
   "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-/* =========================================================
-   ABI
-========================================================= */
-
-const PAIR_ABI = [
-  "function getReserves() view returns (uint112,uint112,uint32)",
-  "function token0() view returns(address)",
-  "function token1() view returns(address)"
-];
-
-const ERC20_ABI = [
-  "function balanceOf(address) view returns(uint256)"
-];
-
-const ARB_ABI = [
+const arbAbi = [
   "function owner() view returns(address)",
 
   "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
@@ -78,23 +56,61 @@ const ARB_ABI = [
   "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
 ];
 
-/* =========================================================
-   CONTRACTS
-========================================================= */
-
 const arb =
   new ethers.Contract(
     CONTRACT_ADDRESS,
-    ARB_ABI,
+    arbAbi,
     wallet
   );
 
-const usdc =
-  new ethers.Contract(
-    USDC,
-    ERC20_ABI,
-    provider
-  );
+/* =========================================================
+   TOKENS
+========================================================= */
+
+const TOKENS = {
+  USDC:
+    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+
+  WETH:
+    "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
+};
+
+const USDC = TOKENS.USDC;
+const WETH = TOKENS.WETH;
+
+/* =========================================================
+   DEX ROUTERS
+========================================================= */
+
+const QUICKSWAP_ROUTER =
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+
+const SUSHISWAP_ROUTER =
+  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+
+/* =========================================================
+   LP PAIRS
+========================================================= */
+
+const QUICKSWAP_PAIR =
+  "0x853Ee4b2A13f8a742d64C8F088bE7bA2131f670d";
+
+const SUSHISWAP_PAIR =
+  "0x34965ba0ac2451A34a0471F04CCa3F990b8dea27";
+
+/* =========================================================
+   ABI
+========================================================= */
+
+const pairAbi = [
+  "function getReserves() view returns(uint112,uint112,uint32)",
+  "function token0() view returns(address)",
+  "function token1() view returns(address)"
+];
+
+const erc20Abi = [
+  "function balanceOf(address) view returns(uint256)"
+];
 
 /* =========================================================
    SETTINGS
@@ -102,129 +118,119 @@ const usdc =
 
 const LOOP_DELAY = 5000;
 
-const MIN_PROFIT =
-  50n * 10n ** 6n;
+const MIN_TRADE_SIZE =
+  100n * 10n ** 6n;
 
-const EXECUTION_LOCK = {
-  active: false
-};
+const MAX_TRADE_SIZE =
+  250000n * 10n ** 6n;
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function fmt(x) {
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
 
+function fmt6(x) {
   return Number(
-    ethers.formatUnits(x || 0n, 6)
+    ethers.formatUnits(x, 6)
   ).toFixed(2);
 }
 
-function sleep(ms) {
+async function rotateRPC() {
 
-  return new Promise(
-    r => setTimeout(r, ms)
-  );
-}
+  rpcIndex++;
 
-/* =========================================================
-   VALIDATE PAIR
-========================================================= */
-
-async function validatePair(address) {
-
-  const code =
-    await provider.getCode(address);
-
-  if (code === "0x") {
-
-    throw new Error(
-      `INVALID_PAIR:${address}`
-    );
+  if (rpcIndex >= RPCS.length) {
+    rpcIndex = 0;
   }
+
+  console.log(
+    `⚠️ ROTATING RPC -> ${RPCS[rpcIndex]}`
+  );
+
+  provider = createProvider();
 }
 
 /* =========================================================
-   NORMALIZED RESERVES
+   RESERVES
 ========================================================= */
 
-async function getReserves(
-  pairAddress,
-  baseToken
-) {
+async function getReserves(pairAddress) {
 
-  await validatePair(pairAddress);
+  try {
 
-  const pair =
-    new ethers.Contract(
-      pairAddress,
-      PAIR_ABI,
-      provider
-    );
+    const pair =
+      new ethers.Contract(
+        pairAddress,
+        pairAbi,
+        provider
+      );
 
-  const reserves =
-    await pair.getReserves();
+    const [r0, r1] =
+      await pair.getReserves();
 
-  const token0 =
-    await pair.token0();
+    const token0 =
+      await pair.token0();
 
-  const token1 =
-    await pair.token1();
-
-  const r0 =
-    BigInt(reserves[0]);
-
-  const r1 =
-    BigInt(reserves[1]);
-
-  /*
-    NORMALIZE ORDER
-  */
-
-  if (
-    token0.toLowerCase() ===
-    baseToken.toLowerCase()
-  ) {
+    const token1 =
+      await pair.token1();
 
     return {
-      reserveBase: r0,
-      reserveQuote: r1,
+      r0: BigInt(r0),
+      r1: BigInt(r1),
       token0,
       token1
     };
-  }
 
-  return {
-    reserveBase: r1,
-    reserveQuote: r0,
-    token0,
-    token1
-  };
+  } catch (e) {
+
+    console.log(
+      "⚠️ RESERVE ERROR:",
+      e.message
+    );
+
+    await rotateRPC();
+
+    return null;
+  }
 }
 
 /* =========================================================
-   PRICE MODEL
+   NORMALIZED PRICE
 ========================================================= */
 
 function computePrice(
-  reserveBase,
-  reserveQuote
+  reserveUSDC,
+  reserveWETH
 ) {
 
-  if (
-    reserveBase === 0n
-  ) {
+  const usdc =
+    Number(
+      ethers.formatUnits(
+        reserveUSDC,
+        6
+      )
+    );
+
+  const weth =
+    Number(
+      ethers.formatUnits(
+        reserveWETH,
+        18
+      )
+    );
+
+  if (weth === 0) {
     return 0;
   }
 
-  return Number(
-    (reserveQuote * 1000000n)
-      / reserveBase
-  ) / 1000000;
+  return usdc / weth;
 }
 
 /* =========================================================
-   SCORE MODEL
+   SCORE
 ========================================================= */
 
 function computeScore(
@@ -237,19 +243,22 @@ function computeScore(
   }
 
   return Math.floor(
-    spread *
-    Math.log10(
-      liquidity / 1e6
-    ) *
-    100
+    spread * (liquidity / 1_000_000)
   );
 }
 
 /* =========================================================
-   VAULT BALANCE
+   BALANCE
 ========================================================= */
 
 async function getVaultBalance() {
+
+  const usdc =
+    new ethers.Contract(
+      USDC,
+      erc20Abi,
+      provider
+    );
 
   return await usdc.balanceOf(
     CONTRACT_ADDRESS
@@ -257,65 +266,27 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   CONFIDENCE MODEL
+   CONFIDENCE
 ========================================================= */
 
-function confidenceLevel(score) {
-
-  if (score > 800) {
-    return 80;
-  }
-
-  if (score > 500) {
-    return 50;
-  }
-
-  if (score > 250) {
-    return 25;
-  }
-
-  return 10;
-}
-
-function allocationFromConfidence(
+function confidenceAllocation(
   confidence,
   vaultBalance
 ) {
 
-  return (
-    vaultBalance *
-    BigInt(confidence)
-  ) / 100n;
+  let allocation =
+    (vaultBalance * BigInt(confidence))
+    / 100n;
+
+  if (allocation > MAX_TRADE_SIZE) {
+    allocation = MAX_TRADE_SIZE;
+  }
+
+  return allocation;
 }
 
 /* =========================================================
-   GAS SETTINGS
-========================================================= */
-
-async function getGasSettings() {
-
-  const fee =
-    await provider.getFeeData();
-
-  return {
-    maxFeePerGas:
-      fee.maxFeePerGas ||
-      ethers.parseUnits(
-        "120",
-        "gwei"
-      ),
-
-    maxPriorityFeePerGas:
-      fee.maxPriorityFeePerGas ||
-      ethers.parseUnits(
-        "40",
-        "gwei"
-      )
-  };
-}
-
-/* =========================================================
-   STATIC SIMULATION
+   STATIC CHECK
 ========================================================= */
 
 async function staticSimulation(
@@ -326,29 +297,28 @@ async function staticSimulation(
 
     const result =
       await arb.simulateArbitrageProfit(
-        PAIR_A,
-        PAIR_B,
+        QUICKSWAP_ROUTER,
+        SUSHISWAP_ROUTER,
         amount,
         [USDC, WETH],
         [WETH, USDC]
       );
 
     return {
-      finalAmount:
-        result[0],
-
-      profit:
-        result[1]
+      success: true,
+      finalAmount: result[0],
+      profit: result[1]
     };
 
   } catch (e) {
 
     console.log(
-      "❌ STATIC ERROR:",
+      "\n❌ STATIC ERROR:",
       e.message
     );
 
     return {
+      success: false,
       finalAmount: 0n,
       profit: 0n
     };
@@ -359,310 +329,252 @@ async function staticSimulation(
    EXECUTION
 ========================================================= */
 
-async function executeTrade(
-  amount
-) {
+async function execute(signal) {
 
-  if (
-    EXECUTION_LOCK.active
-  ) {
+  console.log(
+    "\n🔥 EXECUTING FLASH LOAN"
+  );
 
-    console.log(
-      "⏳ EXECUTION LOCK"
+  const before =
+    await getVaultBalance();
+
+  const feeData =
+    await provider.getFeeData();
+
+  const tx =
+    await arb.executeBestFlashLoanArbitrage(
+      QUICKSWAP_ROUTER,
+      SUSHISWAP_ROUTER,
+      [signal.amount],
+      [USDC, WETH],
+      [WETH, USDC],
+      Math.floor(Date.now() / 1000) + 120,
+      {
+        gasLimit: 4000000,
+        maxFeePerGas:
+          feeData.maxFeePerGas,
+        maxPriorityFeePerGas:
+          feeData.maxPriorityFeePerGas
+      }
     );
 
-    return;
-  }
+  console.log(
+    "\n📡 TX:"
+  );
 
-  EXECUTION_LOCK.active = true;
+  console.log(tx.hash);
 
-  try {
+  const receipt =
+    await tx.wait();
 
-    console.log(
-      "\n🔥 EXECUTING FLASH LOAN\n"
-    );
+  const after =
+    await getVaultBalance();
 
-    const before =
-      await getVaultBalance();
+  const pnl =
+    after - before;
 
-    const gas =
-      await getGasSettings();
+  console.log(
+    "\n✅ BLOCK:"
+  );
 
-    const tx =
-      await arb.executeBestFlashLoanArbitrage(
-        PAIR_A,
-        PAIR_B,
-        [amount],
-        [USDC, WETH],
-        [WETH, USDC],
-        Math.floor(
-          Date.now() / 1000
-        ) + 120,
-        {
-          gasLimit: 3000000,
-          maxFeePerGas:
-            gas.maxFeePerGas,
-          maxPriorityFeePerGas:
-            gas.maxPriorityFeePerGas
-        }
-      );
+  console.log(
+    receipt.blockNumber
+  );
 
-    console.log(
-      "📡 TX:"
-    );
+  console.log(
+    "\n🏦 VAULT_BEFORE:"
+  );
 
-    console.log(
-      tx.hash
-    );
+  console.log(
+    fmt6(before)
+  );
 
-    const receipt =
-      await tx.wait();
+  console.log(
+    "\n🏦 VAULT_AFTER:"
+  );
 
-    const after =
-      await getVaultBalance();
+  console.log(
+    fmt6(after)
+  );
 
-    const net =
-      after - before;
+  console.log(
+    "\n📈 NET_PROFIT:"
+  );
 
-    console.log(
-      "\n✅ BLOCK:"
-    );
+  console.log(
+    `${fmt6(pnl)} USDC`
+  );
 
-    console.log(
-      receipt.blockNumber
-    );
-
-    console.log(
-      "\n🏦 VAULT_BEFORE:"
-    );
-
-    console.log(
-      fmt(before)
-    );
-
-    console.log(
-      "\n🏦 VAULT_AFTER:"
-    );
-
-    console.log(
-      fmt(after)
-    );
-
-    console.log(
-      "\n📈 NET_PROFIT:"
-    );
-
-    console.log(
-      `${fmt(net)} USDC`
-    );
-
-    console.log(
-      "\n🏆 PROFITS ACCUMULATED\n"
-    );
-
-  } catch (e) {
-
-    console.log(
-      "❌ EXECUTION FAILED:",
-      e.message
-    );
-
-  } finally {
-
-    EXECUTION_LOCK.active = false;
-  }
+  console.log(
+    "\n🏆 PROFITS ACCUMULATED"
+  );
 }
 
 /* =========================================================
    CORE ENGINE
 ========================================================= */
 
-async function runVaultEngine() {
+async function runEngine() {
 
-  try {
+  console.log(
+    "\n🚀 VAULT ENGINE STARTED"
+  );
 
-    /*
-      RESERVE SCAN
-    */
+  console.log(
+    "\n🔎 RESERVE_SCAN"
+  );
 
-    const A =
-      await getReserves(
-        PAIR_A,
-        USDC
-      );
+  console.log(
+    "\nPAIR_A:"
+  );
 
-    const B =
-      await getReserves(
-        PAIR_B,
-        USDC
-      );
+  console.log(
+    QUICKSWAP_PAIR
+  );
 
-    const priceA =
-      computePrice(
-        A.reserveBase,
-        A.reserveQuote
-      );
+  console.log(
+    "\nPAIR_B:"
+  );
 
-    const priceB =
-      computePrice(
-        B.reserveBase,
-        B.reserveQuote
-      );
+  console.log(
+    SUSHISWAP_PAIR
+  );
 
-    const spread =
-      Math.abs(
-        priceA - priceB
-      );
-
-    console.log(
-      "\n🚀 VAULT ENGINE STARTED\n"
+  const pairA =
+    await getReserves(
+      QUICKSWAP_PAIR
     );
 
-    console.log(
-      "🔎 RESERVE_SCAN\n"
+  const pairB =
+    await getReserves(
+      SUSHISWAP_PAIR
     );
 
-    console.log(
-      "PAIR_A:"
+  if (!pairA || !pairB) {
+    return;
+  }
+
+  const priceA =
+    computePrice(
+      pairA.r0,
+      pairA.r1
     );
 
-    console.log(
-      PAIR_A
+  const priceB =
+    computePrice(
+      pairB.r0,
+      pairB.r1
     );
 
-    console.log(
-      "\nPAIR_B:"
+  const spread =
+    Math.abs(
+      priceA - priceB
     );
 
-    console.log(
-      PAIR_B
+  console.log(
+    `\nDEXA_PRICE: ${priceA.toFixed(2)}`
+  );
+
+  console.log(
+    `DEXB_PRICE: ${priceB.toFixed(2)}`
+  );
+
+  console.log(
+    `\nSPREAD: ${spread.toFixed(2)}`
+  );
+
+  const liquidity =
+    Number(
+      pairA.r0 +
+      pairA.r1 +
+      pairB.r0 +
+      pairB.r1
     );
 
-    console.log(
-      `\nDEXA_PRICE: ${priceA.toFixed(2)}`
+  const score =
+    computeScore(
+      spread,
+      liquidity
     );
 
-    console.log(
-      `DEXB_PRICE: ${priceB.toFixed(2)}`
-    );
+  console.log(
+    `\n📊 PROFIT_SCORE: ${score}`
+  );
+
+  if (score <= 0) {
 
     console.log(
-      `\nSPREAD: ${spread.toFixed(2)}\n`
+      "\n❌ NO EDGE"
     );
 
-    /*
-      SCORE
-    */
+    return;
+  }
 
-    const liquidity =
-      Number(
-        A.reserveBase +
-        A.reserveQuote +
-        B.reserveBase +
-        B.reserveQuote
-      );
+  const confidence =
+    score > 800 ? 80 :
+    score > 500 ? 50 :
+    score > 200 ? 25 :
+    10;
 
-    const score =
-      computeScore(
-        spread,
-        liquidity
-      );
+  console.log(
+    `\n🎯 CONFIDENCE: ${confidence}%`
+  );
 
-    console.log(
-      `📊 PROFIT_SCORE: ${score}\n`
+  const vault =
+    await getVaultBalance();
+
+  let allocation =
+    confidenceAllocation(
+      confidence,
+      vault
     );
 
-    if (score <= 0) {
+  if (allocation < MIN_TRADE_SIZE) {
 
-      console.log(
-        "❌ NO EDGE FOUND\n"
-      );
+    allocation =
+      MIN_TRADE_SIZE;
+  }
 
-      return;
-    }
+  console.log(
+    `\n💰 ALLOCATION: ${fmt6(allocation)} USDC`
+  );
 
-    /*
-      CONFIDENCE
-    */
+  console.log(
+    "\n🧪 STATIC SIMULATION"
+  );
 
-    const confidence =
-      confidenceLevel(score);
-
-    console.log(
-      `🎯 CONFIDENCE: ${confidence}%\n`
-    );
-
-    /*
-      VAULT
-    */
-
-    const vaultBalance =
-      await getVaultBalance();
-
-    const allocation =
-      allocationFromConfidence(
-        confidence,
-        vaultBalance
-      );
-
-    console.log(
-      `💰 ALLOCATION: ${fmt(allocation)} USDC\n`
-    );
-
-    /*
-      STATIC CHECK
-    */
-
-    console.log(
-      "🧪 STATIC SIMULATION\n"
-    );
-
-    const simulation =
-      await staticSimulation(
-        allocation
-      );
-
-    console.log(
-      `SIMULATED_PROFIT: ${fmt(simulation.profit)}\n`
-    );
-
-    if (
-      simulation.profit <
-      MIN_PROFIT
-    ) {
-
-      console.log(
-        "❌ STATIC FAILED\n"
-      );
-
-      return;
-    }
-
-    console.log(
-      "✅ STATIC PASSED\n"
-    );
-
-    /*
-      EXECUTE
-    */
-
-    await executeTrade(
+  const sim =
+    await staticSimulation(
       allocation
     );
 
-  } catch (e) {
+  console.log(
+    `\nSIMULATED_PROFIT: ${fmt6(sim.profit)}`
+  );
+
+  if (
+    !sim.success ||
+    sim.profit <= 0n
+  ) {
 
     console.log(
-      "⚠️ ERROR:",
-      e.message
+      "\n❌ STATIC FAILED"
     );
 
-    await sleep(10000);
+    return;
   }
+
+  console.log(
+    "\n✅ STATIC PASSED"
+  );
+
+  await execute({
+    amount: allocation
+  });
 }
 
 /* =========================================================
-   MAIN LOOP
+   MAIN
 ========================================================= */
 
 async function main() {
@@ -674,21 +586,32 @@ async function main() {
     "\n👤 OWNER:"
   );
 
-  console.log(
-    owner
-  );
+  console.log(owner);
 
   console.log(
     "\n👤 WALLET:"
   );
 
-  console.log(
-    wallet.address
-  );
+  console.log(wallet.address);
 
   while (true) {
 
-    await runVaultEngine();
+    try {
+
+      await runEngine();
+
+    } catch (e) {
+
+      console.log(
+        "\n⚠️ ENGINE ERROR:"
+      );
+
+      console.log(
+        e.message
+      );
+
+      await rotateRPC();
+    }
 
     await sleep(
       LOOP_DELAY
