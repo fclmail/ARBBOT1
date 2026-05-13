@@ -1,3 +1,4 @@
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -19,12 +20,18 @@ if (!PRIVATE_KEY) {
 }
 
 /* =========================================================
-   RPC
+   RPC ROTATION
 ========================================================= */
 
 const RPCS = [
 
-  "https://polygon-bor-rpc.publicnode.com"
+  "https://polygon-bor-rpc.publicnode.com",
+
+  "https://polygon-rpc.com",
+
+  "https://rpc.ankr.com/polygon",
+
+  "https://1rpc.io/matic"
 
 ];
 
@@ -42,10 +49,15 @@ function nextRPC() {
   return rpc;
 }
 
-const provider =
-  new ethers.JsonRpcProvider(
+function buildProvider() {
+
+  return new ethers.JsonRpcProvider(
     nextRPC()
   );
+}
+
+let provider =
+  buildProvider();
 
 const wallet =
   new ethers.Wallet(
@@ -72,8 +84,6 @@ const arbAbi = [
 
   "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
 
-  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
-
   "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
 
 ];
@@ -88,17 +98,6 @@ const erc20Abi = [
 
   "function balanceOf(address) view returns(uint256)"
 ];
-
-/* =========================================================
-   CONTRACT
-========================================================= */
-
-const arb =
-  new ethers.Contract(
-    CONTRACT_ADDRESS,
-    arbAbi,
-    wallet
-  );
 
 /* =========================================================
    TOKENS
@@ -187,6 +186,17 @@ const routerContracts =
   );
 
 /* =========================================================
+   CONTRACT INSTANCE
+========================================================= */
+
+const arb =
+  new ethers.Contract(
+    CONTRACT_ADDRESS,
+    arbAbi,
+    wallet
+  );
+
+/* =========================================================
    SETTINGS
 ========================================================= */
 
@@ -208,9 +218,9 @@ const EXECUTION_THRESHOLD =
     6
   );
 
-const LOOP_DELAY = 5;
+const LOOP_DELAY = 25;
 
-const WORKER_COUNT = 24;
+const WORKER_COUNT = 1;
 
 let EXECUTING = false;
 
@@ -332,7 +342,7 @@ async function quote(
 }
 
 /* =========================================================
-   VAULT BALANCE
+   BALANCE
 ========================================================= */
 
 async function getVaultBalance() {
@@ -350,7 +360,7 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   FAST MICRO DETECTION
+   MICRO DETECTION
 ========================================================= */
 
 async function detectFastSpread(
@@ -431,7 +441,7 @@ async function detectFastSpread(
 }
 
 /* =========================================================
-   LIQUIDITY CURVE SCALER
+   LIQUIDITY CURVE
 ========================================================= */
 
 async function testLiquidityCurve(
@@ -450,7 +460,11 @@ async function testLiquidityCurve(
       6
     );
 
-  for(let i=0;i<16;i++){
+  for (
+    let i = 0;
+    i < 16;
+    i++
+  ) {
 
     candidateSizes.push(size);
 
@@ -466,10 +480,10 @@ async function testLiquidityCurve(
     estimatedProfit: 0n
   };
 
-  for(
+  for (
     const testSize
     of candidateSizes
-  ){
+  ) {
 
     try {
 
@@ -499,10 +513,10 @@ async function testLiquidityCurve(
         `SIZE ${fmt(testSize)} → PROFIT ${fmt(estimatedProfit)}`
       );
 
-      if(
+      if (
         estimatedProfit >
         best.estimatedProfit
-      ){
+      ) {
 
         best = {
 
@@ -517,17 +531,13 @@ async function testLiquidityCurve(
         };
       }
 
-      /*
-      LIQUIDITY COLLAPSE STOP
-      */
-
-      if(
+      if (
 
         best.estimatedProfit > 0n &&
 
         estimatedProfit <
         best.estimatedProfit / 2n
-      ){
+      ) {
 
         break;
       }
@@ -542,6 +552,87 @@ async function testLiquidityCurve(
 }
 
 /* =========================================================
+   FULL STATIC EXECUTION
+========================================================= */
+
+async function fullStaticCheck(
+  signal
+) {
+
+  try {
+
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 120;
+
+    pipeline(
+      "STAGE 3.5",
+      "FULL STATIC EXECUTION"
+    );
+
+    await arb
+      .executeBestFlashLoanArbitrage
+      .staticCall(
+
+        signal.route.buyRouter,
+
+        signal.route.sellRouter,
+
+        [signal.size],
+
+        signal.route.pathToToken,
+
+        signal.route.pathToUSDC,
+
+        deadline
+      );
+
+    console.log(
+      "\n✅ FULL STATIC CALL PASSED"
+    );
+
+    const gas =
+      await arb
+      .executeBestFlashLoanArbitrage
+      .estimateGas(
+
+        signal.route.buyRouter,
+
+        signal.route.sellRouter,
+
+        [signal.size],
+
+        signal.route.pathToToken,
+
+        signal.route.pathToUSDC,
+
+        deadline
+      );
+
+    console.log(
+      `\n⛽ ESTIMATED GAS:\n${gas}`
+    );
+
+    return true;
+
+  } catch (err) {
+
+    console.log(
+      "\n❌ STATIC CALL FAILED"
+    );
+
+    console.log(
+      err.shortMessage ||
+      err.reason ||
+      err.message
+    );
+
+    return false;
+  }
+}
+
+/* =========================================================
    DEPTH ANALYSIS
 ========================================================= */
 
@@ -551,6 +642,9 @@ async function runDepthAnalysis(
 ) {
 
   try {
+
+    if (EXECUTING)
+      return null;
 
     console.log(
       `\n🔎 SCANNING ${name}`
@@ -577,19 +671,15 @@ async function runDepthAnalysis(
       "DEPTH ANALYSIS"
     );
 
-    /*
-    CONTINUOUS LIQUIDITY CURVE
-    */
-
     const best =
       await testLiquidityCurve(
         spread
       );
 
-    if(
+    if (
       best.estimatedProfit <
       EXECUTION_THRESHOLD
-    ){
+    ) {
 
       return null;
     }
@@ -661,10 +751,10 @@ async function runDepthAnalysis(
     const liveProfit =
       recheck[1];
 
-    if(
+    if (
       liveProfit <
       EXECUTION_THRESHOLD
-    ){
+    ) {
 
       console.log(
         "\n❌ Spread vanished"
@@ -677,7 +767,7 @@ async function runDepthAnalysis(
       "\n✅ Execution precheck passed"
     );
 
-    return {
+    const signal = {
 
       token,
 
@@ -704,6 +794,22 @@ async function runDepthAnalysis(
       profit:
         estimatedProfit
     };
+
+    const staticPassed =
+      await fullStaticCheck(
+        signal
+      );
+
+    if (!staticPassed) {
+
+      console.log(
+        "\n❌ Static execution rejected"
+      );
+
+      return null;
+    }
+
+    return signal;
 
   } catch (err) {
 
@@ -748,6 +854,9 @@ async function execute(
         Date.now() / 1000
       ) + 120;
 
+    const feeData =
+      await provider.getFeeData();
+
     console.log(
       "\n📡 Sending transaction..."
     );
@@ -769,7 +878,13 @@ async function execute(
         deadline,
 
         {
-          gasLimit: 5000000
+          gasLimit: 5000000,
+
+          maxFeePerGas:
+            feeData.maxFeePerGas,
+
+          maxPriorityFeePerGas:
+            feeData.maxPriorityFeePerGas
         }
       );
 
@@ -824,10 +939,6 @@ async function execute(
     );
 
     console.log(
-      `\n🏦 CONTRACT:\n${CONTRACT_ADDRESS}`
-    );
-
-    console.log(
       "\n🏦 CONTRACT VAULT GROWTH:"
     );
 
@@ -843,8 +954,12 @@ async function execute(
 
     console.log(
       err.shortMessage ||
+      err.reason ||
       err.message
     );
+
+    provider =
+      buildProvider();
   }
 }
 
@@ -890,8 +1005,10 @@ async function main() {
   );
 
   if (
+
     owner.toLowerCase() !==
     wallet.address.toLowerCase()
+
   ) {
 
     throw new Error(
@@ -909,7 +1026,7 @@ async function main() {
 
         if (EXECUTING) {
 
-          await sleep(1);
+          await sleep(50);
 
           continue;
         }
@@ -928,8 +1045,14 @@ async function main() {
             task.token
           );
 
-        if (!signal)
+        if (!signal) {
+
+          await sleep(
+            LOOP_DELAY
+          );
+
           continue;
+        }
 
         console.log(
           "\n🏆 BEST SIGNAL"
