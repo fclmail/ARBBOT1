@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -20,7 +19,7 @@ if (!PRIVATE_KEY) {
 }
 
 /* =========================================================
-   RPC ROTATION
+   RPC
 ========================================================= */
 
 const RPCS = [
@@ -49,15 +48,10 @@ function nextRPC() {
   return rpc;
 }
 
-function buildProvider() {
-
-  return new ethers.JsonRpcProvider(
+const provider =
+  new ethers.JsonRpcProvider(
     nextRPC()
   );
-}
-
-let provider =
-  buildProvider();
 
 const wallet =
   new ethers.Wallet(
@@ -82,21 +76,38 @@ const arbAbi = [
 
   "function minimumProfitUSDC() view returns(uint256)",
 
-  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
+  "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256) external",
 
-  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
+  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)"
 
 ];
 
 const routerAbi = [
 
-  "function getAmountsOut(uint,address[]) view returns(uint[])"
+  "function getAmountsOut(uint,address[]) view returns(uint[])",
 
+  "function factory() view returns(address)"
+];
+
+const pairAbi = [
+
+  "function token0() view returns(address)",
+
+  "function token1() view returns(address)",
+
+  "function getReserves() view returns(uint112,uint112,uint32)"
+];
+
+const factoryAbi = [
+
+  "function getPair(address,address) view returns(address)"
 ];
 
 const erc20Abi = [
 
-  "function balanceOf(address) view returns(uint256)"
+  "function balanceOf(address) view returns(uint256)",
+
+  "function decimals() view returns(uint8)"
 ];
 
 /* =========================================================
@@ -186,7 +197,7 @@ const routerContracts =
   );
 
 /* =========================================================
-   CONTRACT INSTANCE
+   CONTRACT
 ========================================================= */
 
 const arb =
@@ -220,7 +231,7 @@ const EXECUTION_THRESHOLD =
 
 const LOOP_DELAY = 25;
 
-const WORKER_COUNT = 16;
+const WORKER_COUNT = 1;
 
 let EXECUTING = false;
 
@@ -245,38 +256,6 @@ function pipeline(stage, msg) {
   );
 }
 
-function calcDepthScore(
-  profit,
-  size
-) {
-
-  if (size === 0n)
-    return 0;
-
-  const ratio =
-    Number(
-      (profit * 100000n) / size
-    );
-
-  return Math.min(
-    Math.max(ratio, 1),
-    99
-  );
-}
-
-function getSlippageLabel(
-  score
-) {
-
-  if (score >= 80)
-    return "LOW";
-
-  if (score >= 50)
-    return "MEDIUM";
-
-  return "HIGH";
-}
-
 /* =========================================================
    PATH BUILDERS
 ========================================================= */
@@ -289,11 +268,7 @@ function buildBuyPaths(token) {
 
     [USDC, TOKENS.WETH, token],
 
-    [USDC, TOKENS.WMATIC, token],
-
-    [USDC, TOKENS.DAI, token],
-
-    [USDC, TOKENS.USDT, token]
+    [USDC, TOKENS.WMATIC, token]
   ];
 }
 
@@ -305,35 +280,118 @@ function buildSellPaths(token) {
 
     [token, TOKENS.WETH, USDC],
 
-    [token, TOKENS.WMATIC, USDC],
-
-    [token, TOKENS.DAI, USDC],
-
-    [token, TOKENS.USDT, USDC]
+    [token, TOKENS.WMATIC, USDC]
   ];
 }
 
 /* =========================================================
-   QUOTE
+   CONSTANT PRODUCT MODEL
 ========================================================= */
 
-async function quote(
+function getAmountOut(
+  amountIn,
+  reserveIn,
+  reserveOut
+) {
+
+  const amountInWithFee =
+    amountIn * 997n;
+
+  const numerator =
+    amountInWithFee *
+    reserveOut;
+
+  const denominator =
+    (reserveIn * 1000n) +
+    amountInWithFee;
+
+  return numerator /
+    denominator;
+}
+
+/* =========================================================
+   GET PAIR RESERVES
+========================================================= */
+
+async function getPairReserves(
   router,
-  amount,
-  path
+  tokenA,
+  tokenB
 ) {
 
   try {
 
-    const out =
+    const factoryAddress =
       await routerContracts[
         router
-      ].getAmountsOut(
-        amount,
-        path
+      ].factory();
+
+    const factory =
+      new ethers.Contract(
+        factoryAddress,
+        factoryAbi,
+        provider
       );
 
-    return out.at(-1);
+    const pairAddress =
+      await factory.getPair(
+        tokenA,
+        tokenB
+      );
+
+    if (
+      pairAddress ===
+      ethers.ZeroAddress
+    ) {
+      return null;
+    }
+
+    const pair =
+      new ethers.Contract(
+        pairAddress,
+        pairAbi,
+        provider
+      );
+
+    const reserves =
+      await pair.getReserves();
+
+    const token0 =
+      await pair.token0();
+
+    let reserveIn;
+    let reserveOut;
+
+    if (
+
+      token0.toLowerCase() ===
+      tokenA.toLowerCase()
+
+    ) {
+
+      reserveIn =
+        BigInt(reserves[0]);
+
+      reserveOut =
+        BigInt(reserves[1]);
+
+    } else {
+
+      reserveIn =
+        BigInt(reserves[1]);
+
+      reserveOut =
+        BigInt(reserves[0]);
+    }
+
+    return {
+
+      pairAddress,
+
+      reserveIn,
+
+      reserveOut
+    };
 
   } catch {
 
@@ -342,7 +400,60 @@ async function quote(
 }
 
 /* =========================================================
-   BALANCE
+   REAL RESERVE DEPTH MODELING
+========================================================= */
+
+async function reserveBasedQuote(
+  router,
+  amount,
+  path
+) {
+
+  try {
+
+    let currentAmount =
+      amount;
+
+    for (
+      let i = 0;
+      i < path.length - 1;
+      i++
+    ) {
+
+      const reserves =
+        await getPairReserves(
+
+          router,
+
+          path[i],
+
+          path[i + 1]
+        );
+
+      if (!reserves)
+        return null;
+
+      currentAmount =
+        getAmountOut(
+
+          currentAmount,
+
+          reserves.reserveIn,
+
+          reserves.reserveOut
+        );
+    }
+
+    return currentAmount;
+
+  } catch {
+
+    return null;
+  }
+}
+
+/* =========================================================
+   VAULT BALANCE
 ========================================================= */
 
 async function getVaultBalance() {
@@ -386,9 +497,12 @@ async function detectFastSpread(
       ) {
 
         const buyOut =
-          await quote(
+          await reserveBasedQuote(
+
             buy,
+
             MICRO_PROBE,
+
             buyPath
           );
 
@@ -401,9 +515,12 @@ async function detectFastSpread(
         ) {
 
           const sellOut =
-            await quote(
+            await reserveBasedQuote(
+
               sell,
+
               buyOut,
+
               sellPath
             );
 
@@ -462,7 +579,7 @@ async function testLiquidityCurve(
 
   for (
     let i = 0;
-    i < 16;
+    i < 20;
     i++
   ) {
 
@@ -475,9 +592,9 @@ async function testLiquidityCurve(
 
     amountIn: 0n,
 
-    estimatedFinalUSDC: 0n,
+    estimatedProfit: 0n,
 
-    estimatedProfit: 0n
+    estimatedFinalUSDC: 0n
   };
 
   for (
@@ -487,26 +604,35 @@ async function testLiquidityCurve(
 
     try {
 
-      const result =
-        await arb
-        .simulateArbitrageProfit(
+      const buyOut =
+        await reserveBasedQuote(
 
           spread.buy,
 
-          spread.sell,
-
           testSize,
 
-          spread.buyPath,
+          spread.buyPath
+        );
+
+      if (!buyOut)
+        continue;
+
+      const finalOut =
+        await reserveBasedQuote(
+
+          spread.sell,
+
+          buyOut,
 
           spread.sellPath
         );
 
-      const estimatedFinal =
-        result[0];
+      if (!finalOut)
+        continue;
 
       const estimatedProfit =
-        result[1];
+        finalOut -
+        testSize;
 
       console.log(
 
@@ -514,8 +640,10 @@ async function testLiquidityCurve(
       );
 
       if (
+
         estimatedProfit >
         best.estimatedProfit
+
       ) {
 
         best = {
@@ -524,10 +652,9 @@ async function testLiquidityCurve(
             testSize,
 
           estimatedFinalUSDC:
-            estimatedFinal,
+            finalOut,
 
-          estimatedProfit:
-            estimatedProfit
+          estimatedProfit
         };
       }
 
@@ -552,7 +679,7 @@ async function testLiquidityCurve(
 }
 
 /* =========================================================
-   FULL STATIC EXECUTION
+   FULL STATIC CHECK + REQUIRE DEBUG
 ========================================================= */
 
 async function fullStaticCheck(
@@ -571,15 +698,60 @@ async function fullStaticCheck(
       "FULL STATIC EXECUTION"
     );
 
+    /*
+    ESTIMATE GAS FIRST
+    */
+
+    try {
+
+      const gas =
+        await arb
+        .executeAaveFlashLoanArbitrage
+        .estimateGas(
+
+          signal.route.buyRouter,
+
+          signal.route.sellRouter,
+
+          signal.size,
+
+          signal.route.pathToToken,
+
+          signal.route.pathToUSDC,
+
+          deadline
+        );
+
+      console.log(
+        `\n⛽ ESTIMATED GAS:\n${gas}`
+      );
+
+    } catch (gasErr) {
+
+      console.log(
+        "\n❌ GAS ESTIMATION FAILED"
+      );
+
+      console.log(
+        gasErr.shortMessage ||
+        gasErr.reason ||
+        gasErr.message
+      );
+    }
+
+    /*
+    STATIC CALL
+    */
+
     await arb
-      .executeBestFlashLoanArbitrage
+      .executeAaveFlashLoanArbitrage
       .staticCall(
 
         signal.route.buyRouter,
 
         signal.route.sellRouter,
 
-        [signal.size],
+        signal.size,
 
         signal.route.pathToToken,
 
@@ -590,28 +762,6 @@ async function fullStaticCheck(
 
     console.log(
       "\n✅ FULL STATIC CALL PASSED"
-    );
-
-    const gas =
-      await arb
-      .executeBestFlashLoanArbitrage
-      .estimateGas(
-
-        signal.route.buyRouter,
-
-        signal.route.sellRouter,
-
-        [signal.size],
-
-        signal.route.pathToToken,
-
-        signal.route.pathToUSDC,
-
-        deadline
-      );
-
-    console.log(
-      `\n⛽ ESTIMATED GAS:\n${gas}`
     );
 
     return true;
@@ -627,6 +777,80 @@ async function fullStaticCheck(
       err.reason ||
       err.message
     );
+
+    /*
+    REQUIRE DEBUGGING
+    */
+
+    const msg =
+      (
+        err.shortMessage ||
+        err.reason ||
+        err.message ||
+        ""
+      ).toLowerCase();
+
+    if (
+      msg.includes(
+        "profit below minimum"
+      )
+    ) {
+
+      console.log(
+        "\n🧠 FAILED REQUIRE: Profit below minimum"
+      );
+    }
+
+    else if (
+      msg.includes(
+        "flash loan unprofitable"
+      )
+    ) {
+
+      console.log(
+        "\n🧠 FAILED REQUIRE: Flash loan unprofitable"
+      );
+    }
+
+    else if (
+      msg.includes(
+        "insufficient vault balance"
+      )
+    ) {
+
+      console.log(
+        "\n🧠 FAILED REQUIRE: Insufficient vault balance"
+      );
+    }
+
+    else if (
+      msg.includes(
+        "invalid asset"
+      )
+    ) {
+
+      console.log(
+        "\n🧠 FAILED REQUIRE: Invalid asset"
+      );
+    }
+
+    else if (
+      msg.includes(
+        "only aave pool"
+      )
+    ) {
+
+      console.log(
+        "\n🧠 FAILED REQUIRE: Only Aave Pool"
+      );
+    }
+
+    else {
+
+      console.log(
+        "\n🧠 UNKNOWN REQUIRE FAILURE"
+      );
+    }
 
     return false;
   }
@@ -677,8 +901,10 @@ async function runDepthAnalysis(
       );
 
     if (
+
       best.estimatedProfit <
       EXECUTION_THRESHOLD
+
     ) {
 
       return null;
@@ -688,44 +914,16 @@ async function runDepthAnalysis(
       "\n🏆 OPTIMAL DEPTH FOUND"
     );
 
-    const bestSize =
-      best.amountIn;
-
-    const estimatedFinal =
-      best.estimatedFinalUSDC;
-
-    const estimatedProfit =
-      best.estimatedProfit;
-
     console.log(
-      `\n📊 Contract Optimal Size:\n${fmt(bestSize)}`
+      `\n📊 Contract Optimal Size:\n${fmt(best.amountIn)}`
     );
 
     console.log(
-      `\n📊 Estimated Final:\n${fmt(estimatedFinal)}`
+      `\n📊 Estimated Final:\n${fmt(best.estimatedFinalUSDC)}`
     );
 
     console.log(
-      `\n📊 Estimated Profit:\n${fmt(estimatedProfit)}`
-    );
-
-    const score =
-      calcDepthScore(
-        estimatedProfit,
-        bestSize
-      );
-
-    const slippage =
-      getSlippageLabel(
-        score
-      );
-
-    console.log(
-      `\n⚡ Liquidity Depth Score: ${score}`
-    );
-
-    console.log(
-      `\n⚡ Slippage: ${slippage}`
+      `\n📊 Estimated Profit:\n${fmt(best.estimatedProfit)}`
     );
 
     pipeline(
@@ -733,43 +931,11 @@ async function runDepthAnalysis(
       "EXECUTION VALIDATION"
     );
 
-    const recheck =
-      await arb
-      .simulateArbitrageProfit(
-
-        spread.buy,
-
-        spread.sell,
-
-        bestSize,
-
-        spread.buyPath,
-
-        spread.sellPath
-      );
-
-    const liveProfit =
-      recheck[1];
-
-    if (
-      liveProfit <
-      EXECUTION_THRESHOLD
-    ) {
-
-      console.log(
-        "\n❌ Spread vanished"
-      );
-
-      return null;
-    }
-
     console.log(
       "\n✅ Execution precheck passed"
     );
 
     const signal = {
-
-      token,
 
       route: {
 
@@ -787,12 +953,10 @@ async function runDepthAnalysis(
       },
 
       size:
-        bestSize,
-
-      estimatedFinal,
+        best.amountIn,
 
       profit:
-        estimatedProfit
+        best.estimatedProfit
     };
 
     const staticPassed =
@@ -800,14 +964,8 @@ async function runDepthAnalysis(
         signal
       );
 
-    if (!staticPassed) {
-
-      console.log(
-        "\n❌ Static execution rejected"
-      );
-
+    if (!staticPassed)
       return null;
-    }
 
     return signal;
 
@@ -854,22 +1012,15 @@ async function execute(
         Date.now() / 1000
       ) + 120;
 
-    const feeData =
-      await provider.getFeeData();
-
-    console.log(
-      "\n📡 Sending transaction..."
-    );
-
     const tx =
       await arb
-      .executeBestFlashLoanArbitrage(
+      .executeAaveFlashLoanArbitrage(
 
         signal.route.buyRouter,
 
         signal.route.sellRouter,
 
-        [signal.size],
+        signal.size,
 
         signal.route.pathToToken,
 
@@ -878,22 +1029,12 @@ async function execute(
         deadline,
 
         {
-          gasLimit: 5000000,
-
-          maxFeePerGas:
-            feeData.maxFeePerGas,
-
-          maxPriorityFeePerGas:
-            feeData.maxPriorityFeePerGas
+          gasLimit: 5000000
         }
       );
 
     console.log(
       `\n🚀 TX SENT:\n${tx.hash}`
-    );
-
-    console.log(
-      "\n⛓ Waiting confirmation..."
     );
 
     const receipt =
@@ -911,39 +1052,13 @@ async function execute(
     const after =
       await getVaultBalance();
 
-    const realizedProfit =
+    const realized =
       after > before
         ? after - before
         : 0n;
 
-    const growth =
-      before > 0n
-
-        ? (
-            Number(realizedProfit) /
-            Number(before)
-          ) * 100
-
-        : 0;
-
     console.log(
-      `\n💰 BEFORE:\n${fmt(before)}`
-    );
-
-    console.log(
-      `\n💰 AFTER:\n${fmt(after)}`
-    );
-
-    console.log(
-      `\n📈 PROFIT:\n${fmt(realizedProfit)}`
-    );
-
-    console.log(
-      "\n🏦 CONTRACT VAULT GROWTH:"
-    );
-
-    console.log(
-      `+${growth.toFixed(4)}%`
+      `\n📈 REALIZED PROFIT:\n${fmt(realized)}`
     );
 
   } catch (err) {
@@ -957,9 +1072,6 @@ async function execute(
       err.reason ||
       err.message
     );
-
-    provider =
-      buildProvider();
   }
 }
 
@@ -990,7 +1102,7 @@ for (
 async function main() {
 
   console.log(
-    "\n🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED"
+    "\n🚀 RESERVE MODELER ENGINE STARTED"
   );
 
   const owner =
@@ -1004,18 +1116,6 @@ async function main() {
     `\n👤 WALLET:\n${wallet.address}`
   );
 
-  if (
-
-    owner.toLowerCase() !==
-    wallet.address.toLowerCase()
-
-  ) {
-
-    throw new Error(
-      "Wallet is not contract owner"
-    );
-  }
-
   let taskIndex = 0;
 
   async function worker() {
@@ -1023,13 +1123,6 @@ async function main() {
     while (true) {
 
       try {
-
-        if (EXECUTING) {
-
-          await sleep(50);
-
-          continue;
-        }
 
         const task =
           scanTasks[
