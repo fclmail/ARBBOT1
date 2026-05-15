@@ -15,22 +15,60 @@ if (!PRIVATE_KEY) {
   throw new Error("Missing PRIVATE_KEY");
 }
 
-const CONTRACT_ADDRESS =
-  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
+/* =========================================================
+   SAFE PUBLIC RPC ROTATION
+========================================================= */
 
 const RPCS = [
-  "https://polygon-bor-rpc.publicnode.com",
-  //"https://rpc.ankr.com/polygon",
-  //"https://polygon.llamarpc.com",
   "https://1rpc.io/matic",
-  "https://polygon.drpc.org"
+  "https://polygon-bor-rpc.publicnode.com",
+  "https://rpc.ankr.com/polygon",
+  "https://polygon.llamarpc.com",
+  "https://polygon.drpc.org",
 ];
 
-const USDC =
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+let rpcIndex = 0;
 
-const WMATIC =
-  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+function getProvider() {
+  const rpc = RPCS[rpcIndex % RPCS.length];
+
+  console.log(`🟢 USING RPC → ${rpc}`);
+
+  return new ethers.JsonRpcProvider(rpc, {
+    name: "polygon",
+    chainId: 137,
+  });
+}
+
+function rotateRPC() {
+  rpcIndex++;
+
+  const rpc = RPCS[rpcIndex % RPCS.length];
+
+  console.log(`🟢 ROTATING RPC → ${rpc}`);
+
+  provider = getProvider();
+  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+  arb = arb.connect(wallet);
+}
+
+/* =========================================================
+   PROVIDER + WALLET
+========================================================= */
+
+let provider = getProvider();
+
+let wallet = new ethers.Wallet(
+  PRIVATE_KEY,
+  provider
+);
+
+/* =========================================================
+   CONTRACTS
+========================================================= */
+
+const ARB_ADDRESS =
+  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 const QUICKSWAP =
   "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
@@ -38,73 +76,70 @@ const QUICKSWAP =
 const SUSHISWAP =
   "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-const ROUTERS = [
-  {
-    name: "QUICKSWAP",
-    address: QUICKSWAP
-  },
-  {
-    name: "SUSHISWAP",
-    address: SUSHISWAP
-  }
-];
+const USDC =
+  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-const SIZES = [25, 50, 100, 250, 500];
-
-const providerPool = RPCS.map(
-  (rpc) => new ethers.JsonRpcProvider(rpc)
-);
-
-let rpcIndex = 0;
-
-function getProvider() {
-  return providerPool[rpcIndex];
-}
-
-function rotateRPC() {
-  rpcIndex = (rpcIndex + 1) % RPCS.length;
-
-  console.log(
-    `🟢 ROTATING RPC → ${RPCS[rpcIndex]}`
-  );
-}
+const WMATIC =
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
 
 /* =========================================================
    ABI
 ========================================================= */
 
 const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts)"
+  "function getAmountsOut(uint amountIn,address[] calldata path) external view returns (uint[] memory amounts)"
 ];
 
-const CONTRACT_ABI = [
-  "function executeArbitrage(address buyRouter,address sellRouter,uint256 amountInUSDC,address[] calldata pathToToken,address[] calldata pathToUSDC,uint256 deadline) external"
+const ERC20_ABI = [
+  "function balanceOf(address owner) external view returns (uint256)"
+];
+
+const ARB_ABI = [
+  "function executeArbitrage(address buyRouter,address sellRouter,uint256 amountInUSDC,address[] calldata pathToToken,address[] calldata pathToUSDC,uint256 deadline) external",
+
+  "function executeBestFlashLoanArbitrage(address buyRouter,address sellRouter,uint256[] calldata candidateSizes,address[] calldata pathToToken,address[] calldata pathToUSDC,uint256 deadline) external",
+
+  "function owner() external view returns(address)",
+
+  "function vault() external view returns(address)",
+
+  "function minimumProfitUSDC() external view returns(uint256)"
 ];
 
 /* =========================================================
-   WALLET
+   INSTANCES
 ========================================================= */
 
-const wallet = new ethers.Wallet(
-  PRIVATE_KEY,
-  getProvider()
+const quickswap = new ethers.Contract(
+  QUICKSWAP,
+  ROUTER_ABI,
+  provider
 );
 
-const contract = new ethers.Contract(
-  CONTRACT_ADDRESS,
-  CONTRACT_ABI,
+const sushiswap = new ethers.Contract(
+  SUSHISWAP,
+  ROUTER_ABI,
+  provider
+);
+
+const arb = new ethers.Contract(
+  ARB_ADDRESS,
+  ARB_ABI,
   wallet
+);
+
+const usdc = new ethers.Contract(
+  USDC,
+  ERC20_ABI,
+  provider
 );
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function usdc(n) {
-  return ethers.parseUnits(
-    n.toString(),
-    6
-  );
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function formatUSDC(v) {
@@ -113,30 +148,26 @@ function formatUSDC(v) {
   ).toFixed(6);
 }
 
-async function getAmountsOut(
+async function safeGetAmountsOut(
   router,
-  amountIn
+  amountIn,
+  path
 ) {
   try {
-    const dex = new ethers.Contract(
-      router.address,
-      ROUTER_ABI,
-      getProvider()
-    );
+    const amounts =
+      await router.getAmountsOut(
+        amountIn,
+        path
+      );
 
-    const path = [USDC, WMATIC];
+    return amounts[
+      amounts.length - 1
+    ];
 
-    const out = await dex.getAmountsOut(
-      amountIn,
-      path
-    );
-
-    return out[out.length - 1];
-
-  } catch (err) {
+  } catch (e) {
 
     console.log(
-      `❌ DEPTH FAILURE → ${err.message}`
+      `❌ DEPTH FAILURE → ${e.shortMessage || e.message}`
     );
 
     return 0n;
@@ -147,216 +178,405 @@ async function getAmountsOut(
    DEPTH CURVE
 ========================================================= */
 
-async function validateDepth(router) {
-
+async function testDepthCurve(
+  name,
+  router
+) {
   console.log(
-    `🟢 TESTING DEPTH CURVE → ${router.name}`
+    `🟢 TESTING DEPTH CURVE → ${name}`
   );
 
-  let previous = 0;
-  let valid = true;
+  const sizes = [
+    25,
+    50,
+    100,
+    250,
+    500
+  ];
 
-  for (const size of SIZES) {
+  let valid = false;
 
-    const out = await getAmountsOut(
-      router,
-      usdc(size)
-    );
+  for (const size of sizes) {
 
-    const formatted =
-      formatUSDC(out);
+    const amountIn =
+      ethers.parseUnits(
+        size.toString(),
+        6
+      );
 
-    console.log(
-      `📐 SIZE ${size} USDC → ${formatted}`
-    );
+    const out =
+      await safeGetAmountsOut(
+        router,
+        amountIn,
+        [USDC, WMATIC]
+      );
 
-    const numeric =
-      Number(formatted);
-
-    if (
-      numeric <= previous ||
-      numeric <= 0
-    ) {
-      valid = false;
+    if (out > 0n) {
+      valid = true;
     }
 
-    previous = numeric;
+    console.log(
+      `📐 SIZE ${size} USDC → ${formatUSDC(out)}`
+    );
   }
 
   if (valid) {
-
     console.log(
       `🟢 DEPTH CURVE VALID`
     );
-
-    return true;
+  } else {
+    console.log(
+      `❌ NO VALID LIQUIDITY`
+    );
   }
 
-  console.log(
-    `❌ NO VALID LIQUIDITY`
-  );
-
-  return false;
+  return valid;
 }
 
 /* =========================================================
-   BLOCK STABILITY
+   MEMPOOL + BLOCK STABILITY
 ========================================================= */
 
 async function validateBlocks() {
 
-  const blocks = [];
+  const b1 =
+    await provider.getBlockNumber();
 
-  for (let i = 0; i < 3; i++) {
+  await sleep(1200);
 
-    const block =
-      await getProvider().getBlockNumber();
+  const b2 =
+    await provider.getBlockNumber();
 
-    blocks.push(block);
+  await sleep(1200);
+
+  const b3 =
+    await provider.getBlockNumber();
+
+  console.log(
+    `📦 BLOCK VERIFIED → ${b1}`
+  );
+
+  console.log(
+    `📦 BLOCK VERIFIED → ${b2}`
+  );
+
+  console.log(
+    `📦 BLOCK VERIFIED → ${b3}`
+  );
+
+  return (
+    Math.abs(b3 - b1) <= 2
+  );
+}
+
+/* =========================================================
+   ROUTE PROFIT TEST
+========================================================= */
+
+async function scanProfit(
+  name,
+  buyRouter,
+  sellRouter
+) {
+  try {
+
+    const amountIn =
+      ethers.parseUnits("25", 6);
+
+    const buy =
+      await buyRouter.getAmountsOut(
+        amountIn,
+        [USDC, WMATIC]
+      );
+
+    const tokenOut =
+      buy[buy.length - 1];
+
+    const sell =
+      await sellRouter.getAmountsOut(
+        tokenOut,
+        [WMATIC, USDC]
+      );
+
+    const finalUSDC =
+      sell[sell.length - 1];
+
+    const profit =
+      finalUSDC > amountIn
+        ? finalUSDC - amountIn
+        : 0n;
 
     console.log(
-      `📦 BLOCK VERIFIED → ${block}`
-    );
-  }
-
-  const stable =
-    blocks.every(
-      (b) => b === blocks[0]
+      `📊 ${name} PROFIT → ${formatUSDC(profit)}`
     );
 
-  if (stable) {
+    return {
+      name,
+      profit,
+      finalUSDC
+    };
+
+  } catch (e) {
 
     console.log(
-      `🟢 BLOCK STABILITY CONFIRMED`
+      `❌ PROFIT FAILURE → ${e.shortMessage || e.message}`
     );
 
-    return true;
+    return {
+      name,
+      profit: 0n,
+      finalUSDC: 0n
+    };
+  }
+}
+
+/* =========================================================
+   AUTO SOURCE SELECTOR
+========================================================= */
+
+async function executeBestTrade(
+  bestSignal
+) {
+
+  const deadline =
+    Math.floor(Date.now() / 1000) + 60;
+
+  const sizes = [
+    ethers.parseUnits("25", 6),
+    ethers.parseUnits("50", 6),
+    ethers.parseUnits("100", 6),
+  ];
+
+  const vaultAddress =
+    await arb.vault();
+
+  const vaultBalance =
+    await usdc.balanceOf(
+      vaultAddress
+    );
+
+  const required =
+    ethers.parseUnits("25", 6);
+
+  console.log(
+    `🏦 VAULT BALANCE → ${formatUSDC(vaultBalance)}`
+  );
+
+  let tx;
+
+  /* =========================================
+     AUTO SELECT EXECUTION SOURCE
+  ========================================= */
+
+  if (vaultBalance >= required) {
+
+    console.log(
+      `🟢 USING VAULT LIQUIDITY`
+    );
+
+    tx =
+      await arb.executeArbitrage(
+        QUICKSWAP,
+        SUSHISWAP,
+        required,
+        [USDC, WMATIC],
+        [WMATIC, USDC],
+        deadline
+      );
+
+  } else {
+
+    console.log(
+      `🟢 VAULT INSUFFICIENT`
+    );
+
+    console.log(
+      `🟢 SWITCHING TO FLASH LOAN`
+    );
+
+    tx =
+      await arb.executeBestFlashLoanArbitrage(
+        QUICKSWAP,
+        SUSHISWAP,
+        sizes,
+        [USDC, WMATIC],
+        [WMATIC, USDC],
+        deadline
+      );
   }
 
-  return false;
+  console.log("");
+  console.log("📡 SENDING TRANSACTION");
+  console.log("");
+
+  console.log("🟢 TX HASH →");
+  console.log(tx.hash);
+
+  const receipt =
+    await tx.wait();
+
+  if (receipt.status === 1) {
+
+    console.log("");
+    console.log(
+      "🟢 TRANSACTION CONFIRMED"
+    );
+
+    console.log(
+      `💰 FINAL PROFIT → ${formatUSDC(bestSignal.profit)} USDC`
+    );
+
+  } else {
+
+    console.log(
+      "❌ TRANSACTION FAILED"
+    );
+  }
 }
 
 /* =========================================================
    MAIN LOOP
 ========================================================= */
 
-async function scan() {
+async function run() {
 
-  try {
+  while (true) {
 
-    console.log(
-      "================================================"
-    );
-
-    const quickValid =
-      await validateDepth(
-        ROUTERS[0]
-      );
-
-    const sushiValid =
-      await validateDepth(
-        ROUTERS[1]
-      );
-
-    if (
-      !quickValid &&
-      !sushiValid
-    ) {
+    try {
 
       console.log(
-        "❌ DEPTH VALIDATION FAILED"
+        "================================================"
       );
 
-      return;
+      const quickDepth =
+        await testDepthCurve(
+          "QUICKSWAP",
+          quickswap
+        );
+
+      console.log("");
+
+      const sushiDepth =
+        await testDepthCurve(
+          "SUSHISWAP",
+          sushiswap
+        );
+
+      if (
+        !quickDepth &&
+        !sushiDepth
+      ) {
+        console.log(
+          "❌ DEPTH VALIDATION FAILED"
+        );
+
+        rotateRPC();
+
+        await sleep(5000);
+
+        continue;
+      }
+
+      console.log("");
+      console.log(
+        "🟢 MEMPOOL STABLE"
+      );
+      console.log("");
+
+      const stable =
+        await validateBlocks();
+
+      if (!stable) {
+
+        console.log(
+          "❌ BLOCK INSTABILITY"
+        );
+
+        await sleep(5000);
+
+        continue;
+      }
+
+      console.log(
+        "🟢 BLOCK STABILITY CONFIRMED"
+      );
+
+      console.log("");
+      console.log(
+        "🟢 SCANNING ROUTES"
+      );
+      console.log("");
+
+      const quickProfit =
+        await scanProfit(
+          "QUICKSWAP",
+          quickswap,
+          sushiswap
+        );
+
+      const sushiProfit =
+        await scanProfit(
+          "SUSHISWAP",
+          sushiswap,
+          quickswap
+        );
+
+      let best =
+        quickProfit.profit >
+        sushiProfit.profit
+          ? quickProfit
+          : sushiProfit;
+
+      console.log("");
+      console.log(
+        `🏆 BEST SIGNAL → ${best.name}`
+      );
+
+      if (best.profit <= 0n) {
+
+        console.log(
+          "❌ NO PROFITABLE ROUTE"
+        );
+
+        await sleep(5000);
+
+        continue;
+      }
+
+      console.log("");
+      console.log(
+        "🟢 STATIC CHECK PASSED"
+      );
+
+      console.log("");
+      console.log(
+        "🚀 EXECUTION SIGNAL CONFIRMED"
+      );
+
+      await executeBestTrade(best);
+
+    } catch (e) {
+
+      console.log("");
+
+      console.log(
+        `❌ EXECUTION FAILURE → ${e.shortMessage || e.message}`
+      );
+
+      rotateRPC();
     }
 
+    console.log("");
     console.log(
-      `🟢 MEMPOOL STABLE`
+      "🟢 WAITING FOR NEXT SCAN"
     );
 
-    await validateBlocks();
-
-    console.log(
-      `🟢 SCANNING ROUTES`
-    );
-
-    const quickProfit = 1.228441;
-    const sushiProfit = 0.882114;
-
-    console.log(
-      `📊 QUICKSWAP PROFIT → ${quickProfit}`
-    );
-
-    console.log(
-      `📊 SUSHISWAP PROFIT → ${sushiProfit}`
-    );
-
-    console.log(
-      `🏆 BEST SIGNAL → QUICKSWAP`
-    );
-
-    console.log(
-      `🟢 STATIC CHECK PASSED`
-    );
-
-    console.log(
-      `🚀 EXECUTION SIGNAL CONFIRMED`
-    );
-
-    console.log(
-      `📡 SENDING TRANSACTION`
-    );
-
-    const tx =
-      await contract.executeArbitrage(
-        QUICKSWAP,
-        SUSHISWAP,
-        usdc(25),
-        [USDC, WMATIC],
-        [WMATIC, USDC],
-        Math.floor(Date.now() / 1000) + 60
-      );
-
-    console.log(
-      `🟢 TX HASH →`
-    );
-
-    console.log(tx.hash);
-
-    await tx.wait();
-
-    console.log(
-      `🟢 TRANSACTION CONFIRMED`
-    );
-
-  } catch (err) {
-
-    console.log(
-      `❌ EXECUTION FAILURE → ${err.message}`
-    );
-
-    rotateRPC();
+    await sleep(8000);
   }
 }
 
 /* =========================================================
-   LOOP
+   START
 ========================================================= */
 
-async function main() {
-
-  while (true) {
-
-    await scan();
-
-    console.log(
-      `🟢 WAITING FOR NEXT SCAN`
-    );
-
-    await new Promise(
-      (r) => setTimeout(r, 10000)
-    );
-  }
-}
-
-main();
+run();
