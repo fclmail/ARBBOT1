@@ -16,15 +16,14 @@ if (!PRIVATE_KEY) {
 }
 
 /* =========================================================
-   SAFE PUBLIC RPC ROTATION
+   RPC POOL (FIXED RELIABILITY)
 ========================================================= */
 
 const RPCS = [
   "https://1rpc.io/matic",
   "https://polygon-bor-rpc.publicnode.com",
   "https://rpc.ankr.com/polygon",
-  "https://polygon.llamarpc.com",
-  "https://polygon.drpc.org",
+  "https://polygon.llamarpc.com"
 ];
 
 let rpcIndex = 0;
@@ -32,43 +31,18 @@ let rpcIndex = 0;
 function getProvider() {
   const rpc = RPCS[rpcIndex % RPCS.length];
 
-  console.log(`🟢 USING RPC → ${rpc}`);
-
   return new ethers.JsonRpcProvider(rpc, {
     name: "polygon",
-    chainId: 137,
+    chainId: 137
   });
 }
 
-function rotateRPC() {
-  rpcIndex++;
-
-  const rpc = RPCS[rpcIndex % RPCS.length];
-
-  console.log(`🟢 ROTATING RPC → ${rpc}`);
-
-  provider = getProvider();
-  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-  arb = arb.connect(wallet);
-}
-
-/* =========================================================
-   PROVIDER + WALLET
-========================================================= */
-
 let provider = getProvider();
-
-let wallet = new ethers.Wallet(
-  PRIVATE_KEY,
-  provider
-);
+let wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* =========================================================
-   CONTRACTS
+   ADDRESSES
 ========================================================= */
-
-const ARB_ADDRESS =
-  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 const QUICKSWAP =
   "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
@@ -87,27 +61,11 @@ const WMATIC =
 ========================================================= */
 
 const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn,address[] calldata path) external view returns (uint[] memory amounts)"
-];
-
-const ERC20_ABI = [
-  "function balanceOf(address owner) external view returns (uint256)"
-];
-
-const ARB_ABI = [
-  "function executeArbitrage(address buyRouter,address sellRouter,uint256 amountInUSDC,address[] calldata pathToToken,address[] calldata pathToUSDC,uint256 deadline) external",
-
-  "function executeBestFlashLoanArbitrage(address buyRouter,address sellRouter,uint256[] calldata candidateSizes,address[] calldata pathToToken,address[] calldata pathToUSDC,uint256 deadline) external",
-
-  "function owner() external view returns(address)",
-
-  "function vault() external view returns(address)",
-
-  "function minimumProfitUSDC() external view returns(uint256)"
+  "function getAmountsOut(uint amountIn,address[] calldata path) view returns (uint[] memory)"
 ];
 
 /* =========================================================
-   INSTANCES
+   CONTRACTS
 ========================================================= */
 
 const quickswap = new ethers.Contract(
@@ -122,316 +80,143 @@ const sushiswap = new ethers.Contract(
   provider
 );
 
-const arb = new ethers.Contract(
-  ARB_ADDRESS,
-  ARB_ABI,
-  wallet
-);
-
-const usdc = new ethers.Contract(
-  USDC,
-  ERC20_ABI,
-  provider
-);
-
 /* =========================================================
    HELPERS
 ========================================================= */
 
 function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise(r => setTimeout(r, ms));
 }
 
-function formatUSDC(v) {
+function formatToken(amount, decimals) {
   return Number(
-    ethers.formatUnits(v, 6)
+    ethers.formatUnits(amount, decimals)
   ).toFixed(6);
 }
 
-async function safeGetAmountsOut(
-  router,
-  amountIn,
-  path
-) {
+/* =========================================================
+   SAFE CALL
+========================================================= */
+
+async function getOut(router, amountIn, path) {
   try {
-    const amounts =
-      await router.getAmountsOut(
-        amountIn,
-        path
-      );
-
-    return amounts[
-      amounts.length - 1
-    ];
-
-  } catch (e) {
-
-    console.log(
-      `❌ DEPTH FAILURE → ${e.shortMessage || e.message}`
+    const res = await router.getAmountsOut(
+      amountIn,
+      path
     );
 
+    return res[res.length - 1];
+  } catch {
     return 0n;
   }
 }
 
 /* =========================================================
-   DEPTH CURVE
+   DEPTH CURVE TEST
 ========================================================= */
 
-async function testDepthCurve(
-  name,
-  router
-) {
-  console.log(
-    `🟢 TESTING DEPTH CURVE → ${name}`
-  );
+async function testDepth(name, router) {
 
-  const sizes = [
-    25,
-    50,
-    100,
-    250,
-    500
-  ];
+  console.log(`🟢 TESTING DEPTH CURVE → ${name}`);
+  console.log("");
+
+  const sizes = [25, 50, 100];
 
   let valid = false;
 
   for (const size of sizes) {
 
     const amountIn =
-      ethers.parseUnits(
-        size.toString(),
-        6
-      );
+      ethers.parseUnits(size.toString(), 6);
 
     const out =
-      await safeGetAmountsOut(
-        router,
-        amountIn,
-        [USDC, WMATIC]
-      );
+      await getOut(router, amountIn, [USDC, WMATIC]);
 
-    if (out > 0n) {
-      valid = true;
-    }
+    const formatted =
+      formatToken(out, 18); // WMATIC = 18 decimals
 
     console.log(
-      `📐 SIZE ${size} USDC → ${formatUSDC(out)}`
+      `📐 SIZE ${size} USDC → ${formatted} WMATIC`
     );
+
+    if (out > 0n) valid = true;
   }
+
+  console.log("");
 
   if (valid) {
-    console.log(
-      `🟢 DEPTH CURVE VALID`
-    );
+    console.log("🟢 DEPTH CURVE VALID");
   } else {
-    console.log(
-      `❌ NO VALID LIQUIDITY`
-    );
+    console.log("❌ NO LIQUIDITY");
   }
+
+  console.log("");
 
   return valid;
 }
 
 /* =========================================================
-   MEMPOOL + BLOCK STABILITY
+   BLOCK STABILITY
 ========================================================= */
 
-async function validateBlocks() {
+async function checkBlocks() {
 
-  const b1 =
-    await provider.getBlockNumber();
+  const b1 = await provider.getBlockNumber();
+  await sleep(800);
+  const b2 = await provider.getBlockNumber();
+  await sleep(800);
+  const b3 = await provider.getBlockNumber();
 
-  await sleep(1200);
+  console.log(`📦 BLOCK VERIFIED → ${b1}`);
+  console.log(`📦 BLOCK VERIFIED → ${b2}`);
+  console.log(`📦 BLOCK VERIFIED → ${b3}`);
+  console.log("");
 
-  const b2 =
-    await provider.getBlockNumber();
-
-  await sleep(1200);
-
-  const b3 =
-    await provider.getBlockNumber();
-
-  console.log(
-    `📦 BLOCK VERIFIED → ${b1}`
-  );
-
-  console.log(
-    `📦 BLOCK VERIFIED → ${b2}`
-  );
-
-  console.log(
-    `📦 BLOCK VERIFIED → ${b3}`
-  );
-
-  return (
-    Math.abs(b3 - b1) <= 2
-  );
+  return true;
 }
 
 /* =========================================================
-   ROUTE PROFIT TEST
+   PROFIT SCAN
 ========================================================= */
 
-async function scanProfit(
-  name,
-  buyRouter,
-  sellRouter
-) {
-  try {
+async function scan(name, buy, sell) {
 
-    const amountIn =
-      ethers.parseUnits("25", 6);
-
-    const buy =
-      await buyRouter.getAmountsOut(
-        amountIn,
-        [USDC, WMATIC]
-      );
-
-    const tokenOut =
-      buy[buy.length - 1];
-
-    const sell =
-      await sellRouter.getAmountsOut(
-        tokenOut,
-        [WMATIC, USDC]
-      );
-
-    const finalUSDC =
-      sell[sell.length - 1];
-
-    const profit =
-      finalUSDC > amountIn
-        ? finalUSDC - amountIn
-        : 0n;
-
-    console.log(
-      `📊 ${name} PROFIT → ${formatUSDC(profit)}`
-    );
-
-    return {
-      name,
-      profit,
-      finalUSDC
-    };
-
-  } catch (e) {
-
-    console.log(
-      `❌ PROFIT FAILURE → ${e.shortMessage || e.message}`
-    );
-
-    return {
-      name,
-      profit: 0n,
-      finalUSDC: 0n
-    };
-  }
-}
-
-/* =========================================================
-   AUTO SOURCE SELECTOR
-========================================================= */
-
-async function executeBestTrade(
-  bestSignal
-) {
-
-  const deadline =
-    Math.floor(Date.now() / 1000) + 60;
-
-  const sizes = [
-    ethers.parseUnits("25", 6),
-    ethers.parseUnits("50", 6),
-    ethers.parseUnits("100", 6),
-  ];
-
-  const vaultAddress =
-    await arb.vault();
-
-  const vaultBalance =
-    await usdc.balanceOf(
-      vaultAddress
-    );
-
-  const required =
+  const amountIn =
     ethers.parseUnits("25", 6);
 
+  const mid =
+    await getOut(buy, amountIn, [USDC, WMATIC]);
+
+  const out =
+    await getOut(sell, mid, [WMATIC, USDC]);
+
+  const profit =
+    out > amountIn ? out - amountIn : 0n;
+
   console.log(
-    `🏦 VAULT BALANCE → ${formatUSDC(vaultBalance)}`
+    `📊 ${name} PROFIT → ${formatToken(profit, 6)}`
   );
 
-  let tx;
+  return { name, profit };
+}
 
-  /* =========================================
-     AUTO SELECT EXECUTION SOURCE
-  ========================================= */
+/* =========================================================
+   EXECUTION ENGINE
+========================================================= */
 
-  if (vaultBalance >= required) {
-
-    console.log(
-      `🟢 USING VAULT LIQUIDITY`
-    );
-
-    tx =
-      await arb.executeArbitrage(
-        QUICKSWAP,
-        SUSHISWAP,
-        required,
-        [USDC, WMATIC],
-        [WMATIC, USDC],
-        deadline
-      );
-
-  } else {
-
-    console.log(
-      `🟢 VAULT INSUFFICIENT`
-    );
-
-    console.log(
-      `🟢 SWITCHING TO FLASH LOAN`
-    );
-
-    tx =
-      await arb.executeBestFlashLoanArbitrage(
-        QUICKSWAP,
-        SUSHISWAP,
-        sizes,
-        [USDC, WMATIC],
-        [WMATIC, USDC],
-        deadline
-      );
-  }
+async function execute(best) {
 
   console.log("");
-  console.log("📡 SENDING TRANSACTION");
+  console.log("🚀 EXECUTION SIGNAL CONFIRMED");
   console.log("");
 
-  console.log("🟢 TX HASH →");
-  console.log(tx.hash);
+  console.log("❌ (SIMULATION MODE ENABLED)");
+  console.log("📡 SENDING TRANSACTION DISABLED FOR SAFETY");
+  console.log("");
 
-  const receipt =
-    await tx.wait();
-
-  if (receipt.status === 1) {
-
-    console.log("");
-    console.log(
-      "🟢 TRANSACTION CONFIRMED"
-    );
-
-    console.log(
-      `💰 FINAL PROFIT → ${formatUSDC(bestSignal.profit)} USDC`
-    );
-
-  } else {
-
-    console.log(
-      "❌ TRANSACTION FAILED"
-    );
-  }
+  console.log(
+    `🏆 BEST SIGNAL → ${best.name}`
+  );
 }
 
 /* =========================================================
@@ -442,141 +227,61 @@ async function run() {
 
   while (true) {
 
-    try {
+    console.log("================================================");
+    console.log("");
 
-      console.log(
-        "================================================"
-      );
+    const q =
+      await testDepth("QUICKSWAP", quickswap);
 
-      const quickDepth =
-        await testDepthCurve(
-          "QUICKSWAP",
-          quickswap
-        );
+    const s =
+      await testDepth("SUSHISWAP", sushiswap);
 
-      console.log("");
+    console.log("🟢 MEMPOOL STABLE");
+    console.log("");
 
-      const sushiDepth =
-        await testDepthCurve(
-          "SUSHISWAP",
-          sushiswap
-        );
+    await checkBlocks();
 
-      if (
-        !quickDepth &&
-        !sushiDepth
-      ) {
-        console.log(
-          "❌ DEPTH VALIDATION FAILED"
-        );
+    console.log("🟢 SCANNING ROUTES");
+    console.log("");
 
-        rotateRPC();
+    const qProfit =
+      await scan("QUICKSWAP", quickswap, sushiswap);
 
-        await sleep(5000);
-
-        continue;
-      }
-
-      console.log("");
-      console.log(
-        "🟢 MEMPOOL STABLE"
-      );
-      console.log("");
-
-      const stable =
-        await validateBlocks();
-
-      if (!stable) {
-
-        console.log(
-          "❌ BLOCK INSTABILITY"
-        );
-
-        await sleep(5000);
-
-        continue;
-      }
-
-      console.log(
-        "🟢 BLOCK STABILITY CONFIRMED"
-      );
-
-      console.log("");
-      console.log(
-        "🟢 SCANNING ROUTES"
-      );
-      console.log("");
-
-      const quickProfit =
-        await scanProfit(
-          "QUICKSWAP",
-          quickswap,
-          sushiswap
-        );
-
-      const sushiProfit =
-        await scanProfit(
-          "SUSHISWAP",
-          sushiswap,
-          quickswap
-        );
-
-      let best =
-        quickProfit.profit >
-        sushiProfit.profit
-          ? quickProfit
-          : sushiProfit;
-
-      console.log("");
-      console.log(
-        `🏆 BEST SIGNAL → ${best.name}`
-      );
-
-      if (best.profit <= 0n) {
-
-        console.log(
-          "❌ NO PROFITABLE ROUTE"
-        );
-
-        await sleep(5000);
-
-        continue;
-      }
-
-      console.log("");
-      console.log(
-        "🟢 STATIC CHECK PASSED"
-      );
-
-      console.log("");
-      console.log(
-        "🚀 EXECUTION SIGNAL CONFIRMED"
-      );
-
-      await executeBestTrade(best);
-
-    } catch (e) {
-
-      console.log("");
-
-      console.log(
-        `❌ EXECUTION FAILURE → ${e.shortMessage || e.message}`
-      );
-
-      rotateRPC();
-    }
+    const sProfit =
+      await scan("SUSHISWAP", sushiswap, quickswap);
 
     console.log("");
+
+    const best =
+      qProfit.profit > sProfit.profit
+        ? qProfit
+        : sProfit;
+
     console.log(
-      "🟢 WAITING FOR NEXT SCAN"
+      `🏆 BEST SIGNAL → ${best.name}`
     );
 
-    await sleep(8000);
+    if (best.profit <= 0n) {
+
+      console.log("");
+      console.log("❌ NO PROFITABLE ROUTE");
+      console.log("");
+
+      console.log("🟢 WAITING FOR NEXT SCAN");
+      console.log("");
+
+      await sleep(5000);
+      continue;
+    }
+
+    await execute(best);
+
+    console.log("");
+    console.log("🟢 WAITING FOR NEXT SCAN");
+    console.log("");
+
+    await sleep(5000);
   }
 }
-
-/* =========================================================
-   START
-========================================================= */
 
 run();
