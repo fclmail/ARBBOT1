@@ -4,8 +4,8 @@ import { ethers } from "ethers";
 dotenv.config();
 
 const RPCS = [
-  "https://polygon-rpc.com",
-  "https://1rpc.io/matic",
+//  "https://polygon-rpc.com",
+//  "https://1rpc.io/matic",
   "https://polygon-bor.publicnode.com"
 ];
 
