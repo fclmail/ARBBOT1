@@ -20,8 +20,8 @@ const CONTRACT_ADDRESS =
 
 const RPCS = [
   "https://polygon-bor-rpc.publicnode.com",
-  "https://rpc.ankr.com/polygon",
-  "https://polygon.llamarpc.com",
+  //"https://rpc.ankr.com/polygon",
+  //"https://polygon.llamarpc.com",
   "https://1rpc.io/matic",
   "https://polygon.drpc.org"
 ];
