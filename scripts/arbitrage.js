@@ -1,9 +1,8 @@
 
-
 /**********************************************************************
  🟢 DETERMINISTIC STATE SIMULATION SNIPER
- 🟢 FULL TUNABLE SINGLE-FILE ARCHITECTURE
- 🟢 MULTI-DEX ARBITRAGE SIMULATION ENGINE
+ 🟢 FLASHLOAN EXECUTION ENGINE
+ 🟢 FULL SINGLE-FILE PRODUCTION ARCHITECTURE
 **********************************************************************/
 
 import dotenv from "dotenv";
@@ -20,7 +19,9 @@ const PRIVATE_KEY =
   process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {
-  throw new Error("❌ Missing PRIVATE_KEY");
+  throw new Error(
+    "❌ Missing PRIVATE_KEY"
+  );
 }
 
 /**********************************************************************
@@ -28,52 +29,88 @@ if (!PRIVATE_KEY) {
 **********************************************************************/
 
 const RPCS = [
-  process.env.RPC_1 || "https://polygon-rpc.com",
-  process.env.RPC_2 || "https://rpc.ankr.com/polygon",
-  process.env.RPC_3 || "https://polygon-bor-rpc.publicnode.com"
+
+  process.env.RPC_1 ||
+    "https://polygon-rpc.com",
+
+  process.env.RPC_2 ||
+    "https://polygon-bor-rpc.publicnode.com",
+
+  process.env.RPC_3 ||
+    "https://polygon.drpc.org",
+
+  process.env.RPC_4 ||
+    "https://1rpc.io/matic"
 ];
 
 let rpcIndex = 0;
 
 function getProvider() {
-  rpcIndex = (rpcIndex + 1) % RPCS.length;
 
-  console.log(`🟢 ROTATING RPC → ${RPCS[rpcIndex]}`);
+  rpcIndex =
+    (rpcIndex + 1) %
+    RPCS.length;
+
+  const rpc =
+    RPCS[rpcIndex];
+
+  console.log(
+    `🟢 ROTATING RPC → ${rpc}`
+  );
 
   return new ethers.JsonRpcProvider(
-    RPCS[rpcIndex],
+    rpc,
     137
   );
 }
 
-let provider = getProvider();
+let provider =
+  getProvider();
 
 /**********************************************************************
  🟢 SECTION 3 — WALLET
 **********************************************************************/
 
-const wallet = new ethers.Wallet(
-  PRIVATE_KEY,
-  provider
+function getWallet() {
+
+  return new ethers.Wallet(
+    PRIVATE_KEY,
+    provider
+  );
+}
+
+console.log(
+  `🟢 WALLET LOADED`
 );
 
-console.log(`🟢 WALLET LOADED`);
-console.log(`🟢 ADDRESS → ${wallet.address}`);
+console.log(
+  `🟢 ADDRESS → ${
+    getWallet().address
+  }`
+);
 
 /**********************************************************************
- 🟢 SECTION 4 — TUNABLE CONFIG
+ 🟢 SECTION 4 — CONTRACT
+**********************************************************************/
+
+const ARB_CONTRACT =
+  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
+
+/**********************************************************************
+ 🟢 SECTION 5 — CONFIG
 **********************************************************************/
 
 const CONFIG = {
+
   SCAN_INTERVAL: 4000,
 
-  MIN_PROFIT_USD: 1.00,
+  MIN_PROFIT_USD: 1,
+
+  GAS_LIMIT: 900000,
 
   MAX_GAS_GWEI: 120,
 
-  FLASH_LOAN_FEE_BPS: 9,
-
-  MAX_SLIPPAGE_BPS: 80,
+  MULTI_BLOCK_CONFIRMATIONS: 3,
 
   DEPTH_SIZES: [
     "25",
@@ -83,26 +120,17 @@ const CONFIG = {
     "500"
   ],
 
-  GAS_LIMIT: 900000,
-
-  MAX_FAILED_SIMULATIONS: 5,
-
-  MULTI_BLOCK_CONFIRMATIONS: 3,
-
-  ENABLE_MEMPOOL_SIMULATION: true,
-
   ENABLE_DEPTH_CURVE: true,
 
-  ENABLE_FAILURE_REPLAY: true,
-
-  ENABLE_FLASHLOAN_SCALING: true
+  ENABLE_MEMPOOL_SIMULATION: true
 };
 
 /**********************************************************************
- 🟢 SECTION 5 — TOKENS
+ 🟢 SECTION 6 — TOKENS
 **********************************************************************/
 
 const TOKENS = {
+
   USDC: {
     symbol: "USDC",
     address:
@@ -126,59 +154,92 @@ const TOKENS = {
 };
 
 /**********************************************************************
- 🟢 SECTION 6 — ROUTERS
+ 🟢 SECTION 7 — ROUTERS
 **********************************************************************/
 
 const ROUTERS = {
+
   QUICKSWAP:
-    "0xa5E0829CaCED8fFDD4De3c43696c57F7D7A678ff",
+    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
 
   SUSHISWAP:
     "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
 /**********************************************************************
- 🟢 SECTION 7 — ROUTER ABI
+ 🟢 SECTION 8 — ROUTER ABI
 **********************************************************************/
 
 const ROUTER_ABI = [
-  "function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts)"
+
+  "function getAmountsOut(uint amountIn,address[] memory path) external view returns (uint[] memory amounts)"
 ];
 
 /**********************************************************************
- 🟢 SECTION 8 — ROUTER CONTRACTS
+ 🟢 SECTION 9 — ARB CONTRACT ABI
 **********************************************************************/
 
-const quickswap = new ethers.Contract(
-  ROUTERS.QUICKSWAP,
-  ROUTER_ABI,
-  provider
-);
+const ARB_ABI = [
 
-const sushiswap = new ethers.Contract(
-  ROUTERS.SUSHISWAP,
-  ROUTER_ABI,
-  provider
-);
+  "function executeBestFlashLoanArbitrage(address buyRouter,address sellRouter,uint256[] calldata candidateSizes,address[] calldata pathToToken,address[] calldata pathToUSDC,uint256 deadline) external",
+
+  "function findBestFlashLoanSize(address buyRouter,address sellRouter,uint256[] calldata candidateSizes,address[] calldata pathToToken,address[] calldata pathToUSDC) external view returns ((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))"
+];
 
 /**********************************************************************
- 🟢 SECTION 9 — HELPERS
+ 🟢 SECTION 10 — CONTRACT FACTORIES
 **********************************************************************/
 
-function formatUSD(value) {
-  return Number(
-    ethers.formatUnits(value, 6)
-  ).toFixed(6);
+function getRouters() {
+
+  return {
+
+    quickswap:
+      new ethers.Contract(
+        ROUTERS.QUICKSWAP,
+        ROUTER_ABI,
+        provider
+      ),
+
+    sushiswap:
+      new ethers.Contract(
+        ROUTERS.SUSHISWAP,
+        ROUTER_ABI,
+        provider
+      )
+  };
 }
 
-function sleep(ms) {
-  return new Promise(resolve =>
-    setTimeout(resolve, ms)
+function getArbContract() {
+
+  return new ethers.Contract(
+    ARB_CONTRACT,
+    ARB_ABI,
+    getWallet()
   );
 }
 
 /**********************************************************************
- 🟢 SECTION 10 — DEPTH SIMULATION
+ 🟢 SECTION 11 — HELPERS
+**********************************************************************/
+
+function sleep(ms) {
+
+  return new Promise(
+    resolve =>
+      setTimeout(resolve, ms)
+  );
+}
+
+function formatUSDC(v) {
+
+  return Number(
+    ethers.formatUnits(v, 6)
+  ).toFixed(6);
+}
+
+/**********************************************************************
+ 🟢 SECTION 12 — DEPTH SIMULATION
 **********************************************************************/
 
 async function simulateDepth(
@@ -186,7 +247,9 @@ async function simulateDepth(
   amountIn,
   path
 ) {
+
   try {
+
     const amounts =
       await router.getAmountsOut(
         amountIn,
@@ -208,7 +271,7 @@ async function simulateDepth(
 }
 
 /**********************************************************************
- 🟢 SECTION 11 — DEPTH CURVE TEST
+ 🟢 SECTION 13 — DEPTH CURVE
 **********************************************************************/
 
 async function testDepthCurve(
@@ -216,16 +279,23 @@ async function testDepthCurve(
   routerName,
   path
 ) {
+
   console.log(
     `\n🟢 TESTING DEPTH CURVE → ${routerName}`
   );
 
-  let previousOut = 0n;
+  let successfulQuotes = 0;
 
-  for (const size of CONFIG.DEPTH_SIZES) {
+  for (
+    const size of
+    CONFIG.DEPTH_SIZES
+  ) {
 
     const amountIn =
-      ethers.parseUnits(size, 6);
+      ethers.parseUnits(
+        size,
+        6
+      );
 
     const out =
       await simulateDepth(
@@ -234,20 +304,24 @@ async function testDepthCurve(
         path
       );
 
-    console.log(
-      `📐 SIZE ${size} USDC → ${formatUSD(out)}`
-    );
-
-    if (previousOut > out && previousOut !== 0n) {
-
-      console.log(
-        `⚠️ DEPTH COLLAPSE DETECTED`
-      );
-
-      return false;
+    if (out > 0n) {
+      successfulQuotes++;
     }
 
-    previousOut = out;
+    console.log(
+      `📐 SIZE ${size} USDC → ${formatUSDC(out)}`
+    );
+  }
+
+  if (
+    successfulQuotes === 0
+  ) {
+
+    console.log(
+      `❌ NO VALID LIQUIDITY`
+    );
+
+    return false;
   }
 
   console.log(
@@ -258,53 +332,7 @@ async function testDepthCurve(
 }
 
 /**********************************************************************
- 🟢 SECTION 12 — PROFIT ENGINE
-**********************************************************************/
-
-function calculateProfit(
-  input,
-  output
-) {
-  return output - input;
-}
-
-/**********************************************************************
- 🟢 SECTION 13 — GAS ESTIMATION
-**********************************************************************/
-
-async function estimateGasCostUSD() {
-
-  const feeData =
-    await provider.getFeeData();
-
-  const gasPrice =
-    feeData.gasPrice || 0n;
-
-  const gasCost =
-    gasPrice *
-    BigInt(CONFIG.GAS_LIMIT);
-
-  return gasCost;
-}
-
-/**********************************************************************
- 🟢 SECTION 14 — STATIC CHECK
-**********************************************************************/
-
-function staticCheck(profit) {
-
-  return (
-    Number(
-      ethers.formatUnits(
-        profit,
-        6
-      )
-    ) > CONFIG.MIN_PROFIT_USD
-  );
-}
-
-/**********************************************************************
- 🟢 SECTION 15 — MEMPOOL SIMULATION
+ 🟢 SECTION 14 — MEMPOOL CHECK
 **********************************************************************/
 
 async function mempoolPressureCheck() {
@@ -315,42 +343,49 @@ async function mempoolPressureCheck() {
     return true;
   }
 
-  console.log(
-    `🟢 MEMPOOL PRESSURE CHECK`
-  );
+  try {
 
-  const pendingBlock =
-    await provider.getBlock(
-      "pending"
-    );
+    const pending =
+      await provider.getBlock(
+        "pending"
+      );
 
-  if (
-    pendingBlock.transactions.length >
-    2500
-  ) {
+    if (
+      pending.transactions.length >
+      2500
+    ) {
+
+      console.log(
+        `⚠️ HIGH MEMPOOL CONGESTION`
+      );
+
+      return false;
+    }
 
     console.log(
-      `⚠️ HIGH MEMPOOL CONGESTION`
+      `🟢 MEMPOOL STABLE`
     );
 
-    return false;
+    return true;
+
+  } catch {
+
+    console.log(
+      `⚠️ MEMPOOL CHECK SKIPPED`
+    );
+
+    return true;
   }
-
-  console.log(
-    `🟢 MEMPOOL STABLE`
-  );
-
-  return true;
 }
 
 /**********************************************************************
- 🟢 SECTION 16 — MULTI-BLOCK VALIDATION
+ 🟢 SECTION 15 — BLOCK VALIDATION
 **********************************************************************/
 
 async function multiBlockValidation() {
 
   console.log(
-    `🟢 MULTI-BLOCK VALIDATION`
+    `\n🟢 MULTI-BLOCK VALIDATION`
   );
 
   for (
@@ -373,71 +408,24 @@ async function multiBlockValidation() {
   console.log(
     `🟢 BLOCK STABILITY CONFIRMED`
   );
-
-  return true;
 }
 
 /**********************************************************************
- 🟢 SECTION 17 — FAILURE REPLAY
+ 🟢 SECTION 16 — ANALYZE ROUTES
 **********************************************************************/
 
-async function deterministicReplay() {
+async function analyzeRoutes() {
 
-  if (
-    !CONFIG.ENABLE_FAILURE_REPLAY
-  ) {
-    return true;
-  }
-
-  console.log(
-    `🟢 DETERMINISTIC FAILURE REPLAY`
-  );
-
-  await sleep(300);
-
-  console.log(
-    `🟢 REPLAY PASSED`
-  );
-
-  return true;
-}
-
-/**********************************************************************
- 🟢 SECTION 18 — FLASHLOAN SCALING
-**********************************************************************/
-
-async function flashloanScaling() {
-
-  if (
-    !CONFIG.ENABLE_FLASHLOAN_SCALING
-  ) {
-    return;
-  }
-
-  console.log(
-    `🟢 FLASHLOAN SIZE OPTIMIZER`
-  );
-
-  for (const size of CONFIG.DEPTH_SIZES) {
-
-    console.log(
-      `⚡ TEST SIZE → ${size} USDC`
-    );
-  }
-
-  console.log(
-    `🟢 OPTIMAL SIZE FOUND`
-  );
-}
-
-/**********************************************************************
- 🟢 SECTION 19 — ANALYZE PATH
-**********************************************************************/
-
-async function analyzePath() {
+  const {
+    quickswap,
+    sushiswap
+  } = getRouters();
 
   const amountIn =
-    ethers.parseUnits("100", 6);
+    ethers.parseUnits(
+      "100",
+      6
+    );
 
   const path = [
     TOKENS.USDC.address,
@@ -464,27 +452,172 @@ async function analyzePath() {
     );
 
   const quickProfit =
-    calculateProfit(
-      amountIn,
-      quickOut
-    );
+    quickOut > amountIn
+      ? quickOut - amountIn
+      : 0n;
 
   const sushiProfit =
-    calculateProfit(
-      amountIn,
-      sushiOut
-    );
+    sushiOut > amountIn
+      ? sushiOut - amountIn
+      : 0n;
 
   return {
+
     quickProfit,
+
     sushiProfit,
-    quickOut,
-    sushiOut
+
+    bestRouter:
+      quickProfit >
+      sushiProfit
+        ? "QUICKSWAP"
+        : "SUSHISWAP",
+
+    buyRouter:
+      quickProfit >
+      sushiProfit
+        ? ROUTERS.QUICKSWAP
+        : ROUTERS.SUSHISWAP,
+
+    sellRouter:
+      quickProfit >
+      sushiProfit
+        ? ROUTERS.SUSHISWAP
+        : ROUTERS.QUICKSWAP
   };
 }
 
 /**********************************************************************
- 🟢 SECTION 20 — EXECUTION ENGINE
+ 🟢 SECTION 17 — EXECUTION
+**********************************************************************/
+
+async function executeArbitrage(
+  buyRouter,
+  sellRouter
+) {
+
+  try {
+
+    const arb =
+      getArbContract();
+
+    const candidateSizes = [
+
+      ethers.parseUnits(
+        "25",
+        6
+      ),
+
+      ethers.parseUnits(
+        "50",
+        6
+      ),
+
+      ethers.parseUnits(
+        "100",
+        6
+      ),
+
+      ethers.parseUnits(
+        "250",
+        6
+      ),
+
+      ethers.parseUnits(
+        "500",
+        6
+      )
+    ];
+
+    const pathToToken = [
+
+      TOKENS.USDC.address,
+      TOKENS.WETH.address
+    ];
+
+    const pathToUSDC = [
+
+      TOKENS.WETH.address,
+      TOKENS.USDC.address
+    ];
+
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 60 * 5;
+
+    console.log(
+      `\n🏆 BEST SIGNAL → ${
+        buyRouter ===
+        ROUTERS.QUICKSWAP
+          ? "QUICKSWAP"
+          : "SUSHISWAP"
+      }`
+    );
+
+    console.log(
+      `🟢 STATIC CHECK PASSED`
+    );
+
+    console.log(
+      `🚀 EXECUTION SIGNAL CONFIRMED`
+    );
+
+    console.log(
+      `📡 SENDING TRANSACTION`
+    );
+
+    const tx =
+      await arb.executeBestFlashLoanArbitrage(
+
+        buyRouter,
+
+        sellRouter,
+
+        candidateSizes,
+
+        pathToToken,
+
+        pathToUSDC,
+
+        deadline,
+
+        {
+          gasLimit:
+            CONFIG.GAS_LIMIT
+        }
+      );
+
+    console.log(
+      `\n🟢 TX HASH →`
+    );
+
+    console.log(tx.hash);
+
+    const receipt =
+      await tx.wait();
+
+    console.log(
+      `\n🟢 TRANSACTION CONFIRMED`
+    );
+
+    console.log(
+      `🧾 BLOCK → ${receipt.blockNumber}`
+    );
+
+  } catch (err) {
+
+    console.log(
+      `❌ EXECUTION FAILURE → ${err.message}`
+    );
+
+    provider =
+      getProvider();
+  }
+}
+
+/**********************************************************************
+ 🟢 SECTION 18 — MAIN ENGINE
 **********************************************************************/
 
 async function executionEngine() {
@@ -495,9 +628,17 @@ async function executionEngine() {
       `\n================================================`
     );
 
+    const {
+      quickswap,
+      sushiswap
+    } = getRouters();
+
     const path = [
+
       TOKENS.USDC.address,
+
       TOKENS.WETH.address,
+
       TOKENS.DAI.address
     ];
 
@@ -541,60 +682,44 @@ async function executionEngine() {
 
     await multiBlockValidation();
 
-    await deterministicReplay();
-
-    await flashloanScaling();
-
     const result =
-      await analyzePath();
+      await analyzeRoutes();
 
     console.log(
-      `\n📊 QUICKSWAP PROFIT → ${formatUSD(result.quickProfit)}`
+      `\n📊 QUICKSWAP PROFIT → ${formatUSDC(result.quickProfit)}`
     );
 
     console.log(
-      `📊 SUSHISWAP PROFIT → ${formatUSD(result.sushiProfit)}`
+      `📊 SUSHISWAP PROFIT → ${formatUSDC(result.sushiProfit)}`
     );
 
-    const gasCost =
-      await estimateGasCostUSD();
-
-    console.log(
-      `⛽ ESTIMATED GAS → ${ethers.formatEther(gasCost)}`
-    );
+    const bestProfit =
+      result.quickProfit >
+      result.sushiProfit
+        ? result.quickProfit
+        : result.sushiProfit;
 
     if (
-      staticCheck(
-        result.quickProfit
-      )
+      Number(
+        ethers.formatUnits(
+          bestProfit,
+          6
+        )
+      ) <
+      CONFIG.MIN_PROFIT_USD
     ) {
-
-      console.log(
-        `\n🏆 BEST SIGNAL → QUICKSWAP`
-      );
-
-      console.log(
-        `🟢 STATIC CHECK PASSED`
-      );
-
-      console.log(
-        `🟢 DETERMINISTIC STATE VERIFIED`
-      );
-
-      console.log(
-        `🚀 EXECUTION SIGNAL CONFIRMED`
-      );
-
-      console.log(
-        `📡 SENDING TRANSACTION`
-      );
-
-    } else {
 
       console.log(
         `❌ NO VALID OPPORTUNITY`
       );
+
+      return;
     }
+
+    await executeArbitrage(
+      result.buyRouter,
+      result.sellRouter
+    );
 
   } catch (err) {
 
@@ -602,12 +727,13 @@ async function executionEngine() {
       `❌ ENGINE FAILURE → ${err.message}`
     );
 
-    provider = getProvider();
+    provider =
+      getProvider();
   }
 }
 
 /**********************************************************************
- 🟢 SECTION 21 — MAIN LOOP
+ 🟢 SECTION 19 — MAIN LOOP
 **********************************************************************/
 
 async function start() {
@@ -631,7 +757,7 @@ async function start() {
 }
 
 /**********************************************************************
- 🟢 SECTION 22 — START BOT
+ 🟢 SECTION 20 — START
 **********************************************************************/
 
 start();
