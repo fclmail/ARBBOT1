@@ -20,9 +20,9 @@ if (!PRIVATE_KEY) {
 ========================================================= */
 
 const RPCS = [
-  "https://1rpc.io/matic",
+//  "https://1rpc.io/matic",
   "https://polygon-bor-rpc.publicnode.com",
-  "https://rpc.ankr.com/polygon",
+//  "https://rpc.ankr.com/polygon",
   "https://polygon.llamarpc.com"
 ];
 
