@@ -4,155 +4,435 @@ import { ethers } from "ethers";
 dotenv.config();
 
 /* =========================================================
-   MICRO → MACRO CONTINUOUS ARBITRAGE ENGINE
-   LIVE CONTRACT SIGNAL PRIMARY SOURCE
-   POLYGON MAINNET
+   ENV
 ========================================================= */
-
-const RPC =
-  process.env.RPC_URL ||
-  "https://polygon-bor-rpc.publicnode.com";
-
-const provider = new ethers.JsonRpcProvider(RPC);
 
 const PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY ||
   process.env.PRIVATE_KEY;
 
-if (!PRIVATE_KEY) {
+if (!PRIVATE_KEY)
   throw new Error("Missing PRIVATE_KEY");
-}
 
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+/* =========================================================
+   RPC
+========================================================= */
+
+const RPC =
+  "https://polygon-bor-rpc.publicnode.com";
+
+const provider =
+  new ethers.JsonRpcProvider(RPC);
+
+const wallet =
+  new ethers.Wallet(
+    PRIVATE_KEY,
+    provider
+  );
 
 /* =========================================================
    CONTRACT
 ========================================================= */
 
-const ARB_CONTRACT =
+const CONTRACT_ADDRESS =
   "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
-
-/* =========================================================
-   ROUTERS
-========================================================= */
-
-const QUICKSWAP =
-  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-
-const SUSHISWAP =
-  "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506";
-
-/* =========================================================
-   TOKENS
-========================================================= */
-
-const TOKENS = [
-  {
-    symbol: "WETH",
-    address:
-      "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-  },
-  {
-    symbol: "WMATIC",
-    address:
-      "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  },
-  {
-    symbol: "DAI",
-    address:
-      "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-  },
-  {
-    symbol: "USDT",
-    address:
-      "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  },
-  {
-    symbol: "WBTC",
-    address:
-      "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
-  },
-];
 
 /* =========================================================
    ABI
 ========================================================= */
 
-const ABI = [
-  "function executeArbitrage(address routerA,address routerB,address[] calldata pathA,address[] calldata pathB,uint256 amountIn,uint256 minProfit) external",
-  "function getLiveProfit(address routerA,address routerB,address token,uint256 amountIn) external view returns(uint256)",
-  "function getOptimalSize(address routerA,address routerB,address token,uint256 baseAmount) external view returns(uint256)",
-  "function vaultBalance() external view returns(uint256)",
+const abi = [
+
+  "function owner() view returns(address)",
+
+  "function minimumProfitUSDC() view returns(uint256)",
+
+  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
+
+  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
+
+  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
+
 ];
 
-/* =========================================================
-   CONTRACT INSTANCE
-========================================================= */
-
-const arb = new ethers.Contract(
-  ARB_CONTRACT,
-  ABI,
-  wallet
-);
+const arb =
+  new ethers.Contract(
+    CONTRACT_ADDRESS,
+    abi,
+    wallet
+  );
 
 /* =========================================================
-   SETTINGS
+   TOKENS
 ========================================================= */
+
+const TOKENS = {
+
+  WETH:
+    "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+
+  WMATIC:
+    "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+
+  DAI:
+    "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+
+  USDT:
+    "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+
+  WBTC:
+    "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+
+  USDC:
+    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+};
 
 const USDC =
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+  TOKENS.USDC;
 
-const BASE_SCAN =
-  ethers.parseUnits("25000", 6);
+/* =========================================================
+   ROUTERS
+========================================================= */
 
-const MIN_PROFIT =
-  ethers.parseUnits("5", 6);
+const QUICK =
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 
-const LOOP_DELAY = 2500;
+const SUSHI =
+  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+
+/* =========================================================
+   ERC20
+========================================================= */
+
+const ERC20_ABI = [
+  "function balanceOf(address) view returns(uint256)"
+];
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function format6(x) {
-  return Number(
+const sleep = (ms) =>
+  new Promise(r => setTimeout(r, ms));
+
+const fmt = (x) =>
+  Number(
     ethers.formatUnits(x, 6)
   ).toFixed(6);
+
+function makeRoute(token) {
+
+  return {
+
+    buyRouter:
+      QUICK,
+
+    sellRouter:
+      SUSHI,
+
+    pathToToken: [
+      USDC,
+      token
+    ],
+
+    pathToUSDC: [
+      token,
+      USDC
+    ]
+  };
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function calcLiquidityScore(
+  profit,
+  size
+) {
+
+  if (size === 0n)
+    return 0;
+
+  const ratio =
+    Number(
+      (profit * 100000n) / size
+    );
+
+  return Math.min(
+    Math.max(ratio, 1),
+    99
+  );
 }
 
-function randomEfficiency() {
-  return Math.floor(
-    Math.random() * 15000000
+function slippageLabel(score) {
+
+  if (score >= 80)
+    return "LOW";
+
+  if (score >= 50)
+    return "MEDIUM";
+
+  return "HIGH";
+}
+
+/* =========================================================
+   CONTRACT VAULT BALANCE
+========================================================= */
+
+async function getVaultBalance() {
+
+  const usdc =
+    new ethers.Contract(
+      USDC,
+      ERC20_ABI,
+      provider
+    );
+
+  return await usdc.balanceOf(
+    CONTRACT_ADDRESS
   );
 }
 
 /* =========================================================
-   STATIC CHECK
+   FAST SPREAD DETECTION
 ========================================================= */
 
-async function staticCheck(signal) {
-  try {
-    await arb.executeArbitrage.staticCall(
-      QUICKSWAP,
-      SUSHISWAP,
-      [USDC, signal.token.address],
-      [signal.token.address, USDC],
-      signal.size,
-      MIN_PROFIT
-    );
+async function fastSpreadDetection(
+  token
+) {
 
-    return true;
-  } catch (err) {
-    console.log("❌ STATIC CHECK FAILED");
-    console.log(
-      err.reason || err.shortMessage || err.message
-    );
+  try {
+
+    const route =
+      makeRoute(token);
+
+    const amount =
+      ethers.parseUnits("5", 6);
+
+    const result =
+      await arb.simulateArbitrageProfit.staticCall(
+
+        route.buyRouter,
+
+        route.sellRouter,
+
+        amount,
+
+        route.pathToToken,
+
+        route.pathToUSDC
+      );
+
+    return result[1] > 0n;
+
+  } catch {
 
     return false;
+  }
+}
+
+/* =========================================================
+   DEPTH ANALYSIS
+========================================================= */
+
+async function runDepthAnalysis(
+  name,
+  token
+) {
+
+  try {
+
+    console.log(
+      `\n🔎 SCANNING ${name}`
+    );
+
+    const vaultBal =
+      await getVaultBalance();
+
+    console.log(
+      `\n💰 Vault: ${fmt(vaultBal)} USDC`
+    );
+
+    /* ==========================================
+       FAST DETECTION
+    ========================================== */
+
+    const spreadExists =
+      await fastSpreadDetection(
+        token
+      );
+
+    if (!spreadExists) {
+
+      console.log(
+        "\n💤 No spread"
+      );
+
+      return null;
+    }
+
+    console.log(
+      "\n📡 Fast spread detected..."
+    );
+
+    console.log(
+      "\n📡 Running contract depth analysis..."
+    );
+
+    const route =
+      makeRoute(token);
+
+    /* ==========================================
+       DYNAMIC CONTINUOUS CANDIDATES
+    ========================================== */
+
+    const candidateSizes = [
+
+      vaultBal / 2n,
+
+      vaultBal,
+
+      vaultBal * 2n,
+
+      vaultBal * 5n,
+
+      vaultBal * 10n,
+
+      vaultBal * 20n,
+
+      vaultBal * 50n
+
+    ].filter(x => x > 0n);
+
+    /* ==========================================
+       STATIC PASS #1
+       CONTRACT PRIMARY SIGNAL
+    ========================================== */
+
+    const best =
+      await arb.findBestFlashLoanSize.staticCall(
+
+        route.buyRouter,
+
+        route.sellRouter,
+
+        candidateSizes,
+
+        route.pathToToken,
+
+        route.pathToUSDC
+      );
+
+    const bestSize =
+      best.amountIn;
+
+    const estimatedFinal =
+      best.estimatedFinalUSDC;
+
+    const estimatedProfit =
+      best.estimatedProfit;
+
+    if (
+      estimatedProfit <= 0n
+    ) {
+
+      console.log(
+        "\n❌ No profitable size"
+      );
+
+      return null;
+    }
+
+    const score =
+      calcLiquidityScore(
+        estimatedProfit,
+        bestSize
+      );
+
+    const slippage =
+      slippageLabel(score);
+
+    console.log(
+      `\n📊 Contract Optimal Size:\n${fmt(bestSize)}`
+    );
+
+    console.log(
+      `\n📊 Estimated Final:\n${fmt(estimatedFinal)}`
+    );
+
+    console.log(
+      `\n📊 Estimated Profit:\n${fmt(estimatedProfit)}`
+    );
+
+    console.log(
+      `\n⚡ Liquidity Depth Score: ${score}`
+    );
+
+    console.log(
+      `\n⚡ Slippage: ${slippage}`
+    );
+
+    console.log(
+      "\n📡 Running execution simulation..."
+    );
+
+    /* ==========================================
+       STATIC PASS #2
+       FULL EXECUTION VALIDATION
+    ========================================== */
+
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 60;
+
+    await arb.executeBestFlashLoanArbitrage.staticCall(
+
+      route.buyRouter,
+
+      route.sellRouter,
+
+      [bestSize],
+
+      route.pathToToken,
+
+      route.pathToUSDC,
+
+      deadline
+    );
+
+    console.log(
+      "\n✅ Static simulation passed"
+    );
+
+    return {
+
+      token,
+
+      route,
+
+      size:
+        bestSize,
+
+      estimatedFinal,
+
+      profit:
+        estimatedProfit,
+
+      score,
+
+      slippage
+    };
+
+  } catch (err) {
+
+    console.log(
+      "\n❌ DEPTH ANALYSIS FAILED"
+    );
+
+    console.log(
+      err.shortMessage ||
+      err.message
+    );
+
+    return null;
   }
 }
 
@@ -160,251 +440,251 @@ async function staticCheck(signal) {
    EXECUTION
 ========================================================= */
 
-async function executeTrade(signal) {
+async function execute(signal) {
+
   try {
-    console.log("🔥 EXECUTING TRADE");
+
+    console.log(
+      "\n🔥 EXECUTING FLASH LOAN"
+    );
+
+    const before =
+      await getVaultBalance();
+
+    const deadline =
+      Math.floor(
+        Date.now() / 1000
+      ) + 60;
+
+    console.log(
+      "\n📡 Sending transaction..."
+    );
 
     const tx =
-      await arb.executeArbitrage(
-        QUICKSWAP,
-        SUSHISWAP,
-        [USDC, signal.token.address],
-        [signal.token.address, USDC],
-        signal.size,
-        MIN_PROFIT,
+      await arb.executeBestFlashLoanArbitrage(
+
+        signal.route.buyRouter,
+
+        signal.route.sellRouter,
+
+        [signal.size],
+
+        signal.route.pathToToken,
+
+        signal.route.pathToUSDC,
+
+        deadline,
+
         {
-          gasLimit: 4500000,
+          gasLimit: 3000000
         }
       );
 
-    console.log("📡 TX SENT");
-    console.log(`🧾 HASH: ${tx.hash}`);
-
-    console.log("⚡ AAVE CALLBACK");
-
-    const receipt = await tx.wait();
-
-    console.log("🔁 SWAPS COMPLETE");
-    console.log("💰 FLASH REPAID");
-
-    const vault =
-      await arb.vaultBalance();
-
     console.log(
-      `🏦 PROFIT RETAINED: ${format6(vault)} USDC`
+      `\n🚀 TX SENT:\n${tx.hash}`
     );
 
     console.log(
-      `✅ CONFIRMED BLOCK ${receipt.blockNumber}`
+      "\n⛓ Waiting confirmation..."
     );
 
-    return true;
+    const receipt =
+      await tx.wait();
+
+    console.log(
+      `\n✅ CONFIRMED BLOCK ${receipt.blockNumber}`
+    );
+
+    const after =
+      await getVaultBalance();
+
+    const realizedProfit =
+      after > before
+        ? after - before
+        : 0n;
+
+    const growth =
+      before > 0n
+        ? (
+            Number(realizedProfit) /
+            Number(before)
+          ) * 100
+        : 0;
+
+    console.log(
+      `\n💰 BEFORE:\n${fmt(before)}`
+    );
+
+    console.log(
+      `\n💰 AFTER:\n${fmt(after)}`
+    );
+
+    console.log(
+      `\n📈 PROFIT:\n${fmt(realizedProfit)}`
+    );
+
+    console.log(
+      "\n🏦 CONTRACT VAULT GROWTH:"
+    );
+
+    console.log(
+      `+${growth.toFixed(4)}%`
+    );
+
   } catch (err) {
-    console.log("❌ EXECUTION FAILED");
 
     console.log(
-      err.reason || err.shortMessage || err.message
+      "\n❌ EXECUTION FAILED"
     );
 
-    return false;
+    console.log(
+      err.shortMessage ||
+      err.message
+    );
   }
 }
 
 /* =========================================================
-   LIVE CONTRACT SIGNAL ENGINE
+   MAIN LOOP
 ========================================================= */
 
-async function scanSignals() {
-  let best = null;
+async function main() {
 
-  for (const token of TOKENS) {
-    try {
-      console.log(
-        `🔎 SCANNING ${token.symbol}`
-      );
-
-      const liveProfit =
-        await arb.getLiveProfit(
-          QUICKSWAP,
-          SUSHISWAP,
-          token.address,
-          BASE_SCAN
-        );
-
-      const optimalSize =
-        await arb.getOptimalSize(
-          QUICKSWAP,
-          SUSHISWAP,
-          token.address,
-          BASE_SCAN
-        );
-
-      const efficiency =
-        randomEfficiency();
-
-      const scale =
-        Number(
-          ethers.formatUnits(
-            optimalSize,
-            6
-          )
-        ) / 25000;
-
-      console.log(
-        `📊 Profit: ${format6(liveProfit)}`
-      );
-
-      console.log(
-        `⚡ Efficiency: ${efficiency}`
-      );
-
-      console.log(
-        `📐 SCALE: ${Math.floor(scale)}x`
-      );
-
-      console.log(
-        `🚀 SIZE: ${format6(
-          optimalSize
-        )} USDC`
-      );
-
-      if (
-        liveProfit > MIN_PROFIT &&
-        optimalSize > 0
-      ) {
-        if (
-          !best ||
-          liveProfit > best.profit
-        ) {
-          best = {
-            token,
-            profit: liveProfit,
-            size: optimalSize,
-          };
-        }
-      }
-    } catch (err) {
-      console.log(
-        `❌ SCAN ERROR ${token.symbol}`
-      );
-
-      console.log(
-        err.reason ||
-          err.shortMessage ||
-          err.message
-      );
-    }
-  }
-
-  return best;
-}
-
-/* =========================================================
-   CONTINUOUS ENGINE
-========================================================= */
-
-async function engine() {
   console.log(
-    "🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED"
+    "\n🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED"
   );
 
+  const owner =
+    await arb.owner();
+
+  console.log(
+    `\n👤 OWNER:\n${owner}`
+  );
+
+  console.log(
+    `\n👤 WALLET:\n${wallet.address}`
+  );
+
+  if (
+    owner.toLowerCase() !==
+    wallet.address.toLowerCase()
+  ) {
+
+    throw new Error(
+      "Wallet is not contract owner"
+    );
+  }
+
   while (true) {
+
     try {
-      const signal =
-        await scanSignals();
 
-      if (!signal) {
-        console.log(
-          "❌ NO VALID SIGNAL"
+      const scans =
+        await Promise.all(
+
+          Object.entries(TOKENS)
+
+            .filter(
+              ([k]) => k !== "USDC"
+            )
+
+            .map(
+              ([name, token]) =>
+                runDepthAnalysis(
+                  name,
+                  token
+                )
+            )
         );
 
+      const valid =
+        scans.filter(Boolean);
+
+      if (
+        valid.length === 0
+      ) {
+
         console.log(
-          "🔎 CONTINUING SCAN..."
+          "\n💤 No opportunities"
         );
 
-        await sleep(LOOP_DELAY);
+        await sleep(2000);
 
         continue;
       }
 
-      console.log("🏆 BEST SIGNAL");
+      /* ======================================
+         CONTRACT SIGNAL PRIMARY
+      ====================================== */
 
-      console.log(
-        `TOKEN: ${signal.token.symbol}`
-      );
+      const best =
+        valid.reduce(
 
-      console.log(
-        `PROFIT: ${format6(
-          signal.profit
-        )}`
-      );
-
-      console.log(
-        `SIZE: ${format6(
-          signal.size
-        )}`
-      );
-
-      console.log(
-        "📊 PROFITABLE SIGNAL"
-      );
-
-      /* =====================================
-         REAL CONTRACT STATIC CHECK
-      ===================================== */
-
-      const passed =
-        await staticCheck(signal);
-
-      if (!passed) {
-        console.log(
-          "🔎 CONTINUING SCAN..."
+          (a, b) =>
+            b.profit > a.profit
+              ? b
+              : a
         );
 
-        await sleep(LOOP_DELAY);
-
-        continue;
-      }
-
       console.log(
-        "🧠 STATIC CHECK PASSED"
+        "\n🏆 BEST SIGNAL"
       );
 
-      /* =====================================
-         EXECUTION
-      ===================================== */
+      console.log(
+        `\nTOKEN:\n${
+          Object.entries(TOKENS)
+            .find(
+              ([, v]) =>
+                v === best.token
+            )?.[0] || best.token
+        }`
+      );
 
-      const success =
-        await executeTrade(signal);
+      console.log(
+        `\nPROFIT:\n${fmt(best.profit)}`
+      );
 
-      if (success) {
+      console.log(
+        `\nSIZE:\n${fmt(best.size)}`
+      );
+
+      /* ======================================
+         EXECUTION THRESHOLD
+      ====================================== */
+
+      const MIN_EXECUTION_PROFIT =
+        ethers.parseUnits(
+          "0.03",
+          6
+        );
+
+      if (
+        best.profit >=
+        MIN_EXECUTION_PROFIT
+      ) {
+
+        await execute(best);
+
+      } else {
+
         console.log(
-          "🏦 VAULT ACCUMULATION COMPLETE"
+          "\n🛑 Profit below threshold"
         );
       }
 
-      console.log(
-        "🔎 CONTINUING SCAN..."
-      );
-
-      await sleep(LOOP_DELAY);
     } catch (err) {
+
       console.log(
-        "❌ ENGINE ERROR"
+        "\n❌ LOOP ERROR"
       );
 
       console.log(
-        err.reason ||
-          err.shortMessage ||
-          err.message
+        err.shortMessage ||
+        err.message
       );
-
-      console.log(
-        "🔁 RECOVERING..."
-      );
-
-      await sleep(5000);
     }
+
+    await sleep(2000);
   }
 }
 
@@ -412,4 +692,4 @@ async function engine() {
    START
 ========================================================= */
 
-engine().catch(console.error);
+main().catch(console.error);
