@@ -21,7 +21,11 @@ if (!PRIVATE_KEY) {
 
 const RPCS = [
 
-  "https://polygon-bor-rpc.publicnode.com"
+  //"https://polygon-bor-rpc.publicnode.com"
+   "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8"
+
+
+
 
 ];
 
