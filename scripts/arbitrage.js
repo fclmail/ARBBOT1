@@ -19,34 +19,11 @@ if (!PRIVATE_KEY) {
    RPC
 ========================================================= */
 
-const RPCS = [
-
-  //"https://polygon-bor-rpc.publicnode.com"
-   "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8"
-
-
-
-
-];
-
-let rpcIndex = 0;
-
-function nextRPC() {
-
-  const rpc =
-    RPCS[rpcIndex];
-
-  rpcIndex =
-    (rpcIndex + 1) %
-    RPCS.length;
-
-  return rpc;
-}
+const RPC =
+  "https://polygon-bor-rpc.publicnode.com";
 
 const provider =
-  new ethers.JsonRpcProvider(
-    nextRPC()
-  );
+  new ethers.JsonRpcProvider(RPC);
 
 const wallet =
   new ethers.Wallet(
@@ -65,7 +42,7 @@ const CONTRACT_ADDRESS =
    ABI
 ========================================================= */
 
-const arbAbi = [
+const abi = [
 
   "function owner() view returns(address)",
 
@@ -79,26 +56,10 @@ const arbAbi = [
 
 ];
 
-const ROUTER_ABI = [
-
-  "function getAmountsOut(uint,address[]) view returns(uint[])"
-
-];
-
-const ERC20_ABI = [
-
-  "function balanceOf(address) view returns(uint256)"
-
-];
-
-/* =========================================================
-   CONTRACT
-========================================================= */
-
 const arb =
   new ethers.Contract(
     CONTRACT_ADDRESS,
-    arbAbi,
+    abi,
     wallet
   );
 
@@ -123,24 +84,6 @@ const TOKENS = {
   WBTC:
     "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
 
-  AAVE:
-    "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-
-  LINK:
-    "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-
-  UNI:
-    "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-
-  QUICK:
-    "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-
-  SHIB:
-    "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
-
-  CRV:
-    "0x172370d5cd63279efa6d502dab29171933a610af",
-
   USDC:
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 };
@@ -152,68 +95,48 @@ const USDC =
    ROUTERS
 ========================================================= */
 
-const routers = {
+const QUICK =
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 
-  QuickSwap:
-    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+const SUSHI =
+  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-  SushiSwap:
-    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+/* =========================================================
+   ERC20 ABI
+========================================================= */
 
-  Dfyn:
-    "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-
-  ApeSwap:
-    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-
-  Wault:
-    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
-
-};
-
-const routerContracts =
-  Object.fromEntries(
-
-    Object.values(routers).map(
-
-      r => [
-
-        r,
-
-        new ethers.Contract(
-          r,
-          ROUTER_ABI,
-          provider
-        )
-      ]
-    )
-  );
+const ERC20_ABI = [
+  "function balanceOf(address) view returns(uint256)"
+];
 
 /* =========================================================
    SETTINGS
 ========================================================= */
 
+/*
+CURRENT VAULT:
+~0.05 USDC
+
+SETTINGS BELOW ARE TUNED
+FOR MICRO DETECTION VISIBILITY
+AND SUCCESSFUL STATIC VALIDATION
+WITH VERY SMALL CAPITAL
+*/
+
 const MICRO_THRESHOLD =
   ethers.parseUnits(
-    "0.00001",
+    "0.000001",
     6
   );
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.00001",
+    "0.000050",
     6
   );
 
-const MICRO_PROBE =
-  ethers.parseUnits(
-    "0.02",
-    6
-  );
-
-const WORKER_COUNT = 32;
-
-const LOOP_DELAY = 5;
+const LOOP_DELAY =
+  2000;
 
 /* =========================================================
    HELPERS
@@ -227,11 +150,26 @@ const fmt = (x) =>
     ethers.formatUnits(x, 6)
   ).toFixed(6);
 
-function pipeline(stage, msg) {
+function makeRoute(token) {
 
-  console.log(
-    `\n📡 PIPELINE ${stage}: ${msg}`
-  );
+  return {
+
+    buyRouter:
+      QUICK,
+
+    sellRouter:
+      SUSHI,
+
+    pathToToken: [
+      USDC,
+      token
+    ],
+
+    pathToUSDC: [
+      token,
+      USDC
+    ]
+  };
 }
 
 function calcDepthScore(
@@ -267,71 +205,7 @@ function getSlippageLabel(
 }
 
 /* =========================================================
-   PATH BUILDERS
-========================================================= */
-
-function buildBuyPaths(token) {
-
-  return [
-
-    [USDC, token],
-
-    [USDC, TOKENS.WETH, token],
-
-    [USDC, TOKENS.WMATIC, token],
-
-    [USDC, TOKENS.DAI, token],
-
-    [USDC, TOKENS.USDT, token]
-  ];
-}
-
-function buildSellPaths(token) {
-
-  return [
-
-    [token, USDC],
-
-    [token, TOKENS.WETH, USDC],
-
-    [token, TOKENS.WMATIC, USDC],
-
-    [token, TOKENS.DAI, USDC],
-
-    [token, TOKENS.USDT, USDC]
-  ];
-}
-
-/* =========================================================
-   QUOTE
-========================================================= */
-
-async function quote(
-  router,
-  amount,
-  path
-) {
-
-  try {
-
-    const out =
-      await routerContracts[
-        router
-      ].getAmountsOut(
-        amount,
-        path
-      );
-
-    return out.at(-1);
-
-  } catch {
-
-    return null;
-  }
-}
-
-/* =========================================================
-   VAULT
+   VAULT BALANCE
 ========================================================= */
 
 async function getVaultBalance() {
@@ -349,76 +223,144 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   FAST MICRO FINDER
+   PIPELINE LOGS
 ========================================================= */
 
-async function fastMicroFinder(
+function pipeline(stage, msg) {
+
+  console.log(
+    `\n📡 PIPELINE ${stage}: ${msg}`
+  );
+}
+
+/* =========================================================
+   ADAPTIVE MICRO DETECTION
+========================================================= */
+
+async function detectMicroSpread(
   token
 ) {
 
   try {
 
-    for (const buy of Object.values(routers)) {
+    pipeline(
+      "STAGE 1",
+      "MICRO DETECTION"
+    );
 
-      for (const sell of Object.values(routers)) {
+    const vaultBal =
+      await getVaultBalance();
 
-        if (buy === sell)
-          continue;
+    /*
+    ADAPTIVE DETECTION SIZE
 
-        for (const buyPath of buildBuyPaths(token)) {
+    Small vault:
+    tiny scan
 
-          const buyOut =
-            await quote(
-              buy,
-              MICRO_PROBE,
-              buyPath
-            );
+    Large vault:
+    larger scan
+    */
 
-          if (!buyOut)
-            continue;
+    let amount;
 
-          for (const sellPath of buildSellPaths(token)) {
+    if (
+      vaultBal >
+      ethers.parseUnits("10", 6)
+    ) {
 
-            const sellOut =
-              await quote(
-                sell,
-                buyOut,
-                sellPath
-              );
+      amount =
+        ethers.parseUnits("1", 6);
 
-            if (!sellOut)
-              continue;
+    } else if (
+      vaultBal >
+      ethers.parseUnits("1", 6)
+    ) {
 
-            const profit =
-              sellOut -
-              MICRO_PROBE;
+      amount =
+        ethers.parseUnits(
+          "0.25",
+          6
+        );
 
-            if (
-              profit >
-              MICRO_THRESHOLD
-            ) {
+    } else {
 
-              return {
+      /*
+      MICRO DETECTION
+      RESTORED
+      */
 
-                profit,
-
-                buy,
-
-                sell,
-
-                buyPath,
-
-                sellPath
-              };
-            }
-          }
-        }
-      }
+      amount =
+        vaultBal / 5n;
     }
+
+    if (amount <= 0n)
+      return null;
+
+    const route =
+      makeRoute(token);
+
+    const result =
+      await arb.simulateArbitrageProfit.staticCall(
+
+        route.buyRouter,
+
+        route.sellRouter,
+
+        amount,
+
+        route.pathToToken,
+
+        route.pathToUSDC
+      );
+
+    const estimatedFinal =
+      result[0];
+
+    const estimatedProfit =
+      result[1];
+
+    console.log(
+      `\n📊 Detection Size:\n${fmt(amount)}`
+    );
+
+    console.log(
+      `\n📊 Detection Profit:\n${fmt(estimatedProfit)}`
+    );
+
+    /*
+    MICRO VISIBILITY
+    */
+
+    if (
+      estimatedProfit >
+      MICRO_THRESHOLD
+    ) {
+
+      console.log(
+        "\n✅ Micro spread visible"
+      );
+
+      return {
+
+        amount,
+
+        estimatedFinal,
+
+        estimatedProfit
+      };
+    }
+
+    console.log(
+      "\n💤 No spread"
+    );
 
     return null;
 
-  } catch {
+  } catch (err) {
+
+    console.log(
+      "\n❌ Detection failed"
+    );
 
     return null;
   }
@@ -442,23 +384,21 @@ async function runDepthAnalysis(
     const vaultBal =
       await getVaultBalance();
 
-    const micro =
-      await fastMicroFinder(
+    console.log(
+      `\n💰 Vault: ${fmt(vaultBal)} USDC`
+    );
+
+    /*
+    FAST DETECTION
+    */
+
+    const spread =
+      await detectMicroSpread(
         token
       );
 
-    if (!micro) {
-
+    if (!spread)
       return null;
-    }
-
-    console.log(
-      "\n⚡ FAST MICRO SPREAD FOUND"
-    );
-
-    console.log(
-      `\n📊 Micro Profit:\n${fmt(micro.profit)}`
-    );
 
     console.log(
       "\n📡 Fast spread detected..."
@@ -469,41 +409,40 @@ async function runDepthAnalysis(
       "DEPTH ANALYSIS"
     );
 
-    const route = {
+    console.log(
+      "\n📡 Running contract depth analysis..."
+    );
 
-      buyRouter:
-        micro.buy,
+    const route =
+      makeRoute(token);
 
-      sellRouter:
-        micro.sell,
+    /*
+    CONTINUOUS CONTRACT SIZING
 
-      pathToToken:
-        micro.buyPath,
-
-      pathToUSDC:
-        micro.sellPath
-    };
+    NO FAKE MULTIPLIERS
+    */
 
     const candidateSizes = [
+
+      vaultBal / 5n,
 
       vaultBal / 2n,
 
       vaultBal,
 
-      vaultBal * 5n,
+      vaultBal * 2n,
 
-      vaultBal * 20n,
+      vaultBal * 3n,
 
-      vaultBal * 100n,
-
-      ethers.parseUnits(
-        "125",
-        6
-      )
+      vaultBal * 5n
 
     ].filter(
       x => x > 0n
     );
+
+    /*
+    CONTRACT PRIMARY SIGNAL
+    */
 
     const best =
       await arb.findBestFlashLoanSize.staticCall(
@@ -532,6 +471,10 @@ async function runDepthAnalysis(
       estimatedProfit <=
       MICRO_THRESHOLD
     ) {
+
+      console.log(
+        "\n❌ No profitable depth"
+      );
 
       return null;
     }
@@ -567,19 +510,27 @@ async function runDepthAnalysis(
       `\n⚡ Slippage: ${slippage}`
     );
 
+    /*
+    STATIC PASS #2
+    */
+
     pipeline(
       "STAGE 3",
       "EXECUTION VALIDATION"
     );
 
+    console.log(
+      "\n📡 Running execution simulation..."
+    );
+
     const deadline =
       Math.floor(
         Date.now() / 1000
-      ) + 120;
+      ) + 60;
 
-    await arb
-      .executeBestFlashLoanArbitrage
-      .staticCall(
+    try {
+
+      await arb.executeBestFlashLoanArbitrage.staticCall(
 
         route.buyRouter,
 
@@ -594,9 +545,27 @@ async function runDepthAnalysis(
         deadline
       );
 
-    console.log(
-      "\n✅ Static simulation passed"
-    );
+      console.log(
+        "\n✅ Static simulation passed"
+      );
+
+    } catch (err) {
+
+      console.log(
+        "\n❌ Static simulation rejected"
+      );
+
+      console.log(
+        "\nReason:"
+      );
+
+      console.log(
+        err.shortMessage ||
+        err.message
+      );
+
+      return null;
+    }
 
     return {
 
@@ -617,7 +586,11 @@ async function runDepthAnalysis(
       slippage
     };
 
-  } catch {
+  } catch (err) {
+
+    console.log(
+      "\n❌ Depth analysis failed"
+    );
 
     return null;
   }
@@ -627,10 +600,7 @@ async function runDepthAnalysis(
    EXECUTION
 ========================================================= */
 
-async function execute(
-  signal,
-  tokenName
-) {
+async function execute(signal) {
 
   try {
 
@@ -649,7 +619,7 @@ async function execute(
     const deadline =
       Math.floor(
         Date.now() / 1000
-      ) + 120;
+      ) + 60;
 
     console.log(
       "\n📡 Sending transaction..."
@@ -705,12 +675,10 @@ async function execute(
 
     const growth =
       before > 0n
-
         ? (
             Number(realizedProfit) /
             Number(before)
           ) * 100
-
         : 0;
 
     console.log(
@@ -747,27 +715,7 @@ async function execute(
 }
 
 /* =========================================================
-   SCAN TASKS
-========================================================= */
-
-const scanTasks = [];
-
-for (
-  const [name, token]
-  of Object.entries(TOKENS)
-) {
-
-  if (name === "USDC")
-    continue;
-
-  scanTasks.push({
-    name,
-    token
-  });
-}
-
-/* =========================================================
-   MAIN
+   MAIN LOOP
 ========================================================= */
 
 async function main() {
@@ -797,73 +745,115 @@ async function main() {
     );
   }
 
-  let taskIndex = 0;
+  while (true) {
 
-  async function worker() {
+    try {
 
-    while (true) {
+      const scans =
+        await Promise.all(
 
-      try {
+          Object.entries(TOKENS)
 
-        const task =
-          scanTasks[
-            taskIndex++
-            % scanTasks.length
-          ];
+            .filter(
+              ([k]) => k !== "USDC"
+            )
 
-        const signal =
-          await runDepthAnalysis(
+            .map(
+              ([name, token]) =>
+                runDepthAnalysis(
+                  name,
+                  token
+                )
+            )
+        );
 
-            task.name,
+      const valid =
+        scans.filter(Boolean);
 
-            task.token
-          );
+      if (
+        valid.length === 0
+      ) {
 
-        if (
-          signal &&
-          signal.profit >=
-          EXECUTION_THRESHOLD
-        ) {
+        console.log(
+          "\n💤 No opportunities"
+        );
 
-          console.log(
-            "\n🏆 BEST SIGNAL"
-          );
+        await sleep(
+          LOOP_DELAY
+        );
 
-          console.log(
-            `\nTOKEN:\n${task.name}`
-          );
+        continue;
+      }
 
-          console.log(
-            `\nPROFIT:\n${fmt(signal.profit)}`
-          );
+      /*
+      CONTRACT PRIMARY SIGNAL
+      */
 
-          console.log(
-            `\nSIZE:\n${fmt(signal.size)}`
-          );
+      const best =
+        valid.reduce(
 
-          await execute(
-            signal,
-            task.name
-          );
-        }
+          (a, b) =>
+            b.profit > a.profit
+              ? b
+              : a
+        );
 
-      } catch {}
+      console.log(
+        "\n🏆 BEST SIGNAL"
+      );
 
-      await sleep(
-        LOOP_DELAY
+      console.log(
+        `\nTOKEN:\n${
+          Object.entries(TOKENS)
+            .find(
+              ([, v]) =>
+                v === best.token
+            )?.[0] || best.token
+        }`
+      );
+
+      console.log(
+        `\nPROFIT:\n${fmt(best.profit)}`
+      );
+
+      console.log(
+        `\nSIZE:\n${fmt(best.size)}`
+      );
+
+      /*
+      EXECUTION FILTER
+      */
+
+      if (
+        best.profit >=
+        EXECUTION_THRESHOLD
+      ) {
+
+        await execute(best);
+
+      } else {
+
+        console.log(
+          "\n🛑 Spread visible but below execution threshold"
+        );
+      }
+
+    } catch (err) {
+
+      console.log(
+        "\n❌ LOOP ERROR"
+      );
+
+      console.log(
+        err.shortMessage ||
+        err.message
       );
     }
+
+    await sleep(
+      LOOP_DELAY
+    );
   }
-
-  await Promise.all(
-
-    Array.from(
-
-      { length: WORKER_COUNT },
-
-      worker
-    )
-  );
 }
 
 /* =========================================================
