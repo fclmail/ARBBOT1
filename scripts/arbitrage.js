@@ -12,7 +12,10 @@ const PRIVATE_KEY =
   process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {
-  throw new Error("Missing PRIVATE_KEY");
+
+  throw new Error(
+    "Missing PRIVATE_KEY"
+  );
 }
 
 /* =========================================================
@@ -191,13 +194,13 @@ const routerContracts =
 
 const MICRO_THRESHOLD =
   ethers.parseUnits(
-    "0.00001",
+    "0.00005",
     6
   );
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.00001",
+    "0.0003",
     6
   );
 
@@ -210,6 +213,12 @@ const MICRO_PROBE =
 const WORKER_COUNT = 32;
 
 const LOOP_DELAY = 5;
+
+/* =========================================================
+   GLOBAL STATE
+========================================================= */
+
+let EXECUTING = false;
 
 /* =========================================================
    HELPERS
@@ -320,7 +329,7 @@ async function quote(
 
     return out.at(-1);
 
-  } catch {
+  } catch (err) {
 
     return null;
   }
@@ -414,7 +423,16 @@ async function fastMicroFinder(
 
     return null;
 
-  } catch {
+  } catch (err) {
+
+    console.log(
+      "\n❌ MICRO FINDER ERROR"
+    );
+
+    console.log(
+      err.shortMessage ||
+      err.message
+    );
 
     return null;
   }
@@ -456,10 +474,6 @@ async function runDepthAnalysis(
       `\n📊 Micro Profit:\n${fmt(micro.profit)}`
     );
 
-    console.log(
-      "\n📡 Fast spread detected..."
-    );
-
     pipeline(
       "STAGE 2",
       "DEPTH ANALYSIS"
@@ -480,26 +494,43 @@ async function runDepthAnalysis(
         micro.sellPath
     };
 
-    const candidateSizes = [
+    let candidateSizes = [
 
-      vaultBal / 2n,
+      MICRO_PROBE,
 
-      vaultBal,
+      MICRO_PROBE * 2n,
 
-      vaultBal * 5n,
+      MICRO_PROBE * 5n,
 
-      vaultBal * 20n,
+      MICRO_PROBE * 10n
 
-      vaultBal * 100n,
+    ];
+
+    if (
+
+      micro.profit >
 
       ethers.parseUnits(
-        "125",
+        "0.001",
         6
       )
 
-    ].filter(
-      x => x > 0n
-    );
+    ) {
+
+      candidateSizes.push(
+
+        vaultBal,
+
+        vaultBal * 2n,
+
+        vaultBal * 5n,
+
+        ethers.parseUnits(
+          "125",
+          6
+        )
+      );
+    }
 
     const best =
       await arb.findBestFlashLoanSize.staticCall(
@@ -526,7 +557,7 @@ async function runDepthAnalysis(
 
     if (
       estimatedProfit <=
-      MICRO_THRESHOLD
+      EXECUTION_THRESHOLD
     ) {
 
       return null;
@@ -613,7 +644,16 @@ async function runDepthAnalysis(
       slippage
     };
 
-  } catch {
+  } catch (err) {
+
+    console.log(
+      "\n❌ DEPTH ANALYSIS ERROR"
+    );
+
+    console.log(
+      err.shortMessage ||
+      err.message
+    );
 
     return null;
   }
@@ -722,6 +762,10 @@ async function execute(
     );
 
     console.log(
+      `\n🏦 CONTRACT:\n${CONTRACT_ADDRESS}`
+    );
+
+    console.log(
       "\n🏦 CONTRACT VAULT GROWTH:"
     );
 
@@ -816,9 +860,12 @@ async function main() {
           );
 
         if (
+
           signal &&
+
           signal.profit >=
           EXECUTION_THRESHOLD
+
         ) {
 
           console.log(
@@ -837,13 +884,35 @@ async function main() {
             `\nSIZE:\n${fmt(signal.size)}`
           );
 
-          await execute(
-            signal,
-            task.name
-          );
+          if (!EXECUTING) {
+
+            EXECUTING = true;
+
+            try {
+
+              await execute(
+                signal,
+                task.name
+              );
+
+            } finally {
+
+              EXECUTING = false;
+            }
+          }
         }
 
-      } catch {}
+      } catch (err) {
+
+        console.log(
+          "\n❌ WORKER ERROR"
+        );
+
+        console.log(
+          err.shortMessage ||
+          err.message
+        );
+      }
 
       await sleep(
         LOOP_DELAY
