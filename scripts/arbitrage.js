@@ -191,13 +191,13 @@ const routerContracts =
 
 const MICRO_THRESHOLD =
   ethers.parseUnits(
-    "0.000001",
+    "0.00001",
     6
   );
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.000001",
+    "0.00001",
     6
   );
 
