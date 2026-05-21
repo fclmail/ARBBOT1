@@ -204,7 +204,7 @@ const MICRO_THRESHOLD =
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.00010",
+    "0.010",
     6
   );
 
