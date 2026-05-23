@@ -450,7 +450,7 @@ async function testLiquidityCurve(
       6
     );
 
-  for(let i=0;i<16;i++){
+  for(let i=0;i<1116;i++){
 
     candidateSizes.push(size);
 
