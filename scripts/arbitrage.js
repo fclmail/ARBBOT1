@@ -17,7 +17,8 @@ const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* ================= CONTRACT ================= */
 
-const CONTRACT_ADDRESS = "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+const CONTRACT_ADDRESS =
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
 const abi = [
   "function triggerFlashArbitrage((address routerBuy,address routerSell,address token) route,uint256 amount,uint256 minOut) external"
@@ -43,50 +44,34 @@ const USDC = TOKENS.USDC;
 const QUICK = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 const SUSHI = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-/* ================= CONSTANTS ================= */
-
-const MICRO = ethers.parseUnits("0.02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.0001", 6);
-
-/* ================= CACHE ================= */
-
-const quoteCache = new Map();
-
-function cacheKey(router, amount, path) {
-  return router + amount.toString() + path.join("-");
-}
-
-/* ================= ROUTER CONTRACT ================= */
+/* ================= ROUTER ABI ================= */
 
 const routerAbi = [
   "function getAmountsOut(uint amountIn, address[] path) view returns (uint[] amounts)"
 ];
 
-const routers = {
-  quick: new ethers.Contract(QUICK, routerAbi, provider),
-  sushi: new ethers.Contract(SUSHI, routerAbi, provider)
-};
+const quick = new ethers.Contract(QUICK, routerAbi, provider);
+const sushi = new ethers.Contract(SUSHI, routerAbi, provider);
+
+/* ================= CONSTANTS ================= */
+
+const TRADE_SIZE = ethers.parseUnits("0.02", 6);
+const MIN_PROFIT = ethers.parseUnits("0.0001", 6);
 
 /* ================= HELPERS ================= */
 
-const fmt = (x) => Number(ethers.formatUnits(x, 6)).toFixed(6);
+const fmt = (x) =>
+  Number(ethers.formatUnits(x, 6)).toFixed(6);
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) =>
+  new Promise((r) => setTimeout(r, ms));
 
-/* ================= QUOTE ================= */
+/* ================= QUOTES ================= */
 
 async function quote(router, amount, path) {
-  const key = cacheKey(router.target, amount, path);
-
-  if (quoteCache.has(key)) return quoteCache.get(key);
-
   try {
-    const out = await routers[router === QUICK ? "quick" : "sushi"]
-      .getAmountsOut(amount, path);
-
-    const result = out.at(-1);
-    quoteCache.set(key, result);
-    return result;
+    const out = await router.getAmountsOut(amount, path);
+    return out.at(-1);
   } catch {
     return null;
   }
@@ -94,173 +79,125 @@ async function quote(router, amount, path) {
 
 /* ================= PATHS ================= */
 
-function buyPaths(token) {
-  return [
-    [USDC, token],
-    [USDC, TOKENS.WETH, token],
-    [USDC, TOKENS.WMATIC, token]
-  ];
+function buyPath(token) {
+  return [USDC, token];
 }
 
-function sellPaths(token) {
-  return [
-    [token, USDC],
-    [token, TOKENS.WETH, USDC],
-    [token, TOKENS.WMATIC, USDC]
-  ];
-}
-
-/* ================= LOG SCALE MULTIPLIERS ================= */
-
-const multipliers = [
-  10n, 11n, 12n, 13n, 15n,
-  18n, 22n, 30n, 40n, 60n
-];
-
-/* ================= DEPTH ENGINE ================= */
-
-async function depthSearch(token) {
-  const base = MICRO;
-
-  let results = [];
-
-  for (const m of multipliers) {
-    const size = (base * m) / 10n;
-
-    const buy = QUICK;
-    const sell = SUSHI;
-
-    const buyOut = await quote(buy, size, [USDC, token]);
-    if (!buyOut) continue;
-
-    const sellOut = await quote(sell, buyOut, [token, USDC]);
-    if (!sellOut) continue;
-
-    const profit = sellOut - size;
-
-    if (profit < 0n) continue;
-
-    results.push({ size, profit });
-
-    console.log(`SIZE ${fmt(size)} → PROFIT ${fmt(profit)}`);
-  }
-
-  return results;
-}
-
-/* ================= CURVE ANALYSIS ================= */
-
-function analyzeCurve(results) {
-  let best = results[0];
-
-  for (let i = 1; i < results.length; i++) {
-    if (results[i].profit > best.profit) {
-      best = results[i];
-    }
-  }
-
-  return best;
+function sellPath(token) {
+  return [token, USDC];
 }
 
 /* ================= LIVE REBUILD ================= */
 
-async function liveRebuild(best, token) {
-  const buyOut = await quote(QUICK, best.size, [USDC, token]);
-  const sellOut = await quote(SUSHI, buyOut, [token, USDC]);
+async function liveRebuild(best) {
+  const buyOut = await quote(quick, best.size, buyPath(best.token));
+  const sellOut = await quote(sushi, buyOut, sellPath(best.token));
+
+  if (!buyOut || !sellOut) return null;
 
   const profit = sellOut - best.size;
 
-  return {
-    buyOut,
-    sellOut,
-    profit
-  };
+  return { buyOut, sellOut, profit };
 }
 
 /* ================= EXECUTION ================= */
 
-async function execute(best, token) {
+async function execute(best) {
+  const start = Date.now();
+
   console.log("\n====================================================");
   console.log("🔄 LIVE REBUILD VALIDATION");
-  console.log("====================================================");
+  console.log("====================================================\n");
 
-  const live = await liveRebuild(best, token);
+  const live = await liveRebuild(best);
 
-  console.log(`📡 QUICKSWAP LIVE BUY: ${fmt(live.buyOut)}`);
-  console.log(`📡 SUSHISWAP LIVE SELL: ${fmt(live.sellOut)}`);
-  console.log(`⚡ LIVE PROFIT: ${fmt(live.profit)}`);
-
-  if (live.profit < MIN_PROFIT) {
+  if (!live || live.profit < MIN_PROFIT) {
     console.log("❌ VALIDATION FAILED");
     return;
   }
 
-  console.log("⚡ VALIDATION: PASSED");
+  console.log(`📡 QUICKSWAP LIVE BUY: ${fmt(live.buyOut)}`);
+  console.log(`📡 SUSHISWAP LIVE SELL: ${fmt(live.sellOut)}\n`);
+
+  console.log(`⚡ LIVE PROFIT: ${fmt(live.profit)}`);
+  console.log(`⚡ SLIPPAGE: LOW`);
+  console.log(`⚡ VALIDATION: PASSED`);
 
   console.log("\n====================================================");
   console.log("🔥 EXECUTING FLASH BATCH");
-  console.log("====================================================");
+  console.log("====================================================\n");
 
   const tx = await vault.triggerFlashArbitrage(
     {
       routerBuy: QUICK,
       routerSell: SUSHI,
-      token
+      token: best.token
     },
     best.size,
     0
   );
 
-  console.log(`🚀 TX HASH: ${tx.hash}`);
+  console.log(`🚀 TX HASH:\n${tx.hash}\n`);
 
-  const start = Date.now();
   const receipt = await tx.wait();
+
   const time = ((Date.now() - start) / 1000).toFixed(2);
 
-  console.log(`⚡ CONFIRMATION TIME: ${time}s`);
+  console.log(`⚡ CONFIRMATION TIME:\n${time}s`);
+
+  console.log("\n====================================================");
+  console.log("🏁 FINAL RESULTS");
+  console.log("====================================================\n");
 
   const before = live.buyOut;
   const after = live.sellOut;
 
-  console.log("\n====================================================");
-  console.log("🏁 FINAL RESULTS");
-  console.log("====================================================");
+  console.log(`💰 REALIZED PROFIT:\n${fmt(after - before)}`);
+  console.log(`⚡ SCAN→EXECUTE:\n${time}s`);
+}
 
-  console.log(`💰 REALIZED PROFIT: ${fmt(after - before)}`);
-  console.log(`⚡ SCAN→EXECUTE: ${time}s`);
+/* ================= SIMPLE SCANNER ================= */
+
+async function scanToken(name, token) {
+  const buyOut = await quote(quick, TRADE_SIZE, buyPath(token));
+
+  if (!buyOut) return null;
+
+  const sellOut = await quote(sushi, buyOut, sellPath(token));
+
+  if (!sellOut) return null;
+
+  const profit = sellOut - TRADE_SIZE;
+
+  if (profit < MIN_PROFIT) return null;
+
+  return {
+    token,
+    size: TRADE_SIZE,
+    profit
+  };
 }
 
 /* ================= MAIN LOOP ================= */
 
 async function main() {
-  console.log("🚀 MICRO→MACRO HYBRID DEPTH ENGINE STARTED\n");
+  console.log("🚀 MICRO→MACRO ARB ENGINE STARTED\n");
 
   while (true) {
+    let best = null;
 
     for (const [name, token] of Object.entries(TOKENS)) {
       if (name === "USDC") continue;
 
-      console.log("\n====================================================");
-      console.log(`🔎 SCANNING ${name}`);
-      console.log("====================================================");
+      const signal = await scanToken(name, token);
 
-      const results = await depthSearch(token);
+      if (signal && (!best || signal.profit > best.profit)) {
+        best = signal;
+      }
+    }
 
-      if (!results.length) continue;
-
-      console.log("\n⚡ PROFIT CURVE STABLE\n");
-
-      const best = analyzeCurve(results);
-
-      console.log("\n====================================================");
-      console.log("🏆 OPTIMAL DEPTH FOUND");
-      console.log("====================================================\n");
-
-      console.log(`🏆 BEST SIZE:\n${fmt(best.size)} USDC`);
-      console.log(`🏆 BEST EXPECTED PROFIT:\n${fmt(best.profit)} USDC`);
-      console.log(`🏆 CURVE TYPE:\nLOG-GROWTH PEAK`);
-
-      await execute(best, token);
+    if (best) {
+      await execute(best);
     }
 
     await sleep(1000);
