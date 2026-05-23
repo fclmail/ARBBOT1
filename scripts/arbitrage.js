@@ -121,23 +121,8 @@ const TOKENS = {
   WBTC:
     "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
 
-  QUICK:
-    "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-
   LINK:
     "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-
-  UNI:
-    "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-
-  CRV:
-    "0x172370d5cd63279efa6d502dab29171933a610af",
-
-  AAVE:
-    "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-
-  SHIB:
-    "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
 
   USDC:
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -162,10 +147,8 @@ const routers = {
     "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
 
   ApeSwap:
-    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
 
-  Wault:
-    "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
 const routerContracts =
@@ -187,30 +170,38 @@ const routerContracts =
   );
 
 /* =========================================================
-   SETTINGS
+   HIGH SPEED SETTINGS
 ========================================================= */
 
 const MICRO_PROBE =
   ethers.parseUnits(
-    "0.01",
+    "1000",
     6
   );
 
 const MICRO_THRESHOLD =
   ethers.parseUnits(
-    "0.00005",
+    "5",
     6
   );
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.00010",
+    "10",
     6
   );
 
-const LOOP_DELAY = 5;
+const LOOP_DELAY = 75;
 
-const WORKER_COUNT = 24;
+const WORKER_COUNT = 4;
+
+const GAS_BUFFER_USDC =
+  ethers.parseUnits(
+    "3",
+    6
+  );
+
+const AAVE_FEE_BPS = 9;
 
 let EXECUTING = false;
 
@@ -245,7 +236,7 @@ function calcDepthScore(
 
   const ratio =
     Number(
-      (profit * 10n) / size
+      (profit * 1000n) / size
     );
 
   return Math.min(
@@ -261,7 +252,7 @@ function getSlippageLabel(
   if (score >= 80)
     return "LOW";
 
-  if (score >= 50)
+  if (score >= 40)
     return "MEDIUM";
 
   return "HIGH";
@@ -281,8 +272,6 @@ function buildBuyPaths(token) {
 
     [USDC, TOKENS.WMATIC, token],
 
-    [USDC, TOKENS.DAI, token],
-
     [USDC, TOKENS.USDT, token]
   ];
 }
@@ -296,8 +285,6 @@ function buildSellPaths(token) {
     [token, TOKENS.WETH, USDC],
 
     [token, TOKENS.WMATIC, USDC],
-
-    [token, TOKENS.DAI, USDC],
 
     [token, TOKENS.USDT, USDC]
   ];
@@ -350,12 +337,42 @@ async function getVaultBalance() {
 }
 
 /* =========================================================
-   FAST MICRO DETECTION
+   MATIC BALANCE CHECK
+========================================================= */
+
+async function ensureGasBalance() {
+
+  const bal =
+    await provider.getBalance(
+      wallet.address
+    );
+
+  const matic =
+    Number(
+      ethers.formatEther(bal)
+    );
+
+  console.log(
+    `\n⛽ WALLET MATIC:\n${matic.toFixed(4)}`
+  );
+
+  if (matic < 1) {
+
+    throw new Error(
+      "LOW MATIC GAS BALANCE"
+    );
+  }
+}
+
+/* =========================================================
+   FAST PARALLEL SPREAD DETECTION
 ========================================================= */
 
 async function detectFastSpread(
   token
 ) {
+
+  const jobs = [];
 
   for (
     const buy
@@ -375,63 +392,110 @@ async function detectFastSpread(
         of buildBuyPaths(token)
       ) {
 
-        const buyOut =
-          await quote(
-            buy,
-            MICRO_PROBE,
-            buyPath
-          );
-
-        if (!buyOut)
-          continue;
-
         for (
           const sellPath
           of buildSellPaths(token)
         ) {
 
-          const sellOut =
-            await quote(
-              sell,
-              buyOut,
-              sellPath
-            );
+          jobs.push(
 
-          if (!sellOut)
-            continue;
+            (async () => {
 
-          const profit =
-            sellOut -
-            MICRO_PROBE;
+              try {
 
-          if (
-            profit >
-            MICRO_THRESHOLD
-          ) {
+                const buyOut =
+                  await quote(
+                    buy,
+                    MICRO_PROBE,
+                    buyPath
+                  );
 
-            return {
+                if (!buyOut)
+                  return null;
 
-              buy,
+                const sellOut =
+                  await quote(
+                    sell,
+                    buyOut,
+                    sellPath
+                  );
 
-              sell,
+                if (!sellOut)
+                  return null;
 
-              buyPath,
+                const grossProfit =
+                  sellOut -
+                  MICRO_PROBE;
 
-              sellPath,
+                const flashFee =
+                  (
+                    MICRO_PROBE *
+                    BigInt(AAVE_FEE_BPS)
+                  ) / 10000n;
 
-              profit
-            };
-          }
+                const realProfit =
+                  grossProfit -
+                  flashFee -
+                  GAS_BUFFER_USDC;
+
+                if (
+                  realProfit >
+                  MICRO_THRESHOLD
+                ) {
+
+                  return {
+
+                    buy,
+
+                    sell,
+
+                    buyPath,
+
+                    sellPath,
+
+                    profit:
+                      realProfit
+                  };
+                }
+
+                return null;
+
+              } catch {
+
+                return null;
+              }
+
+            })()
+          );
         }
       }
     }
   }
 
-  return null;
+  const results =
+    await Promise.all(jobs);
+
+  const valid =
+    results.filter(Boolean);
+
+  if (!valid.length)
+    return null;
+
+  valid.sort(
+
+    (a, b) =>
+
+      Number(
+        b.profit -
+        a.profit
+      )
+  );
+
+  return valid[0];
 }
 
 /* =========================================================
-   LIQUIDITY CURVE SCALER
+   OPTIMAL DEPTH FINDER
 ========================================================= */
 
 async function testLiquidityCurve(
@@ -442,20 +506,16 @@ async function testLiquidityCurve(
     "\n📊 Testing Liquidity Curve..."
   );
 
-  const candidateSizes = [];
+  const candidateSizes = [
 
-  let size =
-    ethers.parseUnits(
-      "0.02",
-      6
-    );
+    ethers.parseUnits("1000", 6),
+    ethers.parseUnits("2500", 6),
+    ethers.parseUnits("5000", 6),
+    ethers.parseUnits("10000", 6),
+    ethers.parseUnits("25000", 6),
+    ethers.parseUnits("50000", 6)
 
-  for(let i=0;i<1116;i++){
-
-    candidateSizes.push(size);
-
-    size = size * 2n;
-  }
+  ];
 
   let best = {
 
@@ -466,10 +526,10 @@ async function testLiquidityCurve(
     estimatedProfit: 0n
   };
 
-  for(
+  for (
     const testSize
     of candidateSizes
-  ){
+  ) {
 
     try {
 
@@ -491,18 +551,29 @@ async function testLiquidityCurve(
       const estimatedFinal =
         result[0];
 
-      const estimatedProfit =
+      let estimatedProfit =
         result[1];
+
+      const flashFee =
+        (
+          testSize *
+          BigInt(AAVE_FEE_BPS)
+        ) / 10000n;
+
+      estimatedProfit =
+        estimatedProfit -
+        flashFee -
+        GAS_BUFFER_USDC;
 
       console.log(
 
         `SIZE ${fmt(testSize)} → PROFIT ${fmt(estimatedProfit)}`
       );
 
-      if(
+      if (
         estimatedProfit >
         best.estimatedProfit
-      ){
+      ) {
 
         best = {
 
@@ -517,17 +588,13 @@ async function testLiquidityCurve(
         };
       }
 
-      /*
-      LIQUIDITY COLLAPSE STOP
-      */
-
-      if(
+      if (
 
         best.estimatedProfit > 0n &&
 
         estimatedProfit <
         best.estimatedProfit / 2n
-      ){
+      ) {
 
         break;
       }
@@ -565,11 +632,11 @@ async function runDepthAnalysis(
       return null;
 
     console.log(
-      "\n⚡ FAST MICRO SPREAD FOUND"
+      "\n⚡ FAST SPREAD FOUND"
     );
 
     console.log(
-      `\n📊 Micro Profit:\n${fmt(spread.profit)}`
+      `\n📊 Real Profit:\n${fmt(spread.profit)}`
     );
 
     pipeline(
@@ -577,19 +644,19 @@ async function runDepthAnalysis(
       "DEPTH ANALYSIS"
     );
 
-    /*
-    CONTINUOUS LIQUIDITY CURVE
-    */
-
     const best =
       await testLiquidityCurve(
         spread
       );
 
-    if(
+    if (
       best.estimatedProfit <
       EXECUTION_THRESHOLD
-    ){
+    ) {
+
+      console.log(
+        "\n❌ PROFIT BELOW THRESHOLD"
+      );
 
       return null;
     }
@@ -598,31 +665,10 @@ async function runDepthAnalysis(
       "\n🏆 OPTIMAL DEPTH FOUND"
     );
 
-    const bestSize =
-      best.amountIn;
-
-    const estimatedFinal =
-      best.estimatedFinalUSDC;
-
-    const estimatedProfit =
-      best.estimatedProfit;
-
-    console.log(
-      `\n📊 Contract Optimal Size:\n${fmt(bestSize)}`
-    );
-
-    console.log(
-      `\n📊 Estimated Final:\n${fmt(estimatedFinal)}`
-    );
-
-    console.log(
-      `\n📊 Estimated Profit:\n${fmt(estimatedProfit)}`
-    );
-
     const score =
       calcDepthScore(
-        estimatedProfit,
-        bestSize
+        best.estimatedProfit,
+        best.amountIn
       );
 
     const slippage =
@@ -631,50 +677,19 @@ async function runDepthAnalysis(
       );
 
     console.log(
-      `\n⚡ Liquidity Depth Score: ${score}`
+      `\n📊 Optimal Size:\n${fmt(best.amountIn)}`
+    );
+
+    console.log(
+      `\n📊 Estimated Profit:\n${fmt(best.estimatedProfit)}`
+    );
+
+    console.log(
+      `\n⚡ Depth Score: ${score}`
     );
 
     console.log(
       `\n⚡ Slippage: ${slippage}`
-    );
-
-    pipeline(
-      "STAGE 3",
-      "EXECUTION VALIDATION"
-    );
-
-    const recheck =
-      await arb
-      .simulateArbitrageProfit(
-
-        spread.buy,
-
-        spread.sell,
-
-        bestSize,
-
-        spread.buyPath,
-
-        spread.sellPath
-      );
-
-    const liveProfit =
-      recheck[1];
-
-    if(
-      liveProfit <
-      EXECUTION_THRESHOLD
-    ){
-
-      console.log(
-        "\n❌ Spread vanished"
-      );
-
-      return null;
-    }
-
-    console.log(
-      "\n✅ Execution precheck passed"
     );
 
     return {
@@ -697,12 +712,13 @@ async function runDepthAnalysis(
       },
 
       size:
-        bestSize,
+        best.amountIn,
 
-      estimatedFinal,
+      estimatedFinal:
+        best.estimatedFinalUSDC,
 
       profit:
-        estimatedProfit
+        best.estimatedProfit
     };
 
   } catch (err) {
@@ -739,6 +755,8 @@ async function execute(
     console.log(
       "\n🔥 EXECUTING FLASH LOAN"
     );
+
+    await ensureGasBalance();
 
     const before =
       await getVaultBalance();
@@ -801,16 +819,6 @@ async function execute(
         ? after - before
         : 0n;
 
-    const growth =
-      before > 0n
-
-        ? (
-            Number(realizedProfit) /
-            Number(before)
-          ) * 100
-
-        : 0;
-
     console.log(
       `\n💰 BEFORE:\n${fmt(before)}`
     );
@@ -820,19 +828,7 @@ async function execute(
     );
 
     console.log(
-      `\n📈 PROFIT:\n${fmt(realizedProfit)}`
-    );
-
-    console.log(
-      `\n🏦 CONTRACT:\n${CONTRACT_ADDRESS}`
-    );
-
-    console.log(
-      "\n🏦 CONTRACT VAULT GROWTH:"
-    );
-
-    console.log(
-      `+${growth.toFixed(4)}%`
+      `\n📈 REALIZED PROFIT:\n${fmt(realizedProfit)}`
     );
 
   } catch (err) {
@@ -875,7 +871,7 @@ for (
 async function main() {
 
   console.log(
-    "\n🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED"
+    "\n🚀 HIGH SPEED DEPTH ENGINE STARTED"
   );
 
   const owner =
@@ -899,6 +895,8 @@ async function main() {
     );
   }
 
+  await ensureGasBalance();
+
   let taskIndex = 0;
 
   async function worker() {
@@ -909,7 +907,7 @@ async function main() {
 
         if (EXECUTING) {
 
-          await sleep(1);
+          await sleep(10);
 
           continue;
         }
