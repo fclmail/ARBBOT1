@@ -192,7 +192,7 @@ const routerContracts =
 
 const MICRO_PROBE =
   ethers.parseUnits(
-    "0.00001",
+    "0.01",
     6
   );
 
@@ -204,7 +204,7 @@ const MICRO_THRESHOLD =
 
 const EXECUTION_THRESHOLD =
   ethers.parseUnits(
-    "0.010",
+    "0.00010",
     6
   );
 
@@ -245,7 +245,7 @@ function calcDepthScore(
 
   const ratio =
     Number(
-      (profit * 100000n) / size
+      (profit * 10n) / size
     );
 
   return Math.min(
