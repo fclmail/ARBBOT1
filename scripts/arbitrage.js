@@ -192,7 +192,7 @@ const routerContracts =
 
 const MICRO_PROBE =
   ethers.parseUnits(
-    "0.01",
+    "10000000",
     6
   );
 
