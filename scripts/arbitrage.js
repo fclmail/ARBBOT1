@@ -90,7 +90,7 @@ ApeSwap:
 
 const FLASH_SIZES=[
 
-ethers.parseUnits("1000",6),
+ethers.parseUnits(".10",6),
 
 ethers.parseUnits("2500",6),
 
