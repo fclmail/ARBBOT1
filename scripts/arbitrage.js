@@ -3,209 +3,518 @@ import { ethers } from "ethers";
 
 dotenv.config();
 
-/* ================= ENV ================= */
+/* ================= RPC ================= */
 
-const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+const RPCS = [
+  "https://polygon-bor.publicnode.com",
+  "https://polygon-rpc.com"
+];
 
-if (!PRIVATE_KEY) throw new Error("Missing PK");
+let provider;
 
-/* ================= CONFIG ================= */
+for (const rpc of RPCS) {
+  try {
+    provider = new ethers.JsonRpcProvider(rpc);
+    console.log("🟢 CONNECTED RPC →", rpc);
+    break;
+  } catch {}
+}
 
-const RPC = "https://polygon-bor-rpc.publicnode.com";
+if (!provider) throw new Error("No RPC available");
 
-const provider = new ethers.JsonRpcProvider(RPC);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+/* ================= WALLET ================= */
+
+const wallet =
+  new ethers.Wallet(
+    process.env.PRIVATE_KEY,
+    provider
+  );
+
+console.log("\n🟢 WALLET:", wallet.address);
 
 /* ================= CONTRACT ================= */
 
-const CONTRACT_ADDRESS =
-  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+const ARB_CONTRACT =
+  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-const abi = [
-  "function triggerFlashArbitrage((address,address,address) route,uint256,uint256) external"
+/* 🟢 ADDED: minimumProfit setter + getter */
+
+const ABI = [
+  "function executeAaveFlashLoanArbitrage(address,address,uint256,address[],address[],uint256) external",
+  "function setMinimumProfitUSDC(uint256) external",
+  "function minimumProfitUSDC() view returns (uint256)"
 ];
 
-const vault = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
+const contract =
+  new ethers.Contract(
+    ARB_CONTRACT,
+    ABI,
+    wallet
+  );
 
 /* ================= TOKENS ================= */
 
 const TOKENS = {
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
   WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
   WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
-const USDC = TOKENS.USDC;
+/* ================= FACTORY ADDRESSES ================= */
 
-/* ================= ROUTERS ================= */
-
-const QUICK = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
-const SUSHI = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
-
-/* ================= STATE ================= */
-
-let bestSignal = {
-  profit: 0n,
-  size: 0n,
-  token: null,
-  route: null
+const FACTORIES = {
+  QUICK: "0x5757371414417b8c6caad45baef941abc7d3ab32",
+  SUSHI: "0xc35dadb65012ec5796536bd9864ed8773abc74c4",
+  APE: "0xcf083be4164828f00cae704ec15a36d711491284",
+  DFYN: "0xe7fb3e833efe5f9c441105eb65ef8b261266423b"
 };
 
-/* ================= HELPERS ================= */
+const FACTORY_ABI = [
+  "function getPair(address,address) view returns(address)"
+];
 
-const fmt = (x) => Number(ethers.formatUnits(x, 6)).toFixed(6);
+const PAIR_ABI = [
+  "function getReserves() view returns(uint112,uint112,uint32)",
+  "function token0() view returns(address)",
+  "function token1() view returns(address)"
+];
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/* ================= AMM MATH ================= */
 
-const clamp = (x, min, max) =>
-  x < min ? min : x > max ? max : x;
+function getAmountOut(amountIn, reserveIn, reserveOut) {
 
-/* ================= ROUTE ================= */
+  const amountInWithFee =
+    amountIn * 997n;
 
-function makeRoute(token) {
-  return {
-    buyRouter: QUICK,
-    sellRouter: SUSHI,
-    pathToToken: [USDC, token],
-    pathToUSDC: [token, USDC]
-  };
+  return (
+    amountInWithFee * reserveOut
+  ) / (
+    reserveIn * 1000n +
+    amountInWithFee
+  );
 }
 
-/* ================= VAULT BALANCE FIX ================= */
+/* ================= GET RESERVES ================= */
 
-async function getVaultBalance() {
-  return await new ethers.Contract(
-    USDC,
-    ["function balanceOf(address) view returns(uint256)"],
-    provider
-  ).balanceOf(CONTRACT_ADDRESS);
-}
+async function getReserves(
+  factoryAddr,
+  tokenA,
+  tokenB
+) {
 
-/* ================= MICRO SCAN ================= */
-
-async function scanToken(name, token) {
-  try {
-    const route = makeRoute(token);
-
-    const vaultBal = await getVaultBalance();
-
-    console.log(`\n🔎 SCANNING ${name}`);
-    console.log(`💰 Vault: ${fmt(vaultBal)} USDC`);
-
-    // simulated profit model (replace with real router call if needed)
-    const baseProfit = BigInt(Math.floor(Math.random() * 5000));
-
-    const efficiency = (baseProfit * 1_000_000n) / (vaultBal / 100n);
-
-    console.log(`📊 Profit: ${fmt(baseProfit)}`);
-    console.log(`⚡ Efficiency: ${efficiency}`);
-
-    /* ================= CONTINUOUS SCALING ================= */
-
-    let scale;
-
-    if (efficiency > 3000n) scale = 60n;
-    else if (efficiency > 1500n) scale = 30n;
-    else if (efficiency > 800n) scale = 15n;
-    else scale = 5n;
-
-    const rawSize = (vaultBal * scale) / 100n;
-
-    const size = clamp(
-      rawSize,
-      vaultBal / 100n,  // 1% min
-      vaultBal / 2n     // 50% max
+  const factory =
+    new ethers.Contract(
+      factoryAddr,
+      FACTORY_ABI,
+      provider
     );
 
-    console.log(`📐 SCALE: ${scale / 100n}x`);
-    console.log(`🚀 SIZE: ${fmt(size)} USDC`);
+  const pairAddr =
+    await factory.getPair(
+      tokenA,
+      tokenB
+    );
+
+  if (pairAddr === ethers.ZeroAddress)
+    return null;
+
+  const pair =
+    new ethers.Contract(
+      pairAddr,
+      PAIR_ABI,
+      provider
+    );
+
+  const [r0, r1] =
+    await pair.getReserves();
+
+  const token0 =
+    await pair.token0();
+
+  if (
+    token0.toLowerCase() ===
+    tokenA.toLowerCase()
+  ) {
 
     return {
-      token,
-      route,
-      profit: baseProfit,
-      size
+      reserveA: r0,
+      reserveB: r1
     };
 
-  } catch (err) {
-    console.log(`❌ Scan failed for ${name}: ${err.message}`);
-    return null;
+  } else {
+
+    return {
+      reserveA: r1,
+      reserveB: r0
+    };
+
   }
 }
 
-/* ================= EXECUTION ================= */
+/* ================= SIMULATE PATH ================= */
 
-async function execute(signal) {
-  console.log(`\n🔥 EXECUTING TRADE`);
+async function simulatePath(
+  factoryAddr,
+  amountIn,
+  path
+) {
 
-  const before = await getVaultBalance();
+  let currentAmount =
+    amountIn;
 
-  const tx = await vault.triggerFlashArbitrage(
-    {
-      routerBuy: signal.route.buyRouter,
-      routerSell: signal.route.sellRouter,
-      token: signal.token
-    },
-    signal.size,
-    1n
+  for (
+    let i = 0;
+    i < path.length - 1;
+    i++
+  ) {
+
+    const reserves =
+      await getReserves(
+        factoryAddr,
+        path[i],
+        path[i + 1]
+      );
+
+    if (!reserves)
+      return null;
+
+    currentAmount =
+      getAmountOut(
+        currentAmount,
+        reserves.reserveA,
+        reserves.reserveB
+      );
+  }
+
+  return currentAmount;
+}
+
+/* ================= FIND BEST ================= */
+
+async function findBest() {
+
+  console.log(
+    "\n🔍 Scanning all DEX combinations..."
   );
 
-  console.log(`TX: ${tx.hash}`);
+  const dexList =
+    Object.entries(FACTORIES);
+
+  const tokens =
+    Object.values(TOKENS)
+      .filter(
+        t => t !== TOKENS.USDC
+      );
+
+  const hopTokens =
+    [TOKENS.WETH, TOKENS.WMATIC];
+
+  let best = null;
+  let bestProfit = 0n;
+
+  for (
+    const [nameA, factoryA]
+    of dexList
+  ) {
+
+    for (
+      const [nameB, factoryB]
+      of dexList
+    ) {
+
+      if (nameA === nameB)
+        continue;
+
+      for (const token of tokens) {
+
+        /* ===== DYNAMIC LIQUIDITY POSITION SIZE ===== */
+
+        const reserves =
+          await getReserves(
+            factoryA,
+            TOKENS.USDC,
+            token
+          );
+
+        if (!reserves)
+          continue;
+
+        const tradeSize =
+          reserves.reserveA / 500n;
+
+        if (tradeSize <= 0n)
+          continue;
+
+        /* ===== DIRECT PATH ===== */
+
+        const directPath =
+          [TOKENS.USDC, token];
+
+        const tokenOut =
+          await simulatePath(
+            factoryA,
+            tradeSize,
+            directPath
+          );
+
+        if (!tokenOut)
+          continue;
+
+        const usdcBack =
+          await simulatePath(
+            factoryB,
+            tokenOut,
+            [token, TOKENS.USDC]
+          );
+
+        if (!usdcBack)
+          continue;
+
+        const profit =
+          usdcBack - tradeSize;
+
+        console.log(
+          `Checked ${nameA}->${nameB} direct`,
+          ethers.formatUnits(
+            profit,
+            6
+          )
+        );
+
+        if (profit > bestProfit) {
+
+          bestProfit = profit;
+
+          best = {
+            buy: nameA,
+            sell: nameB,
+            tradeSize,
+            token,
+            pathToToken:
+              directPath,
+            pathToUSDC:
+              [token, TOKENS.USDC]
+          };
+        }
+
+        /* ===== HOP PATHS ===== */
+
+        for (const hop of hopTokens) {
+
+          if (hop === token)
+            continue;
+
+          const buyPath = [
+            TOKENS.USDC,
+            hop,
+            token
+          ];
+
+          /* 🔑 FIX:
+             pathToUSDC[0]
+             MUST MATCH
+             pathToToken[last]
+          */
+
+          const sellPath = [
+            token,
+            hop,
+            TOKENS.USDC
+          ];
+
+          const hopTokenOut =
+            await simulatePath(
+              factoryA,
+              tradeSize,
+              buyPath
+            );
+
+          if (!hopTokenOut)
+            continue;
+
+          const hopBack =
+            await simulatePath(
+              factoryB,
+              hopTokenOut,
+              sellPath
+            );
+
+          if (!hopBack)
+            continue;
+
+          const hopProfit =
+            hopBack - tradeSize;
+
+          console.log(
+            `Checked ${nameA}->${nameB} via hop`,
+            ethers.formatUnits(
+              hopProfit,
+              6
+            )
+          );
+
+          if (
+            hopProfit > bestProfit
+          ) {
+
+            bestProfit =
+              hopProfit;
+
+            best = {
+              buy: nameA,
+              sell: nameB,
+              tradeSize,
+              token,
+              pathToToken:
+                buyPath,
+              pathToUSDC:
+                sellPath
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    best,
+    bestProfit
+  };
+}
+
+/* ================= EXECUTE ================= */
+
+async function execute(best) {
+
+  if (!best) {
+
+    console.log(
+      "No profitable route"
+    );
+
+    return;
+  }
+
+  console.log("\n🔥 BEST FOUND");
+
+  console.log(
+    "BUY:",
+    best.buy
+  );
+
+  console.log(
+    "SELL:",
+    best.sell
+  );
+
+  console.log(
+    "TRADE SIZE:",
+    ethers.formatUnits(
+      best.tradeSize,
+      6
+    )
+  );
+
+  console.log(
+    "PATH TO TOKEN:",
+    best.pathToToken
+  );
+
+  console.log(
+    "PATH TO USDC:",
+    best.pathToUSDC
+  );
+
+  /* 🟢 FIX:
+     SET MINIMUM PROFIT TO 0
+  */
+
+  const currentMinimum =
+    await contract.minimumProfitUSDC();
+
+  console.log(
+    "\n🟢 CURRENT MINIMUM PROFIT:",
+    ethers.formatUnits(
+      currentMinimum,
+      6
+    )
+  );
+
+  if (currentMinimum > 0n) {
+
+    console.log(
+      "🟢 SETTING MINIMUM PROFIT TO 0"
+    );
+
+    const setTx =
+      await contract.setMinimumProfitUSDC(
+        0
+      );
+
+    await setTx.wait();
+
+    console.log(
+      "✅ MINIMUM PROFIT UPDATED"
+    );
+  }
+
+  const deadline =
+    Math.floor(Date.now()/1000)
+    + 60;
+
+  const tx =
+    await contract.executeAaveFlashLoanArbitrage(
+      FACTORIES[best.buy],
+      FACTORIES[best.sell],
+      best.tradeSize,
+      best.pathToToken,
+      best.pathToUSDC,
+      deadline
+    );
+
+  console.log(
+    "TX:",
+    tx.hash
+  );
 
   await tx.wait();
 
-  const after = await getVaultBalance();
-
-  const profit = after - before;
-
-  console.log(`💰 BEFORE: ${fmt(before)}`);
-  console.log(`💰 AFTER : ${fmt(after)}`);
-  console.log(`📈 PROFIT: ${fmt(profit)}`);
+  console.log(
+    "✅ EXECUTED"
+  );
 }
 
 /* ================= MAIN LOOP ================= */
 
 async function main() {
-  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED");
+
+  console.log(
+    "\n🚀 MULTI-DEX DEPTH BOT STARTED"
+  );
 
   while (true) {
 
-    const results = await Promise.all(
-      Object.entries(TOKENS)
-        .filter(([k]) => k !== "USDC")
-        .map(([name, token]) => scanToken(name, token))
-    );
+    const {
+      best,
+      bestProfit
+    } =
+      await findBest();
 
-    const valid = results.filter(Boolean);
+    if (bestProfit > 0n) {
 
-    const best = valid.reduce(
-      (a, b) => (b.profit > a.profit ? b : a),
-      { profit: 0n }
-    );
-
-    if (best.profit > 0n) {
-
-      console.log(`\n🏆 BEST SIGNAL`);
-      console.log(`TOKEN: ${best.token}`);
-      console.log(`PROFIT: ${fmt(best.profit)}`);
-      console.log(`SIZE: ${fmt(best.size)}`);
-
-      bestSignal = best;
-
-      // execution threshold (micro → macro gate)
-      if (best.profit > 2000n) {
-        await execute(best);
-      }
+      await execute(best);
 
     } else {
-      console.log(`💤 No opportunity`);
+
+      console.log(
+        "No arbitrage found"
+      );
     }
 
-    await sleep(2000);
+    await new Promise(
+      r => setTimeout(r, 5000)
+    );
   }
 }
 
