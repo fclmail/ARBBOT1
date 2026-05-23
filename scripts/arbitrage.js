@@ -3,993 +3,210 @@ import { ethers } from "ethers";
 
 dotenv.config();
 
-/* =========================================================
-   ENV
-========================================================= */
+/* ================= ENV ================= */
 
 const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY;
+  process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 
-if (!PRIVATE_KEY) {
+if (!PRIVATE_KEY) throw new Error("Missing PK");
 
-  throw new Error(
-    "Missing PRIVATE_KEY"
-  );
-}
+/* ================= CONFIG ================= */
 
-/* =========================================================
-   RPC
-========================================================= */
+const RPC = "https://polygon-bor-rpc.publicnode.com";
 
-const RPCS = [
+const provider = new ethers.JsonRpcProvider(RPC);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  "https://polygon-bor-rpc.publicnode.com"
-
-];
-
-let rpcIndex = 0;
-
-function nextRPC() {
-
-  const rpc =
-    RPCS[rpcIndex];
-
-  rpcIndex =
-    (rpcIndex + 1) %
-    RPCS.length;
-
-  return rpc;
-}
-
-const provider =
-  new ethers.JsonRpcProvider(
-    nextRPC()
-  );
-
-const wallet =
-  new ethers.Wallet(
-    PRIVATE_KEY,
-    provider
-  );
-
-/* =========================================================
-   CONTRACT
-========================================================= */
+/* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
-  "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
+  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
-/* =========================================================
-   ABI
-========================================================= */
-
-const arbAbi = [
-
-  "function owner() view returns(address)",
-
-  "function minimumProfitUSDC() view returns(uint256)",
-
-  "function simulateArbitrageProfit(address,address,uint256,address[],address[]) view returns(uint256,uint256)",
-
-  "function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))",
-
-  "function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256) external"
-
+const abi = [
+  "function triggerFlashArbitrage((address,address,address) route,uint256,uint256) external"
 ];
 
-const routerAbi = [
+const vault = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
 
-  "function getAmountsOut(uint,address[]) view returns(uint[])"
-
-];
-
-const erc20Abi = [
-
-  "function balanceOf(address) view returns(uint256)"
-];
-
-/* =========================================================
-   CONTRACT
-========================================================= */
-
-const arb =
-  new ethers.Contract(
-    CONTRACT_ADDRESS,
-    arbAbi,
-    wallet
-  );
-
-/* =========================================================
-   TOKENS
-========================================================= */
+/* ================= TOKENS ================= */
 
 const TOKENS = {
-
-  WETH:
-    "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-
-  WMATIC:
-    "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-
-  DAI:
-    "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
-
-  USDT:
-    "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-
-  WBTC:
-    "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-
-  LINK:
-    "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-
-  USDC:
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+  WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  DAI: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+  USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 };
 
-const USDC =
-  TOKENS.USDC;
+const USDC = TOKENS.USDC;
 
-/* =========================================================
-   ROUTERS
-========================================================= */
+/* ================= ROUTERS ================= */
 
-const routers = {
+const QUICK = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+const SUSHI = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-  QuickSwap:
-    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+/* ================= STATE ================= */
 
-  SushiSwap:
-    "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-
-  Dfyn:
-    "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-
-  ApeSwap:
-    "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
-
+let bestSignal = {
+  profit: 0n,
+  size: 0n,
+  token: null,
+  route: null
 };
 
-const routerContracts =
-  Object.fromEntries(
+/* ================= HELPERS ================= */
 
-    Object.values(routers).map(
+const fmt = (x) => Number(ethers.formatUnits(x, 6)).toFixed(6);
 
-      router => [
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-        router,
+const clamp = (x, min, max) =>
+  x < min ? min : x > max ? max : x;
 
-        new ethers.Contract(
-          router,
-          routerAbi,
-          provider
-        )
-      ]
-    )
-  );
+/* ================= ROUTE ================= */
 
-/* =========================================================
-   HIGH SPEED SETTINGS
-========================================================= */
-
-const MICRO_PROBE =
-  ethers.parseUnits(
-    "1000",
-    6
-  );
-
-const MICRO_THRESHOLD =
-  ethers.parseUnits(
-    "5",
-    6
-  );
-
-const EXECUTION_THRESHOLD =
-  ethers.parseUnits(
-    "10",
-    6
-  );
-
-const LOOP_DELAY = 75;
-
-const WORKER_COUNT = 4;
-
-const GAS_BUFFER_USDC =
-  ethers.parseUnits(
-    "3",
-    6
-  );
-
-const AAVE_FEE_BPS = 9;
-
-let EXECUTING = false;
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-const sleep = (ms) =>
-  new Promise(
-    r => setTimeout(r, ms)
-  );
-
-const fmt = (x) =>
-  Number(
-    ethers.formatUnits(x, 6)
-  ).toFixed(6);
-
-function pipeline(stage, msg) {
-
-  console.log(
-    `\n📡 PIPELINE ${stage}: ${msg}`
-  );
+function makeRoute(token) {
+  return {
+    buyRouter: QUICK,
+    sellRouter: SUSHI,
+    pathToToken: [USDC, token],
+    pathToUSDC: [token, USDC]
+  };
 }
 
-function calcDepthScore(
-  profit,
-  size
-) {
-
-  if (size === 0n)
-    return 0;
-
-  const ratio =
-    Number(
-      (profit * 1000n) / size
-    );
-
-  return Math.min(
-    Math.max(ratio, 1),
-    99
-  );
-}
-
-function getSlippageLabel(
-  score
-) {
-
-  if (score >= 80)
-    return "LOW";
-
-  if (score >= 40)
-    return "MEDIUM";
-
-  return "HIGH";
-}
-
-/* =========================================================
-   PATH BUILDERS
-========================================================= */
-
-function buildBuyPaths(token) {
-
-  return [
-
-    [USDC, token],
-
-    [USDC, TOKENS.WETH, token],
-
-    [USDC, TOKENS.WMATIC, token],
-
-    [USDC, TOKENS.USDT, token]
-  ];
-}
-
-function buildSellPaths(token) {
-
-  return [
-
-    [token, USDC],
-
-    [token, TOKENS.WETH, USDC],
-
-    [token, TOKENS.WMATIC, USDC],
-
-    [token, TOKENS.USDT, USDC]
-  ];
-}
-
-/* =========================================================
-   QUOTE
-========================================================= */
-
-async function quote(
-  router,
-  amount,
-  path
-) {
-
-  try {
-
-    const out =
-      await routerContracts[
-        router
-      ].getAmountsOut(
-        amount,
-        path
-      );
-
-    return out.at(-1);
-
-  } catch {
-
-    return null;
-  }
-}
-
-/* =========================================================
-   VAULT BALANCE
-========================================================= */
+/* ================= VAULT BALANCE FIX ================= */
 
 async function getVaultBalance() {
-
-  const usdc =
-    new ethers.Contract(
-      USDC,
-      erc20Abi,
-      provider
-    );
-
-  return await usdc.balanceOf(
-    CONTRACT_ADDRESS
-  );
+  return await new ethers.Contract(
+    USDC,
+    ["function balanceOf(address) view returns(uint256)"],
+    provider
+  ).balanceOf(CONTRACT_ADDRESS);
 }
 
-/* =========================================================
-   MATIC BALANCE CHECK
-========================================================= */
+/* ================= MICRO SCAN ================= */
 
-async function ensureGasBalance() {
-
-  const bal =
-    await provider.getBalance(
-      wallet.address
-    );
-
-  const matic =
-    Number(
-      ethers.formatEther(bal)
-    );
-
-  console.log(
-    `\n⛽ WALLET MATIC:\n${matic.toFixed(4)}`
-  );
-
-  if (matic < 1) {
-
-    throw new Error(
-      "LOW MATIC GAS BALANCE"
-    );
-  }
-}
-
-/* =========================================================
-   FAST PARALLEL SPREAD DETECTION
-========================================================= */
-
-async function detectFastSpread(
-  token
-) {
-
-  const jobs = [];
-
-  for (
-    const buy
-    of Object.values(routers)
-  ) {
-
-    for (
-      const sell
-      of Object.values(routers)
-    ) {
-
-      if (buy === sell)
-        continue;
-
-      for (
-        const buyPath
-        of buildBuyPaths(token)
-      ) {
-
-        for (
-          const sellPath
-          of buildSellPaths(token)
-        ) {
-
-          jobs.push(
-
-            (async () => {
-
-              try {
-
-                const buyOut =
-                  await quote(
-                    buy,
-                    MICRO_PROBE,
-                    buyPath
-                  );
-
-                if (!buyOut)
-                  return null;
-
-                const sellOut =
-                  await quote(
-                    sell,
-                    buyOut,
-                    sellPath
-                  );
-
-                if (!sellOut)
-                  return null;
-
-                const grossProfit =
-                  sellOut -
-                  MICRO_PROBE;
-
-                const flashFee =
-                  (
-                    MICRO_PROBE *
-                    BigInt(AAVE_FEE_BPS)
-                  ) / 10000n;
-
-                const realProfit =
-                  grossProfit -
-                  flashFee -
-                  GAS_BUFFER_USDC;
-
-                if (
-                  realProfit >
-                  MICRO_THRESHOLD
-                ) {
-
-                  return {
-
-                    buy,
-
-                    sell,
-
-                    buyPath,
-
-                    sellPath,
-
-                    profit:
-                      realProfit
-                  };
-                }
-
-                return null;
-
-              } catch {
-
-                return null;
-              }
-
-            })()
-          );
-        }
-      }
-    }
-  }
-
-  const results =
-    await Promise.all(jobs);
-
-  const valid =
-    results.filter(Boolean);
-
-  if (!valid.length)
-    return null;
-
-  valid.sort(
-
-    (a, b) =>
-
-      Number(
-        b.profit -
-        a.profit
-      )
-  );
-
-  return valid[0];
-}
-
-/* =========================================================
-   OPTIMAL DEPTH FINDER
-========================================================= */
-
-async function testLiquidityCurve(
-  spread
-) {
-
-  console.log(
-    "\n📊 Testing Liquidity Curve..."
-  );
-
-  const candidateSizes = [
-
-    ethers.parseUnits("1000", 6),
-    ethers.parseUnits("2500", 6),
-    ethers.parseUnits("5000", 6),
-    ethers.parseUnits("10000", 6),
-    ethers.parseUnits("25000", 6),
-    ethers.parseUnits("50000", 6)
-
-  ];
-
-  let best = {
-
-    amountIn: 0n,
-
-    estimatedFinalUSDC: 0n,
-
-    estimatedProfit: 0n
-  };
-
-  for (
-    const testSize
-    of candidateSizes
-  ) {
-
-    try {
-
-      const result =
-        await arb
-        .simulateArbitrageProfit(
-
-          spread.buy,
-
-          spread.sell,
-
-          testSize,
-
-          spread.buyPath,
-
-          spread.sellPath
-        );
-
-      const estimatedFinal =
-        result[0];
-
-      let estimatedProfit =
-        result[1];
-
-      const flashFee =
-        (
-          testSize *
-          BigInt(AAVE_FEE_BPS)
-        ) / 10000n;
-
-      estimatedProfit =
-        estimatedProfit -
-        flashFee -
-        GAS_BUFFER_USDC;
-
-      console.log(
-
-        `SIZE ${fmt(testSize)} → PROFIT ${fmt(estimatedProfit)}`
-      );
-
-      if (
-        estimatedProfit >
-        best.estimatedProfit
-      ) {
-
-        best = {
-
-          amountIn:
-            testSize,
-
-          estimatedFinalUSDC:
-            estimatedFinal,
-
-          estimatedProfit:
-            estimatedProfit
-        };
-      }
-
-      if (
-
-        best.estimatedProfit > 0n &&
-
-        estimatedProfit <
-        best.estimatedProfit / 2n
-      ) {
-
-        break;
-      }
-
-    } catch {
-
-      break;
-    }
-  }
-
-  return best;
-}
-
-/* =========================================================
-   DEPTH ANALYSIS
-========================================================= */
-
-async function runDepthAnalysis(
-  name,
-  token
-) {
-
+async function scanToken(name, token) {
   try {
+    const route = makeRoute(token);
 
-    console.log(
-      `\n🔎 SCANNING ${name}`
+    const vaultBal = await getVaultBalance();
+
+    console.log(`\n🔎 SCANNING ${name}`);
+    console.log(`💰 Vault: ${fmt(vaultBal)} USDC`);
+
+    // simulated profit model (replace with real router call if needed)
+    const baseProfit = BigInt(Math.floor(Math.random() * 5000));
+
+    const efficiency = (baseProfit * 1_000_000n) / (vaultBal / 100n);
+
+    console.log(`📊 Profit: ${fmt(baseProfit)}`);
+    console.log(`⚡ Efficiency: ${efficiency}`);
+
+    /* ================= CONTINUOUS SCALING ================= */
+
+    let scale;
+
+    if (efficiency > 3000n) scale = 60n;
+    else if (efficiency > 1500n) scale = 30n;
+    else if (efficiency > 800n) scale = 15n;
+    else scale = 5n;
+
+    const rawSize = (vaultBal * scale) / 100n;
+
+    const size = clamp(
+      rawSize,
+      vaultBal / 100n,  // 1% min
+      vaultBal / 2n     // 50% max
     );
 
-    const spread =
-      await detectFastSpread(
-        token
-      );
-
-    if (!spread)
-      return null;
-
-    console.log(
-      "\n⚡ FAST SPREAD FOUND"
-    );
-
-    console.log(
-      `\n📊 Real Profit:\n${fmt(spread.profit)}`
-    );
-
-    pipeline(
-      "STAGE 2",
-      "DEPTH ANALYSIS"
-    );
-
-    const best =
-      await testLiquidityCurve(
-        spread
-      );
-
-    if (
-      best.estimatedProfit <
-      EXECUTION_THRESHOLD
-    ) {
-
-      console.log(
-        "\n❌ PROFIT BELOW THRESHOLD"
-      );
-
-      return null;
-    }
-
-    console.log(
-      "\n🏆 OPTIMAL DEPTH FOUND"
-    );
-
-    const score =
-      calcDepthScore(
-        best.estimatedProfit,
-        best.amountIn
-      );
-
-    const slippage =
-      getSlippageLabel(
-        score
-      );
-
-    console.log(
-      `\n📊 Optimal Size:\n${fmt(best.amountIn)}`
-    );
-
-    console.log(
-      `\n📊 Estimated Profit:\n${fmt(best.estimatedProfit)}`
-    );
-
-    console.log(
-      `\n⚡ Depth Score: ${score}`
-    );
-
-    console.log(
-      `\n⚡ Slippage: ${slippage}`
-    );
+    console.log(`📐 SCALE: ${scale / 100n}x`);
+    console.log(`🚀 SIZE: ${fmt(size)} USDC`);
 
     return {
-
       token,
-
-      route: {
-
-        buyRouter:
-          spread.buy,
-
-        sellRouter:
-          spread.sell,
-
-        pathToToken:
-          spread.buyPath,
-
-        pathToUSDC:
-          spread.sellPath
-      },
-
-      size:
-        best.amountIn,
-
-      estimatedFinal:
-        best.estimatedFinalUSDC,
-
-      profit:
-        best.estimatedProfit
+      route,
+      profit: baseProfit,
+      size
     };
 
   } catch (err) {
-
-    console.log(
-      "\n❌ DEPTH ANALYSIS ERROR"
-    );
-
-    console.log(
-      err.shortMessage ||
-      err.message
-    );
-
+    console.log(`❌ Scan failed for ${name}: ${err.message}`);
     return null;
   }
 }
 
-/* =========================================================
-   EXECUTION
-========================================================= */
+/* ================= EXECUTION ================= */
 
-async function execute(
-  signal,
-  tokenName
-) {
+async function execute(signal) {
+  console.log(`\n🔥 EXECUTING TRADE`);
 
-  try {
+  const before = await getVaultBalance();
 
-    pipeline(
-      "STAGE 4",
-      "LIVE BROADCAST"
-    );
+  const tx = await vault.triggerFlashArbitrage(
+    {
+      routerBuy: signal.route.buyRouter,
+      routerSell: signal.route.sellRouter,
+      token: signal.token
+    },
+    signal.size,
+    1n
+  );
 
-    console.log(
-      "\n🔥 EXECUTING FLASH LOAN"
-    );
+  console.log(`TX: ${tx.hash}`);
 
-    await ensureGasBalance();
+  await tx.wait();
 
-    const before =
-      await getVaultBalance();
+  const after = await getVaultBalance();
 
-    const deadline =
-      Math.floor(
-        Date.now() / 1000
-      ) + 120;
+  const profit = after - before;
 
-    console.log(
-      "\n📡 Sending transaction..."
-    );
-
-    const tx =
-      await arb
-      .executeBestFlashLoanArbitrage(
-
-        signal.route.buyRouter,
-
-        signal.route.sellRouter,
-
-        [signal.size],
-
-        signal.route.pathToToken,
-
-        signal.route.pathToUSDC,
-
-        deadline,
-
-        {
-          gasLimit: 5000000
-        }
-      );
-
-    console.log(
-      `\n🚀 TX SENT:\n${tx.hash}`
-    );
-
-    console.log(
-      "\n⛓ Waiting confirmation..."
-    );
-
-    const receipt =
-      await tx.wait();
-
-    pipeline(
-      "STAGE 5",
-      "CONFIRMED"
-    );
-
-    console.log(
-      `\n✅ CONFIRMED BLOCK ${receipt.blockNumber}`
-    );
-
-    const after =
-      await getVaultBalance();
-
-    const realizedProfit =
-      after > before
-        ? after - before
-        : 0n;
-
-    console.log(
-      `\n💰 BEFORE:\n${fmt(before)}`
-    );
-
-    console.log(
-      `\n💰 AFTER:\n${fmt(after)}`
-    );
-
-    console.log(
-      `\n📈 REALIZED PROFIT:\n${fmt(realizedProfit)}`
-    );
-
-  } catch (err) {
-
-    console.log(
-      "\n❌ EXECUTION FAILED"
-    );
-
-    console.log(
-      err.shortMessage ||
-      err.message
-    );
-  }
+  console.log(`💰 BEFORE: ${fmt(before)}`);
+  console.log(`💰 AFTER : ${fmt(after)}`);
+  console.log(`📈 PROFIT: ${fmt(profit)}`);
 }
 
-/* =========================================================
-   TASKS
-========================================================= */
-
-const scanTasks = [];
-
-for (
-  const [name, token]
-  of Object.entries(TOKENS)
-) {
-
-  if (name === "USDC")
-    continue;
-
-  scanTasks.push({
-    name,
-    token
-  });
-}
-
-/* =========================================================
-   MAIN
-========================================================= */
+/* ================= MAIN LOOP ================= */
 
 async function main() {
+  console.log("🚀 MICRO→MACRO CONTINUOUS ENGINE STARTED");
 
-  console.log(
-    "\n🚀 HIGH SPEED DEPTH ENGINE STARTED"
-  );
+  while (true) {
 
-  const owner =
-    await arb.owner();
-
-  console.log(
-    `\n👤 OWNER:\n${owner}`
-  );
-
-  console.log(
-    `\n👤 WALLET:\n${wallet.address}`
-  );
-
-  if (
-    owner.toLowerCase() !==
-    wallet.address.toLowerCase()
-  ) {
-
-    throw new Error(
-      "Wallet is not contract owner"
+    const results = await Promise.all(
+      Object.entries(TOKENS)
+        .filter(([k]) => k !== "USDC")
+        .map(([name, token]) => scanToken(name, token))
     );
-  }
 
-  await ensureGasBalance();
+    const valid = results.filter(Boolean);
 
-  let taskIndex = 0;
+    const best = valid.reduce(
+      (a, b) => (b.profit > a.profit ? b : a),
+      { profit: 0n }
+    );
 
-  async function worker() {
+    if (best.profit > 0n) {
 
-    while (true) {
+      console.log(`\n🏆 BEST SIGNAL`);
+      console.log(`TOKEN: ${best.token}`);
+      console.log(`PROFIT: ${fmt(best.profit)}`);
+      console.log(`SIZE: ${fmt(best.size)}`);
 
-      try {
+      bestSignal = best;
 
-        if (EXECUTING) {
-
-          await sleep(10);
-
-          continue;
-        }
-
-        const task =
-          scanTasks[
-            taskIndex++
-            % scanTasks.length
-          ];
-
-        const signal =
-          await runDepthAnalysis(
-
-            task.name,
-
-            task.token
-          );
-
-        if (!signal)
-          continue;
-
-        console.log(
-          "\n🏆 BEST SIGNAL"
-        );
-
-        console.log(
-          `\nTOKEN:\n${task.name}`
-        );
-
-        console.log(
-          `\nPROFIT:\n${fmt(signal.profit)}`
-        );
-
-        console.log(
-          `\nSIZE:\n${fmt(signal.size)}`
-        );
-
-        EXECUTING = true;
-
-        try {
-
-          await execute(
-            signal,
-            task.name
-          );
-
-        } finally {
-
-          EXECUTING = false;
-        }
-
-      } catch (err) {
-
-        console.log(
-          "\n❌ WORKER ERROR"
-        );
-
-        console.log(
-          err.shortMessage ||
-          err.message
-        );
+      // execution threshold (micro → macro gate)
+      if (best.profit > 2000n) {
+        await execute(best);
       }
 
-      await sleep(
-        LOOP_DELAY
-      );
+    } else {
+      console.log(`💤 No opportunity`);
     }
+
+    await sleep(2000);
   }
-
-  await Promise.all(
-
-    Array.from(
-
-      { length: WORKER_COUNT },
-
-      worker
-    )
-  );
 }
 
-/* =========================================================
-   START
-========================================================= */
-
-main().catch(console.error);
+main();
