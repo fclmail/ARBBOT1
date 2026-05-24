@@ -220,7 +220,7 @@ const DEXES = [
 ========================================================= */
 
 const TRADE_AMOUNT =
-  ethers.parseUnits("50", 6);
+  ethers.parseUnits("1", 6);
 
 const FLASH_LOAN_FEE_BPS = 9;
 
