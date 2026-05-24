@@ -18,11 +18,14 @@ if (!PRIVATE_KEY) {
    PROVIDER
 ========================================================= */
 
-const RPC = "https://polygon-bor-rpc.publicnode.com";
+const RPC =
+  "https://polygon-bor-rpc.publicnode.com";
 
-const provider = new ethers.JsonRpcProvider(RPC);
+const provider =
+  new ethers.JsonRpcProvider(RPC);
 
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+const wallet =
+  new ethers.Wallet(PRIVATE_KEY, provider);
 
 /* =========================================================
    CONTRACT
@@ -35,11 +38,12 @@ const arbAbi = [
   "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
 ];
 
-const vault = new ethers.Contract(
-  CONTRACT_ADDRESS,
-  arbAbi,
-  wallet
-);
+const vault =
+  new ethers.Contract(
+    CONTRACT_ADDRESS,
+    arbAbi,
+    wallet
+  );
 
 /* =========================================================
    ROUTER ABI
@@ -56,6 +60,9 @@ const routerAbi = [
 const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
+const WMATIC =
+  "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
+
 const WETH =
   "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
@@ -69,17 +76,19 @@ const QUICK =
 const SUSHI =
   "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-const quickRouter = new ethers.Contract(
-  QUICK,
-  routerAbi,
-  provider
-);
+const quickRouter =
+  new ethers.Contract(
+    QUICK,
+    routerAbi,
+    provider
+  );
 
-const sushiRouter = new ethers.Contract(
-  SUSHI,
-  routerAbi,
-  provider
-);
+const sushiRouter =
+  new ethers.Contract(
+    SUSHI,
+    routerAbi,
+    provider
+  );
 
 /* =========================================================
    SETTINGS
@@ -89,7 +98,8 @@ const TRADE_AMOUNT =
   ethers.parseUnits("50", 6);
 
 const FLASH_LOAN_FEE_BPS = 9;
-const SLIPPAGE_BUFFER = 0.98;
+
+const SLIPPAGE_BPS = 200;
 
 const LOOP_DELAY = 1000;
 
@@ -97,35 +107,51 @@ const LOOP_DELAY = 1000;
    HELPERS
 ========================================================= */
 
-const fmt = (v, d = 6) =>
-  Number(ethers.formatUnits(v, d)).toFixed(6);
+const fmt = (
+  value,
+  decimals = 6
+) =>
+  Number(
+    ethers.formatUnits(
+      value,
+      decimals
+    )
+  ).toFixed(6);
 
 const sleep = (ms) =>
-  new Promise((r) => setTimeout(r, ms));
-
-/* =========================================================
-   LIVE QUOTES
-========================================================= */
-
-async function getBuyQuote() {
-  const amounts = await quickRouter.getAmountsOut(
-    TRADE_AMOUNT,
-    [USDC, WETH]
+  new Promise((r) =>
+    setTimeout(r, ms)
   );
 
+/* =========================================================
+   MULTIHOP QUOTES
+========================================================= */
+
+async function getQuickMultiHopBuy() {
+  const amounts =
+    await quickRouter.getAmountsOut(
+      TRADE_AMOUNT,
+      [USDC, WMATIC, WETH]
+    );
+
   return {
-    wethOut: amounts[1]
+    wmaticOut: amounts[1],
+    wethOut: amounts[2]
   };
 }
 
-async function getSellQuote(wethAmount) {
-  const amounts = await sushiRouter.getAmountsOut(
-    wethAmount,
-    [WETH, USDC]
-  );
+async function getSushiMultiHopSell(
+  wethAmount
+) {
+  const amounts =
+    await sushiRouter.getAmountsOut(
+      wethAmount,
+      [WETH, WMATIC, USDC]
+    );
 
   return {
-    usdcOut: amounts[1]
+    wmaticOut: amounts[1],
+    usdcOut: amounts[2]
   };
 }
 
@@ -140,7 +166,7 @@ async function simulate(batch) {
     );
 
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -151,7 +177,7 @@ async function simulate(batch) {
 
 async function execute(
   batch,
-  netProfit,
+  realizedProfit,
   startTime
 ) {
   console.log(
@@ -179,9 +205,9 @@ async function execute(
 
   console.log("⏳ WAITING...\n");
 
-  const receipt = await tx.wait();
+  await tx.wait();
 
-  const end =
+  const elapsed =
     Date.now() - startTime;
 
   console.log(
@@ -201,7 +227,9 @@ async function execute(
   );
 
   console.log(
-    `${fmt(netProfit)} USDC\n`
+    `${realizedProfit.toFixed(
+      6
+    )} USDC\n`
   );
 
   console.log(
@@ -209,7 +237,7 @@ async function execute(
   );
 
   console.log(
-    `${end}ms`
+    `${elapsed}ms\n`
   );
 
   console.log(
@@ -232,18 +260,18 @@ async function main() {
         Date.now();
 
       /* =========================================================
-         LIVE BUY QUOTE
+         MULTIHOP BUY
       ========================================================= */
 
       const buy =
-        await getBuyQuote();
+        await getQuickMultiHopBuy();
 
       /* =========================================================
-         LIVE SELL QUOTE
+         MULTIHOP SELL
       ========================================================= */
 
       const sell =
-        await getSellQuote(
+        await getSushiMultiHopSell(
           buy.wethOut
         );
 
@@ -255,22 +283,34 @@ async function main() {
         sell.usdcOut -
         TRADE_AMOUNT;
 
-      const gasPrice =
+      const rawProfitNum =
+        Number(
+          fmt(rawProfit)
+        );
+
+      const feeData =
         await provider.getFeeData();
 
       const estimatedGas =
-        842114n;
+        991224n;
 
-      const estGasCostWei =
-        estimatedGas *
-        gasPrice.gasPrice;
+      const gasPrice =
+        feeData.gasPrice ||
+        ethers.parseUnits(
+          "250",
+          "gwei"
+        );
 
-      const estGasCostUSDC =
+      const gasCostPOL =
         Number(
           ethers.formatEther(
-            estGasCostWei
+            estimatedGas *
+              gasPrice
           )
-        ) * 0.9;
+        );
+
+      const estGasCostUSDC =
+        gasCostPOL * 0.9;
 
       const flashLoanFee =
         Number(
@@ -283,17 +323,18 @@ async function main() {
           )
         );
 
-      const rawProfitNum =
-        Number(fmt(rawProfit));
-
-      const safeProfit =
-        rawProfitNum *
-        SLIPPAGE_BUFFER;
+      const slippageBuffer =
+        Math.abs(
+          rawProfitNum *
+            (SLIPPAGE_BPS /
+              10000)
+        );
 
       const netProfit =
-        safeProfit -
+        rawProfitNum -
         estGasCostUSDC -
-        flashLoanFee;
+        flashLoanFee -
+        slippageBuffer;
 
       /* =========================================================
          VALIDATION OUTPUT
@@ -308,7 +349,15 @@ async function main() {
       );
 
       console.log(
-        "📡 QUICKSWAP LIVE BUY:"
+        "📡 ROUTE:"
+      );
+
+      console.log(
+        "USDC → WMATIC → WETH → USDC\n"
+      );
+
+      console.log(
+        "📡 QUICKSWAP MULTIHOP BUY:"
       );
 
       console.log(
@@ -319,7 +368,7 @@ async function main() {
       );
 
       console.log(
-        "📡 SUSHISWAP LIVE SELL:"
+        "📡 SUSHISWAP MULTIHOP SELL:"
       );
 
       console.log(
@@ -354,6 +403,16 @@ async function main() {
 
       console.log(
         `${flashLoanFee.toFixed(
+          6
+        )} USDC\n`
+      );
+
+      console.log(
+        "⚡ SLIPPAGE BUFFER:"
+      );
+
+      console.log(
+        `${slippageBuffer.toFixed(
           6
         )} USDC\n`
       );
@@ -401,7 +460,7 @@ async function main() {
       );
 
       /* =========================================================
-         BUILD BATCH
+         BATCH
       ========================================================= */
 
       const batch = {
@@ -414,11 +473,11 @@ async function main() {
         ],
 
         pathsToToken: [
-          [USDC, WETH]
+          [USDC, WMATIC, WETH]
         ],
 
         pathsToUSDC: [
-          [WETH, USDC]
+          [WETH, WMATIC, USDC]
         ],
 
         deadline:
@@ -456,7 +515,11 @@ async function main() {
         );
 
         console.log(
-          "❌ CONTRACT REJECTED"
+          "❌ CONTRACT ACCEPTANCE:"
+        );
+
+        console.log(
+          "FALSE\n"
         );
 
         console.log(
@@ -483,8 +546,7 @@ async function main() {
       );
 
       console.log(
-        estimatedGas.toString() +
-          "\n"
+        `${estimatedGas}\n`
       );
 
       console.log(
@@ -496,15 +558,12 @@ async function main() {
       );
 
       /* =========================================================
-         EXECUTION
+         EXECUTE
       ========================================================= */
 
       await execute(
         batch,
-        ethers.parseUnits(
-          netProfit.toFixed(6),
-          6
-        ),
+        netProfit,
         startTime
       );
     } catch (err) {
