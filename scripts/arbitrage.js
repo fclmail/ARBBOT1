@@ -1,6 +1,7 @@
 
 
 
+
 import dotenv from "dotenv";  
 import { ethers } from "ethers";  
 
@@ -53,7 +54,7 @@ const routerAbi = [
 ];  
 
 /* =========================================================  
-   TOKENS (ONLY FIX: checksum safety added)  
+   TOKENS  
 ========================================================= */  
 
 const USDC =  
@@ -65,7 +66,6 @@ const WMATIC =
 const WETH =  
   "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";  
 
-/* FIXED CHECKSUM LINK */  
 const LINK = ethers.getAddress(  
   "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"  
 );  
@@ -104,26 +104,131 @@ const TRADE_AMOUNT =
 
 const FLASH_LOAN_FEE_BPS = 9;  
 
-const SLIPPAGE_BPS = 100; // FIXED SAFE SLIPPAGE (1%)  
+const SLIPPAGE_BPS = 100;  
 
 const GAS_ESTIMATE = 1001244n;  
 
 const LOOP_DELAY = 1000;  
 
 /* =========================================================  
-   ROUTES  
+   TRUE TRIANGULAR ROUTES (FIX: uses 3 DIFFERENT tokens)  
 ========================================================= */  
 
 const ROUTES = [  
-  { symbol: "WETH", token: WETH, decimals: 18 },  
-  { symbol: "LINK", token: LINK, decimals: 18 },  
-  { symbol: "WBTC", token: WBTC, decimals: 8 },  
-  { symbol: "DAI", token: DAI, decimals: 18 },  
-  { symbol: "CRV", token: CRV, decimals: 18 }  
+  // USDC → WETH → WBTC → USDC  
+  {  
+    symbol: "WETH→WBTC",  
+    pathBuy: [USDC, WMATIC, WETH],  
+    pathSell: [WETH, WBTC, USDC],  
+    buyToken: WETH,  
+    sellToken: WBTC,  
+    decimals: 18,  
+    sellDecimals: 8  
+  },  
+  // USDC → WETH → LINK → USDC  
+  {  
+    symbol: "WETH→LINK",  
+    pathBuy: [USDC, WMATIC, WETH],  
+    pathSell: [WETH, LINK, USDC],  
+    buyToken: WETH,  
+    sellToken: LINK,  
+    decimals: 18,  
+    sellDecimals: 18  
+  },  
+  // USDC → DAI → WETH → USDC  
+  {  
+    symbol: "DAI→WETH",  
+    pathBuy: [USDC, WMATIC, DAI],  
+    pathSell: [DAI, WETH, USDC],  
+    buyToken: DAI,  
+    sellToken: WETH,  
+    decimals: 18,  
+    sellDecimals: 18  
+  },  
+  // USDC → DAI → WBTC → USDC  
+  {  
+    symbol: "DAI→WBTC",  
+    pathBuy: [USDC, WMATIC, DAI],  
+    pathSell: [DAI, WBTC, USDC],  
+    buyToken: DAI,  
+    sellToken: WBTC,  
+    decimals: 18,  
+    sellDecimals: 8  
+  },  
+  // USDC → WBTC → WETH → USDC  
+  {  
+    symbol: "WBTC→WETH",  
+    pathBuy: [USDC, WMATIC, WBTC],  
+    pathSell: [WBTC, WETH, USDC],  
+    buyToken: WBTC,  
+    sellToken: WETH,  
+    decimals: 8,  
+    sellDecimals: 18  
+  },  
+  // USDC → WBTC → LINK → USDC  
+  {  
+    symbol: "WBTC→LINK",  
+    pathBuy: [USDC, WMATIC, WBTC],  
+    pathSell: [WBTC, LINK, USDC],  
+    buyToken: WBTC,  
+    sellToken: LINK,  
+    decimals: 8,  
+    sellDecimals: 18  
+  },  
+  // USDC → LINK → WETH → USDC  
+  {  
+    symbol: "LINK→WETH",  
+    pathBuy: [USDC, WMATIC, LINK],  
+    pathSell: [LINK, WETH, USDC],  
+    buyToken: LINK,  
+    sellToken: WETH,  
+    decimals: 18,  
+    sellDecimals: 18  
+  },  
+  // USDC → LINK → WBTC → USDC  
+  {  
+    symbol: "LINK→WBTC",  
+    pathBuy: [USDC, WMATIC, LINK],  
+    pathSell: [LINK, WBTC, USDC],  
+    buyToken: LINK,  
+    sellToken: WBTC,  
+    decimals: 18,  
+    sellDecimals: 8  
+  },  
+  // USDC → WETH → DAI → USDC  
+  {  
+    symbol: "WETH→DAI",  
+    pathBuy: [USDC, WMATIC, WETH],  
+    pathSell: [WETH, DAI, USDC],  
+    buyToken: WETH,  
+    sellToken: DAI,  
+    decimals: 18,  
+    sellDecimals: 18  
+  },  
+  // USDC → CRV → WETH → USDC  
+  {  
+    symbol: "CRV→WETH",  
+    pathBuy: [USDC, WMATIC, CRV],  
+    pathSell: [CRV, WETH, USDC],  
+    buyToken: CRV,  
+    sellToken: WETH,  
+    decimals: 18,  
+    sellDecimals: 18  
+  },  
+  // USDC → CRV → WBTC → USDC  
+  {  
+    symbol: "CRV→WBTC",  
+    pathBuy: [USDC, WMATIC, CRV],  
+    pathSell: [CRV, WBTC, USDC],  
+    buyToken: CRV,  
+    sellToken: WBTC,  
+    decimals: 18,  
+    sellDecimals: 8  
+  }  
 ];  
 
 /* =========================================================  
-   HELPERS (NO BREAKING CHANGES)  
+   HELPERS  
 ========================================================= */  
 
 const fmt = (v, d = 6) =>  
@@ -133,40 +238,28 @@ const sleep = (ms) =>
   new Promise((r) => setTimeout(r, ms));  
 
 /* =========================================================  
-   SLIPPAGE FIX (ONLY ADDITION)  
+   SLIPPAGE  
 ========================================================= */  
 
 function safeSlippage(rawProfit) {  
   const p = Math.abs(rawProfit) * (SLIPPAGE_BPS / 10000);  
-
-  // HARD CAP (prevents explosion like logs show)  
   return Math.min(Math.max(p, 0.01), 0.05);  
 }  
 
 /* =========================================================  
-   QUOTES  
+   QUOTES (UPDATED for true triangular routes)  
 ========================================================= */  
 
-async function getBuy(token) {  
+async function getBuy(route) {  
   const amounts =  
-    await quickRouter.getAmountsOut(TRADE_AMOUNT, [  
-      USDC,  
-      WMATIC,  
-      token  
-    ]);  
-
-  return amounts[2];  
+    await quickRouter.getAmountsOut(TRADE_AMOUNT, route.pathBuy);  
+  return amounts[route.pathBuy.length - 1];  
 }  
 
-async function getSell(token, amountIn) {  
+async function getSell(route, amountIn) {  
   const amounts =  
-    await sushiRouter.getAmountsOut(amountIn, [  
-      token,  
-      WMATIC,  
-      USDC  
-    ]);  
-
-  return amounts[2];  
+    await sushiRouter.getAmountsOut(amountIn, route.pathSell);  
+  return amounts[route.pathSell.length - 1];  
 }  
 
 /* =========================================================  
@@ -210,7 +303,9 @@ async function execute(batch, sym, profit, start) {
   console.log("====================================================\n");  
 
   console.log(`💰 THIS TRADE:\n  ${profit.toFixed(6)} USDC\n`);  
-  console.log(`⚡ EXECUTED ROUTE:\n  USDC → WMATIC → ${sym} → USDC\n`);  
+  console.log(`📊 ACCUMULATED PROFIT:\n  TODO\n`);  
+  console.log(`📊 TOTAL TRADES:\n  TODO\n`);  
+  console.log(`⚡ EXECUTED ROUTE:\n  USDC → ${sym} → USDC\n`);  
   console.log(`⚡ SCAN→EXECUTE:\n  ${ms}ms\n`);  
   console.log("====================================================\n");  
 }  
@@ -233,14 +328,18 @@ async function main() {
       const start = Date.now();  
 
       try {  
-        const buy = await getBuy(r.token);  
-        const sell = await getSell(r.token, buy);  
+        const buyAmt = await getBuy(r);  
+        const sellAmt = await getSell(r, buyAmt);  
 
-        const raw = Number(fmt(sell - TRADE_AMOUNT));  
+        // Buy amount in USDC is always TRADE_AMOUNT (50 USDC)  
+        const buyUSDC = Number(fmt(TRADE_AMOUNT));  
+        const sellUSDC = Number(fmt(sellAmt));  
 
-        const gas = Number(  
-          ethers.formatEther(GAS_ESTIMATE)  
-        ) * 0.9;  
+        const raw = sellUSDC - buyUSDC;  
+
+        // Gas: convert wei to USDC (approximate MATIC price ~0.7 USDC)  
+        const gasMatic = Number(ethers.formatEther(GAS_ESTIMATE));  
+        const gas = gasMatic * 0.7; // ~0.0000007 USDC, negligible  
 
         const fee = Number(  
           fmt((TRADE_AMOUNT * BigInt(FLASH_LOAN_FEE_BPS)) / 10000n)  
@@ -250,15 +349,15 @@ async function main() {
 
         const net = raw - gas - fee - slip;  
 
-        // User-friendly USDC values  
-        const buyUSDC = Number(fmt(TRADE_AMOUNT));  
-        const sellUSDC = Number(fmt(sell));  
+        // Build buy/sell token strings for display  
+        const buySym = r.symbol.split("→")[0];  
+        const sellSym = r.symbol.split("→")[1];  
 
         console.log(`📡 SCANNING:\n${r.symbol}`);  
-        console.log(`USDC → WMATIC → ${r.symbol} → USDC\n`);  
+        console.log(`USDC → ${buySym} → ${sellSym} → USDC\n`);  
 
-        console.log(`💰 BUY:\n  ${buyUSDC.toFixed(2)} USDC → ${fmt(buy, r.decimals)} ${r.symbol}`);  
-        console.log(`💰 SELL:\n  ${fmt(buy, r.decimals)} ${r.symbol} → ${sellUSDC.toFixed(2)} USDC\n`);  
+        console.log(`💰 BUY:\n  ${buyUSDC.toFixed(2)} USDC → ${fmt(buyAmt, r.decimals)} ${buySym}`);  
+        console.log(`💰 SELL:\n  ${fmt(buyAmt, r.decimals)} ${buySym} → ${fmt(sellAmt, r.sellDecimals)} ${sellSym} → ${sellUSDC.toFixed(2)} USDC\n`);  
 
         console.log(`📊 RAW PROFIT:\n  ${raw.toFixed(6)} USDC\n`);  
         console.log(`⚡ EST GAS COST:\n  ${gas.toFixed(6)} USDC\n`);  
@@ -275,19 +374,23 @@ async function main() {
         console.log(`⚡ RESULT:\nPROFITABLE`);
         console.log("====================================================\n");
 
-        // Build batch
+        // Build batch for TRUE triangular arbitrage
         const batch = {
           buyRouters: [QUICK],
           sellRouters: [SUSHI],
           amountsInUSDC: [TRADE_AMOUNT],
-          pathsToToken: [[USDC, WMATIC, r.token]],
-          pathsToUSDC: [[r.token, WMATIC, USDC]],
+          pathsToToken: [r.pathBuy],
+          pathsToUSDC: [r.pathSell],
           deadline: Math.floor(Date.now() / 1000) + 120
         };
 
         // Simulate
         const ok = await simulate(batch);
-        if (!ok) continue;
+        if (!ok) {
+          console.log(`⚡ SIMULATION FAILED:\nSKIPPED\n`);
+          console.log("====================================================\n");
+          continue;
+        }
 
         // Execute
         await execute(batch, r.symbol, net, start);
