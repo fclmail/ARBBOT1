@@ -66,6 +66,18 @@ const WMATIC =
 const WETH =
   "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
+const LINK =
+  "0x53E0bca35eC356BD5ddDFebBD1Fc0fD03FaBad39";
+
+const WBTC =
+  "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6";
+
+const DAI =
+  "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063";
+
+const CRV =
+  "0x172370d5Cd63279eFa6d502DAB29171933a610AF";
+
 /* =========================================================
    ROUTERS
 ========================================================= */
@@ -101,7 +113,45 @@ const FLASH_LOAN_FEE_BPS = 9;
 
 const SLIPPAGE_BPS = 200;
 
+const GAS_ESTIMATE = 1001244n;
+
 const LOOP_DELAY = 1000;
+
+/* =========================================================
+   ROUTES
+========================================================= */
+
+const ROUTES = [
+  {
+    symbol: "WETH",
+    token: WETH,
+    decimals: 18
+  },
+
+  {
+    symbol: "LINK",
+    token: LINK,
+    decimals: 18
+  },
+
+  {
+    symbol: "WBTC",
+    token: WBTC,
+    decimals: 8
+  },
+
+  {
+    symbol: "DAI",
+    token: DAI,
+    decimals: 18
+  },
+
+  {
+    symbol: "CRV",
+    token: CRV,
+    decimals: 18
+  }
+];
 
 /* =========================================================
    HELPERS
@@ -124,35 +174,40 @@ const sleep = (ms) =>
   );
 
 /* =========================================================
-   MULTIHOP QUOTES
+   MULTIHOP QUOTE
 ========================================================= */
 
-async function getQuickMultiHopBuy() {
+async function getBuyQuote(
+  tokenAddress
+) {
   const amounts =
     await quickRouter.getAmountsOut(
       TRADE_AMOUNT,
-      [USDC, WMATIC, WETH]
+      [
+        USDC,
+        WMATIC,
+        tokenAddress
+      ]
     );
 
-  return {
-    wmaticOut: amounts[1],
-    wethOut: amounts[2]
-  };
+  return amounts[2];
 }
 
-async function getSushiMultiHopSell(
-  wethAmount
+async function getSellQuote(
+  tokenAddress,
+  amountIn
 ) {
   const amounts =
     await sushiRouter.getAmountsOut(
-      wethAmount,
-      [WETH, WMATIC, USDC]
+      amountIn,
+      [
+        tokenAddress,
+        WMATIC,
+        USDC
+      ]
     );
 
-  return {
-    wmaticOut: amounts[1],
-    usdcOut: amounts[2]
-  };
+  return amounts[2];
 }
 
 /* =========================================================
@@ -177,7 +232,8 @@ async function simulate(batch) {
 
 async function execute(
   batch,
-  realizedProfit,
+  symbol,
+  netProfit,
   startTime
 ) {
   console.log(
@@ -227,9 +283,17 @@ async function execute(
   );
 
   console.log(
-    `${realizedProfit.toFixed(
+    `${netProfit.toFixed(
       6
     )} USDC\n`
+  );
+
+  console.log(
+    "⚡ EXECUTED ROUTE:"
+  );
+
+  console.log(
+    `USDC → WMATIC → ${symbol} → USDC\n`
   );
 
   console.log(
@@ -256,316 +320,341 @@ async function main() {
 
   while (true) {
     try {
-      const startTime =
-        Date.now();
-
-      /* =========================================================
-         MULTIHOP BUY
-      ========================================================= */
-
-      const buy =
-        await getQuickMultiHopBuy();
-
-      /* =========================================================
-         MULTIHOP SELL
-      ========================================================= */
-
-      const sell =
-        await getSushiMultiHopSell(
-          buy.wethOut
-        );
-
-      /* =========================================================
-         PROFIT CALCULATIONS
-      ========================================================= */
-
-      const rawProfit =
-        sell.usdcOut -
-        TRADE_AMOUNT;
-
-      const rawProfitNum =
-        Number(
-          fmt(rawProfit)
-        );
-
-      const feeData =
-        await provider.getFeeData();
-
-      const estimatedGas =
-        991224n;
-
-      const gasPrice =
-        feeData.gasPrice ||
-        ethers.parseUnits(
-          "250",
-          "gwei"
-        );
-
-      const gasCostPOL =
-        Number(
-          ethers.formatEther(
-            estimatedGas *
-              gasPrice
-          )
-        );
-
-      const estGasCostUSDC =
-        gasCostPOL * 0.9;
-
-      const flashLoanFee =
-        Number(
-          fmt(
-            (TRADE_AMOUNT *
-              BigInt(
-                FLASH_LOAN_FEE_BPS
-              )) /
-              10000n
-          )
-        );
-
-      const slippageBuffer =
-        Math.abs(
-          rawProfitNum *
-            (SLIPPAGE_BPS /
-              10000)
-        );
-
-      const netProfit =
-        rawProfitNum -
-        estGasCostUSDC -
-        flashLoanFee -
-        slippageBuffer;
-
-      /* =========================================================
-         VALIDATION OUTPUT
-      ========================================================= */
-
       console.log(
-        "\n🔄 LIVE REBUILD VALIDATION"
+        "\n🔄 MULTI-ASSET TRIANGULAR SCAN"
       );
 
       console.log(
         "====================================================\n"
       );
 
-      console.log(
-        "📡 ROUTE:"
-      );
+      for (const route of ROUTES) {
+        const startTime =
+          Date.now();
 
-      console.log(
-        "USDC → WMATIC → WETH → USDC\n"
-      );
+        try {
+          /* =========================================================
+             BUY QUOTE
+          ========================================================= */
 
-      console.log(
-        "📡 QUICKSWAP MULTIHOP BUY:"
-      );
+          const tokenOut =
+            await getBuyQuote(
+              route.token
+            );
 
-      console.log(
-        `${fmt(
-          buy.wethOut,
-          18
-        )} WETH\n`
-      );
+          /* =========================================================
+             SELL QUOTE
+          ========================================================= */
 
-      console.log(
-        "📡 SUSHISWAP MULTIHOP SELL:"
-      );
+          const usdcOut =
+            await getSellQuote(
+              route.token,
+              tokenOut
+            );
 
-      console.log(
-        `${fmt(
-          sell.usdcOut
-        )} USDC\n`
-      );
+          /* =========================================================
+             CALCULATIONS
+          ========================================================= */
 
-      console.log(
-        "⚡ RAW PROFIT:"
-      );
+          const rawProfit =
+            usdcOut -
+            TRADE_AMOUNT;
 
-      console.log(
-        `${rawProfitNum.toFixed(
-          6
-        )} USDC\n`
-      );
+          const rawProfitNum =
+            Number(
+              fmt(rawProfit)
+            );
 
-      console.log(
-        "⚡ EST GAS COST:"
-      );
+          const feeData =
+            await provider.getFeeData();
 
-      console.log(
-        `${estGasCostUSDC.toFixed(
-          6
-        )} USDC\n`
-      );
+          const gasPrice =
+            feeData.gasPrice ||
+            ethers.parseUnits(
+              "250",
+              "gwei"
+            );
 
-      console.log(
-        "⚡ FLASH LOAN FEE:"
-      );
+          const gasCostPOL =
+            Number(
+              ethers.formatEther(
+                GAS_ESTIMATE *
+                  gasPrice
+              )
+            );
 
-      console.log(
-        `${flashLoanFee.toFixed(
-          6
-        )} USDC\n`
-      );
+          const estGasCostUSDC =
+            gasCostPOL * 0.9;
 
-      console.log(
-        "⚡ SLIPPAGE BUFFER:"
-      );
+          const flashLoanFee =
+            Number(
+              fmt(
+                (TRADE_AMOUNT *
+                  BigInt(
+                    FLASH_LOAN_FEE_BPS
+                  )) /
+                  10000n
+              )
+            );
 
-      console.log(
-        `${slippageBuffer.toFixed(
-          6
-        )} USDC\n`
-      );
+          const slippageBuffer =
+            Math.abs(
+              rawProfitNum *
+                (SLIPPAGE_BPS /
+                  10000)
+            );
 
-      console.log(
-        "⚡ NET PROFIT:"
-      );
+          const netProfit =
+            rawProfitNum -
+            estGasCostUSDC -
+            flashLoanFee -
+            slippageBuffer;
 
-      console.log(
-        `${netProfit.toFixed(
-          6
-        )} USDC\n`
-      );
+          /* =========================================================
+             OUTPUT
+          ========================================================= */
 
-      if (netProfit <= 0) {
-        console.log(
-          "❌ VALIDATION:"
-        );
+          console.log(
+            "📡 SCANNING:"
+          );
 
-        console.log(
-          "FAILED\n"
-        );
+          console.log(
+            `${route.symbol}`
+          );
 
-        console.log(
-          "❌ TRADE SKIPPED"
-        );
+          console.log(
+            `USDC → WMATIC → ${route.symbol} → USDC\n`
+          );
 
-        console.log(
-          "====================================================\n"
-        );
+          console.log(
+            "📡 QUICKSWAP BUY:"
+          );
 
-        await sleep(
-          LOOP_DELAY
-        );
+          console.log(
+            `${fmt(
+              tokenOut,
+              route.decimals
+            )} ${route.symbol}\n`
+          );
 
-        continue;
+          console.log(
+            "📡 SUSHISWAP SELL:"
+          );
+
+          console.log(
+            `${fmt(
+              usdcOut
+            )} USDC\n`
+          );
+
+          console.log(
+            "⚡ RAW PROFIT:"
+          );
+
+          console.log(
+            `${rawProfitNum.toFixed(
+              6
+            )} USDC\n`
+          );
+
+          console.log(
+            "⚡ EST GAS COST:"
+          );
+
+          console.log(
+            `${estGasCostUSDC.toFixed(
+              6
+            )} USDC\n`
+          );
+
+          console.log(
+            "⚡ FLASH LOAN FEE:"
+          );
+
+          console.log(
+            `${flashLoanFee.toFixed(
+              6
+            )} USDC\n`
+          );
+
+          console.log(
+            "⚡ SLIPPAGE BUFFER:"
+          );
+
+          console.log(
+            `${slippageBuffer.toFixed(
+              6
+            )} USDC\n`
+          );
+
+          console.log(
+            "⚡ NET PROFIT:"
+          );
+
+          console.log(
+            `${netProfit.toFixed(
+              6
+            )} USDC\n`
+          );
+
+          /* =========================================================
+             VALIDATION
+          ========================================================= */
+
+          if (netProfit <= 0) {
+            console.log(
+              "❌ RESULT:"
+            );
+
+            console.log(
+              "SKIPPED\n"
+            );
+
+            console.log(
+              "====================================================\n"
+            );
+
+            continue;
+          }
+
+          console.log(
+            "⚡ RESULT:"
+          );
+
+          console.log(
+            "PROFITABLE\n"
+          );
+
+          /* =========================================================
+             BUILD BATCH
+          ========================================================= */
+
+          const batch = {
+            buyRouters: [QUICK],
+
+            sellRouters: [SUSHI],
+
+            amountsInUSDC: [
+              TRADE_AMOUNT
+            ],
+
+            pathsToToken: [
+              [
+                USDC,
+                WMATIC,
+                route.token
+              ]
+            ],
+
+            pathsToUSDC: [
+              [
+                route.token,
+                WMATIC,
+                USDC
+              ]
+            ],
+
+            deadline:
+              Math.floor(
+                Date.now() / 1000
+              ) + 30
+          };
+
+          /* =========================================================
+             SIMULATION
+          ========================================================= */
+
+          console.log(
+            "====================================================\n"
+          );
+
+          console.log(
+            "🧪 ON-CHAIN SIMULATION"
+          );
+
+          console.log(
+            "====================================================\n"
+          );
+
+          const ok =
+            await simulate(
+              batch
+            );
+
+          if (!ok) {
+            console.log(
+              "❌ STATICCALL:"
+            );
+
+            console.log(
+              "FAILED\n"
+            );
+
+            console.log(
+              "❌ CONTRACT ACCEPTANCE:"
+            );
+
+            console.log(
+              "FALSE\n"
+            );
+
+            console.log(
+              "====================================================\n"
+            );
+
+            continue;
+          }
+
+          console.log(
+            "⚡ STATICCALL:"
+          );
+
+          console.log(
+            "SUCCESS\n"
+          );
+
+          console.log(
+            "⚡ GAS ESTIMATE:"
+          );
+
+          console.log(
+            `${GAS_ESTIMATE}\n`
+          );
+
+          console.log(
+            "⚡ CONTRACT ACCEPTANCE:"
+          );
+
+          console.log(
+            "TRUE\n"
+          );
+
+          /* =========================================================
+             EXECUTE
+          ========================================================= */
+
+          await execute(
+            batch,
+            route.symbol,
+            netProfit,
+            startTime
+          );
+        } catch (err) {
+          console.log(
+            `❌ ${route.symbol} ERROR:`
+          );
+
+          console.log(
+            err.reason ||
+              err.message ||
+              err
+          );
+
+          console.log(
+            "====================================================\n"
+          );
+        }
       }
-
-      console.log(
-        "⚡ VALIDATION:"
-      );
-
-      console.log(
-        "PASSED\n"
-      );
-
-      /* =========================================================
-         BATCH
-      ========================================================= */
-
-      const batch = {
-        buyRouters: [QUICK],
-
-        sellRouters: [SUSHI],
-
-        amountsInUSDC: [
-          TRADE_AMOUNT
-        ],
-
-        pathsToToken: [
-          [USDC, WMATIC, WETH]
-        ],
-
-        pathsToUSDC: [
-          [WETH, WMATIC, USDC]
-        ],
-
-        deadline:
-          Math.floor(
-            Date.now() / 1000
-          ) + 30
-      };
-
-      /* =========================================================
-         SIMULATION
-      ========================================================= */
-
-      console.log(
-        "====================================================\n"
-      );
-
-      console.log(
-        "🧪 ON-CHAIN SIMULATION"
-      );
-
-      console.log(
-        "====================================================\n"
-      );
-
-      const ok =
-        await simulate(batch);
-
-      if (!ok) {
-        console.log(
-          "❌ STATICCALL:"
-        );
-
-        console.log(
-          "FAILED\n"
-        );
-
-        console.log(
-          "❌ CONTRACT ACCEPTANCE:"
-        );
-
-        console.log(
-          "FALSE\n"
-        );
-
-        console.log(
-          "====================================================\n"
-        );
-
-        await sleep(
-          LOOP_DELAY
-        );
-
-        continue;
-      }
-
-      console.log(
-        "⚡ STATICCALL:"
-      );
-
-      console.log(
-        "SUCCESS\n"
-      );
-
-      console.log(
-        "⚡ GAS ESTIMATE:"
-      );
-
-      console.log(
-        `${estimatedGas}\n`
-      );
-
-      console.log(
-        "⚡ CONTRACT ACCEPTANCE:"
-      );
-
-      console.log(
-        "TRUE\n"
-      );
-
-      /* =========================================================
-         EXECUTE
-      ========================================================= */
-
-      await execute(
-        batch,
-        netProfit,
-        startTime
-      );
     } catch (err) {
       console.log(
         "\n❌ ENGINE ERROR:"
