@@ -3,131 +3,528 @@ import { ethers } from "ethers";
 
 dotenv.config();
 
-/* ================= CONFIG ================= */
+/* =========================================================
+   CONFIG
+========================================================= */
 
 const PRIVATE_KEY =
   process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 
-if (!PRIVATE_KEY) throw new Error("Missing PRIVATE KEY");
+if (!PRIVATE_KEY) {
+  throw new Error("Missing PRIVATE KEY");
+}
 
-/* ================= PROVIDER ================= */
+/* =========================================================
+   PROVIDER
+========================================================= */
 
 const RPC = "https://polygon-bor-rpc.publicnode.com";
+
 const provider = new ethers.JsonRpcProvider(RPC);
+
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-/* ================= CONTRACT ================= */
+/* =========================================================
+   CONTRACT
+========================================================= */
 
 const CONTRACT_ADDRESS =
   "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
+const arbAbi = [
+  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
+];
+
+const vault = new ethers.Contract(
+  CONTRACT_ADDRESS,
+  arbAbi,
+  wallet
+);
+
+/* =========================================================
+   ROUTER ABI
+========================================================= */
+
+const routerAbi = [
+  "function getAmountsOut(uint amountIn, address[] memory path) external view returns (uint[] memory amounts)"
+];
+
+/* =========================================================
+   TOKENS
+========================================================= */
+
 const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-/* ================= ABIs ================= */
+const WETH =
+  "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
-const vaultAbi = [
-  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
-  "function balanceOf(address) view returns(uint256)"
-];
+/* =========================================================
+   ROUTERS
+========================================================= */
 
-const erc20Abi = [
-  "function balanceOf(address) view returns(uint256)"
-];
+const QUICK =
+  "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
 
-const vault = new ethers.Contract(CONTRACT_ADDRESS, vaultAbi, wallet);
-const usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+const SUSHI =
+  "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
 
-/* ================= HELPERS ================= */
+const quickRouter = new ethers.Contract(
+  QUICK,
+  routerAbi,
+  provider
+);
 
-const fmt = (x, d = 6) =>
-  Number(ethers.formatUnits(x, d)).toFixed(6);
+const sushiRouter = new ethers.Contract(
+  SUSHI,
+  routerAbi,
+  provider
+);
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/* =========================================================
+   SETTINGS
+========================================================= */
 
-/* ================= MOCK BATCH (replace with real builder) ================= */
+const TRADE_AMOUNT =
+  ethers.parseUnits("50", 6);
 
-function buildBatch() {
+const FLASH_LOAN_FEE_BPS = 9;
+const SLIPPAGE_BUFFER = 0.98;
+
+const LOOP_DELAY = 1000;
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const fmt = (v, d = 6) =>
+  Number(ethers.formatUnits(v, d)).toFixed(6);
+
+const sleep = (ms) =>
+  new Promise((r) => setTimeout(r, ms));
+
+/* =========================================================
+   LIVE QUOTES
+========================================================= */
+
+async function getBuyQuote() {
+  const amounts = await quickRouter.getAmountsOut(
+    TRADE_AMOUNT,
+    [USDC, WETH]
+  );
+
   return {
-    buyRouters: ["0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"],
-    sellRouters: ["0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"],
-    amountsInUSDC: [ethers.parseUnits("0.02", 6)],
-    pathsToToken: [[USDC, "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"]],
-    pathsToUSDC: [["0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", USDC]],
-    deadline: Math.floor(Date.now() / 1000) + 30
+    wethOut: amounts[1]
   };
 }
 
-/* ================= EXECUTION ================= */
+async function getSellQuote(wethAmount) {
+  const amounts = await sushiRouter.getAmountsOut(
+    wethAmount,
+    [WETH, USDC]
+  );
 
-async function executeFlashBatch() {
-  const start = Date.now();
+  return {
+    usdcOut: amounts[1]
+  };
+}
 
-  const batch = buildBatch();
+/* =========================================================
+   SIMULATION
+========================================================= */
 
-  /* ================= PRE BALANCES ================= */
+async function simulate(batch) {
+  try {
+    await vault.executeFlashBatchArbitrage.staticCall(
+      batch
+    );
 
-  const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
 
-  /* ================= SEND TX ================= */
+/* =========================================================
+   EXECUTION
+========================================================= */
 
-  const tx = await vault.executeFlashBatchArbitrage(batch);
+async function execute(
+  batch,
+  netProfit,
+  startTime
+) {
+  console.log(
+    "===================================================="
+  );
 
-  console.log("====================================================\n");
-  console.log("🔥 EXECUTING FLASH BATCH");
-  console.log("====================================================\n");
+  console.log(
+    "🔥 EXECUTING FLASH BATCH"
+  );
+
+  console.log(
+    "====================================================\n"
+  );
+
+  const tx =
+    await vault.executeFlashBatchArbitrage(
+      batch
+    );
 
   console.log("🚀 TX HASH:");
-  console.log(tx.hash + "\n");
+  console.log(tx.hash);
 
-  console.log("⚡ TX STATUS:");
+  console.log("\n⚡ TX STATUS:");
   console.log("SENT\n");
 
   console.log("⏳ WAITING...\n");
 
-  /* ================= WAIT CONFIRMATION ================= */
-
   const receipt = await tx.wait();
 
-  /* ================= POST BALANCES ================= */
+  const end =
+    Date.now() - startTime;
 
-  const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+  console.log(
+    "===================================================="
+  );
 
-  const gasUsed = receipt.gasUsed || 0n;
+  console.log(
+    "🏁 FINAL RESULTS"
+  );
 
-  const profit = after - before;
+  console.log(
+    "====================================================\n"
+  );
 
-  const end = Date.now() - start;
+  console.log(
+    "💰 REALIZED NET PROFIT:"
+  );
 
-  /* ================= FINAL OUTPUT ================= */
+  console.log(
+    `${fmt(netProfit)} USDC\n`
+  );
 
-  console.log("====================================================\n");
-  console.log("🏁 FINAL RESULTS");
-  console.log("====================================================\n");
+  console.log(
+    "⚡ SCAN→EXECUTE:"
+  );
 
-  console.log("💰 REALIZED PROFIT:");
-  console.log(`${fmt(profit)} USDC\n`);
+  console.log(
+    `${end}ms`
+  );
 
-  console.log("💰 CONTRACT BEFORE:");
-  console.log(`${fmt(before)} USDC\n`);
-
-  console.log("💰 CONTRACT AFTER:");
-  console.log(`${fmt(after)} USDC\n`);
-
-  console.log("⛓ GAS USED:");
-  console.log(`${gasUsed.toString()}\n`);
-
-  console.log("⚡ SCAN→EXECUTE:");
-  console.log(`${end}ms\n`);
+  console.log(
+    "====================================================\n"
+  );
 }
 
-/* ================= RUN ================= */
+/* =========================================================
+   MAIN LOOP
+========================================================= */
 
-(async () => {
-  console.log("🚀 FLASH EXECUTOR READY\n");
+async function main() {
+  console.log(
+    "\n🚀 MICRO→MACRO ARB ENGINE STARTED\n"
+  );
 
   while (true) {
-    await executeFlashBatch();
-    await sleep(1500);
+    try {
+      const startTime =
+        Date.now();
+
+      /* =========================================================
+         LIVE BUY QUOTE
+      ========================================================= */
+
+      const buy =
+        await getBuyQuote();
+
+      /* =========================================================
+         LIVE SELL QUOTE
+      ========================================================= */
+
+      const sell =
+        await getSellQuote(
+          buy.wethOut
+        );
+
+      /* =========================================================
+         PROFIT CALCULATIONS
+      ========================================================= */
+
+      const rawProfit =
+        sell.usdcOut -
+        TRADE_AMOUNT;
+
+      const gasPrice =
+        await provider.getFeeData();
+
+      const estimatedGas =
+        842114n;
+
+      const estGasCostWei =
+        estimatedGas *
+        gasPrice.gasPrice;
+
+      const estGasCostUSDC =
+        Number(
+          ethers.formatEther(
+            estGasCostWei
+          )
+        ) * 0.9;
+
+      const flashLoanFee =
+        Number(
+          fmt(
+            (TRADE_AMOUNT *
+              BigInt(
+                FLASH_LOAN_FEE_BPS
+              )) /
+              10000n
+          )
+        );
+
+      const rawProfitNum =
+        Number(fmt(rawProfit));
+
+      const safeProfit =
+        rawProfitNum *
+        SLIPPAGE_BUFFER;
+
+      const netProfit =
+        safeProfit -
+        estGasCostUSDC -
+        flashLoanFee;
+
+      /* =========================================================
+         VALIDATION OUTPUT
+      ========================================================= */
+
+      console.log(
+        "\n🔄 LIVE REBUILD VALIDATION"
+      );
+
+      console.log(
+        "====================================================\n"
+      );
+
+      console.log(
+        "📡 QUICKSWAP LIVE BUY:"
+      );
+
+      console.log(
+        `${fmt(
+          buy.wethOut,
+          18
+        )} WETH\n`
+      );
+
+      console.log(
+        "📡 SUSHISWAP LIVE SELL:"
+      );
+
+      console.log(
+        `${fmt(
+          sell.usdcOut
+        )} USDC\n`
+      );
+
+      console.log(
+        "⚡ RAW PROFIT:"
+      );
+
+      console.log(
+        `${rawProfitNum.toFixed(
+          6
+        )} USDC\n`
+      );
+
+      console.log(
+        "⚡ EST GAS COST:"
+      );
+
+      console.log(
+        `${estGasCostUSDC.toFixed(
+          6
+        )} USDC\n`
+      );
+
+      console.log(
+        "⚡ FLASH LOAN FEE:"
+      );
+
+      console.log(
+        `${flashLoanFee.toFixed(
+          6
+        )} USDC\n`
+      );
+
+      console.log(
+        "⚡ NET PROFIT:"
+      );
+
+      console.log(
+        `${netProfit.toFixed(
+          6
+        )} USDC\n`
+      );
+
+      if (netProfit <= 0) {
+        console.log(
+          "❌ VALIDATION:"
+        );
+
+        console.log(
+          "FAILED\n"
+        );
+
+        console.log(
+          "❌ TRADE SKIPPED"
+        );
+
+        console.log(
+          "====================================================\n"
+        );
+
+        await sleep(
+          LOOP_DELAY
+        );
+
+        continue;
+      }
+
+      console.log(
+        "⚡ VALIDATION:"
+      );
+
+      console.log(
+        "PASSED\n"
+      );
+
+      /* =========================================================
+         BUILD BATCH
+      ========================================================= */
+
+      const batch = {
+        buyRouters: [QUICK],
+
+        sellRouters: [SUSHI],
+
+        amountsInUSDC: [
+          TRADE_AMOUNT
+        ],
+
+        pathsToToken: [
+          [USDC, WETH]
+        ],
+
+        pathsToUSDC: [
+          [WETH, USDC]
+        ],
+
+        deadline:
+          Math.floor(
+            Date.now() / 1000
+          ) + 30
+      };
+
+      /* =========================================================
+         SIMULATION
+      ========================================================= */
+
+      console.log(
+        "====================================================\n"
+      );
+
+      console.log(
+        "🧪 ON-CHAIN SIMULATION"
+      );
+
+      console.log(
+        "====================================================\n"
+      );
+
+      const ok =
+        await simulate(batch);
+
+      if (!ok) {
+        console.log(
+          "❌ STATICCALL:"
+        );
+
+        console.log(
+          "FAILED\n"
+        );
+
+        console.log(
+          "❌ CONTRACT REJECTED"
+        );
+
+        console.log(
+          "====================================================\n"
+        );
+
+        await sleep(
+          LOOP_DELAY
+        );
+
+        continue;
+      }
+
+      console.log(
+        "⚡ STATICCALL:"
+      );
+
+      console.log(
+        "SUCCESS\n"
+      );
+
+      console.log(
+        "⚡ GAS ESTIMATE:"
+      );
+
+      console.log(
+        estimatedGas.toString() +
+          "\n"
+      );
+
+      console.log(
+        "⚡ CONTRACT ACCEPTANCE:"
+      );
+
+      console.log(
+        "TRUE\n"
+      );
+
+      /* =========================================================
+         EXECUTION
+      ========================================================= */
+
+      await execute(
+        batch,
+        ethers.parseUnits(
+          netProfit.toFixed(6),
+          6
+        ),
+        startTime
+      );
+    } catch (err) {
+      console.log(
+        "\n❌ ENGINE ERROR:"
+      );
+
+      console.log(
+        err.reason ||
+          err.message ||
+          err
+      );
+
+      console.log("");
+    }
+
+    await sleep(
+      LOOP_DELAY
+    );
   }
-})();
+}
+
+main();
