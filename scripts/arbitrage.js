@@ -93,6 +93,16 @@ const CRV =
   "0x172370d5Cd63279eFa6d502DAB29171933a610AF";
 
 /* =========================================================
+   OPTIONAL VOLATILE TOKENS
+========================================================= */
+
+const AAVE =
+  "0xD6DF932A45C0f255f85145f286ea0B292B21C90B";
+
+const SUSHI_TOKEN =
+  "0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a";
+
+/* =========================================================
    USDC CONTRACT
 ========================================================= */
 
@@ -219,8 +229,13 @@ const DEXES = [
    SETTINGS
 ========================================================= */
 
+/*
+  LOWERED TRADE SIZE
+  Smaller trades create less price impact
+*/
+
 const TRADE_AMOUNT =
-  ethers.parseUnits("1", 6);
+  ethers.parseUnits("5", 6);
 
 const FLASH_LOAN_FEE_BPS = 9;
 
@@ -231,7 +246,7 @@ const GAS_ESTIMATE = 1001244n;
 const LOOP_DELAY = 1000;
 
 /* =========================================================
-   TRUE TRIANGULAR ROUTES
+   ROUTES
 ========================================================= */
 
 const ROUTES = [
@@ -239,8 +254,6 @@ const ROUTES = [
     symbol: "WETH→WBTC",
     pathBuy: [USDC, WMATIC, WETH],
     pathSell: [WETH, WBTC, USDC],
-    buyToken: WETH,
-    sellToken: WBTC,
     decimals: 18,
     sellDecimals: 8
   },
@@ -248,8 +261,6 @@ const ROUTES = [
     symbol: "WETH→LINK",
     pathBuy: [USDC, WMATIC, WETH],
     pathSell: [WETH, LINK, USDC],
-    buyToken: WETH,
-    sellToken: LINK,
     decimals: 18,
     sellDecimals: 18
   },
@@ -257,82 +268,40 @@ const ROUTES = [
     symbol: "DAI→WETH",
     pathBuy: [USDC, WMATIC, DAI],
     pathSell: [DAI, WETH, USDC],
-    buyToken: DAI,
-    sellToken: WETH,
     decimals: 18,
     sellDecimals: 18
-  },
-  {
-    symbol: "DAI→WBTC",
-    pathBuy: [USDC, WMATIC, DAI],
-    pathSell: [DAI, WBTC, USDC],
-    buyToken: DAI,
-    sellToken: WBTC,
-    decimals: 18,
-    sellDecimals: 8
   },
   {
     symbol: "WBTC→WETH",
     pathBuy: [USDC, WMATIC, WBTC],
     pathSell: [WBTC, WETH, USDC],
-    buyToken: WBTC,
-    sellToken: WETH,
     decimals: 8,
-    sellDecimals: 18
-  },
-  {
-    symbol: "WBTC→LINK",
-    pathBuy: [USDC, WMATIC, WBTC],
-    pathSell: [WBTC, LINK, USDC],
-    buyToken: WBTC,
-    sellToken: LINK,
-    decimals: 8,
-    sellDecimals: 18
-  },
-  {
-    symbol: "LINK→WETH",
-    pathBuy: [USDC, WMATIC, LINK],
-    pathSell: [LINK, WETH, USDC],
-    buyToken: LINK,
-    sellToken: WETH,
-    decimals: 18,
     sellDecimals: 18
   },
   {
     symbol: "LINK→WBTC",
     pathBuy: [USDC, WMATIC, LINK],
     pathSell: [LINK, WBTC, USDC],
-    buyToken: LINK,
-    sellToken: WBTC,
     decimals: 18,
     sellDecimals: 8
   },
+
+  /* VOLATILE ROUTES */
+
   {
-    symbol: "WETH→DAI",
-    pathBuy: [USDC, WMATIC, WETH],
-    pathSell: [WETH, DAI, USDC],
-    buyToken: WETH,
-    sellToken: DAI,
+    symbol: "AAVE→WETH",
+    pathBuy: [USDC, WMATIC, AAVE],
+    pathSell: [AAVE, WETH, USDC],
     decimals: 18,
     sellDecimals: 18
   },
+
   {
-    symbol: "CRV→WETH",
-    pathBuy: [USDC, WMATIC, CRV],
-    pathSell: [CRV, WETH, USDC],
-    buyToken: CRV,
-    sellToken: WETH,
+    symbol: "SUSHI→WETH",
+    pathBuy: [USDC, WMATIC, SUSHI_TOKEN],
+    pathSell: [SUSHI_TOKEN, WETH, USDC],
     decimals: 18,
     sellDecimals: 18
-  },
-  {
-    symbol: "CRV→WBTC",
-    pathBuy: [USDC, WMATIC, CRV],
-    pathSell: [CRV, WBTC, USDC],
-    buyToken: CRV,
-    sellToken: WBTC,
-    decimals: 18,
-    sellDecimals: 8
   }
 ];
 
@@ -352,8 +321,6 @@ const sleep = (ms) =>
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
-const CYAN = "\x1b[36m";
-const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
 /* =========================================================
@@ -394,9 +361,9 @@ function safeSlippage(rawProfit) {
     Math.abs(rawProfit) *
     (SLIPPAGE_BPS / 10000);
 
-  return Math.min(
-    Math.max(p, 0.01),
-    0.05
+  return Math.max(
+    p,
+    0.001
   );
 }
 
@@ -431,11 +398,18 @@ async function findBestArb(route) {
 
         try {
 
+          console.log(
+            `🔍 TESTING: ${buyDex.name} → ${sellDex.name}`
+          );
+
           const sellAmounts =
             await sellDex.router.getAmountsOut(
               buyAmt,
               route.pathSell
             );
+
+          const midSellAmount =
+            sellAmounts[1];
 
           const sellAmt =
             sellAmounts[
@@ -460,6 +434,7 @@ async function findBestArb(route) {
               buyDex,
               sellDex,
               buyAmt,
+              midSellAmount,
               sellAmt,
               raw
             };
@@ -624,6 +599,10 @@ async function main() {
 
       try {
 
+        console.log(
+          `📡 SCANNING:\n${r.symbol}`
+        );
+
         const arb =
           await findBestArb(r);
 
@@ -684,10 +663,6 @@ async function main() {
           r.symbol.split("→")[1];
 
         console.log(
-          `📡 SCANNING:\n${r.symbol}`
-        );
-
-        console.log(
           `🔀 DEX ROUTE:\n${arb.buyDex.name} → ${arb.sellDex.name}\n`
         );
 
@@ -700,7 +675,7 @@ async function main() {
         );
 
         console.log(
-          `💰 SELL:\n  ${fmt(buyAmt, r.decimals)} ${buySym} → ${fmt(sellAmt, r.sellDecimals)} ${sellSym} → ${sellUSDC.toFixed(2)} USDC\n`
+          `💰 SELL:\n  ${fmt(buyAmt, r.decimals)} ${buySym} → ${fmt(arb.midSellAmount, r.sellDecimals)} ${sellSym} → ${sellUSDC.toFixed(2)} USDC\n`
         );
 
         console.log(
