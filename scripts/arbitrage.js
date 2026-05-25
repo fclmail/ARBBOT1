@@ -1,419 +1,442 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.17;
+import dotenv from "dotenv";
+import { ethers } from "ethers";
 
-/* ===================== ORIGINAL INTERFACES ===================== */
+/* ================= ENV ================= */
+dotenv.config({ override: false });
 
-interface IERC20 {
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address recipient, uint256 amount) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function allowance(address owner, address spender) external view returns (uint256);
+const RPC_POLYGON =
+  (process.env.RPC_POLYGON ||
+    process.env.POLYGON_RPC ||
+    process.env.RPC_URL ||
+    "").trim();
+
+const WALLET_PRIVATE_KEY =
+  (process.env.WALLET_PRIVATE_KEY ||
+    process.env.PRIVATE_KEY ||
+    "").trim();
+
+if (!RPC_POLYGON) throw new Error("RPC_POLYGON missing");
+if (!WALLET_PRIVATE_KEY) throw new Error("PRIVATE_KEY missing");
+
+/* ================= COLORS ================= */
+
+const GREEN = "\x1b[92m";
+const RESET = "\x1b[0m";
+const CYAN = "\x1b[96m";
+const YELLOW = "\x1b[93m";
+const RED = "\x1b[91m";
+
+/* ================= CONSTANTS ================= */
+
+const MIN_TRADE_USDC = 0.05;
+const MIN_EXPECTED_PROFIT = 0.0002;
+
+const SCAN_INTERVAL_MS = 10000;
+const DEADLINE_SECONDS = 6000;
+
+const TARGET_BATCH_SIZE = 20;
+const WORKERS = 16;
+
+/* ================= TRADE BUFFER ================= */
+
+let tradeBuffer = [];
+
+/* ================= PROVIDER ================= */
+
+const provider = new ethers.JsonRpcProvider(RPC_POLYGON);
+const wallet = new ethers.Wallet(WALLET_PRIVATE_KEY, provider);
+
+/* ================= CONTRACT ================= */
+
+const VAULT_ADDRESS = "0xf7e8A1580Dd9b3757Fb6a1f86AD5ed0e0F3EfC31";
+
+const vaultAbi = [
+{
+name: "executeFlashBatchArbitrage",
+type: "function",
+inputs: [
+{ name: "buyRouters", type: "address[]" },
+{ name: "sellRouters", type: "address[]" },
+{ name: "amountsInUSDC", type: "uint256[]" },
+{ name: "pathsToToken", type: "address[][]" },
+{ name: "pathsToUSDC", type: "address[][]" },
+{ name: "deadline", type: "uint256" }
+],
+outputs: [],
+stateMutability: "nonpayable"
+}
+];
+
+const vault = new ethers.Contract(VAULT_ADDRESS, vaultAbi, wallet);
+
+/* ================= USDC ================= */
+
+const usdcAbi = [
+"function balanceOf(address owner) view returns (uint256)"
+];
+
+const usdc = new ethers.Contract(
+"0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+usdcAbi,
+provider
+);
+
+/* ================= ROUTERS ================= */
+
+const routers = {
+QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+};
+
+const routerAbi = [
+"function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory)"
+];
+
+/* ================= TOKENS ================= */
+
+const TOKENS = {
+USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
+CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b"
+};
+
+/* ================= HELPERS ================= */
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function decodeError(err) {
+return (
+err?.reason ||
+err?.shortMessage ||
+err?.info?.error?.message ||
+err?.message ||
+"Unknown error"
+);
 }
 
-interface IUniswapV2Router {
-    function swapExactTokensForTokens(
-        uint amountIn,
-        uint amountOutMin,
-        address[] calldata path,
-        address to,
-        uint deadline
-    ) external returns (uint[] memory amounts);
+async function logBalances() {
+
+const vaultUSDC = await usdc.balanceOf(VAULT_ADDRESS);
+const formattedVaultUSDC = ethers.formatUnits(vaultUSDC, 6);
+
+const maticBalance = await provider.getBalance(wallet.address);
+const formattedMatic = ethers.formatEther(maticBalance);
+
+console.log(`${CYAN}Vault USDC:${RESET} ${formattedVaultUSDC}`);
+console.log(`${CYAN}Wallet MATIC:${RESET} ${formattedMatic}`);
+
 }
 
-/* ===================== AAVE V3 INTERFACES ===================== */
+async function quote(routerAddr, amountIn, path) {
 
-interface IPool {
-    function flashLoanSimple(
-        address receiver,
-        address asset,
-        uint256 amount,
-        bytes calldata params,
-        uint16 referralCode
-    ) external;
+try {
+
+const router = new ethers.Contract(routerAddr, routerAbi, provider);
+
+const amounts = await router.getAmountsOut(amountIn, path);
+
+return amounts.at(-1);
+
+} catch {
+
+return null;
+
 }
 
-interface IPoolAddressesProvider {
-    function getPool() external view returns (address);
 }
 
-abstract contract FlashLoanSimpleReceiverBase {
-    IPool public immutable POOL;
+/* ================= FIND TRADE ================= */
 
-    constructor(IPoolAddressesProvider provider) {
-        POOL = IPool(provider.getPool());
-    }
+async function findProfitableTrade(buyRouter, sellRouter, tokenAddr) {
 
-    function executeOperation(
-        address asset,
-        uint256 amount,
-        uint256 premium,
-        address initiator,
-        bytes calldata params
-    ) external virtual returns (bool);
+if (tokenAddr === TOKENS.USDC) return null;
+
+const amountIn = ethers.parseUnits(MIN_TRADE_USDC.toString(), 6);
+
+let bestBuyOut;
+let bestBuyPath;
+
+const buyPaths = [
+[TOKENS.USDC, tokenAddr],
+[TOKENS.USDC, TOKENS.WMATIC, tokenAddr],
+[TOKENS.USDC, TOKENS.WETH, tokenAddr],
+[TOKENS.USDC, TOKENS.USDT, tokenAddr],
+[TOKENS.USDC, TOKENS.DAI, tokenAddr]
+];
+
+for (const p of buyPaths) {
+
+const out = await quote(buyRouter, amountIn, p);
+
+if (out && (!bestBuyOut || out > bestBuyOut)) {
+
+bestBuyOut = out;
+bestBuyPath = p;
+
 }
 
-/* ===================== MAIN CONTRACT ===================== */
-
-contract VaultArbitrageEnforcer is FlashLoanSimpleReceiverBase {
-    address public owner;
-    address public vault;
-    IERC20 public usdc;
-
-    uint256 public minimumProfitUSDC;
-
-    event ArbitrageExecuted(
-        address indexed buyRouter,
-        address indexed sellRouter,
-        address indexed token,
-        uint256 amountInUSDC,
-        uint256 beforeBal,
-        uint256 afterBal,
-        uint256 profitUSDC
-    );
-
-    event MinProfitUpdated(uint256 newMin);
-    event VaultUpdated(address newVault);
-
-    constructor(
-        address _usdc,
-        address _vault,
-        uint256 _minimumProfitUSDC,
-        IPoolAddressesProvider provider
-    ) FlashLoanSimpleReceiverBase(provider) {
-        owner = msg.sender;
-        usdc = IERC20(_usdc);
-        vault = _vault;
-        minimumProfitUSDC = _minimumProfitUSDC;
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
-        _;
-    }
-
-    /* ================= SET VAULT ================= */
-
-    function setVault(address _newVault) external onlyOwner {
-        require(_newVault != address(0), "Zero address");
-        vault = _newVault;
-        emit VaultUpdated(_newVault);
-    }
-
-    /* ================= INTERNAL ARBITRAGE ================= */
-
-    function _performOnChainArbitrage(
-        address buyRouter,
-        address sellRouter,
-        uint256 amountInUSDC,
-        address[] memory pathToToken,
-        address[] memory pathToUSDC,
-        uint256 deadline
-    ) internal returns (uint256) {
-
-        uint256 beforeBal = usdc.balanceOf(address(this));
-
-        if (usdc.allowance(address(this), buyRouter) < amountInUSDC) {
-            usdc.approve(buyRouter, type(uint256).max);
-        }
-
-        IUniswapV2Router(buyRouter).swapExactTokensForTokens(
-            amountInUSDC,
-            0,
-            pathToToken,
-            address(this),
-            deadline
-        );
-
-        IERC20 token = IERC20(pathToUSDC[0]);
-        uint256 tokenBal = token.balanceOf(address(this));
-
-        if (token.allowance(address(this), sellRouter) < tokenBal) {
-            token.approve(sellRouter, type(uint256).max);
-        }
-
-        IUniswapV2Router(sellRouter).swapExactTokensForTokens(
-            tokenBal,
-            0,
-            pathToUSDC,
-            address(this),
-            deadline
-        );
-
-        return usdc.balanceOf(address(this));
-    }
-
-    /* ================= NORMAL VAULT ARBITRAGE ================= */
-
-    function executeArbitrage(
-        address buyRouter,
-        address sellRouter,
-        uint256 amountInUSDC,
-        address[] calldata pathToToken,
-        address[] calldata pathToUSDC,
-        uint256 deadline
-    ) external {
-
-        require(msg.sender == owner || msg.sender == vault, "Unauthorized");
-
-        uint256 beforeBal = usdc.balanceOf(address(this));
-        require(beforeBal >= amountInUSDC, "Insufficient vault balance");
-
-        uint256 afterBal = _performOnChainArbitrage(
-            buyRouter,
-            sellRouter,
-            amountInUSDC,
-            pathToToken,
-            pathToUSDC,
-            deadline
-        );
-
-        require(
-            afterBal >= beforeBal + minimumProfitUSDC,
-            "Profit below minimum"
-        );
-
-        uint256 profit = afterBal - beforeBal;
-        usdc.transfer(vault, profit);
-
-        emit ArbitrageExecuted(
-            buyRouter,
-            sellRouter,
-            pathToUSDC[0],
-            amountInUSDC,
-            beforeBal,
-            afterBal,
-            profit
-        );
-    }
-
-    /* ================= SINGLE FLASH ================= */
-
-    function executeFlashArbitrage(
-        address buyRouter,
-        address sellRouter,
-        uint256 amountInUSDC,
-        address[] calldata pathToToken,
-        address[] calldata pathToUSDC,
-        uint256 deadline
-    ) external onlyOwner {
-
-        bytes memory params = abi.encode(
-            false,
-            buyRouter,
-            sellRouter,
-            pathToToken,
-            pathToUSDC,
-            deadline
-        );
-
-        POOL.flashLoanSimple(
-            address(this),
-            address(usdc),
-            amountInUSDC,
-            params,
-            0
-        );
-    }
-
-    /* ================= BATCH FLASH ================= */
-
-    function executeFlashBatchArbitrage(
-        address[] calldata buyRouters,
-        address[] calldata sellRouters,
-        uint256[] calldata amountsInUSDC,
-        address[][] calldata pathsToToken,
-        address[][] calldata pathsToUSDC,
-        uint256 deadline
-    ) external onlyOwner {
-
-        require(
-            buyRouters.length == sellRouters.length &&
-            buyRouters.length == amountsInUSDC.length &&
-            buyRouters.length == pathsToToken.length &&
-            buyRouters.length == pathsToUSDC.length,
-            "Length mismatch"
-        );
-
-        uint256 totalAmount;
-
-        for (uint256 i = 0; i < amountsInUSDC.length; i++) {
-            totalAmount += amountsInUSDC[i];
-        }
-
-        bytes memory params = abi.encode(
-            true,
-            buyRouters,
-            sellRouters,
-            amountsInUSDC,
-            pathsToToken,
-            pathsToUSDC,
-            deadline
-        );
-
-        POOL.flashLoanSimple(
-            address(this),
-            address(usdc),
-            totalAmount,
-            params,
-            0
-        );
-    }
-
-    /* ================= FLASH CALLBACK ================= */
-
-    function executeOperation(
-        address asset,
-        uint256 amount,
-        uint256 premium,
-        address,
-        bytes calldata params
-    ) external override returns (bool) {
-
-        require(asset == address(usdc), "Invalid asset");
-
-        bool isBatch = abi.decode(params, (bool));
-
-        uint256 beforeBal = usdc.balanceOf(address(this));
-
-        if (!isBatch) {
-
-            (
-                ,
-                address buyRouter,
-                address sellRouter,
-                address[] memory pathToToken,
-                address[] memory pathToUSDC,
-                uint256 deadline
-            ) = abi.decode(params, (
-                bool,
-                address,
-                address,
-                address[],
-                address[],
-                uint256
-            ));
-
-            _performOnChainArbitrage(
-                buyRouter,
-                sellRouter,
-                amount,
-                pathToToken,
-                pathToUSDC,
-                deadline
-            );
-
-        } else {
-
-            (
-                ,
-                address[] memory buyRouters,
-                address[] memory sellRouters,
-                uint256[] memory amountsInUSDC,
-                address[][] memory pathsToToken,
-                address[][] memory pathsToUSDC,
-                uint256 deadline
-            ) = abi.decode(params, (
-                bool,
-                address[],
-                address[],
-                uint256[],
-                address[][],
-                address[][],
-                uint256
-            ));
-
-            uint256 batchBeforeBal = beforeBal;
-            uint256 batchAfterBal = beforeBal;
-
-            for (uint256 i = 0; i < buyRouters.length; i++) {
-
-                (uint256 tradeAfterBal, uint256 tradeProfit) = _executeBatchTrade(
-                    buyRouters[i],
-                    sellRouters[i],
-                    amountsInUSDC[i],
-                    pathsToToken[i],
-                    pathsToUSDC[i],
-                    deadline
-                );
-
-                batchAfterBal = tradeAfterBal;
-
-                emit ArbitrageExecuted(
-                    buyRouters[i],
-                    sellRouters[i],
-                    pathsToUSDC[i][0],
-                    amountsInUSDC[i],
-                    tradeAfterBal - tradeProfit,
-                    tradeAfterBal,
-                    tradeProfit
-                );
-            }
-
-            require(
-                batchAfterBal >= batchBeforeBal + minimumProfitUSDC,
-                "Flash profit below minimum (batch)"
-            );
-
-            uint256 aggregatedProfit = batchAfterBal - batchBeforeBal;
-
-            if (aggregatedProfit > 0) {
-                usdc.transfer(vault, aggregatedProfit);
-            }
-        }
-
-        uint256 afterBal = usdc.balanceOf(address(this));
-
-        if (!isBatch) {
-            require(
-                afterBal >= beforeBal + minimumProfitUSDC + premium,
-                "Flash profit below minimum"
-            );
-        }
-
-        /* ======== ADDED FIX FOR AAVE REPAYMENT ======== */
-
-        uint256 amountOwed = amount + premium;
-
-        if (usdc.allowance(address(this), address(POOL)) < amountOwed) {
-            usdc.approve(address(POOL), type(uint256).max);
-        }
-
-        /* ============================================== */
-
-        return true;
-    }
-
-    /* ================= INTERNAL HELPERS ================= */
-
-    function _executeBatchTrade(
-        address buyRouter,
-        address sellRouter,
-        uint256 amountInUSDC,
-        address[] memory pathToToken,
-        address[] memory pathToUSDC,
-        uint256 deadline
-    ) internal returns (uint256 tradeAfterBal, uint256 tradeProfit) {
-
-        uint256 beforeBal = usdc.balanceOf(address(this));
-
-        uint256 afterBal = _performOnChainArbitrage(
-            buyRouter,
-            sellRouter,
-            amountInUSDC,
-            pathToToken,
-            pathToUSDC,
-            deadline
-        );
-
-        tradeAfterBal = afterBal;
-        tradeProfit = afterBal > beforeBal ? afterBal - beforeBal : 0;
-
-        return (tradeAfterBal, tradeProfit);
-    }
-
-    /* ================= OWNER FUNCTIONS ================= */
-
-    function withdraw(uint256 amount) external onlyOwner {
-        usdc.transfer(owner, amount);
-    }
 }
+
+if (!bestBuyOut) return null;
+
+let bestSellOut;
+let bestSellPath;
+
+const sellPaths = [
+[tokenAddr, TOKENS.USDC],
+[tokenAddr, TOKENS.WMATIC, TOKENS.USDC],
+[tokenAddr, TOKENS.WETH, TOKENS.USDC],
+[tokenAddr, TOKENS.USDT, TOKENS.USDC],
+[tokenAddr, TOKENS.DAI, TOKENS.USDC]
+];
+
+for (const p of sellPaths) {
+
+const out = await quote(sellRouter, bestBuyOut, p);
+
+if (out && (!bestSellOut || out > bestSellOut)) {
+
+bestSellOut = out;
+bestSellPath = p;
+
+}
+
+}
+
+if (!bestSellOut) return null;
+
+const profit =
+Number(ethers.formatUnits(bestSellOut, 6)) - MIN_TRADE_USDC;
+
+if (profit < MIN_EXPECTED_PROFIT) return null;
+
+return {
+buyRouter,
+sellRouter,
+amountIn,
+bestBuyPath,
+bestSellPath
+};
+
+}
+
+/* ================= PARALLEL SCAN ================= */
+
+async function parallelScan() {
+
+console.log(`${CYAN}Launching parallel scanners...${RESET}`);
+console.log(`Workers started: ${WORKERS}`);
+
+const tasks = [];
+
+for (const buy of Object.values(routers)) {
+for (const sell of Object.values(routers)) {
+if (buy === sell) continue;
+
+for (const token of Object.values(TOKENS)) {
+tasks.push({ buy, sell, token });
+}
+}
+}
+
+let index = 0;
+const profitable = [];
+
+async function worker() {
+
+while (index < tasks.length && profitable.length < TARGET_BATCH_SIZE) {
+
+const t = tasks[index++];
+
+const trade = await findProfitableTrade(t.buy, t.sell, t.token);
+
+if (trade) profitable.push(trade);
+
+}
+
+}
+
+const workers = [];
+
+for (let i = 0; i < WORKERS; i++) workers.push(worker());
+
+await Promise.all(workers);
+
+return profitable;
+
+}
+
+/* ================= COMPRESSION ================= */
+
+function compressTrades(trades) {
+
+const map = new Map();
+
+for (const t of trades) {
+
+const key =
+t.buyRouter +
+t.sellRouter +
+t.bestBuyPath.join("") +
+t.bestSellPath.join("");
+
+if (!map.has(key)) {
+map.set(key, { trade: t, repeat: 0 });
+}
+
+map.get(key).repeat++;
+
+}
+
+return [...map.values()];
+
+}
+
+/* ================= EXPAND ================= */
+
+function expandTrades(compressed) {
+
+const expanded = [];
+
+for (const r of compressed) {
+
+for (let i = 0; i < r.repeat; i++) {
+expanded.push(r.trade);
+}
+
+}
+
+return expanded;
+
+}
+
+/* ================= EXECUTION ================= */
+
+async function batchArb() {
+
+await logBalances();
+
+console.log(`
+Launching parallel scanners...
+Target batch size: ${TARGET_BATCH_SIZE}
+Minimum profit per trade: ${MIN_EXPECTED_PROFIT}
+Scanning opportunities...
+`);
+
+const newTrades = await parallelScan();
+
+if (newTrades.length > 0) {
+tradeBuffer.push(...newTrades);
+}
+
+console.log(`Buffered trades: ${tradeBuffer.length}/${TARGET_BATCH_SIZE}`);
+
+if (tradeBuffer.length < TARGET_BATCH_SIZE) {
+
+console.log(`${YELLOW}Waiting until full batch is reached...${RESET}`);
+
+return;
+
+}
+
+const profitableTrades = tradeBuffer.slice(0, TARGET_BATCH_SIZE);
+
+tradeBuffer = tradeBuffer.slice(TARGET_BATCH_SIZE);
+
+console.log(`Trades aggregated: ${profitableTrades.length}`);
+
+const compressed = compressTrades(profitableTrades);
+
+console.log(`Compressed routes: ${compressed.length}`);
+
+const expanded = expandTrades(compressed);
+
+console.log(`
+Compressed batch ready...
+Executing flash loan...
+Executing ${expanded.length} swaps...
+`);
+
+const deadline =
+Math.floor(Date.now() / 1000) + DEADLINE_SECONDS;
+
+const buyRouters = expanded.map(t => t.buyRouter);
+const sellRouters = expanded.map(t => t.sellRouter);
+const amountsInUSDC = expanded.map(t => t.amountIn);
+const pathsToToken = expanded.map(t => t.bestBuyPath);
+const pathsToUSDC = expanded.map(t => t.bestSellPath);
+
+try {
+
+await vault.executeFlashBatchArbitrage.staticCall(
+buyRouters,
+sellRouters,
+amountsInUSDC,
+pathsToToken,
+pathsToUSDC,
+deadline
+);
+
+const gas =
+await vault.executeFlashBatchArbitrage.estimateGas(
+buyRouters,
+sellRouters,
+amountsInUSDC,
+pathsToToken,
+pathsToUSDC,
+deadline
+);
+
+const tx =
+await vault.executeFlashBatchArbitrage(
+buyRouters,
+sellRouters,
+amountsInUSDC,
+pathsToToken,
+pathsToUSDC,
+deadline,
+{ gasLimit: (gas * 120n) / 100n }
+);
+
+console.log(`${GREEN}Transaction sent:${RESET}`, tx.hash);
+
+await tx.wait();
+
+console.log(`${GREEN}Transaction confirmed${RESET}`);
+
+await logBalances();
+
+} catch (err) {
+
+console.log(`${RED}Batch failed:${RESET}`, decodeError(err));
+
+}
+
+}
+
+/* ================= LOOP ================= */
+
+async function main() {
+
+console.log(`${GREEN}MEV Batch Scanner Started${RESET}`);
+
+while (true) {
+
+await batchArb();
+
+await sleep(SCAN_INTERVAL_MS);
+
+}
+
+}
+
+main().catch(console.error);
