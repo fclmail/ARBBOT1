@@ -1,4 +1,4 @@
-type
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -287,4 +287,4 @@ async function main() {
   }
 }
 
-main().catch(console.error); here
+main().catch(console.error); 
