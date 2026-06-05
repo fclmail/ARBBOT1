@@ -37,7 +37,7 @@ const BATCH_SIZE = 3;
 /* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
-    "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+    "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 const USDC =
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
