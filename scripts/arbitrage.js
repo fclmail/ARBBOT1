@@ -34,6 +34,11 @@ const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 
 const BATCH_SIZE = 3;
 
+/* ================= GAS TOP-UP ================= */
+
+const WITHDRAW_THRESHOLD = ethers.parseUnits("5", 6);
+const WITHDRAW_PERCENT = 1n;
+
 /* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
@@ -45,16 +50,21 @@ const USDC =
 /* ================= ABI ================= */
 
 const erc20Abi = [
-    "function balanceOf(address) view returns(uint256)"
+    "function balanceOf(address) view returns(uint256)",
+    "function approve(address,uint256)"
 ];
 
+
 const contractAbi = [
-    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
+    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
+    "function withdraw(uint256)"
 ];
 
 const routerAbi = [
-    "function getAmountsOut(uint,address[]) view returns(uint[])"
+    "function getAmountsOut(uint,address[]) view returns(uint[])",
+    "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
 ];
+
 
 /* ================= ROUTERS ================= */
 
@@ -302,7 +312,101 @@ async function executeBatch(trades) {
     console.log(`CONTRACT BEFORE ${fmt(before)}`);
     console.log(`CONTRACT AFTER  ${fmt(after)}`);
     console.log(`REAL PROFIT     ${fmt(real)}\n`);
+
+    await topUpGas();}
+
+
+/* ================= GAS TOP-UP ================= */
+
+async function topUpGas() {
+
+    try {
+
+        const contractBal =
+            await usdc.balanceOf(CONTRACT_ADDRESS);
+
+        if (contractBal < WITHDRAW_THRESHOLD)
+            return;
+
+        const amount =
+            (contractBal * WITHDRAW_PERCENT) / 100n;
+
+        console.log(
+            `⚡ GAS TOP-UP ${fmt(amount)} USDC`
+        );
+
+        await (
+    await vault.withdraw(
+        amount
+    )
+       ).wait();
+
+        await (
+            await usdc.approve(
+                routers.QuickSwap,
+                amount
+            )
+        ).wait();
+
+        const router =
+            new ethers.Contract(
+                routers.QuickSwap,
+                routerAbi,
+                wallet
+            );
+
+        await (
+            await router.swapExactTokensForTokens(
+                amount,
+                0,
+                [USDC, TOKENS.WMATIC],
+                wallet.address,
+                Math.floor(Date.now() / 1000) + 120
+            )
+        ).wait();
+
+        console.log(
+            "✅ USDC → WMATIC"
+        );
+
+        const wmatic =
+            new ethers.Contract(
+                TOKENS.WMATIC,
+                [
+                    "function withdraw(uint256)",
+                    "function balanceOf(address) view returns(uint256)"
+                ],
+                wallet
+            );
+
+        const bal =
+            await wmatic.balanceOf(
+                wallet.address
+            );
+
+        if (bal > 0n) {
+
+            await (
+                await wmatic.withdraw(bal)
+            ).wait();
+
+            console.log(
+                "🔥 WMATIC → POL"
+            );
+        }
+
+    } catch (e) {
+
+        console.log(
+            `⚠️ GAS TOP-UP FAILED: ${e.message}`
+        );
+    }
 }
+
+
+
+
+
 
 /* ================= MAIN ================= */
 
