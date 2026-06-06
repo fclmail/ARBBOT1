@@ -28,7 +28,7 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const BASE_TRADE = ethers.parseUnits(".7", 6);
+const BASE_TRADE = ethers.parseUnits(".07", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 
