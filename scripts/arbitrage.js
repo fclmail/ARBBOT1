@@ -30,7 +30,7 @@ const BASE_TRADE = ethers.parseUnits("0.04", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.0003", 6);
 
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 3
 
 /* ================= CONTRACT ================= */
 
@@ -107,11 +107,11 @@ function rebuildContracts() {
 async function topUpGas() {
     try {
         const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
-        const threshold = ethers.parseUnits("5", 6);
+        const threshold = ethers.parseUnits(".04", 6);
 
         if (contractBal < threshold) return;
 
-        const amount = contractBal / 100n;
+        const amount = contractBal / 1n;
 
         console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
 
