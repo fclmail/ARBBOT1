@@ -37,7 +37,7 @@ const BATCH_SIZE = 15;
 /* ================= GAS TOP-UP ================= */
 
 const WITHDRAW_THRESHOLD = ethers.parseUnits(".03", 6);
-const WITHDRAW_PERCENT = 1n;
+const WITHDRAW_PERCENT = 10n;
 
 /* ================= CONTRACT ================= */
 
