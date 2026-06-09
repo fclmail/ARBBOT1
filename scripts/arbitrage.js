@@ -29,8 +29,8 @@ if (!PRIVATE_KEY) {
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00021", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
-const MAX_TRADES_PER_BATCH = 5; // Target size for the contract array submission
-const SCAN_CONCURRENCY_CHUNKS = 150; // Increased to clear all routes under 1 second
+const MAX_TRADES_PER_BATCH = 5; 
+const SCAN_CONCURRENCY_CHUNKS = 45; // Sweet spot: high throughput, safe memory allocation
 
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -110,10 +110,10 @@ const WITHDRAW_PERCENT = 10n;
 const fmt = x => ethers.formatUnits(x, 6);
 
 /* =========================================================================
-   IN-MEMORY LOCAL SPEED CACHE
+   MEM-SAFE IN-MEMORY LOCAL CACHE
    ========================================================================= */
-const quoteCache = new Map();
-const CACHE_TTL = 1200; 
+let quoteCache = new Map();
+const CACHE_TTL = 1000; 
 
 function getCachedQuote(router, path) {
     const key = `${router}-${path.join('-')}`;
@@ -127,15 +127,6 @@ function getCachedQuote(router, path) {
 function setCachedQuote(router, path, value) {
     const key = `${router}-${path.join('-')}`;
     quoteCache.set(key, { value, timestamp: Date.now() });
-
-    if (quoteCache.size > 60000) {
-        const now = Date.now();
-        for (const [k, entry] of quoteCache) {
-            if (now - entry.timestamp > CACHE_TTL) {
-                quoteCache.delete(k);
-            }
-        }
-    }
 }
 
 /* =========================================================================
@@ -215,7 +206,7 @@ function buildTriangularPaths() {
 }
 
 /* =========================================================================
-   ARBITRAGE MAIN ENGINE (High-Throughput Parallel Pipeline Execution)
+   ARBITRAGE MAIN ENGINE (Memory-Safe Pipeline Execution)
    ========================================================================= */
 class LiveArbitrageEngine {
     constructor() {
@@ -239,6 +230,8 @@ class LiveArbitrageEngine {
             }
 
             try {
+                // Hard reset cache map per block to forcefully drop object references and free RAM
+                quoteCache.clear();
                 await this.processArbitrageOpportunities();
             } catch (err) {
                 console.error("âš ï¸ Operational Scan Warning:", err.message);
@@ -250,7 +243,6 @@ class LiveArbitrageEngine {
         console.log(`ðŸ” [HIGH THROUGHPUT SCAN] Analyzing ${this.triangularPaths.length} structural variations across 6 DEXs...`);
         const foundTrades = [];
 
-        // Massively increased chunk limits to finish entire loop inside the block time window
         for (let i = 0; i < this.triangularPaths.length; i += SCAN_CONCURRENCY_CHUNKS) {
             const pathChunk = this.triangularPaths.slice(i, i + SCAN_CONCURRENCY_CHUNKS);
             const scanPromises = [];
