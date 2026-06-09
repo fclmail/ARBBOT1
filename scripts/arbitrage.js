@@ -194,19 +194,22 @@ function buildTriangularPaths() {
     return paths;
 }
 
-/* ================= TRIANGULAR FINDER (AUTOMATIC SIZING) ================= */
-async function findTriangular(router, path, candidateSizes) {
+/* ================= CROSS-ROUTER TRIANGULAR FINDER ================= */
+async function findTriangular(buyRouter, sellRouter, path, candidateSizes) {
     let bestTrade = null;
     let maxProfitFound = 0n;
 
     for (const sizeCandidate of candidateSizes) {
-        const baseOut1 = await quote(router, sizeCandidate, [path[0], path[1]]);
+        // Leg 1: Swap USDC to Token A on BUY router
+        const baseOut1 = await quote(buyRouter, sizeCandidate, [path[0], path[1]]);
         if (!baseOut1) continue;
 
-        const baseOut2 = await quote(router, baseOut1, [path[1], path[2]]);
+        // Leg 2: Swap Token A to Token B on BUY router
+        const baseOut2 = await quote(buyRouter, baseOut1, [path[1], path[2]]);
         if (!baseOut2) continue;
 
-        const baseOut3 = await quote(router, baseOut2, [path[2], path[3]]);
+        // Leg 3: Swap Token B back to USDC on alternative SELL router
+        const baseOut3 = await quote(sellRouter, baseOut2, [path[2], path[3]]);
         if (!baseOut3) continue;
 
         const profit = baseOut3 - sizeCandidate;
@@ -214,7 +217,8 @@ async function findTriangular(router, path, candidateSizes) {
         if (profit > 0n && profit >= MIN_PROFIT && profit > maxProfitFound) {
             maxProfitFound = profit;
             bestTrade = {
-                router,
+                buyRouter,
+                sellRouter,
                 amountIn: sizeCandidate,
                 pathToToken: path.slice(0, 3),
                 pathToUSDC: [path[2], USDC],
@@ -224,7 +228,8 @@ async function findTriangular(router, path, candidateSizes) {
         }
     }
 
-    const routerName = Object.keys(routers).find(k => routers[k] === router);
+    const buyName = Object.keys(routers).find(k => routers[k] === buyRouter);
+    const sellName = Object.keys(routers).find(k => routers[k] === sellRouter);
     const tokenLegName = Object.keys(TOKENS).find(k => TOKENS[k] === path[1]);
 
     if (bestTrade) {
@@ -232,12 +237,12 @@ async function findTriangular(router, path, candidateSizes) {
         console.log(`TRI FOUND ${fmt(bestTrade.amountIn)} â†’ ${fmt(bestTrade.grossOutput)} PROFIT ${fmt(bestTrade.expectedProfit)}\n`);
         return bestTrade;
     } else {
-        console.log(`ðŸ” [POOL CHECK] ${routerName} âž” ${routerName} via ${tokenLegName} | Bracket Scan Complete (No Depth)`);
+        console.log(`ðŸ” [POOL CHECK] ${buyName} âž” ${sellName} via ${tokenLegName} | Bracket Scan Complete (No Depth)`);
         return null;
     }
 }
 
-/* ================= PARALLEL SCANNER ================= */
+/* ================= MATRIX PARALLEL SCANNER ================= */
 async function parallelScan(paths, routersList, candidateSizes) {
     const batchResults = [];
 
@@ -245,11 +250,16 @@ async function parallelScan(paths, routersList, candidateSizes) {
         const pathChunk = paths.slice(i, i + BATCH_SIZE);
         const scanPromises = [];
 
-        for (const router of routersList) {
-            for (const path of pathChunk) {
-                scanPromises.push(
-                    findTriangular(router, path, candidateSizes).catch(() => null)
-                );
+        // Loop over the matrix cross-referencing every router combination
+        for (const buyRouter of routersList) {
+            for (const sellRouter of routersList) {
+                if (buyRouter === sellRouter) continue; // Skip identical routers to avoid fee extraction traps
+
+                for (const path of pathChunk) {
+                    scanPromises.push(
+                        findTriangular(buyRouter, sellRouter, path, candidateSizes).catch(() => null)
+                    );
+                }
             }
         }
 
@@ -286,8 +296,8 @@ async function executeBatch(trades) {
 
     try {
         const tx = await vault.executeFlashBatchArbitrage({
-            buyRouters: trades.map(t => t.router),
-            sellRouters: trades.map(t => t.router),
+            buyRouters: trades.map(t => t.buyRouter),
+            sellRouters: trades.map(t => t.sellRouter),
             amountsInUSDC: trades.map(t => t.amountIn),
             pathsToToken: trades.map(t => t.pathToToken),
             pathsToUSDC: trades.map(t => t.pathToUSDC),
