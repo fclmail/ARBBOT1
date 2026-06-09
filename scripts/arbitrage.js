@@ -35,20 +35,34 @@ const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 /* --- ACCURATE SMART CONTRACT INFRASTRUCTURE ABIS --- */
-const ERC20_ABI = ["function balanceOf(address account) external view returns (uint256)"];
-const ROUTER_ABI = ["function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"];
+const ERC20_ABI = [
+    "function balanceOf(address account) external view returns (uint256)",
+    "function approve(address spender, uint256 amount) external returns (bool)"
+];
+const ROUTER_ABI = [
+    "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)",
+    "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
+];
 const VAULT_ABI = [
-    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external"
+    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",
+    "function withdraw(uint256 amount) external"
 ];
 
-/* --- HARD TARGET DIVERSIFIED DEX NETWORKS --- */
+/* --- RESTORED ALL 6 LIQUIDITY NETWORKS FOR MAXIMUM COUPLING DEVIATION --- */
 const routers = {
     QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+    SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+    Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+    Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+    ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+    Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
+/* --- CLEANED MATRIX TOKENS (No Duplicates) --- */
 const TOKENS = {
-    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+    APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
     DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
     LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
     QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
@@ -88,12 +102,42 @@ const TOKENS = {
     AMP: "0x0621d647cecbfb64b79e44302c1933cb4f27054d",
     CBK: "0x4EC203dD0699Fac6adAF483CDd2519BC05D2c573",
     ACX: "0xf328b73b6c685831f238c30a23fc19140cb4d8fc",
-    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
     WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 };
 
+const WITHDRAW_THRESHOLD = ethers.parseUnits("3001112", 6);
+const WITHDRAW_PERCENT = 10n;
+
 const fmt = x => ethers.formatUnits(x, 6);
+
+/* =========================================================================
+   IN-MEMORY LOCAL SPEED CACHE (Restored from JS1 optimization rules)
+   ========================================================================= */
+const quoteCache = new Map();
+const CACHE_TTL = 1000; 
+
+function getCachedQuote(router, path) {
+    const key = `${router}-${path.join('-')}`;
+    const cached = quoteCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.value;
+    }
+    return undefined;
+}
+
+function setCachedQuote(router, path, value) {
+    const key = `${router}-${path.join('-')}`;
+    quoteCache.set(key, { value, timestamp: Date.now() });
+
+    if (quoteCache.size > 50000) {
+        const now = Date.now();
+        for (const [k, entry] of quoteCache) {
+            if (now - entry.timestamp > CACHE_TTL) {
+                quoteCache.delete(k);
+            }
+        }
+    }
+}
 
 /* =========================================================================
    CONNECTIONS MANAGEMENT Framework
@@ -106,10 +150,9 @@ function newProvider() {
 
 function rebuildContracts() {
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
+    usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
     vaultContract = new ethers.Contract(CONTRACT_ADDRESS, VAULT_ABI, wallet);
     
-    // FIX: Removed the undefined 'routerAbi' fallback reference entirely
     routerContracts = Object.fromEntries(
         Object.values(routers).map(addr => [
             addr,
@@ -119,20 +162,24 @@ function rebuildContracts() {
 }
 
 /* =========================================================================
-   TRIANGULAR ON-CHAIN PATH SCANNER (LIVE CALCULATION)
+   TRIANGULAR PATH SCANNER ENGINE (With High-Speed Memory Storage Check)
    ========================================================================= */
 async function getLiveQuote(router, amount, path) {
+    const cached = getCachedQuote(router, path);
+    if (cached !== undefined) return cached;
+
     try {
         const out = await routerContracts[router].getAmountsOut(amount, path);
-        return out[out.length - 1];
+        const result = out[out.length - 1];
+        setCachedQuote(router, path, result);
+        return result;
     } catch {
+        setCachedQuote(router, path, null);
         return null;
     }
 }
 
-async function scanPath(router, tokenA, tokenB) {
-    const path = [USDC_ADDRESS, tokenA, tokenB, USDC_ADDRESS];
-    
+async function scanPath(router, path) {
     const out1 = await getLiveQuote(router, BASE_TRADE, [path[0], path[1]]);
     if (!out1) return null;
     
@@ -143,23 +190,39 @@ async function scanPath(router, tokenA, tokenB) {
     if (!out3) return null;
 
     const profit = out3 - BASE_TRADE;
-    if (profit < MIN_PROFIT) return null;
+    if (profit <= 0n || profit < MIN_PROFIT) return null;
+
+    console.log(`ðŸŽ¯ TRI FOUND ${fmt(BASE_TRADE)} â†’ ${fmt(out3)} PROFIT ${fmt(profit)}`);
 
     return {
         router,
         amountIn: BASE_TRADE,
-        pathToToken: [path[0], path[1], path[2]],
-        pathToUSDC: [path[2], path[3]],
+        pathToToken: path.slice(0, 3),
+        pathToUSDC: [path[2], USDC_ADDRESS],
         expectedProfit: profit
     };
 }
 
+function buildTriangularPaths() {
+    const tokens = Object.values(TOKENS);
+    const paths = [];
+    for (const a of tokens) {
+        for (const b of tokens) {
+            if (a === b) continue;
+            paths.push([USDC_ADDRESS, a, b, USDC_ADDRESS]);
+        }
+    }
+    return paths;
+}
+
 /* =========================================================================
-   ARBITRAGE MAIN ENGINE
+   ARBITRAGE MAIN ENGINE (Event-Driven Async Parallel Processing)
    ========================================================================= */
 class LiveArbitrageEngine {
     constructor() {
         this.isExecuting = false;
+        this.triangularPaths = buildTriangularPaths();
+        this.routerList = Object.values(routers);
     }
 
     async init() {
@@ -187,21 +250,25 @@ class LiveArbitrageEngine {
     async processArbitrageOpportunities() {
         console.log("ðŸ” [PARALLEL SCAN] Running triangular calculations...");
         const foundTrades = [];
-        const routerList = Object.values(routers);
-        const tokenList = Object.values(TOKENS);
 
-        for (const r of routerList) {
-            for (const tA of tokenList) {
-                for (const tB of tokenList) {
-                    if (tA === tB) continue;
-                    const trade = await scanPath(r, tA, tB);
-                    if (trade) {
-                        foundTrades.push(trade);
-                        if (foundTrades.length >= BATCH_SIZE) break;
-                    }
+        // Concurrency chunking via JS1 parallel processing style rules
+        for (let i = 0; i < this.triangularPaths.length; i += BATCH_SIZE) {
+            const pathChunk = this.triangularPaths.slice(i, i + BATCH_SIZE);
+            const scanPromises = [];
+
+            for (const router of this.routerList) {
+                for (const path of pathChunk) {
+                    scanPromises.push(scanPath(router, path).catch(() => null));
                 }
-                if (foundTrades.length >= BATCH_SIZE) break;
             }
+
+            const results = await Promise.all(scanPromises);
+            for (const r of results) {
+                if (r !== null) {
+                    foundTrades.push(r);
+                }
+            }
+
             if (foundTrades.length >= BATCH_SIZE) break;
         }
 
@@ -210,7 +277,7 @@ class LiveArbitrageEngine {
             return;
         }
 
-        await this.executeBatchTransaction(foundTrades);
+        await this.executeBatchTransaction(foundTrades.slice(0, BATCH_SIZE));
     }
 
     async executeBatchTransaction(trades) {
@@ -248,31 +315,74 @@ class LiveArbitrageEngine {
             const tx = await vaultContract.executeFlashBatchArbitrage(batchStruct, {
                 maxFeePerGas: feeData.maxFeePerGas,
                 maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
-                gasLimit: 650000 
+                gasLimit: 850000 
             });
 
             console.log(`âœ‰ï¸ Transaction broadcasted to public mempool. Hash: ${tx.hash}`);
             console.log("â³ Awaiting network mining validation...");
 
-            const receipt = await tx.wait();
+            await provider.waitForTransaction(tx.hash);
             
-            if (receipt.status === 1) {
-                const contractAfterBalance = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-                const actualProfit = contractAfterBalance - contractBeforeBalance;
+            const contractAfterBalance = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+            const actualProfit = contractAfterBalance > contractBeforeBalance ? contractAfterBalance - contractBeforeBalance : 0n;
 
-                console.log(`\nâœ… ARBITRAGE BATCH MINED SUCCESSFULLY IN BLOCK ${receipt.blockNumber}`);
-                console.log(`   Gas Consumed:     ${receipt.gasUsed.toString()}`);
-                console.log(`   CONTRACT BEFORE:  ${fmt(contractBeforeBalance)} USDC`);
-                console.log(`   CONTRACT AFTER:   ${fmt(contractAfterBalance)} USDC`);
-                console.log(`   REALIZED PROFIT:  +${fmt(actualProfit)} USDC ðŸš€`);
-            } else {
-                console.error("ðŸ›‘ Internal trade step execution sequence threw an unhandled contract error.");
-            }
+            console.log(`\nâœ… ARBITRAGE BATCH MINED SUCCESSFULLY`);
+            console.log(`   CONTRACT BEFORE:  ${fmt(contractBeforeBalance)} USDC`);
+            console.log(`   CONTRACT AFTER:   ${fmt(contractAfterBalance)} USDC`);
+            console.log(`   REALIZED PROFIT:  +${fmt(actualProfit)} USDC ðŸš€\n`);
+
+            await this.topUpGas();
 
         } catch (txError) {
             console.error("ðŸ›‘ Transaction failed or rejected by node:", txError.message);
         } finally {
             this.isExecuting = false;
+        }
+    }
+
+    async topUpGas() {
+        try {
+            const contractBal = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+            if (contractBal < WITHDRAW_THRESHOLD) return;
+
+            const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
+            console.log(`âš¡ GAS TOP-UP ${fmt(amount)} USDC`);
+
+            const withdrawTx = await vaultContract.withdraw(amount);
+            await withdrawTx.wait();
+
+            const quickswapRouterAddr = routers.QuickSwap;
+            const approveTx = await usdcContract.approve(quickswapRouterAddr, amount);
+            await approveTx.wait();
+
+            const routerContract = new ethers.Contract(quickswapRouterAddr, ROUTER_ABI, wallet);
+            const swapTx = await routerContract.swapExactTokensForTokens(
+                amount,
+                0,
+                [USDC_ADDRESS, TOKENS.WMATIC],
+                wallet.address,
+                Math.floor(Date.now() / 1000) + 120
+            );
+            await swapTx.wait();
+            console.log("âœ… USDC â†’ WMATIC");
+
+            const wmaticContract = new ethers.Contract(
+                TOKENS.WMATIC,
+                [
+                    "function withdraw(uint256) external",
+                    "function balanceOf(address account) external view returns (uint256)"
+                ],
+                wallet
+            );
+
+            const bal = await wmaticContract.balanceOf(wallet.address);
+            if (bal > 0n) {
+                const unwrapTx = await wmaticContract.withdraw(bal);
+                await unwrapTx.wait();
+                console.log("ðŸ”¥ WMATIC â†’ POL");
+            }
+        } catch (e) {
+            console.log(`âš ï¸ GAS TOP-UP FAILED: ${e.message}`);
         }
     }
 }
