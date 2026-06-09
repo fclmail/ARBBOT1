@@ -1,8 +1,3 @@
-📜js&logs code only  -sc signals🌊 asis 2026 6 9 4:35pm gem
-
-
-Js:
-
 
 import dotenv from "dotenv";
 import { ethers } from "ethers";
