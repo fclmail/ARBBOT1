@@ -9,10 +9,10 @@ dotenv.config({ override: false });
 const PROVIDER_URL = "https://polygon-bor-rpc.publicnode.com";
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-// Native Production Base Asset (Verify this matches your deployed contract constructor!)
+// Native Production Base Asset
 const USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"; 
 
-// Expanded Multi-Route Asset Token Matrix
+// Multi-Route Asset Token Matrix
 const TOKENS = {
     WPOL: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",   // Wrapped POL (replaces legacy WMATIC)
     WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
@@ -93,7 +93,7 @@ class PureVaultArbEngine {
         console.log(`ðŸ“Š Pipeline Minimum Profit Trigger: ${fmt(manualTestProfitTarget)} USDC\n`);
 
         this.provider.on("block", async (blockNumber) => {
-            console.log(`\n--- [BLOCK ${blockNumber}] Scanning Cross-Protocol Liquidity Matrix ---`);
+            console.log(`--- [BLOCK ${blockNumber}] Scanning Cross-Protocol Liquidity Matrix ---`);
             if (this.isExecuting) return;
 
             try {
@@ -128,17 +128,16 @@ class PureVaultArbEngine {
                             path2
                         );
 
-                        // LIVE DIAGNOSTIC OUTPUT
-                        // Prints the exact math the smart contract is extracting back from the DEX routers
                         const buyName = Object.keys(routers).find(k => routers[k] === buyR);
                         const sellName = Object.keys(routers).find(k => routers[k] === sellR);
                         const tokenName = Object.keys(TOKENS).find(k => TOKENS[k] === token);
                         
+                        // Output diagnostic pool checks invisibly/dimmed to preserve workspace focus
                         console.log(`${DIM}ðŸ” [POOL CHECK] ${buyName} âž” ${sellName} via ${tokenName} | Best Size: ${fmt(bestResult.amountIn)} USDC | Est Profit: ${fmt(bestResult.estimatedProfit)} USDC${RESET}`);
 
                         if (bestResult.estimatedProfit >= profitTargetThreshold) {
                             console.log(`${GREEN}ðŸŽ¯ PROFIT TARGET GAP LOCATED!${RESET}`);
-                            console.log(`${GREEN}   Routers: ${buyR} (${buyName}) âž” ${sellR} (${sellName})${RESET}`);
+                            console.log(`${GREEN}   Routers: ${buyR} âž” ${sellR}${RESET}`);
                             console.log(`${GREEN}   Token Leg: USDC âž” ${tokenName} âž” USDC${RESET}`);
                             console.log(`${GREEN}   Optimized Input Size: ${fmt(bestResult.amountIn)} USDC${RESET}`);
                             console.log(`${GREEN}   Net Return Yielded:  +${fmt(bestResult.estimatedProfit)} USDC${RESET}\n`);
@@ -148,13 +147,13 @@ class PureVaultArbEngine {
                                 sellRouter: sellR,
                                 amountIn: bestResult.amountIn,
                                 pathToToken: path1,
-                                pathToUSDC: path2
+                                pathToUSDC: path2,
+                                tokenName: tokenName
                             });
 
                             if (profitableTradesFound.length >= 3) break;
                         }
                     } catch (e) {
-                        // Suppress failures from broken routing legs, but display an activity marker
                         continue;
                     }
                 }
@@ -172,6 +171,11 @@ class PureVaultArbEngine {
         try {
             this.isExecuting = true;
             console.log(`${YELLOW}ðŸ”¥ Packaging Batch Parameters for Contract Execution...${RESET}`);
+
+            // Gather Pre-execution State Snapshots
+            const walletAddress = this.wallet.address;
+            const walletGasBefore = await this.provider.getBalance(walletAddress);
+            const vaultUsdcBefore = await this.usdcContract.balanceOf(CONTRACT_ADDRESS);
 
             const batchStruct = {
                 buyRouters: trades.map(t => t.buyRouter),
@@ -192,7 +196,27 @@ class PureVaultArbEngine {
 
             console.log(`âœ‰ï¸ Batch Transaction Broadcasted. Hash: ${tx.hash}`);
             await this.provider.waitForTransaction(tx.hash);
-            console.log(`${GREEN}âœ… BATCH TRANSACTION MINED SUCCESSFULLY BY NETWORK${RESET}\n`);
+            console.log(`${GREEN}âœ… BATCH TRANSACTION MINED SUCCESSFULLY BY NETWORK${RESET}`);
+
+            // Gather Post-execution State Snapshots
+            const walletGasAfter = await this.provider.getBalance(walletAddress);
+            const vaultUsdcAfter = await this.usdcContract.balanceOf(CONTRACT_ADDRESS);
+
+            // Compute delta metrics
+            const gasUsedPOL = walletGasBefore - walletGasAfter;
+            const netProfitUSDC = vaultUsdcAfter - vaultUsdcBefore;
+
+            // Display dynamic metrics dashboard matching specifications
+            console.log(`\n=================== PIPELINE METRICS LOG ===================`);
+            console.log(`ðŸ”¹ Executing Wallet Address   : ${walletAddress}`);
+            console.log(`â›½ Wallet Gas Balance (Before) : ${ethers.formatEther(walletGasBefore)} POL/MATIC`);
+            console.log(`â›½ Wallet Gas Balance (After)  : ${ethers.formatEther(walletGasAfter)} POL/MATIC`);
+            console.log(`ðŸ’¸ Real Transaction Fee Cost  : -${ethers.formatEther(gasUsedPOL)} POL/MATIC`);
+            console.log(`------------------------------------------------------------`);
+            console.log(`ðŸ“Š Vault USDC Balance (Before) : ${ethers.formatUnits(vaultUsdcBefore, 6)} USDC`);
+            console.log(`ðŸ“Š Vault USDC Balance (After)  : ${ethers.formatUnits(vaultUsdcAfter, 6)} USDC`);
+            console.log(`%sðŸ“ˆ Net Capital Growth In Vault : +${ethers.formatUnits(netProfitUSDC, 6)} USDC%s`, GREEN, RESET);
+            console.log(`============================================================\n`);
 
         } catch (err) {
             console.error("ðŸ›‘ On-Chain Execution Reverted:", err.message);
