@@ -29,7 +29,8 @@ if (!PRIVATE_KEY) {
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00021", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
-const BATCH_SIZE = 5;
+const MAX_TRADES_PER_BATCH = 5; // Target size for the contract array submission
+const SCAN_CONCURRENCY_CHUNKS = 150; // Increased to clear all routes under 1 second
 
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -48,7 +49,6 @@ const VAULT_ABI = [
     "function withdraw(uint256 amount) external"
 ];
 
-/* --- RESTORED ALL 6 LIQUIDITY NETWORKS FOR MAXIMUM COUPLING DEVIATION --- */
 const routers = {
     QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
     SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -58,7 +58,6 @@ const routers = {
     Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* --- CLEANED MATRIX TOKENS (No Duplicates) --- */
 const TOKENS = {
     AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
     APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
@@ -111,10 +110,10 @@ const WITHDRAW_PERCENT = 10n;
 const fmt = x => ethers.formatUnits(x, 6);
 
 /* =========================================================================
-   IN-MEMORY LOCAL SPEED CACHE (Restored from JS1 optimization rules)
+   IN-MEMORY LOCAL SPEED CACHE
    ========================================================================= */
 const quoteCache = new Map();
-const CACHE_TTL = 1000; 
+const CACHE_TTL = 1200; 
 
 function getCachedQuote(router, path) {
     const key = `${router}-${path.join('-')}`;
@@ -129,7 +128,7 @@ function setCachedQuote(router, path, value) {
     const key = `${router}-${path.join('-')}`;
     quoteCache.set(key, { value, timestamp: Date.now() });
 
-    if (quoteCache.size > 50000) {
+    if (quoteCache.size > 60000) {
         const now = Date.now();
         for (const [k, entry] of quoteCache) {
             if (now - entry.timestamp > CACHE_TTL) {
@@ -145,7 +144,7 @@ function setCachedQuote(router, path, value) {
 function newProvider() {
     const url = RPCS[rpcIndex];
     rpcIndex = (rpcIndex + 1) % RPCS.length;
-    return new ethers.JsonRpcProvider(url);
+    return new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true });
 }
 
 function rebuildContracts() {
@@ -162,7 +161,7 @@ function rebuildContracts() {
 }
 
 /* =========================================================================
-   TRIANGULAR PATH SCANNER ENGINE (With High-Speed Memory Storage Check)
+   TRIANGULAR PATH SCANNER ENGINE
    ========================================================================= */
 async function getLiveQuote(router, amount, path) {
     const cached = getCachedQuote(router, path);
@@ -216,7 +215,7 @@ function buildTriangularPaths() {
 }
 
 /* =========================================================================
-   ARBITRAGE MAIN ENGINE (Event-Driven Async Parallel Processing)
+   ARBITRAGE MAIN ENGINE (High-Throughput Parallel Pipeline Execution)
    ========================================================================= */
 class LiveArbitrageEngine {
     constructor() {
@@ -248,12 +247,12 @@ class LiveArbitrageEngine {
     }
 
     async processArbitrageOpportunities() {
-        console.log("ðŸ” [PARALLEL SCAN] Running triangular calculations...");
+        console.log(`ðŸ” [HIGH THROUGHPUT SCAN] Analyzing ${this.triangularPaths.length} structural variations across 6 DEXs...`);
         const foundTrades = [];
 
-        // Concurrency chunking via JS1 parallel processing style rules
-        for (let i = 0; i < this.triangularPaths.length; i += BATCH_SIZE) {
-            const pathChunk = this.triangularPaths.slice(i, i + BATCH_SIZE);
+        // Massively increased chunk limits to finish entire loop inside the block time window
+        for (let i = 0; i < this.triangularPaths.length; i += SCAN_CONCURRENCY_CHUNKS) {
+            const pathChunk = this.triangularPaths.slice(i, i + SCAN_CONCURRENCY_CHUNKS);
             const scanPromises = [];
 
             for (const router of this.routerList) {
@@ -266,10 +265,11 @@ class LiveArbitrageEngine {
             for (const r of results) {
                 if (r !== null) {
                     foundTrades.push(r);
+                    if (foundTrades.length >= MAX_TRADES_PER_BATCH) break;
                 }
             }
 
-            if (foundTrades.length >= BATCH_SIZE) break;
+            if (foundTrades.length >= MAX_TRADES_PER_BATCH) break;
         }
 
         if (foundTrades.length === 0) {
@@ -277,7 +277,7 @@ class LiveArbitrageEngine {
             return;
         }
 
-        await this.executeBatchTransaction(foundTrades.slice(0, BATCH_SIZE));
+        await this.executeBatchTransaction(foundTrades.slice(0, MAX_TRADES_PER_BATCH));
     }
 
     async executeBatchTransaction(trades) {
