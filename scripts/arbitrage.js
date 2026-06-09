@@ -1,4 +1,3 @@
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -15,7 +14,7 @@ const USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
 
 // Expanded Multi-Route Asset Token Matrix
 const TOKENS = {
-    WPOL: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf12,
+    WPOL: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270,
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
     LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
     QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
