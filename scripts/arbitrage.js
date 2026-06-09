@@ -24,7 +24,7 @@ if (!PRIVATE_KEY) {
 }
 
 /* =========================================================================
-   EXACT CONFIGURATION PARAMETERS (MATCHING YOUR JS1 DEFAULTS)
+   EXACT CONFIGURATION PARAMETERS
    ========================================================================= */
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00021", 6);
@@ -68,10 +68,12 @@ function rebuildContracts() {
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
     vaultContract = new ethers.Contract(CONTRACT_ADDRESS, VAULT_ABI, wallet);
+    
+    // FIX: Removed the undefined 'routerAbi' fallback reference entirely
     routerContracts = Object.fromEntries(
         Object.values(routers).map(addr => [
             addr,
-            new ethers.Contract(addr, routerAbi || ROUTER_ABI, provider)
+            new ethers.Contract(addr, ROUTER_ABI, provider)
         ])
     );
 }
@@ -138,7 +140,6 @@ class LiveArbitrageEngine {
                 await this.processArbitrageOpportunities();
             } catch (err) {
                 console.error("âš ï¸ Operational Scan Warning:", err.message);
-                throw err;
             }
         });
     }
@@ -149,7 +150,6 @@ class LiveArbitrageEngine {
         const routerList = Object.values(routers);
         const tokenList = Object.values(TOKENS);
 
-        // Perform parallel lookups using token pairings
         for (const r of routerList) {
             for (const tA of tokenList) {
                 for (const tB of tokenList) {
@@ -196,7 +196,6 @@ class LiveArbitrageEngine {
             const contractBeforeBalance = await usdcContract.balanceOf(CONTRACT_ADDRESS);
             const feeData = await provider.getFeeData();
 
-            // Construct exact BatchParams struct configuration expected by VaultArbitrageEnforcer
             const batchStruct = {
                 buyRouters: trades.map(t => t.router),
                 sellRouters: trades.map(t => t.router),
@@ -206,11 +205,10 @@ class LiveArbitrageEngine {
                 deadline: Math.floor(Date.now() / 1000) + 60
             };
 
-            // Call the correct name format from your smart contract
             const tx = await vaultContract.executeFlashBatchArbitrage(batchStruct, {
                 maxFeePerGas: feeData.maxFeePerGas,
                 maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
-                gasLimit: 650000 // Multi-hop loops require a comfortable ceiling
+                gasLimit: 650000 
             });
 
             console.log(`âœ‰ï¸ Transaction broadcasted to public mempool. Hash: ${tx.hash}`);
@@ -233,7 +231,7 @@ class LiveArbitrageEngine {
 
         } catch (txError) {
             console.error("ðŸ›‘ Transaction failed or rejected by node:", txError.message);
-        } {
+        } finally {
             this.isExecuting = false;
         }
     }
