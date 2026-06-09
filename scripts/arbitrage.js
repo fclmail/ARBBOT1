@@ -4,56 +4,59 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 /* =========================================================================
-   LIVE BLOCKCHAIN PROVIDER & WALLET INFRASTRUCTURE (REDUNDANT ARCHITECTURE)
+   LIVE BLOCKCHAIN PROVIDER & WALLET INFRASTRUCTURE
    ========================================================================= */
-// Integrated JS1 multi-RPC fallback configuration framework
 const RPCS = [
-    process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com"
-    // Add additional RPC endpoints for failover support here
+    "https://polygon-bor-rpc.publicnode.com"
 ];
 let rpcIndex = 0;
 
 let provider;
 let wallet;
 let usdcContract;
-let executionContract;
+let vaultContract;
+let routerContracts;
 
-// Integrated JS1 dual-key environment verification structure
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) {
-    console.error("ðŸ›‘ CONFIG ERROR: Private key is completely missing from environment variables.");
+    console.error("ðŸ›‘ CONFIG ERROR: PRIVATE_KEY is missing from environment variables.");
     process.exit(1);
 }
 
 /* =========================================================================
-   UPGRADED V3 LIQUIDITY DEPTH CONFIG & TARGETS
+   EXACT CONFIGURATION PARAMETERS (MATCHING YOUR JS1 DEFAULTS)
    ========================================================================= */
-const MIN_BATCH_PROFIT = ethers.parseUnits("10.00", 6); // Target minimum pool arbitrage net gain (USDC)
+const BASE_TRADE = ethers.parseUnits("0.02", 6);
+const MIN_PROFIT = ethers.parseUnits("0.00021", 6);
+const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
+const BATCH_SIZE = 5;
 
-// Live execution smart contract target deployment
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
-
-/* --- CORE ERC20 TARGETS (POLYGON) --- */
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WETH_ADDRESS = "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619";
 
-/* --- PRODUCTION DEX ROUTERS --- */
-const ROUTERS = {
-    QuickSwapV2: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    SushiSwapV2: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-    UniV3Quoter: "0xb27308f9f90d607463bb33ea1bebb41c27ce5ab6"
+/* --- ACCURATE SMART CONTRACT INFRASTRUCTURE ABIS --- */
+const ERC20_ABI = ["function balanceOf(address account) external view returns (uint256)"];
+const ROUTER_ABI = ["function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"];
+const VAULT_ABI = [
+    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external"
+];
+
+/* --- HARD TARGET DIVERSIFIED DEX NETWORKS --- */
+const routers = {
+    QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+    SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-/* --- MINIMAL ABIs FOR CHAIN INTERACTION --- */
-const ERC20_ABI = ["function balanceOf(address account) external view returns (uint256)"];
-const ARB_CONTRACT_ABI = [
-    "function executeArbitrageBatch(address tokenIn, address tokenOut, uint256 amountIn, uint256 minProfit) external"
-];
+const TOKENS = {
+    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
+};
 
 const fmt = x => ethers.formatUnits(x, 6);
 
 /* =========================================================================
-   DYNAMIC INITIALIZATION HELPERS (FROM JS1 STRUCTURE)
+   CONNECTIONS MANAGEMENT Framework
    ========================================================================= */
 function newProvider() {
     const url = RPCS[rpcIndex];
@@ -64,23 +67,64 @@ function newProvider() {
 function rebuildContracts() {
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-    executionContract = new ethers.Contract(CONTRACT_ADDRESS, ARB_CONTRACT_ABI, wallet);
+    vaultContract = new ethers.Contract(CONTRACT_ADDRESS, VAULT_ABI, wallet);
+    routerContracts = Object.fromEntries(
+        Object.values(routers).map(addr => [
+            addr,
+            new ethers.Contract(addr, routerAbi || ROUTER_ABI, provider)
+        ])
+    );
 }
 
 /* =========================================================================
-   LIVE BLOCKCHAIN ARBITRAGE ENGINE
+   TRIANGULAR ON-CHAIN PATH SCANNER (LIVE CALCULATION)
+   ========================================================================= */
+async function getLiveQuote(router, amount, path) {
+    try {
+        const out = await routerContracts[router].getAmountsOut(amount, path);
+        return out[out.length - 1];
+    } catch {
+        return null;
+    }
+}
+
+async function scanPath(router, tokenA, tokenB) {
+    const path = [USDC_ADDRESS, tokenA, tokenB, USDC_ADDRESS];
+    
+    const out1 = await getLiveQuote(router, BASE_TRADE, [path[0], path[1]]);
+    if (!out1) return null;
+    
+    const out2 = await getLiveQuote(router, out1, [path[1], path[2]]);
+    if (!out2) return null;
+    
+    const out3 = await getLiveQuote(router, out2, [path[2], path[3]]);
+    if (!out3) return null;
+
+    const profit = out3 - BASE_TRADE;
+    if (profit < MIN_PROFIT) return null;
+
+    return {
+        router,
+        amountIn: BASE_TRADE,
+        pathToToken: [path[0], path[1], path[2]],
+        pathToUSDC: [path[2], path[3]],
+        expectedProfit: profit
+    };
+}
+
+/* =========================================================================
+   ARBITRAGE MAIN ENGINE
    ========================================================================= */
 class LiveArbitrageEngine {
     constructor() {
         this.isExecuting = false;
     }
 
-    // Listens to incoming real-time blocks to calculate instant atomic spreads
     async init() {
         console.log("ðŸš€ BOT STARTED â€” LIVE BLOCKCHAIN ENGINE ACTIVE");
         console.log(`ðŸ“¡ Linked Node Provider: ${provider._getConnection().url}`);
         console.log(`ðŸ§³ Execution Wallet Key Authorized: ${wallet.address}`);
-        console.log(`ðŸ“Š Parameters Loaded: Min Profit Target = ${fmt(MIN_BATCH_PROFIT)} USDC\n`);
+        console.log(`ðŸ“Š Parameters Loaded: Min Profit Target = ${fmt(MIN_PROFIT)} USDC\n`);
 
         provider.on("block", async (blockNumber) => {
             console.log(`\n--- [BLOCK ${blockNumber}] Monitoring Live Pool Depths ---`);
@@ -91,62 +135,87 @@ class LiveArbitrageEngine {
             }
 
             try {
-                await this.processArbitrageOpportunities(blockNumber);
+                await this.processArbitrageOpportunities();
             } catch (err) {
                 console.error("âš ï¸ Operational Scan Warning:", err.message);
-                // Trigger failover reconnection mechanics matching JS1 loop logic
-                throw err; 
+                throw err;
             }
         });
     }
 
-    async processArbitrageOpportunities(blockNumber) {
-        // 1. Evaluate Live Liquidity Depth (Real Uniswap V3 Quoter contract states simulation)
-        console.log(`ðŸ” [V3-QUOTER] Testing concentrated depth for USDC -> WETH -> USDC`);
-        
-        const tradingCapitalInput = ethers.parseUnits("25000", 6); // 25,000 USDC active tier
-        const simulatedOutput = ethers.parseUnits("25142.50", 6);   // Current on-chain execution paths state output
-        const projectedNetProfit = simulatedOutput - tradingCapitalInput;
+    async processArbitrageOpportunities() {
+        console.log("ðŸ” [PARALLEL SCAN] Running triangular calculations...");
+        const foundTrades = [];
+        const routerList = Object.values(routers);
+        const tokenList = Object.values(TOKENS);
 
-        console.log(`ðŸ“ˆ SPREAD IDENTIFIED: Buy[UniV3] -> Sell[QuickSwapV2]`);
-        console.log(`   Capital Required: ${fmt(tradingCapitalInput)} USDC`);
-        console.log(`   Expected Yield:   ${fmt(simulatedOutput)} USDC`);
-        console.log(`   Projected Net:    +${fmt(projectedNetProfit)} USDC`);
+        // Perform parallel lookups using token pairings
+        for (const r of routerList) {
+            for (const tA of tokenList) {
+                for (const tB of tokenList) {
+                    if (tA === tB) continue;
+                    const trade = await scanPath(r, tA, tB);
+                    if (trade) {
+                        foundTrades.push(trade);
+                        if (foundTrades.length >= BATCH_SIZE) break;
+                    }
+                }
+                if (foundTrades.length >= BATCH_SIZE) break;
+            }
+            if (foundTrades.length >= BATCH_SIZE) break;
+        }
 
-        // 2. Validate Profit Requirements
-        if (projectedNetProfit < MIN_BATCH_PROFIT) {
-            console.log(`âŒ Opportunity discarded. Net profit below target minimum threshold.`);
+        if (foundTrades.length === 0) {
+            console.log("â„¹ï¸ No profitable triangular spreads found in this block.");
             return;
         }
 
-        // 3. Fire Atomic Flash Loan Transaction into the Public Mempool
+        await this.executeBatchTransaction(foundTrades);
+    }
+
+    async executeBatchTransaction(trades) {
         try {
             this.isExecuting = true;
-            console.log("\nðŸ”¥ EXECUTING LIVE ON-CHAIN ARBITRAGE BATCH...");
-            console.log(`âš¡ FLASH LOAN SOURCE: Requesting Aave V3 Liquidity Pool Vault`);
+            console.log("\nðŸ”¥ EXECUTING BATCH VIA VAULTARBITRAGEENFORCER...");
             
+            let totalCapital = 0n;
+            let totalExpectedProfit = 0n;
+            for (const t of trades) {
+                totalCapital += t.amountIn;
+                totalExpectedProfit += t.expectedProfit;
+            }
+
+            console.log(`USED CAPITAL: ${fmt(totalCapital)} USDC`);
+            console.log(`EXPECTED PROFIT: ${fmt(totalExpectedProfit)} USDC`);
+
+            if (totalExpectedProfit < GAS_COST_USDC) {
+                console.log("âŒ SKIPPED: Calculated block yields fall beneath network gas margins.\n");
+                return;
+            }
+
             const contractBeforeBalance = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-            
-            // Fetch real-time gas metrics from network oracle
             const feeData = await provider.getFeeData();
-            
-            // Call smart contract batch strategy
-            const tx = await executionContract.executeArbitrageBatch(
-                USDC_ADDRESS,
-                WETH_ADDRESS,
-                tradingCapitalInput,
-                MIN_BATCH_PROFIT,
-                {
-                    maxFeePerGas: feeData.maxFeePerGas,
-                    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
-                    gasLimit: 350000 // Standard overhead for complex multi-pool cross routing
-                }
-            );
+
+            // Construct exact BatchParams struct configuration expected by VaultArbitrageEnforcer
+            const batchStruct = {
+                buyRouters: trades.map(t => t.router),
+                sellRouters: trades.map(t => t.router),
+                amountsInUSDC: trades.map(t => t.amountIn),
+                pathsToToken: trades.map(t => t.pathToToken),
+                pathsToUSDC: trades.map(t => t.pathToUSDC),
+                deadline: Math.floor(Date.now() / 1000) + 60
+            };
+
+            // Call the correct name format from your smart contract
+            const tx = await vaultContract.executeFlashBatchArbitrage(batchStruct, {
+                maxFeePerGas: feeData.maxFeePerGas,
+                maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+                gasLimit: 650000 // Multi-hop loops require a comfortable ceiling
+            });
 
             console.log(`âœ‰ï¸ Transaction broadcasted to public mempool. Hash: ${tx.hash}`);
             console.log("â³ Awaiting network mining validation...");
 
-            // Wait for real on-chain receipt confirmation
             const receipt = await tx.wait();
             
             if (receipt.status === 1) {
@@ -159,22 +228,21 @@ class LiveArbitrageEngine {
                 console.log(`   CONTRACT AFTER:   ${fmt(contractAfterBalance)} USDC`);
                 console.log(`   REALIZED PROFIT:  +${fmt(actualProfit)} USDC ðŸš€`);
             } else {
-                console.error("ðŸ›‘ Transaction reverted on-chain during execution.");
+                console.error("ðŸ›‘ Internal trade step execution sequence threw an unhandled contract error.");
             }
 
         } catch (txError) {
             console.error("ðŸ›‘ Transaction failed or rejected by node:", txError.message);
-        } finally {
+        } {
             this.isExecuting = false;
         }
     }
 }
 
 /* =========================================================================
-   PROTECTED MAIN EXECUTION WRAPPER (INTEGRATED FROM JS1 METHODOLOGY)
+   PROTECTED MAIN EXECUTION WRAPPER
    ========================================================================= */
 (async function main() {
-    // Correctly instantiate state components using framework setups derived from JS1
     provider = newProvider();
     rebuildContracts();
 
@@ -183,17 +251,11 @@ class LiveArbitrageEngine {
     while (true) {
         try {
             await engine.init();
-            
-            // Keep process alive indefinitely to handle incoming block subscription payloads
             await new Promise(() => {}); 
         } catch (error) {
-            console.error("âŒ Error in main loop execution chain:", error.message);
-            console.log("ðŸ”„ Initiating network provider connection recovery...");
-            
-            // Failover reconnect routines matching JS1 catch statements
+            console.error("âŒ Process Loop Context Crash:", error.message);
             provider = newProvider();
             rebuildContracts();
-            
             await new Promise(resolve => setTimeout(resolve, 2000));
         }
     }
