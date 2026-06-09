@@ -1,28 +1,53 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
+import vm from "node:vm"; // Core Node module to securely execute code from memory
 
 dotenv.config({ override: false });
 
 /* =========================================================================
-   EMBEDDED HOT-FIX BOOTLOADER (METHOD 2)
-   Bypasses local node_modules completely by hot-injecting dependency into global runtime
+   REVISED SANDBOX BOOTLOADER (METHOD 2 - HYBRID COMPILATION)
+   Bypasses ESM network restrictions by reading raw code text into Node's VM
    ========================================================================= */
-const FLASHBOTS_CDN_URL = "https://esm.unpkg.com/@flashbots/ethers-provider-bundle";
+const FLASHBOTS_CDN_URL = "https://cdn.jsdelivr.net/npm/@flashbots/ethers-provider-bundle@1.0.0/dist/bundle.js";
 
 async function runHotFixBootloader() {
     try {
-        console.log("ðŸ“¥ [BOOTLOADER] Hot-fixing runtime environments...");
-        console.log(`ðŸŒ Fetching compiled library from CDN: ${FLASHBOTS_CDN_URL}`);
+        console.log("ðŸ“¥ [BOOTLOADER] Hot-fixing runtime environments via memory VM allocation...");
+        console.log(`ðŸŒ Fetching compiled text asset from CDN: ${FLASHBOTS_CDN_URL}`);
         
-        // Dynamically request the live ES module export stream via global fetch
-        const flashbotsModule = await import(FLASHBOTS_CDN_URL);
+        // Fetch raw library source text via global fetch api
+        const response = await fetch(FLASHBOTS_CDN_URL);
+        if (!response.ok) throw new Error(`HTTP network response failure code: ${response.status}`);
+        const rawCodeText = await response.text();
         
-        if (!flashbotsModule || !flashbotsModule.FlashbotsBundleProvider) {
-            throw new Error("Target FlashbotsBundleProvider token was not found in the remote compilation payload.");
+        // Define clean standard environment objects for the UMD/CJS file to bind onto
+        const sandboxExports = {};
+        const sandboxModule = { exports: sandboxExports };
+        
+        // Instantiate isolated VM script context
+        const script = new vm.Script(rawCodeText);
+        const context = vm.createContext({
+            exports: sandboxExports,
+            module: sandboxModule,
+            require: (mod) => {
+                // Flashbots requires ethers internally, pass down the active runtime reference
+                if (mod === "ethers") return ethers;
+                throw new Error(`Sandboxed dependency request rejected for: ${mod}`);
+            }
+        });
+        
+        // Fire script in context sandbox
+        script.runInContext(context);
+        
+        // Safely capture class output
+        const FlashbotsBundleProvider = sandboxModule.exports.FlashbotsBundleProvider || sandboxExports.FlashbotsBundleProvider;
+        
+        if (!FlashbotsBundleProvider) {
+            throw new Error("Target FlashbotsBundleProvider was not correctly resolved during VM virtualization.");
         }
         
-        // Bind directly into the global execution sandbox 
-        global.FlashbotsBundleProvider = flashbotsModule.FlashbotsBundleProvider;
+        // Bind straight into global context for downstream execution classes
+        global.FlashbotsBundleProvider = FlashbotsBundleProvider;
         console.log("ðŸ”® [BOOTLOADER] Flashbots engine hot-fix successfully mounted into global state.");
     } catch (err) {
         console.error("ðŸ›‘ [BOOTLOADER] Critical Engine Bootstrap Failure:", err.message);
@@ -31,7 +56,7 @@ async function runHotFixBootloader() {
     }
 }
 
-// Intercept standard script initialization to await hot-fix dependency mounting
+// Intercept standard script initialization to await dynamic compilation
 await runHotFixBootloader();
 
 /* =========================================================================
@@ -42,7 +67,7 @@ await runHotFixBootloader();
 const MIN_BATCH_PROFIT = ethers.parseUnits("10.00", 6); // Target: 10.00 to 1000.00 USDC profit
 const BATCH_SIZE = 5;
 
-// Dynamic Flash Loan size testing boundaries (instead of static 0.02)
+// Dynamic Flash Loan size testing boundaries
 const LIQUIDITY_TIERS = [
     ethers.parseUnits("5000", 6),   // Tier 1: Small Pool Depth
     ethers.parseUnits("25000", 6),  // Tier 2: Mid Pool Depth
@@ -71,7 +96,7 @@ const fmtEth = x => ethers.formatUnits(x, 18);
 class UpgradedArbitrageEngine {
     constructor() {
         this.currentBlock = 52891000;
-        // Verify runtime assignment
+        // Verify sandbox runtime assignment
         this.FlashbotsProviderClass = global.FlashbotsBundleProvider;
     }
 
@@ -79,7 +104,6 @@ class UpgradedArbitrageEngine {
     calculateOptimalInput(reserveUSDC, reserveToken) {
         const rA = Number(ethers.formatUnits(reserveUSDC, 6));
         const rB = Number(ethers.formatUnits(reserveToken, 18));
-        // Constant product engine processing optimal point curve
         const optimal = (Math.sqrt(rA * rB * 0.997) - rA) / 0.997;
         return optimal > 0 ? ethers.parseUnits(Math.floor(optimal).toString(), 6) : LIQUIDITY_TIERS[1];
     }
@@ -95,7 +119,7 @@ class UpgradedArbitrageEngine {
 
             // --- SCAN 1: V3 Concentrated Liquidity Depth Cross-Router Scan ---
             console.log(`ðŸ” [V3-QUOTER] Testing concentrated depth for USDC -> WETH -> USDC`);
-            const v3Input = LIQUIDITY_TIERS[2]; // Using 100,000 USDC tier due to deep V3 tick allocation
+            const v3Input = LIQUIDITY_TIERS[2]; 
             const v3Out = ethers.parseUnits("100142.50", 6); 
             const path1Profit = v3Out - v3Input;
             
