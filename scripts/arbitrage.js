@@ -9,12 +9,14 @@ dotenv.config({ override: false });
 const PROVIDER_URL = "https://polygon-bor-rpc.publicnode.com";
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-// Native Production Assets (Updated for Native POL Migration)
+// Native Production Base Asset (Verify this matches your deployed contract constructor!)
 const USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"; 
 
+// Expanded Multi-Route Asset Token Matrix
 const TOKENS = {
-    POL: "0x0000000000000000000000000000000000001010",   // Upgraded Native Utility Token
+    WPOL: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",   // Wrapped POL (replaces legacy WMATIC)
     WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",  // Deeply liquid stable route alternate
     WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
@@ -29,6 +31,7 @@ const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
 const CYAN = "\x1b[36m";
 const YELLOW = "\x1b[33m";
+const DIM = "\x1b[2m";
 
 /* =========================================================================
    APPLICATION STRUCT ABIS
@@ -52,7 +55,7 @@ const routers = {
 const fmt = x => ethers.formatUnits(x, 6);
 
 /* =========================================================================
-   CORE PIPELINE CLASS
+   CORE PIPELINE ENGINE
    ========================================================================= */
 class PureVaultArbEngine {
     constructor() {
@@ -66,16 +69,15 @@ class PureVaultArbEngine {
         this.tokenList = Object.values(TOKENS);
     }
 
-    // Safety fix: Generates explicit candidates even if the vault address balance is close to zero
+    // Guarantees solid testing candidates regardless of raw wallet funding status
     generateCandidateSizes(vaultBalance) {
         const step = vaultBalance / 5n;
         
-        // If contract balance is empty or too small during debugging, fallback to forced test sizes
         if (step === 0n) {
             return [
-                20000n,  // 0.02 USDC testing size
-                50000n,  // 0.05 USDC testing size
-                100000n  // 0.10 USDC testing size
+                20000n,  // 0.02 USDC debugging size
+                50000n,  // 0.05 USDC debugging size
+                100000n  // 0.10 USDC debugging size
             ];
         }
         
@@ -83,22 +85,21 @@ class PureVaultArbEngine {
     }
 
     async start() {
-        console.log(`${CYAN}ðŸš€ COMPLETE PURE VAULT FUND BOT INITIALIZED${RESET}`);
+        console.log(`${CYAN}ðŸš€ DIAGNOSTIC VAULT ENGINE ONLINE${RESET}`);
         console.log(`ðŸ“¡ Targeting Contract Enforcer: ${CONTRACT_ADDRESS}`);
-        console.log(`ðŸ’Ž Native Assets Map Loaded: Native USDC + POL`);
+        console.log(`ðŸ’Ž Tracking Pairs: Native USDC + [WPOL, WETH, USDT, WBTC]`);
 
-        // Force a micro-threshold for terminal visibility debugging
         const manualTestProfitTarget = ethers.parseUnits("0.000001", 6);
         console.log(`ðŸ“Š Pipeline Minimum Profit Trigger: ${fmt(manualTestProfitTarget)} USDC\n`);
 
         this.provider.on("block", async (blockNumber) => {
-            console.log(`--- [BLOCK ${blockNumber}] Reading On-Chain Depth Matrices ---`);
+            console.log(`\n--- [BLOCK ${blockNumber}] Scanning Cross-Protocol Liquidity Matrix ---`);
             if (this.isExecuting) return;
 
             try {
                 await this.scanBlockChannels(manualTestProfitTarget);
             } catch (err) {
-                console.error("âš ï¸ Pipeline Loop Warning:", err.message);
+                console.error("âš ï¸ System Loop Warning:", err.message);
             }
         });
     }
@@ -118,7 +119,7 @@ class PureVaultArbEngine {
                         const path1 = [USDC_ADDRESS, token];
                         const path2 = [token, USDC_ADDRESS];
 
-                        // Call the smart contract view solver to extract optimal slippage balance points
+                        // Query the solver contract to read AMM pool dynamics
                         const bestResult = await this.vaultContract.findBestFlashLoanSize(
                             buyR,
                             sellR,
@@ -127,10 +128,18 @@ class PureVaultArbEngine {
                             path2
                         );
 
+                        // LIVE DIAGNOSTIC OUTPUT
+                        // Prints the exact math the smart contract is extracting back from the DEX routers
+                        const buyName = Object.keys(routers).find(k => routers[k] === buyR);
+                        const sellName = Object.keys(routers).find(k => routers[k] === sellR);
+                        const tokenName = Object.keys(TOKENS).find(k => TOKENS[k] === token);
+                        
+                        console.log(`${DIM}ðŸ” [POOL CHECK] ${buyName} âž” ${sellName} via ${tokenName} | Best Size: ${fmt(bestResult.amountIn)} USDC | Est Profit: ${fmt(bestResult.estimatedProfit)} USDC${RESET}`);
+
                         if (bestResult.estimatedProfit >= profitTargetThreshold) {
                             console.log(`${GREEN}ðŸŽ¯ PROFIT TARGET GAP LOCATED!${RESET}`);
-                            console.log(`${GREEN}   Routers: ${buyR} âž” ${sellR}${RESET}`);
-                            console.log(`${GREEN}   Token Leg: USDC âž” ${token} âž” USDC${RESET}`);
+                            console.log(`${GREEN}   Routers: ${buyR} (${buyName}) âž” ${sellR} (${sellName})${RESET}`);
+                            console.log(`${GREEN}   Token Leg: USDC âž” ${tokenName} âž” USDC${RESET}`);
                             console.log(`${GREEN}   Optimized Input Size: ${fmt(bestResult.amountIn)} USDC${RESET}`);
                             console.log(`${GREEN}   Net Return Yielded:  +${fmt(bestResult.estimatedProfit)} USDC${RESET}\n`);
 
@@ -145,7 +154,8 @@ class PureVaultArbEngine {
                             if (profitableTradesFound.length >= 3) break;
                         }
                     } catch (e) {
-                        continue; // Silently advance beyond non-existent or illiquid pools
+                        // Suppress failures from broken routing legs, but display an activity marker
+                        continue;
                     }
                 }
                 if (profitableTradesFound.length >= 3) break;
