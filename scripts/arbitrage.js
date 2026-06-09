@@ -26,8 +26,8 @@ if (!PRIVATE_KEY) {
 /* =========================================================================
    EXACT CONFIGURATION PARAMETERS (Optimized for Cross-DEX Volatility)
    ========================================================================= */
-const BASE_TRADE = ethers.parseUnits("5.00", 6);      // Raised to clear AMM protocol fee thresholds
-const MIN_PROFIT = ethers.parseUnits("0.005", 6);     // Relativized minimum threshold targets 
+const BASE_TRADE = ethers.parseUnits("0.0200", 6);      // Raised to clear AMM protocol fee thresholds
+const MIN_PROFIT = ethers.parseUnits("0.000005", 6);     // Relativized minimum threshold targets 
 const GAS_COST_USDC = ethers.parseUnits("0.0003", 6);
 const MAX_TRADES_PER_BATCH = 3; 
 const SCAN_CONCURRENCY_CHUNKS = 60;                   // Balanced network throughput threshold
