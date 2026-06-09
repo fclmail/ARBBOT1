@@ -12,7 +12,7 @@ const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 // Native Production Base Asset
 const USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"; 
 
-// Multi-Route Asset Token Matrix
+// Expanded Multi-Route Asset Token Matrix
 const TOKENS = {
     WPOL: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",   // Wrapped POL (replaces legacy WMATIC)
     WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
@@ -107,7 +107,6 @@ class PureVaultArbEngine {
     async scanBlockChannels(profitTargetThreshold) {
         const vaultBalance = await this.usdcContract.balanceOf(CONTRACT_ADDRESS);
         const candidateSizes = this.generateCandidateSizes(vaultBalance);
-
         const profitableTradesFound = [];
 
         for (const buyR of this.routerList) {
@@ -132,7 +131,6 @@ class PureVaultArbEngine {
                         const sellName = Object.keys(routers).find(k => routers[k] === sellR);
                         const tokenName = Object.keys(TOKENS).find(k => TOKENS[k] === token);
                         
-                        // Output diagnostic pool checks invisibly/dimmed to preserve workspace focus
                         console.log(`${DIM}ðŸ” [POOL CHECK] ${buyName} âž” ${sellName} via ${tokenName} | Best Size: ${fmt(bestResult.amountIn)} USDC | Est Profit: ${fmt(bestResult.estimatedProfit)} USDC${RESET}`);
 
                         if (bestResult.estimatedProfit >= profitTargetThreshold) {
@@ -147,8 +145,7 @@ class PureVaultArbEngine {
                                 sellRouter: sellR,
                                 amountIn: bestResult.amountIn,
                                 pathToToken: path1,
-                                pathToUSDC: path2,
-                                tokenName: tokenName
+                                pathToUSDC: path2
                             });
 
                             if (profitableTradesFound.length >= 3) break;
@@ -172,7 +169,7 @@ class PureVaultArbEngine {
             this.isExecuting = true;
             console.log(`${YELLOW}ðŸ”¥ Packaging Batch Parameters for Contract Execution...${RESET}`);
 
-            // Gather Pre-execution State Snapshots
+            // Take balance state snapshots BEFORE tx processing
             const walletAddress = this.wallet.address;
             const walletGasBefore = await this.provider.getBalance(walletAddress);
             const vaultUsdcBefore = await this.usdcContract.balanceOf(CONTRACT_ADDRESS);
@@ -198,15 +195,15 @@ class PureVaultArbEngine {
             await this.provider.waitForTransaction(tx.hash);
             console.log(`${GREEN}âœ… BATCH TRANSACTION MINED SUCCESSFULLY BY NETWORK${RESET}`);
 
-            // Gather Post-execution State Snapshots
+            // Take balance state snapshots AFTER tx processing
             const walletGasAfter = await this.provider.getBalance(walletAddress);
             const vaultUsdcAfter = await this.usdcContract.balanceOf(CONTRACT_ADDRESS);
 
-            // Compute delta metrics
+            // Math Deltas
             const gasUsedPOL = walletGasBefore - walletGasAfter;
             const netProfitUSDC = vaultUsdcAfter - vaultUsdcBefore;
 
-            // Display dynamic metrics dashboard matching specifications
+            // Output Exact Formatted Dashboard Logs
             console.log(`\n=================== PIPELINE METRICS LOG ===================`);
             console.log(`ðŸ”¹ Executing Wallet Address   : ${walletAddress}`);
             console.log(`â›½ Wallet Gas Balance (Before) : ${ethers.formatEther(walletGasBefore)} POL/MATIC`);
@@ -215,7 +212,7 @@ class PureVaultArbEngine {
             console.log(`------------------------------------------------------------`);
             console.log(`ðŸ“Š Vault USDC Balance (Before) : ${ethers.formatUnits(vaultUsdcBefore, 6)} USDC`);
             console.log(`ðŸ“Š Vault USDC Balance (After)  : ${ethers.formatUnits(vaultUsdcAfter, 6)} USDC`);
-            console.log(`%sðŸ“ˆ Net Capital Growth In Vault : +${ethers.formatUnits(netProfitUSDC, 6)} USDC%s`, GREEN, RESET);
+            console.log(`ðŸ“ˆ Net Capital Growth In Vault : +${ethers.formatUnits(netProfitUSDC, 6)} USDC`);
             console.log(`============================================================\n`);
 
         } catch (err) {
