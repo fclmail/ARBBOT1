@@ -10,10 +10,10 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 /* ================= RPC ================= */
 const RPCS = [
 //  "https://polygon.drpc.org",
-  "https://1rpc.io/matic",
-  "https://polygon.drpc.org",
-  "https://polygon-bor-rpc.publicnode.com",
-  "https://1rpc.io/matic",
+ // "https://1rpc.io/matic",
+ // "https://polygon.drpc.org",
+ // "https://polygon-bor-rpc.publicnode.com",
+ // "https://1rpc.io/matic",
   "https://tenderly.rpc.polygon.community",
   "https://polygon.api.onfinality.io/public",
   "https://polygon-bor-rpc.publicnode.com"
