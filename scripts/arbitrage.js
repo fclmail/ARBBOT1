@@ -33,7 +33,7 @@ const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 
-const BATCH_SIZE = 3;
+const BATCH_SIZE = 5;
 
 /* ================= GAS TOP-UP ================= */
 
@@ -80,6 +80,18 @@ const routers = {
 
 const TOKENS = {
     AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
     APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
     CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
     DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
