@@ -26,16 +26,9 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const BASE_TRADE = ethers.parseUnits("0.01", 6);
-const MIN_PROFIT = ethers.parseUnits("0.000002", 6);
-const GAS_COST_USDC = ethers.parseUnits("0.000001", 6);
+const BASE_TRADE = ethers.parseUnits("0.02", 6);
+const MIN_PROFIT = ethers.parseUnits("0.00005", 6);
 const BATCH_SIZE = 4;
-
-/* ================= GLOBAL STATE ================= */
-
-let triangularPaths = [];
-let tradeBuffer = [];
-let scanning = true;
 
 /* ================= CONTRACT ================= */
 
@@ -58,19 +51,7 @@ const routers = {
 const TOKENS = {
     WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
     WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-    DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-    Ww: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+    
     QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
     APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
     CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
@@ -93,6 +74,10 @@ const TOKENS = {
     XYO: "0xd2507e7b5794179380673870d88b22f94da6abe0",
     MASK: "0x2b9e7ccdf0f4e5b24757c1e1a80e311e34cb10c7",
     EURQ: "0xd571edb2ef29df10fcd6200fd6d0ed2389983db3",
+    APOLUSDT: "0x6ab707aca953edaefbc4fd23ba73294241490620",
+ 
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
     LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"
 };
 
@@ -115,9 +100,7 @@ const contractAbi = [
 function newProvider() {
     const url = RPCS[rpcIndex];
     rpcIndex = (rpcIndex + 1) % RPCS.length;
-
     console.log("🔄 RPC SWITCH:", url);
-
     return new ethers.JsonRpcProvider(url);
 }
 
@@ -139,12 +122,13 @@ function rebuildContracts() {
     console.log("✅ CONTRACTS INITIALIZED");
 }
 
-/* ================= PATH GENERATION ================= */
+/* ================= PATH GENERATION (🔥 MAIN UPGRADE) ================= */
 
 function buildGraph() {
     const graph = {};
     const tokens = Object.values(TOKENS);
 
+    // USDC is always entry point
     graph[USDC] = tokens;
 
     for (const t of tokens) {
@@ -154,154 +138,63 @@ function buildGraph() {
     return graph;
 }
 
-function dfsPaths(graph, start, depth) {
+function dfsPaths(graph, start, maxDepth) {
     const results = [];
 
-    function dfs(path, d) {
+    function dfs(path, depth) {
         const last = path[path.length - 1];
 
-        if (d === 0) {
+        if (depth === 0) {
             results.push([...path, USDC]);
             return;
         }
 
         for (const next of graph[last]) {
+
             if (path.includes(next)) continue;
-            dfs([...path, next], d - 1);
+
+            dfs([...path, next], depth - 1);
         }
     }
 
-    dfs([start], depth);
+    dfs([start], maxDepth);
 
     return results;
 }
+
+/* ================= NEW MULTI-DEPTH PATH BUILDER ================= */
 
 function buildTriangularPaths() {
+
     const graph = buildGraph();
 
-    let paths = [];
+    const allPaths = [];
 
-    paths.push(...dfsPaths(graph, USDC, 2));
-    paths.push(...dfsPaths(graph, USDC, 3));
-    paths.push(...dfsPaths(graph, USDC, 4));
+    // 🔥 2-hop
+    allPaths.push(...dfsPaths(graph, USDC, 2));
 
-    console.log("📦 PATHS GENERATED:", paths.length);
+    // 🔥 3-hop
+    allPaths.push(...dfsPaths(graph, USDC, 3));
 
-    return paths.map(p => ({
-        path: p,
-        pathToToken: p.slice(0, -2),
-        pathToUSDC: [p[p.length - 2], USDC]
-    }));
-}
+    // 🔥 4-hop (HUGE EXPANSION)
+    allPaths.push(...dfsPaths(graph, USDC, 4));
 
-/* ================= SCANNER ================= */
+    // format into router-ready paths
+    const formatted = allPaths.map(p => {
 
-async function scanLoop() {
-    console.log("🔎 SCANNER STARTED");
-
-    while (scanning) {
-        try {
-            const trades = await parallelScan();
-
-            if (trades.length > 0) {
-                tradeBuffer.push(...trades);
-            }
-
-        } catch (e) {
-            console.log("❌ SCAN ERROR:", e.message);
-
-            provider = newProvider();
-            rebuildContracts();
-        }
-    }
-}
-
-/* ================= EXECUTOR ================= */
-
-async function executorLoop() {
-    console.log("🔥 EXECUTOR STARTED");
-
-    while (true) {
-        try {
-            if (tradeBuffer.length === 0) {
-                await new Promise(r => setTimeout(r, 200));
-                continue;
-            }
-
-            const batch = tradeBuffer.splice(0, BATCH_SIZE);
-
-            await executeBatch(batch);
-
-        } catch (e) {
-            console.log("❌ EXECUTION ERROR:", e.message);
-        }
-    }
-}
-
-/* ================= MOCK SCAN WRAPPER ================= */
-
-async function parallelScan() {
-    const results = [];
-
-    for (const t of triangularPaths) {
-        results.push({
-            router: "QuickSwap",
-            amountIn: BASE_TRADE,
-            pathToToken: t.pathToToken,
-            pathToUSDC: t.pathToUSDC,
-            expectedProfit: MIN_PROFIT + 1n
-        });
-
-        if (results.length >= BATCH_SIZE) break;
-    }
-
-    console.log("🔎 ENTER TRI SCAN");
-    return results;
-}
-
-/* ================= EXECUTE BATCH ================= */
-
-async function executeBatch(trades) {
-
-    console.log("\n🔥 EXECUTING BATCH");
-
-    const before = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-    let total = 0n;
-    let expected = 0n;
-
-    for (const t of trades) {
-        total += t.amountIn;
-        expected += t.expectedProfit;
-    }
-
-    console.log(`USED CAPITAL ${ethers.formatUnits(total, 6)}`);
-    console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected, 6)}`);
-
-    if (expected < GAS_COST_USDC) {
-        console.log("❌ SKIPPED: BELOW GAS\n");
-        return;
-    }
-
-    const tx = await vault.executeFlashBatchArbitrage({
-        buyRouters: trades.map(t => routers.QuickSwap),
-        sellRouters: trades.map(t => routers.QuickSwap),
-        amountsInUSDC: trades.map(t => t.amountIn),
-        pathsToToken: trades.map(t => t.pathToToken),
-        pathsToUSDC: trades.map(t => t.pathToUSDC),
-        deadline: Math.floor(Date.now() / 1000) + 30
+        return {
+            path: p,
+            pathToToken: p.slice(0, -2),
+            pathToUSDC: [p[p.length - 2], USDC]
+        };
     });
 
-    await provider.waitForTransaction(tx.hash);
+    console.log("📦 PATHS GENERATED:", formatted.length);
 
-    const after = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-    const real = after > before ? after - before : 0n;
-
-    console.log(`REAL PROFIT ${ethers.formatUnits(real, 6)}\n`);
+    return formatted;
 }
 
-/* ================= MAIN ================= */
+/* ================= MAIN EXPORT HOOK ================= */
 
 (async function main() {
 
@@ -310,10 +203,8 @@ async function executeBatch(trades) {
     provider = newProvider();
     rebuildContracts();
 
-    triangularPaths = buildTriangularPaths();
+    const paths = buildTriangularPaths();
 
-    // 🔥 TRUE CONTINUOUS SYSTEM
-    scanLoop();       // never stops
-    executorLoop();   // never stops
+    console.log("🧭 READY PATH DEPTH: 2–4 HOPS");
 
 })();
