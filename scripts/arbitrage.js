@@ -27,8 +27,15 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00005", 6);
+const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
+const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 const BATCH_SIZE = 4;
+
+/* ================= GLOBAL STATE ================= */
+
+let triangularPaths = [];
+let tradeBuffer = [];
+let scanning = true;
 
 /* ================= CONTRACT ================= */
 
@@ -75,7 +82,9 @@ const contractAbi = [
 function newProvider() {
     const url = RPCS[rpcIndex];
     rpcIndex = (rpcIndex + 1) % RPCS.length;
+
     console.log("🔄 RPC SWITCH:", url);
+
     return new ethers.JsonRpcProvider(url);
 }
 
@@ -97,13 +106,12 @@ function rebuildContracts() {
     console.log("✅ CONTRACTS INITIALIZED");
 }
 
-/* ================= PATH GENERATION (🔥 MAIN UPGRADE) ================= */
+/* ================= PATH GENERATION ================= */
 
 function buildGraph() {
     const graph = {};
     const tokens = Object.values(TOKENS);
 
-    // USDC is always entry point
     graph[USDC] = tokens;
 
     for (const t of tokens) {
@@ -113,63 +121,154 @@ function buildGraph() {
     return graph;
 }
 
-function dfsPaths(graph, start, maxDepth) {
+function dfsPaths(graph, start, depth) {
     const results = [];
 
-    function dfs(path, depth) {
+    function dfs(path, d) {
         const last = path[path.length - 1];
 
-        if (depth === 0) {
+        if (d === 0) {
             results.push([...path, USDC]);
             return;
         }
 
         for (const next of graph[last]) {
-
             if (path.includes(next)) continue;
-
-            dfs([...path, next], depth - 1);
+            dfs([...path, next], d - 1);
         }
     }
 
-    dfs([start], maxDepth);
+    dfs([start], depth);
 
     return results;
 }
 
-/* ================= NEW MULTI-DEPTH PATH BUILDER ================= */
-
 function buildTriangularPaths() {
-
     const graph = buildGraph();
 
-    const allPaths = [];
+    let paths = [];
 
-    // 🔥 2-hop
-    allPaths.push(...dfsPaths(graph, USDC, 2));
+    paths.push(...dfsPaths(graph, USDC, 2));
+    paths.push(...dfsPaths(graph, USDC, 3));
+    paths.push(...dfsPaths(graph, USDC, 4));
 
-    // 🔥 3-hop
-    allPaths.push(...dfsPaths(graph, USDC, 3));
+    console.log("📦 PATHS GENERATED:", paths.length);
 
-    // 🔥 4-hop (HUGE EXPANSION)
-    allPaths.push(...dfsPaths(graph, USDC, 4));
-
-    // format into router-ready paths
-    const formatted = allPaths.map(p => {
-
-        return {
-            path: p,
-            pathToToken: p.slice(0, -2),
-            pathToUSDC: [p[p.length - 2], USDC]
-        };
-    });
-
-    console.log("📦 PATHS GENERATED:", formatted.length);
-
-    return formatted;
+    return paths.map(p => ({
+        path: p,
+        pathToToken: p.slice(0, -2),
+        pathToUSDC: [p[p.length - 2], USDC]
+    }));
 }
 
-/* ================= MAIN EXPORT HOOK ================= */
+/* ================= SCANNER ================= */
+
+async function scanLoop() {
+    console.log("🔎 SCANNER STARTED");
+
+    while (scanning) {
+        try {
+            const trades = await parallelScan();
+
+            if (trades.length > 0) {
+                tradeBuffer.push(...trades);
+            }
+
+        } catch (e) {
+            console.log("❌ SCAN ERROR:", e.message);
+
+            provider = newProvider();
+            rebuildContracts();
+        }
+    }
+}
+
+/* ================= EXECUTOR ================= */
+
+async function executorLoop() {
+    console.log("🔥 EXECUTOR STARTED");
+
+    while (true) {
+        try {
+            if (tradeBuffer.length === 0) {
+                await new Promise(r => setTimeout(r, 200));
+                continue;
+            }
+
+            const batch = tradeBuffer.splice(0, BATCH_SIZE);
+
+            await executeBatch(batch);
+
+        } catch (e) {
+            console.log("❌ EXECUTION ERROR:", e.message);
+        }
+    }
+}
+
+/* ================= MOCK SCAN WRAPPER ================= */
+
+async function parallelScan() {
+    const results = [];
+
+    for (const t of triangularPaths) {
+        results.push({
+            router: "QuickSwap",
+            amountIn: BASE_TRADE,
+            pathToToken: t.pathToToken,
+            pathToUSDC: t.pathToUSDC,
+            expectedProfit: MIN_PROFIT + 1n
+        });
+
+        if (results.length >= BATCH_SIZE) break;
+    }
+
+    console.log("🔎 ENTER TRI SCAN");
+    return results;
+}
+
+/* ================= EXECUTE BATCH ================= */
+
+async function executeBatch(trades) {
+
+    console.log("\n🔥 EXECUTING BATCH");
+
+    const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    let total = 0n;
+    let expected = 0n;
+
+    for (const t of trades) {
+        total += t.amountIn;
+        expected += t.expectedProfit;
+    }
+
+    console.log(`USED CAPITAL ${ethers.formatUnits(total, 6)}`);
+    console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected, 6)}`);
+
+    if (expected < GAS_COST_USDC) {
+        console.log("❌ SKIPPED: BELOW GAS\n");
+        return;
+    }
+
+    const tx = await vault.executeFlashBatchArbitrage({
+        buyRouters: trades.map(t => routers.QuickSwap),
+        sellRouters: trades.map(t => routers.QuickSwap),
+        amountsInUSDC: trades.map(t => t.amountIn),
+        pathsToToken: trades.map(t => t.pathToToken),
+        pathsToUSDC: trades.map(t => t.pathToUSDC),
+        deadline: Math.floor(Date.now() / 1000) + 30
+    });
+
+    await provider.waitForTransaction(tx.hash);
+
+    const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    const real = after > before ? after - before : 0n;
+
+    console.log(`REAL PROFIT ${ethers.formatUnits(real, 6)}\n`);
+}
+
+/* ================= MAIN ================= */
 
 (async function main() {
 
@@ -178,8 +277,10 @@ function buildTriangularPaths() {
     provider = newProvider();
     rebuildContracts();
 
-    const paths = buildTriangularPaths();
+    triangularPaths = buildTriangularPaths();
 
-    console.log("🧭 READY PATH DEPTH: 2–4 HOPS");
+    // 🔥 TRUE CONTINUOUS SYSTEM
+    scanLoop();       // never stops
+    executorLoop();   // never stops
 
 })();
