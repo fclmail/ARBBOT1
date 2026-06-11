@@ -69,7 +69,7 @@ const TOKENS = {
 
 
 
-const gasCostInUSDC = gasCost / 1000000n;
+const gasCostInUSDC = gasCost / BigInt(1000000);
             const netProfit = profit - gasCostInUSDC;
             
             if (netProfit > MIN_PROFIT) {
