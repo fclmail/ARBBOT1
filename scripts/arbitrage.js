@@ -14,8 +14,7 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 /* ================= RPC ================= */
 
 const RPCS = [
-    "https://polygon-bor-rpc.publicnode.com",
-    "https://polygon-mainnet.infura.io/v3/YOUR_INFURA_KEY" // Add backup RPC
+    "https://polygon-bor-rpc.publicnode.com"
 ];
 
 let rpcIndex = 0;
@@ -29,8 +28,8 @@ let routerContracts;
 
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00005", 6);
-const BATCH_SIZE = 100; // Paths to scan per batch
-const TARGET_BATCH_QUANTITY = 3; // Execute after finding THIS many opportunities
+const BATCH_SIZE = 100;           // Paths per batch
+const TARGET_BATCH_QUANTITY = 3;  // Execute after finding THIS many
 const SCAN_INTERVAL_MS = 2000;
 const MAX_FAILURES = 10;
 
@@ -67,165 +66,10 @@ const TOKENS = {
     BAT: "0x3cef98bb43d732e2f285ee605a8158cde967d219",
     TBTC: "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
     MANA: "0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4",
-    APOLUSDT: "0x6ab707aca953edaefbc4fd23ba73294241490620"
-};
-
-/* ================= ABI ================= */
-
-const erc20Abi = [
-    "function balanceOf(address) view returns(uint256)",
-    "function approve(address,uint256) returns(bool)"
-];
-
-const routerAbi = [
-    "function getAmountsOut(uint,address[]) view returns(uint[])",
-    "function swapExactTokensForTokens(uint,uint,address[],address,uint) returns(uint[])"
-];
-
-const contractAbi = [
-    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
-];
-
-/* ================= PROVIDER ================= */
-
-function newProvider() {
-    const url = RPCS[rpcIndex];
-    rpcIndex = (rpcIndex + 1) % RPCS.length;
-    console.log("🔄 RPC SWITCH:", url);
-    return new ethers.JsonRpcProvider(url);
-}
-
-/* ================= INIT ================= */
-
-function rebuildContracts() {
-    wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-    usdc = new ethers.Contract(USDC, erc20Abi, wallet);
-    vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
-
-    routerContracts = Object.fromEntries(
-        Object.entries(routers).map(([k, v]) => [
-            k,
-            new ethers.Contract(v, routerAbi, provider)
-        ])
-    );
-
-    console.log("✅ CONTRACTS INITIALIZED");
-}
-
-/* ================= PATH GENERATION ================= */
-
-function buildGraph() {
-    const graph = {};
-    const tokens = Object.values(TOKENS);
-
-    // USDC is always entry point
-    graph[USDC] = tokens;
-
-    for (const t of tokens) {
-        graph[t] = [...tokens, USDC].filter(x => x !== t);
-    }
-
-    return graph;
-}
-
-function dfsPaths(graph, start, maxDepth) {
-    const results = [];
-
-    function dfs(path, depth) {
-        const last = path[path.length - 1];
-
-        if (depth === 0) {
-            results.push([...path, USDC]);
-            return;
-        }
-
-        for (const next of graph[last]) {
-            if (path.includes(next)) continue;
-            dfs([...path, next], depth - 1);
-        }
-    }
-
-    dfs([start], maxDepth);
-
-    return results;
-}
-
-function buildTriangularPaths() {
-    const graph = buildGraph();
-    const allPaths = [];
-
-    // Only use 2-hop and 3-hop for faster scanning
-    allPaths.push(...dfsPaths(graph, USDC, 2));
-    allPaths.push(...dfsPaths(graph, USDC, 3));
-
-    const formatted = allPaths.map(p => ({
-        path: p,
-        pathToToken: p.slice(0, -2),
-        pathToUSDC: [p[p.length - 2], USDC]
-    }));
-
-    console.log("📦 PATHS GENERATED:", formatted.length);
-    return formatted;
-}
-
-/* ================= GAS ESTIMATION ================= */
-
-async function estimateGasCost() {
-    try {
-        const feeData = await provider.getFeeData();
-        const gasPrice = feeData.gasPrice || ethers.parseUnits("30", "gwei");
-        const estimatedGas = 500000n;
-        return gasPrice * estimatedGas;
-    } catch {
-        return ethers.parseEther("0.01");
-    }
-}
-
-/* ================= OPPORTUNITY FINDER ================= */
-
-let consecutiveFailures = 0;
-let totalProfitsAccumulated = ethers.parseUnits("0", 6);
-let totalTradesExecuted = 0;
-
-async function checkOpportunity(pathData) {
-    const { pathToToken, pathToUSDC } = pathData;
-    
-    try {
-        // Use QuickSwap as default router for simulation
-        const router = routerContracts["QuickSwap"];
-        if (!router) return null;
-        
-        // Simulate: Buy path (USDC -> token)
-        const buyAmounts = await router.getAmountsOut(
-            BASE_TRADE,
-            pathToToken
-        );
-        
-        if (!buyAmounts || buyAmounts.length < 2) return null;
-        
-        const tokenAmount = buyAmounts[buyAmounts.length - 1];
-        
-        // Simulate: Sell path (token -> USDC)
-        const sellAmounts = await router.getAmountsOut(
-            tokenAmount,
-            pathToUSDC
-        );
-        
 
 
 
-if (!sellAmounts || sellAmounts.length < 2) return null;
-        
-        const usdcReturn = sellAmounts[sellAmounts.length - 1];
-        const profit = usdcReturn - BASE_TRADE;
-        
-        if (profit > MIN_PROFIT) {
-            // Calculate gas costs
-            const gasCost = await estimateGasCost();
-            // Convert gas cost to USDC (gas is in MATIC, approximate)
-            const gasCostInUSDC = gasCost / 1000000n; // Rough approximation
-            
+const gasCostInUSDC = gasCost / 1000000n;
             const netProfit = profit - gasCostInUSDC;
             
             if (netProfit > MIN_PROFIT) {
@@ -233,73 +77,61 @@ if (!sellAmounts || sellAmounts.length < 2) return null;
                     pathData,
                     profit: netProfit,
                     usdcReturn,
-                    tokenAmount,
-                    router: router,
-                    routerAddress: router.target || router.address || Object.values(routers)[0]
+                    tokenAmount
                 };
             }
         }
-        
         return null;
     } catch (error) {
-        // Path might not exist on this router
         return null;
     }
 }
 
-/* ================= BATCHED SCAN WITH IMMEDIATE EXECUTION ================= */
+/* ================= BATCH SCANNER ================= */
 
-async function scanBatchAndExecute(paths, batchIndex) {
-    const start = batchIndex * BATCH_SIZE;
-    const end = Math.min(start + BATCH_SIZE, paths.length);
-    const batch = paths.slice(start, end);
-    
-    console.log(`\n📦 Scanning batch ${batchIndex + 1}/${Math.ceil(paths.length / BATCH_SIZE)} (${batch.length} paths)`);
-    
+async function scanBatchForOpportunities(batchPaths) {
     const opportunities = [];
     
-    // Scan all paths in this batch
-    const promises = batch.map(pathData => 
+    const promises = batchPaths.map(pathData =>
         checkOpportunity(pathData)
             .then(result => {
                 if (result) {
                     opportunities.push(result);
-                    console.log(`🎯 Found opportunity #${opportunities.length}: ${ethers.formatUnits(result.profit, 6)} USDC`);
+                    console.log(`🎯 Found opportunity: ${ethers.formatUnits(result.profit, 6)} USDC profit`);
                 }
             })
             .catch(() => {})
     );
     
     await Promise.all(promises);
-    
-    // Check if we've reached target batch quantity
-    if (opportunities.length >= TARGET_BATCH_QUANTITY) {
-        console.log(`\n🎯 TARGET REACHED: ${opportunities.length} opportunities found (target: ${TARGET_BATCH_QUANTITY})`);
-        
-        // Sort by profit (highest first)
-        opportunities.sort((a, b) => b.profit - a.profit);
-        
-        // Execute the best opportunity immediately
-        const best = opportunities[0];
-        console.log(`🏆 Executing best opportunity: ${ethers.formatUnits(best.profit, 6)} USDC profit`);
-        
-        const executed = await executeOpportunity(best);
-        
-        if (executed) {
-            console.log(`✅ Batch complete! Total trades: ${totalTradesExecuted}, Total profit: ${ethers.formatUnits(totalProfitsAccumulated, 6)} USDC`);
-            return true; // Signal that we should stop scanning this round
-        }
-    } else {
-        console.log(`⏳ Found ${opportunities.length}/${TARGET_BATCH_QUANTITY} opportunities in this batch`);
-    }
-    
-    return false; // Continue to next batch
+    return opportunities;
 }
 
-/* ================= EXECUTION ENGINE ================= */
+/* ================= BATCH EXECUTION ================= */
 
-async function executeOpportunity(opportunity) {
-    const { pathData, profit, routerAddress } = opportunity;
+async function processBatch(paths, batchIndex) {
+    const start = batchIndex * BATCH_SIZE;
+    const end = Math.min(start + BATCH_SIZE, paths.length);
+    const batch = paths.slice(start, end);
+    
+    console.log(`\n📦 Scanning batch ${batchIndex + 1} (paths ${start}-${end})`);
+    
+    // Scan batch for opportunities
+    const opportunities = await scanBatchForOpportunities(batch);
+    
+    if (opportunities.length >= TARGET_BATCH_QUANTITY) {
+        console.log(`🎯 TARGET REACHED! Found ${opportunities.length} opportunities`);
+        return opportunities;
+    }
+    
+    console.log(`⏳ Found ${opportunities.length}/${TARGET_BATCH_QUANTITY} opportunities in this batch`);
+    return null; // Not enough opportunities yet
+}
+
+/* ================= EXECUTE TRADE ================= */
+
+async function executeTrade(opportunity) {
+    const { pathData, profit } = opportunity;
     const { pathToToken, pathToUSDC } = pathData;
     
     try {
@@ -307,10 +139,10 @@ async function executeOpportunity(opportunity) {
         console.log(`📈 Path: ${pathToToken.join(" -> ")} -> ${pathToUSDC.join(" -> ")}`);
         console.log(`💰 Expected Profit: ${ethers.formatUnits(profit, 6)} USDC`);
         
-        // Build batch data for contract
+        // Build batch data for contract execution
         const batchData = {
-            buyRouters: [routerAddress],
-            sellRouters: [routerAddress],
+            buyRouters: [Object.values(routers)[0]], // QuickSwap
+            sellRouters: [Object.values(routers)[0]], // QuickSwap
             amountsInUSDC: [BASE_TRADE],
             pathsToToken: [pathToToken],
             pathsToUSDC: [pathToUSDC],
@@ -318,17 +150,12 @@ async function executeOpportunity(opportunity) {
         };
         
         console.log("📤 Sending transaction...");
-        
-        // Execute the trade
         const tx = await vault.executeFlashBatchArbitrage(batchData);
+        console.log(`⏳ TX HASH: ${tx.hash}`);
         
-        console.log(`⏳ TX SENT: ${tx.hash}`);
-        
-        // Wait for confirmation
         const receipt = await tx.wait();
         
         if (receipt.status === 1) {
-            // Success
             totalProfitsAccumulated += profit;
             totalTradesExecuted++;
             consecutiveFailures = 0;
@@ -336,7 +163,6 @@ async function executeOpportunity(opportunity) {
             console.log(`✅ SUCCESS | Profit: ${ethers.formatUnits(profit, 6)} USDC`);
             console.log(`💰 Total Accumulated: ${ethers.formatUnits(totalProfitsAccumulated, 6)} USDC`);
             console.log(`📊 Total Trades: ${totalTradesExecuted}`);
-            
             return true;
         } else {
             console.log("❌ TX FAILED");
@@ -350,7 +176,7 @@ async function executeOpportunity(opportunity) {
     }
 }
 
-/* ================= CONTINUOUS SCAN & EXECUTE ================= */
+/* ================= CONTINUOUS LOOP ================= */
 
 async function continuousArbitrageLoop(paths) {
     console.log("\n🔄 Starting continuous scan loop...");
@@ -361,17 +187,17 @@ async function continuousArbitrageLoop(paths) {
     
     while (true) {
         try {
-            // Check if we should stop
             if (consecutiveFailures >= MAX_FAILURES) {
                 console.error(`💀 TOO MANY FAILURES (${MAX_FAILURES}). Stopping.`);
                 break;
             }
-            
-            // Check provider is still connected
-            const network = await provider.getNetwork();
+
+
+
+
+const network = await provider.getNetwork();
             console.log(`\n🌐 Network: ${network.name} (chainId: ${network.chainId})`);
             
-            // Check USDC balance
             const balance = await usdc.balanceOf(wallet.address);
             console.log(`💳 Balance: ${ethers.formatUnits(balance, 6)} USDC`);
             
@@ -383,89 +209,79 @@ async function continuousArbitrageLoop(paths) {
             
             // Scan batches until we find enough opportunities or run out of paths
             const totalBatches = Math.ceil(paths.length / BATCH_SIZE);
-            let executed = false;
+            let allBatchOpportunities = [];
             
-            for (let i = 0; i < totalBatches && !executed; i++) {
-                executed = await scanBatchAndExecute(paths, i);
+            for (let i = 0; i < totalBatches; i++) {
+                if (allBatchOpportunities.length >= TARGET_BATCH_QUANTITY) {
+                    break; // Stop scanning, we have enough
+                }
                 
-                // Small delay between batches to avoid rate limiting
-                if (!executed && i < totalBatches - 1) {
-                    await new Promise(r => setTimeout(r, 200));
+                const batchOpportunities = await processBatch(paths, i);
+                
+                if (batchOpportunities) {
+                    allBatchOpportunities.push(...batchOpportunities);
+                    console.log(`📊 Total opportunities found: ${allBatchOpportunities.length}`);
                 }
             }
             
-            if (!executed) {
-                console.log("⏳ No profitable opportunities found in any batch");
+            // If we found enough opportunities, execute the best one
+            if (allBatchOpportunities.length >= TARGET_BATCH_QUANTITY) {
+                // Sort by profit (highest first)
+                allBatchOpportunities.sort((a, b) => b.profit - a.profit);
+                
+                console.log(`\n🎯 EXECUTING BEST OPPORTUNITY`);
+                const best = allBatchOpportunities[0];
+                await executeTrade(best);
+            } else {
+                console.log("\n⏳ No profitable opportunities found");
             }
             
-            // Refresh paths after execution or full scan
-            console.log("🔄 Refreshing paths for next round...");
+            // Refresh paths
+            console.log("🔄 Refreshing paths...");
             paths = buildTriangularPaths();
             
             // Wait before next scan
-            console.log(`💤 Waiting ${SCAN_INTERVAL_MS}ms until next scan...`);
+            console.log(`💤 Waiting ${SCAN_INTERVAL_MS}ms...`);
             await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
             
         } catch (error) {
             console.error("💥 Loop error:", error.message);
-            
-            // Rotate RPC on error
             provider = newProvider();
             rebuildContracts();
-            
-            console.log("🔄 Rebuilding paths...");
             paths = buildTriangularPaths();
-            
             await new Promise(r => setTimeout(r, 5000));
         }
     }
 }
 
-/* ================= MAIN FUNCTION ================= */
+/* ================= MAIN ================= */
 
 (async function main() {
     console.log("🚀 ARBITRAGE BOT STARTED");
     console.log(`📍 Network: Polygon`);
-    console.log(`💼 Wallet: ${PRIVATE_KEY.slice(0, 6)}...${PRIVATE_KEY.slice(-4)}`);
-    console.log(`📦 Batch Quantity Target: ${TARGET_BATCH_QUANTITY}`);
-    console.log(`📦 Batch Size: ${BATCH_SIZE} paths per scan`);
+    console.log(`📦 Batch Size: ${BATCH_SIZE} paths`);
+    console.log(`🎯 Target Opportunities: ${TARGET_BATCH_QUANTITY}`);
     
     provider = newProvider();
     rebuildContracts();
     
     const walletAddress = wallet.address;
-    console.log(`🏦 Wallet Address: ${walletAddress}`);
+    console.log(`🏦 Wallet: ${walletAddress}`);
     
-    // Check initial balance
-    const initialBalance = await usdc.balanceOf(walletAddress);
-    console.log(`💰 Initial USDC Balance: ${ethers.formatUnits(initialBalance, 6)} USDC`);
+    // Check balance
+    const balance = await usdc.balanceOf(walletAddress);
+    console.log(`💰 Balance: ${ethers.formatUnits(balance, 6)} USDC`);
     
-    if (initialBalance === 0n) {
-        console.error("❌ No USDC balance! Fund your wallet first.");
+    if (balance === 0n) {
+        console.error("❌ No USDC balance! Exiting.");
         process.exit(1);
     }
     
-    let paths = buildTriangularPaths();
-    console.log(`🧭 Paths generated: ${paths.length}`);
+    const paths = buildTriangularPaths();
+    console.log(`🧭 Paths: ${paths.length}`);
     
-
-
-    // Start continuous arbitrage
+    // Start arbitrage loop
     await continuousArbitrageLoop(paths);
-    
-    // Final report
-    console.log("\n══════════════════════════════════");
-    console.log("📊 FINAL SUMMARY");
-    console.log("══════════════════════════════════");
-    console.log(`✅ Total trades executed: ${totalTradesExecuted}`);
-    console.log(`💰 Total profit accumulated: ${ethers.formatUnits(totalProfitsAccumulated, 6)} USDC`);
-    
-    const finalBalance = await usdc.balanceOf(wallet.address);
-    console.log(`💳 Final USDC Balance: ${ethers.formatUnits(finalBalance, 6)} USDC`);
-    console.log(`📈 Net Change: ${ethers.formatUnits(finalBalance - initialBalance, 6)} USDC`);
-    console.log("══════════════════════════════════\n");
-    
-    console.log("👋 Bot stopped. Goodbye!");
     
 })().catch(error => {
     console.error("💀 FATAL ERROR:", error);
