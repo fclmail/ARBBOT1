@@ -28,7 +28,6 @@ let routerContracts;
 
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
-const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 const BATCH_SIZE = 4;
 
 /* ================= CONTRACT ================= */
@@ -39,16 +38,14 @@ const CONTRACT_ADDRESS =
 const USDC =
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-/* ================= ABI ================= */
+/* ================= ABIs ================= */
 
 const erc20Abi = [
-    "function balanceOf(address) view returns(uint256)",
-    "function approve(address,uint256)"
+    "function balanceOf(address) view returns(uint256)"
 ];
 
 const contractAbi = [
-    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
-    "function withdraw(uint256)"
+    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
 ];
 
 const routerAbi = [
@@ -63,31 +60,23 @@ const routers = {
     Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
 };
 
-/* ================= CACHE ================= */
+/* ================= DEBUG STATE ================= */
 
-const liquidityCache = new Map();
-const quoteCache = new Map();
-
-function cacheGet(map, key, ttl = 2000) {
-    const v = map.get(key);
-    if (!v) return null;
-    if (Date.now() - v.t > ttl) return null;
-    return v.v;
-}
-
-function cacheSet(map, key, value) {
-    map.set(key, { v: value, t: Date.now() });
-}
+let scanTick = 0;
+let lastHeartbeat = Date.now();
 
 /* ================= PROVIDER ================= */
 
 function newProvider() {
     const url = RPCS[rpcIndex];
     rpcIndex = (rpcIndex + 1) % RPCS.length;
+
+    console.log("🔄 RPC SWITCH:", url);
+
     return new ethers.JsonRpcProvider(url);
 }
 
-/* ================= CONTRACT INIT ================= */
+/* ================= INIT ================= */
 
 function rebuildContracts() {
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
@@ -101,162 +90,117 @@ function rebuildContracts() {
             new ethers.Contract(v, routerAbi, provider)
         ])
     );
+
+    console.log("✅ CONTRACTS INITIALIZED");
 }
+
+/* ================= HEARTBEAT ================= */
+
+setInterval(() => {
+    const now = Date.now();
+
+    console.log(
+        `💓 HEARTBEAT | scanTick=${scanTick} | uptime=${Math.floor((now - lastHeartbeat)/1000)}s`
+    );
+}, 5000);
 
 /* ================= QUOTE ================= */
 
 async function quote(router, amount, path) {
-    const key = `${router}-${path.join("-")}-${amount}`;
-    const cached = cacheGet(quoteCache, key);
-    if (cached) return cached;
-
     try {
         const out =
             await routerContracts[router].getAmountsOut(amount, path);
 
-        const res = out.at(-1);
-
-        cacheSet(quoteCache, key, res);
-
-        return res;
+        return out.at(-1);
 
     } catch {
         return null;
     }
 }
 
-/* ================= LIQUIDITY ================= */
+/* ================= PATH GENERATION ================= */
 
-async function getLiquidity(router, tokenA, tokenB) {
-    const key = `${router}-${tokenA}-${tokenB}`;
-    const cached = cacheGet(liquidityCache, key, 2000);
-    if (cached) return cached;
+function buildPaths() {
+    const tokens = Object.values(routers);
+    const paths = [];
 
-    try {
-        const factory = new ethers.Contract(
-            await routerContracts[router].factory(),
-            ["function getPair(address,address) view returns(address)"],
-            provider
-        );
-
-        const pairAddr =
-            await factory.getPair(tokenA, tokenB);
-
-        if (pairAddr === ethers.ZeroAddress) return 0n;
-
-        const pair = new ethers.Contract(
-            pairAddr,
-            [
-                "function getReserves() view returns(uint112,uint112,uint32)",
-                "function token0() view returns(address)"
-            ],
-            provider
-        );
-
-        const reserves = await pair.getReserves();
-        const token0 = await pair.token0();
-
-        const liquidity =
-            token0.toLowerCase() === tokenA.toLowerCase()
-                ? BigInt(reserves[0])
-                : BigInt(reserves[1]);
-
-        cacheSet(liquidityCache, key, liquidity);
-
-        return liquidity;
-
-    } catch {
-        return 0n;
-    }
-}
-
-/* ================= SIZE GENERATOR ================= */
-
-function generateSizes(liquidity) {
-    const p = [
-        1000000n,
-        500000n,
-        100000n,
-        50000n,
-        10000n,
-        5000n,
-        1000n
-    ];
-
-    return p
-        .map(x => liquidity / x)
-        .filter(x => x > 0n);
-}
-
-/* ================= TRI FINDER ================= */
-
-async function findTriangular(router, path) {
-
-    const liquidity =
-        await getLiquidity(router, USDC, path[1]);
-
-    if (!liquidity) return null;
-
-    const sizes = generateSizes(liquidity);
-
-    let bestAmount = 0n;
-    let bestProfit = 0n;
-    let bestOut = 0n;
-
-    for (const amount of sizes) {
-
-        const out1 =
-            await quote(router, amount, [path[0], path[1]]);
-        if (!out1) continue;
-
-        const out2 =
-            await quote(router, out1, [path[1], path[2]]);
-        if (!out2) continue;
-
-        const out3 =
-            await quote(router, out2, [path[2], path[3]]);
-        if (!out3) continue;
-
-        const profit = out3 - amount;
-
-        if (profit > bestProfit) {
-            bestProfit = profit;
-            bestAmount = amount;
-            bestOut = out3;
+    for (let i = 0; i < tokens.length; i++) {
+        for (let j = 0; j < tokens.length; j++) {
+            if (i === j) continue;
+            paths.push([USDC, tokens[i], tokens[j], USDC]);
         }
     }
 
-    if (bestProfit < MIN_PROFIT) return null;
+    console.log("📦 PATHS GENERATED:", paths.length);
+
+    return paths;
+}
+
+/* ================= FIND TRI ================= */
+
+async function findTriangular(router, path) {
+
+    console.log("🔎 ENTER TRI SCAN");
+
+    const out1 = await quote(router, BASE_TRADE, [path[0], path[1]]);
+    if (!out1) return null;
+
+    const out2 = await quote(router, out1, [path[1], path[2]]);
+    if (!out2) return null;
+
+    const out3 = await quote(router, out2, [path[2], path[3]]);
+    if (!out3) return null;
+
+    const profit = out3 - BASE_TRADE;
+
+    if (profit < MIN_PROFIT) return null;
 
     console.log(
-        `TRI FOUND ${ethers.formatUnits(bestAmount,6)} → ${ethers.formatUnits(bestOut,6)} PROFIT ${ethers.formatUnits(bestProfit,6)}`
+        `TRI FOUND ${ethers.formatUnits(BASE_TRADE,6)} → ${ethers.formatUnits(out3,6)} PROFIT ${ethers.formatUnits(profit,6)}`
     );
 
     return {
         router,
-        amountIn: bestAmount,
-        pathToToken: path.slice(0, 3),
+        amountIn: BASE_TRADE,
+        pathToToken: path.slice(0,3),
         pathToUSDC: [path[2], USDC],
-        expectedProfit: bestProfit
+        expectedProfit: profit
     };
 }
 
-/* ================= PARALLEL SCAN ================= */
+/* ================= SCANNER ================= */
 
-async function parallelScan(paths, routersList) {
+async function scan(paths) {
+
+    scanTick++;
+
     const results = [];
 
-    for (const router of routersList) {
-        for (const path of paths.slice(0, BATCH_SIZE * 10)) {
+    for (const router of Object.keys(routers)) {
 
-            const r = await findTriangular(router, path).catch(() => null);
-            if (r) results.push(r);
+        console.log("🧭 ROUTER:", router);
 
-            if (results.length >= BATCH_SIZE) break;
+        for (const path of paths.slice(0, 20)) {
+
+            try {
+
+                const r =
+                    await findTriangular(router, path);
+
+                if (r) results.push(r);
+
+                if (results.length >= BATCH_SIZE) {
+                    return results;
+                }
+
+            } catch (e) {
+                console.log("⚠️ SCAN ERROR:", e.message);
+            }
+
         }
     }
 
-    return results.slice(0, BATCH_SIZE);
+    return results;
 }
 
 /* ================= EXECUTE ================= */
@@ -294,50 +238,32 @@ async function executeBatch(trades) {
     console.log(`CONTRACT BEFORE ${ethers.formatUnits(before,6)}`);
     console.log(`CONTRACT AFTER  ${ethers.formatUnits(after,6)}`);
 
-    const real = after > before ? after - before : 0n;
+    console.log(
+        `REAL PROFIT ${(after > before ? after - before : 0n)}`
+    );
 
-    console.log(`\nREAL PROFIT     ${ethers.formatUnits(real,6)}\n`);
 }
 
 /* ================= MAIN ================= */
 
 (async function main() {
 
-    console.log("🚀 BOT STARTED\n");
+    console.log("🚀 BOT STARTED");
 
     provider = newProvider();
     rebuildContracts();
 
-    const paths = [];
-
-    const tokens = Object.values(routers);
-
-    for (let i = 0; i < tokens.length; i++) {
-        for (let j = 0; j < tokens.length; j++) {
-            if (i === j) continue;
-            paths.push([USDC, tokens[i], tokens[j], USDC]);
-        }
-    }
+    const paths = buildPaths();
 
     while (true) {
 
-        try {
+        const trades = await scan(paths);
 
-            const trades =
-                await parallelScan(paths, Object.keys(routers));
-
-            if (trades.length) {
-                await executeBatch(trades);
-            }
-
-        } catch (e) {
-
-            console.log("ERROR:", e.message);
-
-            provider = newProvider();
-            rebuildContracts();
-
+        if (trades.length > 0) {
+            await executeBatch(trades);
         }
+
+        await new Promise(r => setTimeout(r, 300));
 
     }
 
