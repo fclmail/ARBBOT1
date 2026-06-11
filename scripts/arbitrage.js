@@ -26,11 +26,8 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const BASE_TRADE = ethers.parseUnits("0.01", 6);
-
-// FIX 1: LOWER SAFE THRESHOLD
+const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00005", 6);
-
 const BATCH_SIZE = 4;
 
 /* ================= CONTRACT ================= */
@@ -41,20 +38,6 @@ const CONTRACT_ADDRESS =
 const USDC =
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-/* ================= ABIs ================= */
-
-const erc20Abi = [
-    "function balanceOf(address) view returns(uint256)"
-];
-
-const contractAbi = [
-    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
-];
-
-const routerAbi = [
-    "function getAmountsOut(uint,address[]) view returns(uint[])"
-];
-
 /* ================= ROUTERS ================= */
 
 const routers = {
@@ -63,30 +46,36 @@ const routers = {
     Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
 };
 
-/* ================= DYNAMIC BASE TRADE (NEW FIX) ================= */
+/* ================= TOKENS ================= */
 
-function adaptiveBaseTrade(routerIndex) {
-    // Small variation per router to avoid dead zones
-    const multipliers = [1n, 2n, 3n];
+const TOKENS = {
+    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+    LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"
+};
 
-    return (BASE_TRADE * multipliers[routerIndex % 3]) / 1n;
-}
+/* ================= ABI ================= */
 
-/* ================= SLIPPAGE SAFETY (LIGHT FIX) ================= */
+const erc20Abi = [
+    "function balanceOf(address) view returns(uint256)"
+];
 
-function adjustProfit(out, inAmount) {
-    // subtract tiny buffer (0.05%) to avoid overestimation
-    return out - (inAmount * 5n / 10000n);
-}
+const routerAbi = [
+    "function getAmountsOut(uint,address[]) view returns(uint[])"
+];
+
+const contractAbi = [
+    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)"
+];
 
 /* ================= PROVIDER ================= */
 
 function newProvider() {
     const url = RPCS[rpcIndex];
     rpcIndex = (rpcIndex + 1) % RPCS.length;
-
     console.log("🔄 RPC SWITCH:", url);
-
     return new ethers.JsonRpcProvider(url);
 }
 
@@ -108,150 +97,79 @@ function rebuildContracts() {
     console.log("✅ CONTRACTS INITIALIZED");
 }
 
-/* ================= QUOTE ================= */
+/* ================= PATH GENERATION (🔥 MAIN UPGRADE) ================= */
 
-async function quote(router, amount, path) {
-    try {
-        const out =
-            await routerContracts[router].getAmountsOut(amount, path);
+function buildGraph() {
+    const graph = {};
+    const tokens = Object.values(TOKENS);
 
-        return out.at(-1);
+    // USDC is always entry point
+    graph[USDC] = tokens;
 
-    } catch {
-        return null;
-    }
-}
-
-/* ================= PATHS ================= */
-
-function buildPaths() {
-    const tokens = Object.values(routers);
-    const paths = [];
-
-    for (let i = 0; i < tokens.length; i++) {
-        for (let j = 0; j < tokens.length; j++) {
-            if (i === j) continue;
-            paths.push([USDC, tokens[i], tokens[j], USDC]);
-        }
+    for (const t of tokens) {
+        graph[t] = [...tokens, USDC].filter(x => x !== t);
     }
 
-    console.log("📦 PATHS GENERATED:", paths.length);
-
-    return paths;
+    return graph;
 }
 
-/* ================= TRI FINDER ================= */
-
-async function findTriangular(router, path, routerIndex = 0) {
-
-    const baseTrade =
-        adaptiveBaseTrade(routerIndex);
-
-    const out1 =
-        await quote(router, baseTrade, [path[0], path[1]]);
-    if (!out1) return null;
-
-    const out2 =
-        await quote(router, out1, [path[1], path[2]]);
-    if (!out2) return null;
-
-    const out3 =
-        await quote(router, out2, [path[2], path[3]]);
-    if (!out3) return null;
-
-    // FIX 3: SLIPPAGE-ADJUSTED PROFIT
-    const adjustedOut =
-        adjustProfit(out3, baseTrade);
-
-    const profit =
-        adjustedOut - baseTrade;
-
-    if (profit < MIN_PROFIT) return null;
-
-    console.log(
-        `TRI FOUND ${ethers.formatUnits(baseTrade,6)} → ${ethers.formatUnits(out3,6)} PROFIT ${ethers.formatUnits(profit,6)}`
-    );
-
-    return {
-        router,
-        amountIn: baseTrade,
-        pathToToken: path.slice(0,3),
-        pathToUSDC: [path[2], USDC],
-        expectedProfit: profit
-    };
-}
-
-/* ================= SCAN ================= */
-
-async function scan(paths) {
-
+function dfsPaths(graph, start, maxDepth) {
     const results = [];
 
-    let routerIndex = 0;
+    function dfs(path, depth) {
+        const last = path[path.length - 1];
 
-    for (const router of Object.keys(routers)) {
-
-        for (const path of paths.slice(0, 25)) {
-
-            const r =
-                await findTriangular(router, path, routerIndex);
-
-            if (r) results.push(r);
-
-            if (results.length >= BATCH_SIZE) {
-                return results;
-            }
+        if (depth === 0) {
+            results.push([...path, USDC]);
+            return;
         }
 
-        routerIndex++;
+        for (const next of graph[last]) {
+
+            if (path.includes(next)) continue;
+
+            dfs([...path, next], depth - 1);
+        }
     }
+
+    dfs([start], maxDepth);
 
     return results;
 }
 
-/* ================= EXECUTE ================= */
+/* ================= NEW MULTI-DEPTH PATH BUILDER ================= */
 
-async function executeBatch(trades) {
+function buildTriangularPaths() {
 
-    console.log("\n🔥 EXECUTING BATCH\n");
+    const graph = buildGraph();
 
-    const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+    const allPaths = [];
 
-    let total = 0n;
-    let expected = 0n;
+    // 🔥 2-hop
+    allPaths.push(...dfsPaths(graph, USDC, 2));
 
-    for (const t of trades) {
-        total += t.amountIn;
-        expected += t.expectedProfit;
-    }
+    // 🔥 3-hop
+    allPaths.push(...dfsPaths(graph, USDC, 3));
 
-    console.log(`USED CAPITAL ${ethers.formatUnits(total,6)}`);
-    console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected,6)}\n`);
+    // 🔥 4-hop (HUGE EXPANSION)
+    allPaths.push(...dfsPaths(graph, USDC, 4));
 
-    const tx =
-        await vault.executeFlashBatchArbitrage({
-            buyRouters: trades.map(t => t.router),
-            sellRouters: trades.map(t => t.router),
-            amountsInUSDC: trades.map(t => t.amountIn),
-            pathsToToken: trades.map(t => t.pathToToken),
-            pathsToUSDC: trades.map(t => t.pathToUSDC),
-            deadline: Math.floor(Date.now()/1000)+30
-        });
+    // format into router-ready paths
+    const formatted = allPaths.map(p => {
 
-    await provider.waitForTransaction(tx.hash);
+        return {
+            path: p,
+            pathToToken: p.slice(0, -2),
+            pathToUSDC: [p[p.length - 2], USDC]
+        };
+    });
 
-    const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+    console.log("📦 PATHS GENERATED:", formatted.length);
 
-    console.log(`CONTRACT BEFORE ${ethers.formatUnits(before,6)}`);
-    console.log(`CONTRACT AFTER  ${ethers.formatUnits(after,6)}`);
-
-    const real =
-        after > before ? after - before : 0n;
-
-    console.log(`REAL PROFIT ${ethers.formatUnits(real,6)}\n`);
+    return formatted;
 }
 
-/* ================= MAIN ================= */
+/* ================= MAIN EXPORT HOOK ================= */
 
 (async function main() {
 
@@ -260,30 +178,8 @@ async function executeBatch(trades) {
     provider = newProvider();
     rebuildContracts();
 
-    const paths = buildPaths();
+    const paths = buildTriangularPaths();
 
-    while (true) {
-
-        try {
-
-            const trades =
-                await scan(paths);
-
-            if (trades.length) {
-                await executeBatch(trades);
-            }
-
-            await new Promise(r => setTimeout(r, 300));
-
-        } catch (e) {
-
-            console.log("ERROR:", e.message);
-
-            provider = newProvider();
-            rebuildContracts();
-
-        }
-
-    }
+    console.log("🧭 READY PATH DEPTH: 2–4 HOPS");
 
 })();
