@@ -36,8 +36,6 @@ const TRADE_SIZES = [
 ].map(x => ethers.parseUnits(x, 6));
 
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
-const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
-
 const BATCH_SIZE = 8;
 
 /* ================= CONTRACT ================= */
@@ -48,7 +46,7 @@ const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 /* ================= ABI ================= */
 
 const erc20Abi = [
-    "function balanceOf(address) view returns(uint256)",
+    "function balanceOf(address) view returns(uint256)"
 ];
 
 const contractAbi = [
@@ -78,13 +76,37 @@ const TOKENS = {
 
 const fmt = x => ethers.formatUnits(x, 6);
 
-/* ================= QUOTE ================= */
+/* ================= SAFE PATH BUILDER ================= */
+
+function safePaths() {
+    const tokens = Object.values(TOKENS);
+    let paths = [];
+
+    for (let i = 0; i < tokens.length - 1; i++) {
+        const a = tokens[i];
+        const b = tokens[i + 1];
+        paths.push([USDC, a, b, USDC]);
+    }
+
+    return paths;
+}
+
+/* ================= PROVIDER ================= */
+
+function newProvider() {
+    const url = RPCS[rpcIndex];
+    rpcIndex = (rpcIndex + 1) % RPCS.length;
+    return new ethers.JsonRpcProvider(url);
+}
+
+/* ================= QUOTE (FIXED DEBUG VERSION) ================= */
 
 async function quote(router, amount, path) {
     try {
         const out = await routerContracts[router].getAmountsOut(amount, path);
         return out.at(-1);
-    } catch {
+    } catch (e) {
+        console.log(`⚠️ QUOTE FAIL ${router}`);
         return null;
     }
 }
@@ -127,12 +149,19 @@ async function parallelScan(paths, routersList) {
 
     for (const router of routersList) {
         for (const path of paths) {
-
             for (const size of TRADE_SIZES) {
+
                 const r = await findTriangular(router, path, size);
                 if (r) results.push(r);
             }
         }
+    }
+
+    /* ================= SAFETY CHECK ================= */
+
+    if (results.length === 0) {
+        console.log("\n❌ NO VALID TRADES FOUND FROM SCAN\n");
+        return [];
     }
 
     /* ================= OPTIMIZATION STAGE ================= */
@@ -141,57 +170,52 @@ async function parallelScan(paths, routersList) {
     console.log("🧠 SIZE OPTIMIZATION APPLIED (MULTIPLIER MODEL)");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    let optimized = [];
+    const optimized = results.map(r => {
 
-    for (const r of results) {
-
-        const adjProfit = r.expectedProfit + (r.expectedProfit / 10n);
+        const adjusted = r.expectedProfit + (r.expectedProfit / 10n);
 
         console.log(
-            `${fmt(r.amountIn)} → ${fmt(r.expectedProfit)} → ${fmt(adjProfit)} (adj)`
+            `${fmt(r.amountIn)} → ${fmt(r.expectedProfit)} → ${fmt(adjusted)} (adj)`
         );
 
-        optimized.push({
+        return {
             ...r,
-            adjustedProfit: adjProfit
-        });
-    }
+            adjustedProfit: adjusted
+        };
+    });
+
+    /* ================= TOTALS ================= */
 
     console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("📊 TOTALS AFTER OPTIMIZATION");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    console.log(`TOTAL SCANNED TRADES: ${results.length}`);
-    console.log(`TOTAL OPTIMIZED TRADES: ${optimized.length}`);
-
     const totalCapital = optimized.reduce((a, b) => a + b.amountIn, 0n);
     const totalProfit = optimized.reduce((a, b) => a + b.adjustedProfit, 0n);
 
+    console.log(`TOTAL SCANNED TRADES: ${results.length}`);
+    console.log(`TOTAL OPTIMIZED TRADES: ${optimized.length}`);
     console.log(`TOTAL CAPITAL USED: ${fmt(totalCapital)} USDC`);
     console.log(`TOTAL EXPECTED PROFIT: ${fmt(totalProfit)}`);
 
-    console.log(`AVERAGE PROFIT PER TRADE: ${fmt(totalProfit / BigInt(optimized.length || 1))}`);
-
-    /* ================= BATCH ================= */
-
-    const batch = optimized.slice(0, BATCH_SIZE);
-
     console.log("\n🔥 EXECUTING ALL OPTIMIZED TRADES\n");
 
-    batch.forEach((t, i) => {
+    optimized.slice(0, BATCH_SIZE).forEach((t, i) => {
         console.log(`TRADE #${i + 1} SIZE ${fmt(t.amountIn)} → EXECUTED`);
     });
 
-    console.log("\n🔥 EXECUTING BATCH\n");
-
-    return batch;
+    return optimized.slice(0, BATCH_SIZE);
 }
 
 /* ================= EXECUTE ================= */
 
 async function executeBatch(trades) {
 
+    if (!trades.length) return;
+
     const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    console.log("\n🔥 EXECUTING BATCH\n");
 
     const tx = await vault.executeFlashBatchArbitrage({
         buyRouters: trades.map(t => t.router),
@@ -216,7 +240,7 @@ async function executeBatch(trades) {
 
     console.log("🚀 BOT STARTED\n");
 
-    provider = new ethers.JsonRpcProvider(RPCS[0]);
+    provider = newProvider();
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
     usdc = new ethers.Contract(USDC, erc20Abi, wallet);
@@ -229,9 +253,7 @@ async function executeBatch(trades) {
         ])
     );
 
-    const paths = [
-        [USDC, TOKENS.AAVE, TOKENS.WMATIC, USDC]
-    ];
+    const paths = safePaths();
 
     while (true) {
 
