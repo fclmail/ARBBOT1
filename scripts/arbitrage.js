@@ -66,7 +66,7 @@ const TOKENS = {
     BAT: "0x3cef98bb43d732e2f285ee605a8158cde967d219",
     TBTC: "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
     MANA: "0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4",
-};
+}
 
 
 
