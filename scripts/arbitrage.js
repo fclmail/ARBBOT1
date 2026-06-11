@@ -26,8 +26,8 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const BASE_TRADE = ethers.parseUnits("0.02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00005", 6);
+const BASE_TRADE = ethers.parseUnits("0.05", 6);
+const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
 const BATCH_SIZE = 100;
 const TARGET_BATCH_QUANTITY = 3;
 const SCAN_INTERVAL_MS = 2000;
