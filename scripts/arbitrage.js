@@ -33,6 +33,8 @@ const TARGET_BATCH_QUANTITY = 3;
 const SCAN_INTERVAL_MS = 2000;
 const MAX_FAILURES = 10;
 
+let consecutiveFailures = 0;
+
 /* ================= CONTRACT ================= */
 
 const CONTRACT_ADDRESS =
@@ -68,7 +70,7 @@ const TOKENS = {
     MANA: "0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4",
 };
 
-/* ================= FIXES (ADDED) ================= */
+/* ================= FIXES ADDED ================= */
 
 function newProvider() {
     const rpc = RPCS[rpcIndex % RPCS.length];
@@ -90,6 +92,26 @@ function rebuildContracts() {
         [],
         wallet
     );
+}
+
+function buildTriangularPaths() {
+    const tokens = Object.values(TOKENS);
+    const paths = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+        for (let j = 0; j < tokens.length; j++) {
+            for (let k = 0; k < tokens.length; k++) {
+                if (i === j || j === k || i === k) continue;
+
+                paths.push({
+                    pathToToken: [tokens[i], tokens[j]],
+                    pathToUSDC: [tokens[j], tokens[k]]
+                });
+            }
+        }
+    }
+
+    return paths;
 }
 
 /* ================= CHECK OPPORTUNITY ================= */
@@ -141,16 +163,14 @@ async function processBatch(paths, batchIndex) {
     const end = Math.min(start + BATCH_SIZE, paths.length);
     const batch = paths.slice(start, end);
 
-    console.log(`\n📦 Scanning batch ${batchIndex + 1} (paths ${start}-${end})`);
+    console.log(`\n📦 Scanning batch ${batchIndex + 1}`);
 
     const opportunities = await scanBatchForOpportunities(batch);
 
     if (opportunities.length >= TARGET_BATCH_QUANTITY) {
-        console.log(`🎯 TARGET REACHED! Found ${opportunities.length} opportunities`);
         return opportunities;
     }
 
-    console.log(`⏳ Found ${opportunities.length}/${TARGET_BATCH_QUANTITY} opportunities in this batch`);
     return null;
 }
 
@@ -161,81 +181,58 @@ async function executeTrade(opportunity) {
     const { pathToToken, pathToUSDC } = pathData;
 
     try {
-        console.log(`\n💎 EXECUTING TRADE`);
-        console.log(`📈 Path: ${pathToToken.join(" -> ")} -> ${pathToUSDC.join(" -> ")}`);
-        console.log(`💰 Expected Profit: ${ethers.formatUnits(profit, 6)} USDC`);
+        console.log(`💎 EXECUTING TRADE`);
 
-        const batchData = {
+        const tx = await vault.executeFlashBatchArbitrage({
             buyRouters: [Object.values(routers)[0]],
             sellRouters: [Object.values(routers)[0]],
             amountsInUSDC: [BASE_TRADE],
             pathsToToken: [pathToToken],
             pathsToUSDC: [pathToUSDC],
             deadline: Math.floor(Date.now() / 1000) + 60
-        };
+        });
 
-        console.log("📤 Sending transaction...");
-        const tx = await vault.executeFlashBatchArbitrage(batchData);
-
-        console.log(`⏳ TX HASH: ${tx.hash}`);
         const receipt = await tx.wait();
 
         if (receipt.status === 1) {
-            console.log(`✅ SUCCESS | Profit: ${ethers.formatUnits(profit, 6)} USDC`);
+            console.log("✅ SUCCESS");
             return true;
-        } else {
-            console.log("❌ TX FAILED");
-            return false;
         }
+
+        return false;
     } catch (error) {
-        console.log(`⚠️ Execution error: ${error.message}`);
+        console.log(`⚠️ ${error.message}`);
         return false;
     }
 }
 
-/* ================= CONTINUOUS LOOP ================= */
+/* ================= LOOP ================= */
 
 async function continuousArbitrageLoop(paths) {
-    console.log("\n🔄 Starting continuous scan loop...");
-
     while (true) {
         try {
-            if (consecutiveFailures >= MAX_FAILURES) {
-                console.error("💀 TOO MANY FAILURES. STOPPING.");
-                break;
-            }
-
-            const network = await provider.getNetwork();
-            console.log(`\n🌐 Network: ${network.name}`);
-
-            const balance = await usdc.balanceOf(wallet.address);
-            console.log(`💳 Balance: ${ethers.formatUnits(balance, 6)} USDC`);
-
-            const totalBatches = Math.ceil(paths.length / BATCH_SIZE);
-            let allBatchOpportunities = [];
-
-            for (let i = 0; i < totalBatches; i++) {
-                const batchOpportunities = await processBatch(paths, i);
-
-                if (batchOpportunities) {
-                    allBatchOpportunities.push(...batchOpportunities);
-                }
-            }
-
-            if (allBatchOpportunities.length >= TARGET_BATCH_QUANTITY) {
-                allBatchOpportunities.sort((a, b) => b.profit - a.profit);
-                await executeTrade(allBatchOpportunities[0]);
-            }
+            if (consecutiveFailures >= MAX_FAILURES) break;
 
             provider = newProvider();
             rebuildContracts();
+
+            const totalBatches = Math.ceil(paths.length / BATCH_SIZE);
+            let all = [];
+
+            for (let i = 0; i < totalBatches; i++) {
+                const res = await processBatch(paths, i);
+                if (res) all.push(...res);
+            }
+
+            if (all.length >= TARGET_BATCH_QUANTITY) {
+                all.sort((a, b) => b.profit - a.profit);
+                await executeTrade(all[0]);
+            }
 
             await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
 
-        } catch (error) {
-            console.error("💥 Loop error:", error.message);
-            provider = newProvider();
-            rebuildContracts();
+        } catch (e) {
+            consecutiveFailures++;
             await new Promise(r => setTimeout(r, 5000));
         }
     }
