@@ -26,7 +26,7 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 
-const BASE_TRADE = ethers.parseUnits("0.02", 6);
+const BASE_TRADE = ethers.parseUnits("0.01", 6);
 
 // FIX 1: LOWER SAFE THRESHOLD
 const MIN_PROFIT = ethers.parseUnits("0.00005", 6);
