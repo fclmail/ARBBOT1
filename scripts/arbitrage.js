@@ -27,7 +27,10 @@ let routerContracts;
 /* ================= CONFIG ================= */
 
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00002", 6);
+
+// FIX 1: LOWER SAFE THRESHOLD
+const MIN_PROFIT = ethers.parseUnits("0.00005", 6);
+
 const BATCH_SIZE = 4;
 
 /* ================= CONTRACT ================= */
@@ -60,10 +63,21 @@ const routers = {
     Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
 };
 
-/* ================= DEBUG STATE ================= */
+/* ================= DYNAMIC BASE TRADE (NEW FIX) ================= */
 
-let scanTick = 0;
-let lastHeartbeat = Date.now();
+function adaptiveBaseTrade(routerIndex) {
+    // Small variation per router to avoid dead zones
+    const multipliers = [1n, 2n, 3n];
+
+    return (BASE_TRADE * multipliers[routerIndex % 3]) / 1n;
+}
+
+/* ================= SLIPPAGE SAFETY (LIGHT FIX) ================= */
+
+function adjustProfit(out, inAmount) {
+    // subtract tiny buffer (0.05%) to avoid overestimation
+    return out - (inAmount * 5n / 10000n);
+}
 
 /* ================= PROVIDER ================= */
 
@@ -94,16 +108,6 @@ function rebuildContracts() {
     console.log("✅ CONTRACTS INITIALIZED");
 }
 
-/* ================= HEARTBEAT ================= */
-
-setInterval(() => {
-    const now = Date.now();
-
-    console.log(
-        `💓 HEARTBEAT | scanTick=${scanTick} | uptime=${Math.floor((now - lastHeartbeat)/1000)}s`
-    );
-}, 5000);
-
 /* ================= QUOTE ================= */
 
 async function quote(router, amount, path) {
@@ -118,7 +122,7 @@ async function quote(router, amount, path) {
     }
 }
 
-/* ================= PATH GENERATION ================= */
+/* ================= PATHS ================= */
 
 function buildPaths() {
     const tokens = Object.values(routers);
@@ -136,68 +140,70 @@ function buildPaths() {
     return paths;
 }
 
-/* ================= FIND TRI ================= */
+/* ================= TRI FINDER ================= */
 
-async function findTriangular(router, path) {
+async function findTriangular(router, path, routerIndex = 0) {
 
-    console.log("🔎 ENTER TRI SCAN");
+    const baseTrade =
+        adaptiveBaseTrade(routerIndex);
 
-    const out1 = await quote(router, BASE_TRADE, [path[0], path[1]]);
+    const out1 =
+        await quote(router, baseTrade, [path[0], path[1]]);
     if (!out1) return null;
 
-    const out2 = await quote(router, out1, [path[1], path[2]]);
+    const out2 =
+        await quote(router, out1, [path[1], path[2]]);
     if (!out2) return null;
 
-    const out3 = await quote(router, out2, [path[2], path[3]]);
+    const out3 =
+        await quote(router, out2, [path[2], path[3]]);
     if (!out3) return null;
 
-    const profit = out3 - BASE_TRADE;
+    // FIX 3: SLIPPAGE-ADJUSTED PROFIT
+    const adjustedOut =
+        adjustProfit(out3, baseTrade);
+
+    const profit =
+        adjustedOut - baseTrade;
 
     if (profit < MIN_PROFIT) return null;
 
     console.log(
-        `TRI FOUND ${ethers.formatUnits(BASE_TRADE,6)} → ${ethers.formatUnits(out3,6)} PROFIT ${ethers.formatUnits(profit,6)}`
+        `TRI FOUND ${ethers.formatUnits(baseTrade,6)} → ${ethers.formatUnits(out3,6)} PROFIT ${ethers.formatUnits(profit,6)}`
     );
 
     return {
         router,
-        amountIn: BASE_TRADE,
+        amountIn: baseTrade,
         pathToToken: path.slice(0,3),
         pathToUSDC: [path[2], USDC],
         expectedProfit: profit
     };
 }
 
-/* ================= SCANNER ================= */
+/* ================= SCAN ================= */
 
 async function scan(paths) {
 
-    scanTick++;
-
     const results = [];
+
+    let routerIndex = 0;
 
     for (const router of Object.keys(routers)) {
 
-        console.log("🧭 ROUTER:", router);
+        for (const path of paths.slice(0, 25)) {
 
-        for (const path of paths.slice(0, 20)) {
+            const r =
+                await findTriangular(router, path, routerIndex);
 
-            try {
+            if (r) results.push(r);
 
-                const r =
-                    await findTriangular(router, path);
-
-                if (r) results.push(r);
-
-                if (results.length >= BATCH_SIZE) {
-                    return results;
-                }
-
-            } catch (e) {
-                console.log("⚠️ SCAN ERROR:", e.message);
+            if (results.length >= BATCH_SIZE) {
+                return results;
             }
-
         }
+
+        routerIndex++;
     }
 
     return results;
@@ -222,14 +228,15 @@ async function executeBatch(trades) {
     console.log(`USED CAPITAL ${ethers.formatUnits(total,6)}`);
     console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected,6)}\n`);
 
-    const tx = await vault.executeFlashBatchArbitrage({
-        buyRouters: trades.map(t => t.router),
-        sellRouters: trades.map(t => t.router),
-        amountsInUSDC: trades.map(t => t.amountIn),
-        pathsToToken: trades.map(t => t.pathToToken),
-        pathsToUSDC: trades.map(t => t.pathToUSDC),
-        deadline: Math.floor(Date.now()/1000)+30
-    });
+    const tx =
+        await vault.executeFlashBatchArbitrage({
+            buyRouters: trades.map(t => t.router),
+            sellRouters: trades.map(t => t.router),
+            amountsInUSDC: trades.map(t => t.amountIn),
+            pathsToToken: trades.map(t => t.pathToToken),
+            pathsToUSDC: trades.map(t => t.pathToUSDC),
+            deadline: Math.floor(Date.now()/1000)+30
+        });
 
     await provider.waitForTransaction(tx.hash);
 
@@ -238,10 +245,10 @@ async function executeBatch(trades) {
     console.log(`CONTRACT BEFORE ${ethers.formatUnits(before,6)}`);
     console.log(`CONTRACT AFTER  ${ethers.formatUnits(after,6)}`);
 
-    console.log(
-        `REAL PROFIT ${(after > before ? after - before : 0n)}`
-    );
+    const real =
+        after > before ? after - before : 0n;
 
+    console.log(`REAL PROFIT ${ethers.formatUnits(real,6)}\n`);
 }
 
 /* ================= MAIN ================= */
@@ -257,13 +264,25 @@ async function executeBatch(trades) {
 
     while (true) {
 
-        const trades = await scan(paths);
+        try {
 
-        if (trades.length > 0) {
-            await executeBatch(trades);
+            const trades =
+                await scan(paths);
+
+            if (trades.length) {
+                await executeBatch(trades);
+            }
+
+            await new Promise(r => setTimeout(r, 300));
+
+        } catch (e) {
+
+            console.log("ERROR:", e.message);
+
+            provider = newProvider();
+            rebuildContracts();
+
         }
-
-        await new Promise(r => setTimeout(r, 300));
 
     }
 
