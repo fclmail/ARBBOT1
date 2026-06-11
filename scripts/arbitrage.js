@@ -69,24 +69,27 @@ const TOKENS = {
 }
 
 
+async function checkOpportunity(pathData) {
+    try {
+        const gasCostInUSDC = gasCost / BigInt(1000000);
+        const netProfit = profit - gasCostInUSDC;
 
-const gasCostInUSDC = gasCost / BigInt(1000000);
-            const netProfit = profit - gasCostInUSDC;
-            
-            if (netProfit > MIN_PROFIT) {
-                return {
-                    pathData,
-                    profit: netProfit,
-                    usdcReturn,
-                    tokenAmount
-                };
-            }
+        if (netProfit > MIN_PROFIT) {
+            return {
+                pathData,
+                profit: netProfit,
+                usdcReturn,
+                tokenAmount
+            };
         }
+
         return null;
     } catch (error) {
         return null;
     }
-}
+};
+    
+
 
 /* ================= BATCH SCANNER ================= */
 
