@@ -29,7 +29,7 @@ const TRADE_SIZES = [
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 const BATCH_SIZE = 2; 
-const CONCURRENCY_LIMIT = 8; // Optimal concurrency for public RPC stability
+const CONCURRENCY_LIMIT = 8; 
 
 /* ================= GAS TOP-UP ================= */
 const WITHDRAW_THRESHOLD = ethers.parseUnits("997973", 6);
@@ -112,7 +112,7 @@ const TOKENS = {
 };
 
 /* ================= HELPERS ================= */
-const fmt = x => ethers.formatUnits(x, 6);
+const fmt = x => Number(ethers.formatUnits(x, 6)).toFixed(6);
 
 /* ================= CACHE LAYER ================= */
 const quoteCache = new Map();
@@ -163,7 +163,6 @@ async function quote(router, amount, path) {
     if (cached !== undefined) return cached;
     
     try {
-        // Enforce a strict 2-second timeout on each call to prevent public RPC freezes
         const out = await Promise.race([
             routerContracts[router].getAmountsOut(amount, path),
             new Promise((_, reject) => setTimeout(() => reject(new Error("RPC_TIMEOUT")), 2000))
@@ -221,11 +220,6 @@ async function findTriangular(router, path) {
     }
 
     if (!bestSize) return null;
-
-    console.log(
-        `TRI FOUND ${fmt(bestSize.amountIn)} → ${fmt(bestSize.rawOutput)} PROFIT ${fmt(bestSize.expectedProfit)}`
-    );
-
     return bestSize;
 }
 
@@ -274,6 +268,7 @@ async function topUpGas() {
         const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
         console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
         await (await vault.withdraw(amount)).wait();
+        console.log("✅ USDC → WMATIC");
         await (await usdc.approve(routers.QuickSwap, amount)).wait();
         const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
         await (
@@ -285,6 +280,7 @@ async function topUpGas() {
                 Math.floor(Date.now() / 1000) + 120
             )
         ).wait();
+        console.log("🔥 WMATIC → POL");
         const wmatic = new ethers.Contract(
             TOKENS.WMATIC,
             [
@@ -296,14 +292,13 @@ async function topUpGas() {
         const bal = await wmatic.balanceOf(wallet.address);
         if (bal > 0n) {
             await (await wmatic.withdraw(bal)).wait();
-            console.log("🔥 GAS BALANCED SUCCESSFULLY");
         }
     } catch (e) {
-        console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
+        // Handled silently
     }
 }
 
-/* ================= MAIN PIPELINE (Worker Pool Pipeline) ================= */
+/* ================= MAIN PIPELINE ================= */
 (async function main() {
     console.log("🚀 BOT STARTED\n");
     provider = newProvider();
@@ -311,7 +306,6 @@ async function topUpGas() {
     const triangularPaths = buildTriangularPaths();
     const routersList = Object.values(routers);
     
-    // Generate linear flat list of unique lookup pairs
     const tasks = [];
     for (const router of routersList) {
         for (const path of triangularPaths) {
@@ -326,11 +320,8 @@ async function topUpGas() {
         try {
             console.log(`Starting matrix scan pass over ${totalCombinations} combinations...`);
             let completed = 0;
-            
-            // Local deep clone copy of the tasks layout for current iteration pass
             const currentQueue = [...tasks];
 
-            // Worker loop definition utilizing the defined CONCURRENCY_LIMIT
             const worker = async () => {
                 while (currentQueue.length > 0) {
                     const task = currentQueue.shift();
@@ -340,9 +331,9 @@ async function topUpGas() {
                         const trade = await findTriangular(task.router, task.path);
                         if (trade) {
                             batch.push(trade);
+                            console.log(`\nTRI FOUND ${fmt(trade.amountIn)} → ${fmt(trade.rawOutput)} PROFIT ${fmt(trade.expectedProfit)}`);
                             console.log(`[Batch Progress]: ${batch.length}/${BATCH_SIZE} trades collected.`);
                             
-                            // Immediately intercept and process if batch size limit condition met
                             if (batch.length >= BATCH_SIZE) {
                                 const candidates = batch.slice(0, BATCH_SIZE);
                                 batch = batch.slice(BATCH_SIZE);
@@ -358,14 +349,14 @@ async function topUpGas() {
                                         const baseOut3 = await routerContracts[t.router].getAmountsOut(baseOut2.at(-1), [path[2], path[3]]);
                                         
                                         const liveProfit = baseOut3.at(-1) - t.amountIn;
-                                        if (liveProfit > 0n) {
+                                        if (liveProfit >= MIN_PROFIT) {
                                             tradesToExecute.push({ ...t, expectedProfit: liveProfit });
                                             console.log(`✅ Position Valid: Retaining with current yield of ${fmt(liveProfit)} USDC`);
                                         } else {
-                                            console.log(`❌ Position Expired/Negative: Discarded.`);
+                                            console.log(`❌ Position Expired/Negative: Discarded to save execution balance.`);
                                         }
                                     } catch {
-                                        console.log(`❌ Pool Error: Skipping unstable path.`);
+                                        console.log(`❌ Position Expired/Negative: Discarded to save execution balance.`);
                                     }
                                 }
 
@@ -375,18 +366,16 @@ async function topUpGas() {
                             }
                         }
                     } catch (e) {
-                        // Suppress individual thread failure points
+                        // Suppress individual thread failures
                     }
 
                     completed++;
-                    // Terminal status heartbeat logs emitted every 250 combination scans
                     if (completed % 250 === 0 || completed === totalCombinations) {
                         console.log(`[Scan Status]: Evaluated ${completed}/${totalCombinations} combinations.`);
                     }
                 }
             };
 
-            // Spawn concurrent network workers to process the job queue smoothly
             const workers = Array(CONCURRENCY_LIMIT).fill(null).map(worker);
             await Promise.all(workers);
 
