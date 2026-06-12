@@ -32,7 +32,7 @@ const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 
-const BATCH_SIZE = 4;
+const BATCH_SIZE = 7;
 
 /* ================= GAS TOP-UP ================= */
 
@@ -55,7 +55,7 @@ const erc20Abi = [
 ];
 
 const contractAbi = [
-    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256[] deadline) batch)",
+    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
     "function withdraw(uint256)"
 ];
 
@@ -253,8 +253,7 @@ async function findTriangular(router, path) {
         amountIn: BASE_TRADE,
         pathToToken: path.slice(0, 3),
         pathToUSDC: [path[2], USDC],
-        expectedProfit: profit,
-        timestamp: Math.floor(Date.now() / 1000) // Capture absolute discovery timestamp
+        expectedProfit: profit
     };
 }
 
@@ -264,8 +263,8 @@ async function parallelScan(paths, routersList) {
     const batchResults = [];
 
     // Create chunks for parallel scanning
-    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
-        const pathChunk = paths.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < paths.length; i += 4) { // internal chunk processing
+        const pathChunk = paths.slice(i, i + 4);
         const scanPromises = [];
 
         for (const router of routersList) {
@@ -313,7 +312,7 @@ async function executeBatch(trades) {
         amountsInUSDC: trades.map(t => t.amountIn),
         pathsToToken: trades.map(t => t.pathToToken),
         pathsToUSDC: trades.map(t => t.pathToUSDC),
-        deadline: trades.map(t => t.timestamp + 120) // Maps dedicated unique execution deadlines per individual trade path
+        deadline: Math.floor(Date.now() / 1000) + 180 // Valid single global batch execution window
     });
 
     await provider.waitForTransaction(tx.hash);
@@ -435,19 +434,46 @@ async function topUpGas() {
             const trades = await parallelScan(triangularPaths, routersList);
 
             if (trades.length > 0) {
-                // Accumulate newly found trades into our persistent batch
+                // Accumulate newly found trades into our persistent queue
                 batch.push(...trades);
                 console.log(`[Batch Progress]: ${batch.length}/${BATCH_SIZE} trades collected.`);
             }
 
-            // Only execute when we have reached or exceeded the chosen BATCH_SIZE
+            // Only evaluate execution when the structural queue threshold is reached
             if (batch.length >= BATCH_SIZE) {
-                const tradesToExecute = batch.slice(0, BATCH_SIZE);
-                
-                await executeBatch(tradesToExecute);
-                
-                // Keep any leftover trades for the next transaction block
-                batch = batch.slice(BATCH_SIZE); 
+                const candidates = batch.slice(0, BATCH_SIZE);
+                batch = batch.slice(BATCH_SIZE); // Rotate the evaluation queue window
+
+                console.log(`\n🔍 Re-verifying ${candidates.length} accumulated trades against real-time pools...`);
+                const tradesToExecute = [];
+
+                for (const t of candidates) {
+                    try {
+                        const path = [...t.pathToToken, t.pathToUSDC[1]];
+                        const baseOut1 = await routerContracts[t.router].getAmountsOut(t.amountIn, [path[0], path[1]]);
+                        const baseOut2 = await routerContracts[t.router].getAmountsOut(baseOut1.at(-1), [path[1], path[2]]);
+                        const baseOut3 = await routerContracts[t.router].getAmountsOut(baseOut2.at(-1), [path[2], path[3]]);
+                        
+                        const liveProfit = baseOut3.at(-1) - t.amountIn;
+                        if (liveProfit > 0n) {
+                            tradesToExecute.push({
+                                ...t,
+                                expectedProfit: liveProfit // Updates with partial or modified full profit values
+                            });
+                            console.log(`✅ Position Valid: Retaining with current yield of ${fmt(liveProfit)} USDC`);
+                        } else {
+                            console.log(`❌ Position Expired/Negative: Discarded to save execution balance.`);
+                        }
+                    } catch {
+                        console.log(`❌ Pool Error: Skipping unstable trade path.`);
+                    }
+                }
+
+                if (tradesToExecute.length > 0) {
+                    await executeBatch(tradesToExecute);
+                } else {
+                    console.log("⚠️ Batch Cancelled: All items in this processing block went stale.\n");
+                }
             } else {
                 // Small delay if batch isn't full yet to prevent spamming RPC
                 await new Promise(resolve => setTimeout(resolve, 500));
