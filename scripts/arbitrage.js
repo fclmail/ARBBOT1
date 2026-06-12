@@ -27,9 +27,9 @@ const TRADE_SIZES = [
    // ethers.parseUnits("1.00", 6)
 ];
 
-const MIN_PROFIT = ethers.parseUnits("0.000005", 6);
+const MIN_PROFIT = ethers.parseUnits("0.001", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
-const BATCH_SIZE = 20; // Set to 3 or 15. The bot will stop and execute immediately when this is hit.
+const BATCH_SIZE = 4; // Set to 3 or 15. The bot will stop and execute immediately when this is hit.
 
 /* ================= GAS TOP-UP ================= */
 const WITHDRAW_THRESHOLD = ethers.parseUnits("997973", 6);
