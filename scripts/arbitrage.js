@@ -14,7 +14,7 @@ const RPCS = [
 let rpcIndex = 0;
 
 /* ================= BOT CONFIGURATION ================= */
-const FIXED_TRADE_SIZE = ethers.parseUnits("0.10", 6); // Global size delegated directly to the contract execution layer
+const FIXED_TRADE_SIZE = ethers.parseUnits("0.05", 6); // Global size delegated directly to the contract execution layer
 const BATCH_SIZE = 4; // Number of sequential routes packed per contract call execution
 
 /* ================= CORE CONTRACT TARGETS ================= */
