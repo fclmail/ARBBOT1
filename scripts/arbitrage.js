@@ -15,12 +15,13 @@ let rpcIndex = 0;
 
 /* ================= BOT CONFIGURATION ================= */
 const FIXED_TRADE_SIZE = ethers.parseUnits("0.10", 6); // Global size delegated directly to the contract execution layer
-const BATCH_SIZE = 30; // Absolute number of concurrent triangular paths pushed per transaction bundle
+const BATCH_SIZE = 4; // Number of sequential routes packed per contract call execution
 
 /* ================= CORE CONTRACT TARGETS ================= */
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
+const erc20Abi = ["function balanceOf(address) view returns (uint256)"];
 const contractAbi = [
     "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch) external",
     "function usdc() view returns (address)"
@@ -47,6 +48,7 @@ const TOKENS = {
 let provider;
 let wallet;
 let vault;
+let usdcContract;
 
 function rotateNetworkProvider() {
     const url = RPCS[rpcIndex];
@@ -54,6 +56,7 @@ function rotateNetworkProvider() {
     provider = new ethers.JsonRpcProvider(url);
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+    usdcContract = new ethers.Contract(USDC, erc20Abi, provider);
 }
 
 /* ================= ATOMIC MATRIX BUILDER ================= */
@@ -81,11 +84,10 @@ function buildRawTriangularMatrix() {
     return rawBatches;
 }
 
-/* ================= BLOCK EXECUTION ENGINE ================= */
+/* ================= HIGH-SPEED SIMULATE-THEN-EXECUTE ENGINE ================= */
 async function sendRawBatchToContract(trades) {
     const deadline = Math.floor(Date.now() / 1000) + 120;
 
-    // Pack raw arrays explicitly matching contract BatchParams structure
     const payload = {
         buyRouters: trades.map(t => t.buyRouter),
         sellRouters: trades.map(t => t.sellRouter),
@@ -97,45 +99,58 @@ async function sendRawBatchToContract(trades) {
 
     try {
         console.log(`📡 Shipping raw batch of ${trades.length} routes directly to EVM...`);
+        console.log(`\n🔍 [SIMULATION] Testing batch of ${trades.length} routes against exact block state...`);
         
-        // Broadcast immediately with high gas limits to prevent local node pre-execution drops
+        // 1. Snapshot contract balance before running the test
+        const balanceBefore = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+
+        // 2. Local Node EVM Simulation Engine Check
+        await vault.executeFlashBatchArbitrage.staticCall(payload);
+        
+        // 3. Execution continues only if staticCall does not revert
+        console.log("🔥 SIMULATION SUCCESSFUL: Batch meets minimum profit floors.");
+        console.log(`📡 Shipping raw batch directly to EVM live pool...`);
+        
+        // Broadcast to live pool with optimized gas ceiling limit
         const tx = await vault.executeFlashBatchArbitrage(payload, {
-            gasLimit: 1200000 
+            gasLimit: 450000 
         });
 
         console.log(`⚡ Tx Broadcasted: ${tx.hash}`);
-        const receipt = await tx.wait();
+        await tx.wait();
         
-        if (receipt.status === 1) {
-            console.log("🟢 BATCH COMPLETED: EVM state successfully modified by profitable routes.");
-        } else {
-            console.log("❌ BATCH REVERTED: EVM state protected from underperforming trades.");
-        }
+        // 4. Calculate realized metrics from live state completion
+        const balanceAfter = await usdcContract.balanceOf(CONTRACT_ADDRESS);
+        const realProfit = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
+
+        console.log("\n=================================================");
+        console.log(`🔥 TRADES EXECUTED`);
+        console.log(`   CONTRACT BEFORE BALANCE : ${ethers.formatUnits(balanceBefore, 6)} USDC`);
+        console.log(`   CONTRACT AFTER BALANCE  : ${ethers.formatUnits(balanceAfter, 6)} USDC`);
+        console.log(`   REALIZED PROFIT         : +${ethers.formatUnits(realProfit, 6)} USDC`);
+        console.log("=================================================\n");
+
     } catch (error) {
-        // Handle node rejection or immediate simulation drop (Global floor block catch triggered)
-        console.log(`❌ BLOCK PASS: Batch aborted atomic state change: ${error.shortMessage || error.message}`);
+        const msg = error.reason || error.shortMessage || "Batch yields below minimum threshold / Slippage hit";
+        console.log(`❌ BLOCK PASS: ${msg}\n`);
     }
 }
 
 /* ================= ZERO-LATENCY HIGH-SPEED LOOP ================= */
 (async function main() {
-    console.log("🏁 ZERO-REVALIDATION BOT INITIALIZED\n");
     rotateNetworkProvider();
+    console.log("🏁 ZERO-REVALIDATION BOT INITIALIZED\n");
 
     const rawRoutes = buildRawTriangularMatrix();
     console.log(`📦 Compiled ${rawRoutes.length} structural market pipelines.`);
 
     while (true) {
         try {
-            // Process chunks sequentially, firing bundles instantly to execute against the live block state
             for (let i = 0; i < rawRoutes.length; i += BATCH_SIZE) {
                 const chunk = rawRoutes.slice(i, i + BATCH_SIZE);
-                
-                // Fire execution to target the live block state instantly
                 await sendRawBatchToContract(chunk);
             }
         } catch (globalError) {
-            console.error("⚠️ Loop Exception encountered:", globalError.message);
             rotateNetworkProvider();
             await new Promise(resolve => setTimeout(resolve, 500));
         }
