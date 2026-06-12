@@ -20,11 +20,11 @@ let routerContracts;
 /* ================= CONFIG ================= */
 const TRADE_SIZES = [
     ethers.parseUnits("0.02", 6),
-    ethers.parseUnits("0.05", 6),
-    ethers.parseUnits("0.10", 6),
-    ethers.parseUnits("0.20", 6),
-    ethers.parseUnits("0.50", 6),
-    ethers.parseUnits("1.00", 6)
+   // ethers.parseUnits("0.05", 6),
+  //  ethers.parseUnits("0.10", 6),
+ //   ethers.parseUnits("0.20", 6),
+ //   ethers.parseUnits("0.50", 6),
+  //  ethers.parseUnits("1.00", 6)
 ];
 
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
