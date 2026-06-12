@@ -19,7 +19,7 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 const TRADE_SIZES = [
-    ethers.parseUnits(".1", 6)
+    ethers.parseUnits(".05", 6)
  //   ethers.parseUnits("0.05", 6)
   //  ethers.parseUnits("0.10", 6),
 //    ethers.parseUnits("0.20", 6),
