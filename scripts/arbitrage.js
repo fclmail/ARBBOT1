@@ -19,7 +19,7 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 const TRADE_SIZES = [
-    ethers.parseUnits("1", 6)
+    ethers.parseUnits(".1", 6)
  //   ethers.parseUnits("0.05", 6)
   //  ethers.parseUnits("0.10", 6),
 //    ethers.parseUnits("0.20", 6),
@@ -27,7 +27,7 @@ const TRADE_SIZES = [
    // ethers.parseUnits("1.00", 6)
 ];
 
-const MIN_PROFIT = ethers.parseUnits("0.05", 6);
+const MIN_PROFIT = ethers.parseUnits("0.000005", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
 const BATCH_SIZE = 20; // Set to 3 or 15. The bot will stop and execute immediately when this is hit.
 
