@@ -28,7 +28,8 @@ const TRADE_SIZES = [
 ];
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
-const BATCH_SIZE = 2; // Updated to 2 as requested
+const BATCH_SIZE = 2; 
+const CONCURRENCY_LIMIT = 8; // Optimal concurrency for public RPC stability
 
 /* ================= GAS TOP-UP ================= */
 const WITHDRAW_THRESHOLD = ethers.parseUnits("997973", 6);
@@ -113,9 +114,9 @@ const TOKENS = {
 /* ================= HELPERS ================= */
 const fmt = x => ethers.formatUnits(x, 6);
 
-/* ================= CACHE (Fixed to index by amount) ================= */
+/* ================= CACHE LAYER ================= */
 const quoteCache = new Map();
-const CACHE_TTL = 1000; 
+const CACHE_TTL = 1200; 
 
 function getCachedQuote(router, amount, path) {
     const key = `${router}-${amount.toString()}-${path.join('-')}`;
@@ -129,7 +130,7 @@ function getCachedQuote(router, amount, path) {
 function setCachedQuote(router, amount, path, value) {
     const key = `${router}-${amount.toString()}-${path.join('-')}`;
     quoteCache.set(key, { value, timestamp: Date.now() });
-    if (quoteCache.size > 50000) {
+    if (quoteCache.size > 20000) {
         const now = Date.now();
         for (const [k, entry] of quoteCache) {
             if (now - entry.timestamp > CACHE_TTL) quoteCache.delete(k);
@@ -137,7 +138,7 @@ function setCachedQuote(router, amount, path, value) {
     }
 }
 
-/* ================= PROVIDER ================= */
+/* ================= PROVIDER INITIALIZATION ================= */
 function newProvider() {
     const url = RPCS[rpcIndex];
     rpcIndex = (rpcIndex + 1) % RPCS.length;
@@ -156,12 +157,17 @@ function rebuildContracts() {
     );
 }
 
-/* ================= QUOTE ================= */
+/* ================= HARDWARE QUOTE WITH BREAKOUT TIMEOUT ================= */
 async function quote(router, amount, path) {
     const cached = getCachedQuote(router, amount, path);
     if (cached !== undefined) return cached;
+    
     try {
-        const out = await routerContracts[router].getAmountsOut(amount, path);
+        // Enforce a strict 2-second timeout on each call to prevent public RPC freezes
+        const out = await Promise.race([
+            routerContracts[router].getAmountsOut(amount, path),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("RPC_TIMEOUT")), 2000))
+        ]);
         const result = out.at(-1);
         setCachedQuote(router, amount, path, result);
         return result;
@@ -171,7 +177,7 @@ async function quote(router, amount, path) {
     }
 }
 
-/* ================= TRIANGULAR PATH BUILDER ================= */
+/* ================= TOKENS MAPPING ================= */
 function buildTriangularPaths() {
     const tokens = Object.values(TOKENS);
     let paths = [];
@@ -184,7 +190,7 @@ function buildTriangularPaths() {
     return paths;
 }
 
-/* ================= TRIANGULAR FINDER ================= */
+/* ================= TRIANGULAR EVALUATION ================= */
 async function findTriangular(router, path) {
     let bestSize = null;
     let maxProfit = 0n;
@@ -223,21 +229,7 @@ async function findTriangular(router, path) {
     return bestSize;
 }
 
-/* ================= PARALLEL SCANNER (Optimized for Stream Chunks) ================= */
-async function parallelScan(paths, routersList) {
-    const scanPromises = [];
-    for (const router of routersList) {
-        for (const path of paths) {
-            scanPromises.push(
-                findTriangular(router, path).catch(() => null)
-            );
-        }
-    }
-    const results = await Promise.all(scanPromises);
-    return results.filter(r => r !== null);
-}
-
-/* ================= EXECUTE ================= */
+/* ================= EXECUTION MANAGER ================= */
 async function executeBatch(trades) {
     console.log("\n🔥 EXECUTING BATCH");
     const before = await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -274,7 +266,7 @@ async function executeBatch(trades) {
     }
 }
 
-/* ================= GAS TOP-UP ================= */
+/* ================= AUTOMATED NATIVE GAS ACCUMULATOR ================= */
 async function topUpGas() {
     try {
         const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -304,79 +296,107 @@ async function topUpGas() {
         const bal = await wmatic.balanceOf(wallet.address);
         if (bal > 0n) {
             await (await wmatic.withdraw(bal)).wait();
-            console.log("🔥 GAS BALANCED SUCESSFULLY");
+            console.log("🔥 GAS BALANCED SUCCESSFULLY");
         }
     } catch (e) {
         console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
     }
 }
 
-/* ================= MAIN (Streamed Pipeline) ================= */
+/* ================= MAIN PIPELINE (Worker Pool Pipeline) ================= */
 (async function main() {
     console.log("🚀 BOT STARTED\n");
     provider = newProvider();
     rebuildContracts();
     const triangularPaths = buildTriangularPaths();
     const routersList = Object.values(routers);
+    
+    // Generate linear flat list of unique lookup pairs
+    const tasks = [];
+    for (const router of routersList) {
+        for (const path of triangularPaths) {
+            tasks.push({ router, path });
+        }
+    }
+    
+    const totalCombinations = tasks.length;
     let batch = [];
 
     while (true) {
         try {
-            // Process the matrix in tiny slices of 30 paths to enable immediate action
-            const SLICE_SIZE = 30;
-            for (let i = 0; i < triangularPaths.length; i += SLICE_SIZE) {
-                const pathChunk = triangularPaths.slice(i, i + SLICE_SIZE);
-                const trades = await parallelScan(pathChunk, routersList);
-                
-                if (trades.length > 0) {
-                    batch.push(...trades);
-                    console.log(`[Batch Progress]: ${batch.length}/${BATCH_SIZE} trades collected.`);
-                }
+            console.log(`Starting matrix scan pass over ${totalCombinations} combinations...`);
+            let completed = 0;
+            
+            // Local deep clone copy of the tasks layout for current iteration pass
+            const currentQueue = [...tasks];
 
-                // If our criteria of 2 trades is fulfilled mid-scan, pull and process immediately
-                while (batch.length >= BATCH_SIZE) {
-                    const candidates = batch.slice(0, BATCH_SIZE);
-                    batch = batch.slice(BATCH_SIZE); 
+            // Worker loop definition utilizing the defined CONCURRENCY_LIMIT
+            const worker = async () => {
+                while (currentQueue.length > 0) {
+                    const task = currentQueue.shift();
+                    if (!task) break;
 
-                    console.log(`\n🔍 Re-verifying ${candidates.length} accumulated trades against real-time pools...`);
-                    const tradesToExecute = [];
-                    
-                    for (const t of candidates) {
-                        try {
-                            const path = [...t.pathToToken, t.pathToUSDC[1]];
-                            const baseOut1 = await routerContracts[t.router].getAmountsOut(t.amountIn, [path[0], path[1]]);
-                            const baseOut2 = await routerContracts[t.router].getAmountsOut(baseOut1.at(-1), [path[1], path[2]]);
-                            const baseOut3 = await routerContracts[t.router].getAmountsOut(baseOut2.at(-1), [path[2], path[3]]);
+                    try {
+                        const trade = await findTriangular(task.router, task.path);
+                        if (trade) {
+                            batch.push(trade);
+                            console.log(`[Batch Progress]: ${batch.length}/${BATCH_SIZE} trades collected.`);
                             
-                            const liveProfit = baseOut3.at(-1) - t.amountIn;
-                            if (liveProfit > 0n) {
-                                tradesToExecute.push({
-                                    ...t,
-                                    expectedProfit: liveProfit 
-                                });
-                                console.log(`✅ Position Valid: Retaining with current yield of ${fmt(liveProfit)} USDC`);
-                            } else {
-                                console.log(`❌ Position Expired/Negative: Discarded to save execution balance.`);
+                            // Immediately intercept and process if batch size limit condition met
+                            if (batch.length >= BATCH_SIZE) {
+                                const candidates = batch.slice(0, BATCH_SIZE);
+                                batch = batch.slice(BATCH_SIZE);
+                                
+                                console.log(`\n🔍 Re-verifying ${candidates.length} accumulated trades against real-time pools...`);
+                                const tradesToExecute = [];
+                                
+                                for (const t of candidates) {
+                                    try {
+                                        const path = [...t.pathToToken, t.pathToUSDC[1]];
+                                        const baseOut1 = await routerContracts[t.router].getAmountsOut(t.amountIn, [path[0], path[1]]);
+                                        const baseOut2 = await routerContracts[t.router].getAmountsOut(baseOut1.at(-1), [path[1], path[2]]);
+                                        const baseOut3 = await routerContracts[t.router].getAmountsOut(baseOut2.at(-1), [path[2], path[3]]);
+                                        
+                                        const liveProfit = baseOut3.at(-1) - t.amountIn;
+                                        if (liveProfit > 0n) {
+                                            tradesToExecute.push({ ...t, expectedProfit: liveProfit });
+                                            console.log(`✅ Position Valid: Retaining with current yield of ${fmt(liveProfit)} USDC`);
+                                        } else {
+                                            console.log(`❌ Position Expired/Negative: Discarded.`);
+                                        }
+                                    } catch {
+                                        console.log(`❌ Pool Error: Skipping unstable path.`);
+                                    }
+                                }
+
+                                if (tradesToExecute.length > 0) {
+                                    await executeBatch(tradesToExecute);
+                                }
                             }
-                        } catch {
-                            console.log(`❌ Pool Error: Skipping unstable trade path.`);
                         }
+                    } catch (e) {
+                        // Suppress individual thread failure points
                     }
 
-                    if (tradesToExecute.length > 0) {
-                        await executeBatch(tradesToExecute);
-                    } else {
-                        console.log("⚠️ Batch Cancelled: All items in this processing block went stale.\n");
+                    completed++;
+                    // Terminal status heartbeat logs emitted every 250 combination scans
+                    if (completed % 250 === 0 || completed === totalCombinations) {
+                        console.log(`[Scan Status]: Evaluated ${completed}/${totalCombinations} combinations.`);
                     }
                 }
-            }
-            // Brief pause before spinning up the next complete matrix scan pass
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            };
+
+            // Spawn concurrent network workers to process the job queue smoothly
+            const workers = Array(CONCURRENCY_LIMIT).fill(null).map(worker);
+            await Promise.all(workers);
+
+            console.log("🏁 Matrix pass complete. Restocking lookups...\n");
+            await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (error) {
-            console.error("❌ Error in main loop:", error.message);
+            console.error("❌ Error in main execution loop:", error.message);
             provider = newProvider();
             rebuildContracts();
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 5000));
         }
     }
 })();
