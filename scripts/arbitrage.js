@@ -13,8 +13,9 @@ const RPCS = [
 let rpcIndex = 0;
 
 /* ================= BOT CONFIGURATION ================= */
-const FIXED_TRADE_SIZE = ethers.parseUnits("0.01", 6); // Global size delegated directly to the contract execution layer
-const BATCH_SIZE = 6; // Number of sequential routes packed per contract call execution
+const FIXED_TRADE_SIZE = ethers.parseUnits("0.02", 6); // Global size delegated directly to the contract execution layer
+const BATCH_SIZE = 2; // Number of sequential routes packed per contract call execution
+const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.005", 6); // Each individual route must secure at least 0.005 USDC
 
 /* ================= CORE CONTRACT TARGETS ================= */
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
@@ -101,30 +102,48 @@ async function sendRawBatchToContract(trades) {
         // 1. Snapshot contract balance before running execution pass
         const balanceBefore = await usdcContract.balanceOf(CONTRACT_ADDRESS);
 
-        // 2. Off-chain profit simulation bypass via directly hitting AMM Router contracts
+        // 2. Per-Trade Profit Enforcement Simulation
         let totalExpectedProfit = 0n;
-        for (const trade of trades) {
+        let batchValid = true;
+
+        for (let i = 0; i < trades.length; i++) {
+            const trade = trades[i];
             try {
                 const routerContract = new ethers.Contract(trade.buyRouter, routerAbi, provider);
                 
-                // Route Part A: USDC -> Intermediate Tokens
+                // Query Leg 1 (USDC -> Token A -> Token B)
                 const buyAmounts = await routerContract.getAmountsOut(trade.amountInUSDC, trade.pathToToken);
-                const intermediateAmount = buyAmounts[buyAmounts.length - 1];
+                const tokenBAmount = buyAmounts[buyAmounts.length - 1];
                 
-                // Route Part B: Intermediate Tokens -> USDC
-                const sellAmounts = await routerContract.getAmountsOut(intermediateAmount, trade.pathToUSDC);
+                // Query Leg 2 (Token B -> USDC)
+                const sellAmounts = await routerContract.getAmountsOut(tokenBAmount, trade.pathToUSDC);
                 const finalUSDC = sellAmounts[sellAmounts.length - 1];
                 
-                if (finalUSDC > trade.amountInUSDC) {
-                    totalExpectedProfit += (finalUSDC - trade.amountInUSDC);
+                // Calculate this specific trade's net profit
+                const tradeProfit = finalUSDC > trade.amountInUSDC ? (finalUSDC - trade.amountInUSDC) : 0n;
+                
+                // STRICT CHECK: Does this individual trade meet our minimum floor?
+                if (tradeProfit < MIN_PROFIT_PER_TRADE) {
+                    console.log(`⚠️ ROUTE SKIPPED: Trade #${i + 1} expected profit (+${ethers.formatUnits(tradeProfit, 6)} USDC) is below floor (${ethers.formatUnits(MIN_PROFIT_PER_TRADE, 6)} USDC).`);
+                    batchValid = false;
+                    break; // Poisoned trade found; drop this entire batch layout
                 }
+
+                totalExpectedProfit += tradeProfit;
             } catch (err) {
-                // If a target path is illiquid or fails to return amounts, skip to mimic contract behavior
-                continue;
+                console.log(`⚠️ ROUTE SKIPPED: Trade #${i + 1} simulation reverted due to pool conditions.`);
+                batchValid = false;
+                break;
             }
         }
 
-        // 3. Keep original contract static call sanity check for authorization and gas validation
+        // 3. STRICT PRE-FLIGHT GUARD: Abort if any individual trade dropped or total profit is dead
+        if (!batchValid || typeof totalExpectedProfit !== "bigint" || totalExpectedProfit <= 0n) {
+            console.log(`🛑 Aborting live pool broadcast for this batch to protect capital.\n`);
+            return;
+        }
+
+        // 4. Sanity check contract limits (auth / structural errors)
         await vault.executeFlashBatchArbitrage.staticCall(payload);
 
         console.log(`🔥 SIMULATION SUCCESSFUL: Expected Batch Profit: +${ethers.formatUnits(totalExpectedProfit, 6)} USDC`);
@@ -137,7 +156,7 @@ async function sendRawBatchToContract(trades) {
         console.log(`⚡ Tx Broadcasted: ${tx.hash}`);
         await tx.wait();
 
-        // 4. Calculate realized metrics from live state completion
+        // 5. Calculate realized metrics from live state completion
         const balanceAfter = await usdcContract.balanceOf(CONTRACT_ADDRESS);
         const realProfit = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
 
