@@ -4,19 +4,24 @@ dotenv.config({ override: false });
 
 /* ================= CREDENTIALS VALIDATION ================= */
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
+if (!PRIVATE_KEY) {
+    console.error("❌ CRITICAL: Private key missing from environment variables.");
+    process.exit(1);
+}
 
 /* ================= HIGH-PERFORMANCE RPC POOL ================= */
+// RECOMMENDED: Replace the public endpoint below with a private Alchemy or QuickNode URL
 const RPCS = [
     "https://polygon-bor-rpc.publicnode.com",
 ];
 let rpcIndex = 0;
 
-/* ================= BOT CONFIGURATION ================= */
-const MIN_MULTIPLIER_SIZE = ethers.parseUnits("0.02", 6);  // Floor test size ($0.02 USDC)
+/* ================= BOT CONFIGURATION (FIXED) ================= */
+const MIN_MULTIPLIER_SIZE = ethers.parseUnits("10.0", 6);  // Raised to $10.00 USDC to bypass AMM fee friction
 const MULTIPLIER_STEPS = 5;                               // Number of candidate steps to test off-chain
-const BATCH_SIZE = 2;                                     // Pack exactly 2 routes per batch
-const DESIRED_PREMIUM = ethers.parseUnits("0.02", 6);     // Target net profit premium pocketed ($0.02 USDC)
-const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.000001", 6);
+const BATCH_SIZE = 1;                                     // Reduced to 1 to execute individual profitable paths immediately
+const DESIRED_PREMIUM = ethers.parseUnits("0.00", 6);     // Set to $0.00 initially to target pure gas clearing
+const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.001", 6); // Dust mitigation threshold
 
 /* ================= CORE CONTRACT TARGETS ================= */
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
@@ -40,8 +45,8 @@ const routers = {
 
 /* ================= CROSS-TOKEN ROUTE MATRIX ================= */
 const TOKENS = {
-    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
     WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
     WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
     DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
     LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"
@@ -62,13 +67,12 @@ function rotateNetworkProvider() {
     usdcContract = new ethers.Contract(USDC, erc20Abi, provider);
 }
 
-/* ================= BUILD RECURSIVE CROSS-ROUTE MATRIX (80 Pipelines) ================= */
+/* ================= BUILD RECURSIVE CROSS-ROUTE MATRIX ================= */
 function buildRawTriangularMatrix() {
     const routersList = Object.values(routers);
     const rawBatches = [];
     const intermediateTokens = Object.values(TOKENS);
 
-    // Dynamic combinations builder to scale the structural pipeline to 80 paths
     for (const router of routersList) {
         for (const tokenA of intermediateTokens) {
             for (const tokenB of intermediateTokens) {
@@ -95,18 +99,21 @@ function buildRawTriangularMatrix() {
 async function calculateDynamicProfitFloor(payload, targetPremiumUSDC) {
     try {
         const feeData = await provider.getFeeData();
-        const currentGasPrice = feeData.maxFeePerGas || feeData.gasPrice || ethers.parseUnits("40", 9);
+        
+        // Dynamic pricing with safety floor for competitive execution
+        const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || ethers.parseUnits("35", 9);
+        const maxFeePerGas = feeData.maxFeePerGas || ethers.parseUnits("200", 9);
 
-        // Estimate raw gas consumption
+        // Estimate raw gas consumption via static simulation
         const estimatedGasUnits = await vault.executeFlashBatchArbitrage.estimateGas(payload)
-            .catch(() => 342105n); // Target trace gas mock alignment fallback
+            .catch(() => 350000n); // Baseline execution buffer fallback
 
-        const totalGasCostInWei = estimatedGasUnits * currentGasPrice;
+        const totalGasCostInWei = estimatedGasUnits * maxFeePerGas;
 
-        // Convert WMATIC Gas Fees directly into USDC value via QuickSwap
+        // Convert WMATIC Gas Fees into USDC value via QuickSwap
         const quickswapRouter = new ethers.Contract(routers.QuickSwap, routerAbi, provider);
         const conversionAmounts = await quickswapRouter.getAmountsOut(totalGasCostInWei, [TOKENS.WMATIC, USDC])
-            .catch(() => [totalGasCostInWei, ethers.parseUnits("0.014210", 6)]);
+            .catch(() => [totalGasCostInWei, ethers.parseUnits("0.05", 6)]); // Safe fallback proxy fee
 
         const gasCostInUSDC = conversionAmounts[conversionAmounts.length - 1];
         const totalRequiredProfitFloor = gasCostInUSDC + targetPremiumUSDC;
@@ -115,14 +122,16 @@ async function calculateDynamicProfitFloor(payload, targetPremiumUSDC) {
             gasCostInUSDC,
             totalRequiredProfitFloor,
             estimatedGasUnits,
-            currentGasPrice
+            maxPriorityFeePerGas,
+            maxFeePerGas
         };
     } catch (err) {
         return {
-            gasCostInUSDC: ethers.parseUnits("0.014210", 6),
-            totalRequiredProfitFloor: ethers.parseUnits("0.014210", 6) + targetPremiumUSDC,
-            estimatedGasUnits: 342105n,
-            currentGasPrice: ethers.parseUnits("42.5", 9)
+            gasCostInUSDC: ethers.parseUnits("0.05", 6),
+            totalRequiredProfitFloor: ethers.parseUnits("0.05", 6) + targetPremiumUSDC,
+            estimatedGasUnits: 350000n,
+            maxPriorityFeePerGas: ethers.parseUnits("40", 9),
+            maxFeePerGas: ethers.parseUnits("250", 9)
         };
     }
 }
@@ -133,9 +142,14 @@ async function sendRawBatchToContract(trades) {
 
     try {
         const balanceBefore = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-        if (balanceBefore < MIN_MULTIPLIER_SIZE) return;
+        
+        // Safety Warning: Let operator know if the contract itself has zero working funds
+        if (balanceBefore < MIN_MULTIPLIER_SIZE) {
+            console.log(`⚠️  SKIPPED PASS: Contract balance (${ethers.formatUnits(balanceBefore, 6)} USDC) is less than MIN_MULTIPLIER_SIZE.`);
+            return;
+        }
 
-        // 1. Calculate Multiplier Steps
+        // 1. Calculate Multiplier Steps Array Based On Contract Vault Pool Sizes
         const dynamicCandidates = [];
         const maxChunkSize = balanceBefore / BigInt(BATCH_SIZE); 
         const stepDelta = (maxChunkSize - MIN_MULTIPLIER_SIZE) / BigInt(MULTIPLIER_STEPS > 1 ? MULTIPLIER_STEPS - 1 : 1);
@@ -230,17 +244,20 @@ async function sendRawBatchToContract(trades) {
         console.log(`🔥 SIMULATION SUCCESSFUL: Total Expected Return (+${ethers.formatUnits(totalExpectedProfit, 6)} USDC) clears absolute floor ($${ethers.formatUnits(metrics.totalRequiredProfitFloor, 6)} USDC).\n`);
         console.log(`📡 Shipping raw batch directly to EVM live pool...`);
 
-        // Static Call Pre-flight Guard
+        // Static Call Pre-flight Validation Guard
         await vault.executeFlashBatchArbitrage.staticCall(payload);
 
-        // 6. Broadcast to EVM Live Pool
-        const gasBufferLimit = (metrics.estimatedGasUnits * 120n) / 100n;
-        const tx = await vault.executeFlashBatchArbitrage(payload, { gasLimit: gasBufferLimit });
+        // 6. Broadcast to EVM Live Pool using hardcoded EIP-1559 Parameters
+        const gasBufferLimit = (metrics.estimatedGasUnits * 130n) / 100n; // 30% safety window
+        const tx = await vault.executeFlashBatchArbitrage(payload, { 
+            gasLimit: gasBufferLimit,
+            maxPriorityFeePerGas: metrics.maxPriorityFeePerGas,
+            maxFeePerGas: metrics.maxFeePerGas
+        });
         console.log(`⚡ Tx Broadcasted: ${tx.hash}`);
         
         const receipt = await tx.wait();
-        const gasPriceInGwei = ethers.formatUnits(metrics.currentGasPrice, 9);
-        console.log(`🎉 TX MINED IN BLOCK #${receipt.blockNumber || "84920141"} (Gas Used: ${receipt.gasUsed?.toLocaleString() || "342,105"} | Gas Price: ${gasPriceInGwei} Gwei)`);
+        console.log(`🎉 TX MINED IN BLOCK #${receipt.blockNumber} (Gas Used: ${receipt.gasUsed?.toLocaleString()})`);
 
         // 7. Extract Final Realized Balances
         const balanceAfter = await usdcContract.balanceOf(CONTRACT_ADDRESS);
@@ -256,15 +273,13 @@ async function sendRawBatchToContract(trades) {
         console.log("=================================================\n");
 
     } catch (error) {
-        console.log(`❌ BLOCK PASS: ${error.reason || error.shortMessage || "transaction execution reverted"}\n`);
+        console.log(`❌ BLOCK PASS REVERT: ${error.reason || error.shortMessage || "Transaction execution failed during pre-flight estimation"}\n`);
     }
 }
 
 /* ================= SECURE RUNTIME WRAPPER ================= */
 async function runEngineSecurely() {
     try {
-        if (!PRIVATE_KEY) process.exit(1);
-
         rotateNetworkProvider();
         console.log("🏁 ZERO-REVALIDATION BOT INITIALIZED FOR JS2");
         
@@ -276,9 +291,11 @@ async function runEngineSecurely() {
                 const chunk = rawRoutes.slice(i, i + BATCH_SIZE);
                 await sendRawBatchToContract(chunk);
             }
+            // 500ms safety rate throttling to respect RPC query rate limits
             await new Promise(resolve => setTimeout(resolve, 500));
         }
     } catch (err) {
+        console.error("Fatal engine error encountered:", err);
         process.exit(1);
     }
 }
