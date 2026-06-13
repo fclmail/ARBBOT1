@@ -15,7 +15,7 @@ let rpcIndex = 0;
 
 /* ================= BOT CONFIGURATION ================= */
 const FIXED_TRADE_SIZE = ethers.parseUnits("0.02", 6); // Global size handled directly by contract logic
-const BATCH_SIZE = 3; // Number of routes packed per atomic contract transaction pass
+const BATCH_SIZE = 10; // Number of routes packed per atomic contract transaction pass
 
 /* ================= CORE CONTRACT TARGETS ================= */
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
