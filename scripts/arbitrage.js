@@ -13,13 +13,14 @@ const RPCS = [
 let rpcIndex = 0;
 
 /* ================= BOT CONFIGURATION ================= */
-const FIXED_TRADE_SIZE = ethers.parseUnits("0.1", 6); // Global size delegated directly to the contract execution layer
-const BATCH_SIZE = 5; // Number of sequential routes packed per contract call execution
-const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.000001", 6); // Each individual route must secure at least 0.005 USDC
+const FIXED_TRADE_SIZE = ethers.parseUnits("0.02", 6); // Global size delegated directly to the contract execution layer
+const BATCH_SIZE = 5; // Number of multi-hop routes packed per contract call execution pass
+const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.000001", 6); // Set your custom individual trade threshold floor
 
 /* ================= CORE CONTRACT TARGETS ================= */
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"; // Native Polygon USDT (6 Decimals)
 
 const erc20Abi = ["function balanceOf(address) view returns (uint256)"];
 const routerAbi = ["function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] memory amounts)"];
@@ -60,25 +61,50 @@ function rotateNetworkProvider() {
     usdcContract = new ethers.Contract(USDC, erc20Abi, provider);
 }
 
-/* ================= ATOMIC MATRIX BUILDER ================= */
+/* ================= ADVANCED MULTI-HOP MATRIX BUILDER ================= */
 function buildRawTriangularMatrix() {
-    const tokens = Object.values(TOKENS);
     const routersList = Object.values(routers);
     const rawBatches = [];
 
+    const WETH = TOKENS.WETH;
+    const WMATIC = TOKENS.WMATIC;
+
     for (const router of routersList) {
-        for (const tokenA of tokens) {
-            for (const tokenB of tokens) {
-                if (tokenA === tokenB) continue;
-                rawBatches.push({
-                    buyRouter: router,
-                    sellRouter: router,
-                    amountInUSDC: FIXED_TRADE_SIZE,
-                    pathToToken: [USDC, tokenA, tokenB],
-                    pathToUSDC: [tokenB, USDC]
-                });
-            }
-        }
+        // Path Formula 1: USDC -> WMATIC -> WETH -> USDT -> USDC
+        rawBatches.push({
+            buyRouter: router,
+            sellRouter: router,
+            amountInUSDC: FIXED_TRADE_SIZE,
+            pathToToken: [USDC, WMATIC, WETH],
+            pathToUSDC: [WETH, USDT, USDC]
+        });
+
+        // Path Formula 2: USDC -> WETH -> WMATIC -> USDT -> USDC
+        rawBatches.push({
+            buyRouter: router,
+            sellRouter: router,
+            amountInUSDC: FIXED_TRADE_SIZE,
+            pathToToken: [USDC, WETH, WMATIC],
+            pathToUSDC: [WMATIC, USDT, USDC]
+        });
+
+        // Path Formula 3: USDC -> USDT -> WETH -> WMATIC -> USDC
+        rawBatches.push({
+            buyRouter: router,
+            sellRouter: router,
+            amountInUSDC: FIXED_TRADE_SIZE,
+            pathToToken: [USDC, USDT, WETH],
+            pathToUSDC: [WETH, WMATIC, USDC]
+        });
+
+        // Path Formula 4: USDC -> USDT -> WMATIC -> WETH -> USDC
+        rawBatches.push({
+            buyRouter: router,
+            sellRouter: router,
+            amountInUSDC: FIXED_TRADE_SIZE,
+            pathToToken: [USDC, USDT, WMATIC],
+            pathToUSDC: [WMATIC, WETH, USDC]
+        });
     }
     return rawBatches;
 }
@@ -89,7 +115,7 @@ async function sendRawBatchToContract(trades) {
     const payload = {
         buyRouters: trades.map(t => t.buyRouter),
         sellRouters: trades.map(t => t.sellRouter),
-        amountsInUSDC: trades.map(t => t.amountInUSDC),
+        amountsInUSDC: trades.map(t => t.amountsInUSDC || t.amountInUSDC),
         pathsToToken: trades.map(t => t.pathToToken),
         pathsToUSDC: trades.map(t => t.pathToUSDC),
         deadline: deadline
@@ -102,7 +128,7 @@ async function sendRawBatchToContract(trades) {
         // 1. Snapshot contract balance before running execution pass
         const balanceBefore = await usdcContract.balanceOf(CONTRACT_ADDRESS);
 
-        // 2. Per-Trade Profit Enforcement Simulation
+        // 2. Per-Trade Profit Enforcement Simulation (USDT / Multi-Hop Compatible)
         let totalExpectedProfit = 0n;
         let batchValid = true;
 
@@ -115,7 +141,7 @@ async function sendRawBatchToContract(trades) {
                 const buyAmounts = await routerContract.getAmountsOut(trade.amountInUSDC, trade.pathToToken);
                 const tokenBAmount = buyAmounts[buyAmounts.length - 1];
                 
-                // Query Leg 2 (Token B -> USDC)
+                // Query Leg 2 (Token B -> USDT/Token C -> USDC)
                 const sellAmounts = await routerContract.getAmountsOut(tokenBAmount, trade.pathToUSDC);
                 const finalUSDC = sellAmounts[sellAmounts.length - 1];
                 
