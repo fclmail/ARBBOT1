@@ -10,18 +10,19 @@ if (!PRIVATE_KEY) {
 }
 
 /* ================= HIGH-PERFORMANCE RPC POOL ================= */
-// RECOMMENDED: Replace the public endpoint below with a private Alchemy or QuickNode URL
 const RPCS = [
     "https://polygon-bor-rpc.publicnode.com",
 ];
 let rpcIndex = 0;
 
-/* ================= BOT CONFIGURATION (FIXED) ================= */
-const MIN_MULTIPLIER_SIZE = ethers.parseUnits(".05", 6);  // Raised to $10.00 USDC to bypass AMM fee friction
-const MULTIPLIER_STEPS = 5;                               // Number of candidate steps to test off-chain
-const BATCH_SIZE = 1;                                     // Reduced to 1 to execute individual profitable paths immediately
-const DESIRED_PREMIUM = ethers.parseUnits("0.00", 6);     // Set to $0.00 initially to target pure gas clearing
-const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.001", 6); // Dust mitigation threshold
+/* ================= FORCED VERIFICATION CONFIGURATION ================= */
+const MIN_MULTIPLIER_SIZE = ethers.parseUnits("0.05", 6);  // Matches your current $0.077 balance floor
+const MULTIPLIER_STEPS = 2;                               // Simple sweep: tests $0.05 and your max available pool chunk
+const BATCH_SIZE = 1;                                     // Reduced to 1 to target individual pipelines immediately
+const DESIRED_PREMIUM = ethers.parseUnits("0.00", 6);     // Bypassed for testing
+
+// FIX 1: Set minimum profit per trade to 0 to accept trades that break even or lose slight decimals to pool fees
+const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.00", 6); 
 
 /* ================= CORE CONTRACT TARGETS ================= */
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
@@ -99,21 +100,19 @@ function buildRawTriangularMatrix() {
 async function calculateDynamicProfitFloor(payload, targetPremiumUSDC) {
     try {
         const feeData = await provider.getFeeData();
-        
-        // Dynamic pricing with safety floor for competitive execution
         const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || ethers.parseUnits("35", 9);
-        const maxFeePerGas = feeData.maxFeePerGas || ethers.parseUnits("200", 9);
+        const maxFeePerGas = feeData.maxFeePerGas || ethers.parseUnits("220", 9);
 
         // Estimate raw gas consumption via static simulation
         const estimatedGasUnits = await vault.executeFlashBatchArbitrage.estimateGas(payload)
-            .catch(() => 350000n); // Baseline execution buffer fallback
+            .catch(() => 350000n); 
 
         const totalGasCostInWei = estimatedGasUnits * maxFeePerGas;
 
         // Convert WMATIC Gas Fees into USDC value via QuickSwap
         const quickswapRouter = new ethers.Contract(routers.QuickSwap, routerAbi, provider);
         const conversionAmounts = await quickswapRouter.getAmountsOut(totalGasCostInWei, [TOKENS.WMATIC, USDC])
-            .catch(() => [totalGasCostInWei, ethers.parseUnits("0.05", 6)]); // Safe fallback proxy fee
+            .catch(() => [totalGasCostInWei, ethers.parseUnits("0.05", 6)]); 
 
         const gasCostInUSDC = conversionAmounts[conversionAmounts.length - 1];
         const totalRequiredProfitFloor = gasCostInUSDC + targetPremiumUSDC;
@@ -142,14 +141,9 @@ async function sendRawBatchToContract(trades) {
 
     try {
         const balanceBefore = await usdcContract.balanceOf(CONTRACT_ADDRESS);
-        
-        // Safety Warning: Let operator know if the contract itself has zero working funds
-        if (balanceBefore < MIN_MULTIPLIER_SIZE) {
-            console.log(`⚠️  SKIPPED PASS: Contract balance (${ethers.formatUnits(balanceBefore, 6)} USDC) is less than MIN_MULTIPLIER_SIZE.`);
-            return;
-        }
+        if (balanceBefore < MIN_MULTIPLIER_SIZE) return;
 
-        // 1. Calculate Multiplier Steps Array Based On Contract Vault Pool Sizes
+        // Calculate Multiplier Steps Array Based On Contract Vault Pool Sizes
         const dynamicCandidates = [];
         const maxChunkSize = balanceBefore / BigInt(BATCH_SIZE); 
         const stepDelta = (maxChunkSize - MIN_MULTIPLIER_SIZE) / BigInt(MULTIPLIER_STEPS > 1 ? MULTIPLIER_STEPS - 1 : 1);
@@ -167,7 +161,7 @@ async function sendRawBatchToContract(trades) {
         let totalExpectedProfit = 0n;
         let batchValid = true;
 
-        // 2. Off-chain Simulation Search Pass
+        // Off-chain Simulation Search Pass
         for (let i = 0; i < trades.length; i++) {
             const trade = trades[i];
             let bestTradeProfit = 0n;
@@ -183,9 +177,10 @@ async function sendRawBatchToContract(trades) {
                     const sellAmounts = await routerContract.getAmountsOut(tokenBAmount, trade.pathToUSDC);
                     const finalUSDC = sellAmounts[sellAmounts.length - 1];
                     
+                    // Allow profit checking to capture up to 0n values or actual numbers
                     const tradeProfit = finalUSDC > candidateSize ? (finalUSDC - candidateSize) : 0n;
                     
-                    if (tradeProfit > bestTradeProfit) {
+                    if (tradeProfit >= bestTradeProfit) {
                         bestTradeProfit = tradeProfit;
                         optimalSizeForRoute = candidateSize;
                     }
@@ -211,7 +206,7 @@ async function sendRawBatchToContract(trades) {
 
         if (!batchValid || optimizedBatchTrades.length !== trades.length) return;
 
-        // 3. Structural Setup Payload for Gas Cost Analysis
+        // Structural Setup Payload for Gas Cost Analysis
         const payload = {
             buyRouters: optimizedBatchTrades.map(t => t.buyRouter),
             sellRouters: optimizedBatchTrades.map(t => t.sellRouter),
@@ -221,7 +216,6 @@ async function sendRawBatchToContract(trades) {
             deadline: deadline
         };
 
-        // 4. Run Real-Time Cost Analysis Execution Pass
         const metrics = await calculateDynamicProfitFloor(payload, DESIRED_PREMIUM);
 
         console.log(`⛽ Real-Time Cost Analysis:`);
@@ -232,22 +226,24 @@ async function sendRawBatchToContract(trades) {
         console.log(`🔍 [SIMULATION] Testing batch of ${trades.length} routes against exact block state...`);
         
         for(let i=0; i<optimizedBatchTrades.length; i++) {
-             console.log(`🔥 ROUTE OPTIMIZED: Trade #${i+1} found peak returns at multiplier size: ${ethers.formatUnits(optimizedBatchTrades[i].calculatedOptimalSize, 6)} USDC (Expected Profit: +${ethers.formatUnits(optimizedBatchTrades[i].assignedProfit, 6)} USDC)`);
+             console.log(`🔥 ROUTE FORCED: Trade #${i+1} selected size: ${ethers.formatUnits(optimizedBatchTrades[i].calculatedOptimalSize, 6)} USDC (Expected Profit: +${ethers.formatUnits(optimizedBatchTrades[i].assignedProfit, 6)} USDC)`);
         }
 
-        // 5. Evaluate Simulation Returns Against Dynamic Profit Floor Anchor
+        // FIX 2: BYPASS ACTIVE. The profitability threshold check is commented out below to force pipeline transmission.
+        /*
         if (totalExpectedProfit < metrics.totalRequiredProfitFloor) {
             console.log(`⚠️ BATCH REJECTED: Total Expected Return fails to clear absolute floor.`);
             return;
         }
+        */
 
-        console.log(`🔥 SIMULATION SUCCESSFUL: Total Expected Return (+${ethers.formatUnits(totalExpectedProfit, 6)} USDC) clears absolute floor ($${ethers.formatUnits(metrics.totalRequiredProfitFloor, 6)} USDC).\n`);
+        console.log(`🔥 SIMULATION BYPASS FORCE: Executing pipeline verification pass...\n`);
         console.log(`📡 Shipping raw batch directly to EVM live pool...`);
 
         // Static Call Pre-flight Validation Guard
         await vault.executeFlashBatchArbitrage.staticCall(payload);
 
-        // 6. Broadcast to EVM Live Pool using hardcoded EIP-1559 Parameters
+        // Broadcast to EVM Live Pool using EIP-1559 Parameters
         const gasBufferLimit = (metrics.estimatedGasUnits * 130n) / 100n; // 30% safety window
         const tx = await vault.executeFlashBatchArbitrage(payload, { 
             gasLimit: gasBufferLimit,
@@ -259,21 +255,23 @@ async function sendRawBatchToContract(trades) {
         const receipt = await tx.wait();
         console.log(`🎉 TX MINED IN BLOCK #${receipt.blockNumber} (Gas Used: ${receipt.gasUsed?.toLocaleString()})`);
 
-        // 7. Extract Final Realized Balances
+        // Extract Final Realized Balances
         const balanceAfter = await usdcContract.balanceOf(CONTRACT_ADDRESS);
         const realGrossReturn = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
-        const estimatedNetPremium = realGrossReturn > metrics.gasCostInUSDC ? realGrossReturn - metrics.gasCostInUSDC : 0n;
 
         console.log("\n=================================================");
-        console.log(`🔥 TRADES EXECUTED (DYNAMIC NET REVENUE CAPTURE)`);
+        console.log(`🔥 PIPELINE VERIFICATION COMPLETE`);
         console.log(`   CONTRACT BEFORE BALANCE : ${ethers.formatUnits(balanceBefore, 6)} USDC`);
         console.log(`   CONTRACT AFTER BALANCE  : ${ethers.formatUnits(balanceAfter, 6)} USDC`);
-        console.log(`   REALIZED GROSS RETURN   : +${ethers.formatUnits(realGrossReturn, 6)} USDC`);
-        console.log(`   ESTIMATED NET PREMIUM   : +${ethers.formatUnits(estimatedNetPremium, 6)} USDC (After Network Gas Deductions)`);
+        console.log(`   REALIZED GROSS DIFFERENCE : ${ethers.formatUnits(realGrossReturn, 6)} USDC`);
         console.log("=================================================\n");
 
+        // Stop execution loop immediately after a successful pipeline run to avoid burning wallet gas
+        console.log("✅ Pipeline successfully verified. Exiting process safely.");
+        process.exit(0);
+
     } catch (error) {
-        console.log(`❌ BLOCK PASS REVERT: ${error.reason || error.shortMessage || "Transaction execution failed during pre-flight estimation"}\n`);
+        console.log(`❌ BLOCK PASS REVERT: ${error.reason || error.shortMessage || "Transaction execution failed during execution wrapper"}\n`);
     }
 }
 
@@ -291,7 +289,6 @@ async function runEngineSecurely() {
                 const chunk = rawRoutes.slice(i, i + BATCH_SIZE);
                 await sendRawBatchToContract(chunk);
             }
-            // 500ms safety rate throttling to respect RPC query rate limits
             await new Promise(resolve => setTimeout(resolve, 500));
         }
     } catch (err) {
