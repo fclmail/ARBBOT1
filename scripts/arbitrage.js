@@ -15,7 +15,7 @@ let rpcIndex = 0;
 /* ================= BOT CONFIGURATION ================= */
 const FIXED_TRADE_SIZE = ethers.parseUnits("0.02", 6); // Global size delegated directly to the contract execution layer
 const BATCH_SIZE = 2; // Number of sequential routes packed per contract call execution
-const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.005", 6); // Each individual route must secure at least 0.005 USDC
+const MIN_PROFIT_PER_TRADE = ethers.parseUnits("0.0001", 6); // Each individual route must secure at least 0.005 USDC
 
 /* ================= CORE CONTRACT TARGETS ================= */
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
