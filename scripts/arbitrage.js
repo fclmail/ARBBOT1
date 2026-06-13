@@ -17,7 +17,7 @@ const RPCS = [
 let rpcIndex = 0;
 
 /* ================= BOT CONFIGURATION (FIXED) ================= */
-const MIN_MULTIPLIER_SIZE = ethers.parseUnits("10.0", 6);  // Raised to $10.00 USDC to bypass AMM fee friction
+const MIN_MULTIPLIER_SIZE = ethers.parseUnits(".05", 6);  // Raised to $10.00 USDC to bypass AMM fee friction
 const MULTIPLIER_STEPS = 5;                               // Number of candidate steps to test off-chain
 const BATCH_SIZE = 1;                                     // Reduced to 1 to execute individual profitable paths immediately
 const DESIRED_PREMIUM = ethers.parseUnits("0.00", 6);     // Set to $0.00 initially to target pure gas clearing
