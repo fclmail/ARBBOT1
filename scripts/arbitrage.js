@@ -1,6 +1,5 @@
 import dotenv from "dotenv";
 import { ethers } from "ethers";
-
 dotenv.config({ override: false });
 
 /* ================= VALIDATION & ENV ================= */
@@ -22,6 +21,7 @@ const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 const erc20Abi = ["function balanceOf(address) view returns (uint256)"];
+const routerAbi = ["function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] memory amounts)"];
 const contractAbi = [
     "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch) external",
     "function usdc() view returns (address)"
@@ -65,12 +65,10 @@ function buildRawTriangularMatrix() {
     const routersList = Object.values(routers);
     const rawBatches = [];
 
-    // Construct raw combinatorial pipelines without checking asset balances or prices
     for (const router of routersList) {
         for (const tokenA of tokens) {
             for (const tokenB of tokens) {
                 if (tokenA === tokenB) continue;
-
                 rawBatches.push({
                     buyRouter: router,
                     sellRouter: router,
@@ -87,7 +85,6 @@ function buildRawTriangularMatrix() {
 /* ================= HIGH-SPEED SIMULATE-THEN-EXECUTE ENGINE ================= */
 async function sendRawBatchToContract(trades) {
     const deadline = Math.floor(Date.now() / 1000) + 120;
-
     const payload = {
         buyRouters: trades.map(t => t.buyRouter),
         sellRouters: trades.map(t => t.sellRouter),
@@ -98,27 +95,48 @@ async function sendRawBatchToContract(trades) {
     };
 
     try {
-        console.log(`📡 Shipping raw batch of ${trades.length} routes directly to EVM...`);
-        console.log(`\n🔍 [SIMULATION] Testing batch of ${trades.length} routes against exact block state...`);
-        
-        // 1. Snapshot contract balance before running the test
+        console.log(`📡 Shipping raw batch of ${trades.length} routes directly to EVM...\n`);
+        console.log(`🔍 [SIMULATION] Testing batch against exact block state...`);
+
+        // 1. Snapshot contract balance before running execution pass
         const balanceBefore = await usdcContract.balanceOf(CONTRACT_ADDRESS);
 
-        // 2. Local Node EVM Simulation Engine Check
+        // 2. Off-chain profit simulation bypass via directly hitting AMM Router contracts
+        let totalExpectedProfit = 0n;
+        for (const trade of trades) {
+            try {
+                const routerContract = new ethers.Contract(trade.buyRouter, routerAbi, provider);
+                
+                // Route Part A: USDC -> Intermediate Tokens
+                const buyAmounts = await routerContract.getAmountsOut(trade.amountInUSDC, trade.pathToToken);
+                const intermediateAmount = buyAmounts[buyAmounts.length - 1];
+                
+                // Route Part B: Intermediate Tokens -> USDC
+                const sellAmounts = await routerContract.getAmountsOut(intermediateAmount, trade.pathToUSDC);
+                const finalUSDC = sellAmounts[sellAmounts.length - 1];
+                
+                if (finalUSDC > trade.amountInUSDC) {
+                    totalExpectedProfit += (finalUSDC - trade.amountInUSDC);
+                }
+            } catch (err) {
+                // If a target path is illiquid or fails to return amounts, skip to mimic contract behavior
+                continue;
+            }
+        }
+
+        // 3. Keep original contract static call sanity check for authorization and gas validation
         await vault.executeFlashBatchArbitrage.staticCall(payload);
-        
-        // 3. Execution continues only if staticCall does not revert
-        console.log("🔥 SIMULATION SUCCESSFUL: Batch meets minimum profit floors.");
+
+        console.log(`🔥 SIMULATION SUCCESSFUL: Expected Batch Profit: +${ethers.formatUnits(totalExpectedProfit, 6)} USDC`);
         console.log(`📡 Shipping raw batch directly to EVM live pool...`);
-        
+
         // Broadcast to live pool with optimized gas ceiling limit
         const tx = await vault.executeFlashBatchArbitrage(payload, {
             gasLimit: 450000 
         });
-
         console.log(`⚡ Tx Broadcasted: ${tx.hash}`);
         await tx.wait();
-        
+
         // 4. Calculate realized metrics from live state completion
         const balanceAfter = await usdcContract.balanceOf(CONTRACT_ADDRESS);
         const realProfit = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
@@ -129,7 +147,6 @@ async function sendRawBatchToContract(trades) {
         console.log(`   CONTRACT AFTER BALANCE  : ${ethers.formatUnits(balanceAfter, 6)} USDC`);
         console.log(`   REALIZED PROFIT         : +${ethers.formatUnits(realProfit, 6)} USDC`);
         console.log("=================================================\n");
-
     } catch (error) {
         const msg = error.reason || error.shortMessage || "Batch yields below minimum threshold / Slippage hit";
         console.log(`❌ BLOCK PASS: ${msg}\n`);
@@ -140,10 +157,10 @@ async function sendRawBatchToContract(trades) {
 (async function main() {
     rotateNetworkProvider();
     console.log("🏁 ZERO-REVALIDATION BOT INITIALIZED\n");
-
+    
     const rawRoutes = buildRawTriangularMatrix();
     console.log(`📦 Compiled ${rawRoutes.length} structural market pipelines.`);
-
+    
     while (true) {
         try {
             for (let i = 0; i < rawRoutes.length; i += BATCH_SIZE) {
