@@ -1,4 +1,4 @@
-//1
+
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -56,9 +56,11 @@ const ROUTERS = {
   APE: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
   DFYN: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"
 };
-
-const FACTORY_ABI = ["function getPair(address,address) view returns(address)"];
-const PAIR_ABI = ["getReserves() view returns(uint112,uint112,uint32)", "token0() view returns(address)"];
+const FACTORY_ABI = ["function getPair(address tokenA, address tokenB) external view returns (address)"];
+const PAIR_ABI = [
+  "function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)",
+  "function token0() external view returns (address)"
+];
 
 // Execution Guard Rails
 const GAS_LIMIT = 4000000n; 
