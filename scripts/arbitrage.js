@@ -141,7 +141,7 @@ function calculatePathOutput(dexName, amountIn, path) {
    PERMUTATION MATRIX MULTI-HOP PATHFINDER
 ========================================================= */
 function findBestMultiHop() {
-  const dexList = Object.keys(FACTORORIES);
+  const dexList = Object.keys(FACTORIES);
   const intermediateTokens = Object.values(TOKENS).filter(t => t !== TOKENS.USDC);
 
   let best = null;
