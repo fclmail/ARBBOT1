@@ -136,7 +136,7 @@ let localReserveCache = {};
 
 function getAmountOut(amountIn, reserveIn, reserveOut) {
   if (amountIn <= 0n || reserveIn <= 0n || reserveOut <= 0n) return 0n;
-  const amountInWithFee = amountIn * 997n;
+  const amountInWithFee = amountIn * 1100n;
   return (amountInWithFee * reserveOut) / (reserveIn * 1000n + amountInWithFee);
 }
 
