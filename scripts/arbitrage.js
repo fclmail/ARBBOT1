@@ -21,7 +21,7 @@ let provider, wallet, usdc, vault, routerContracts;
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
-const BATCH_SIZE = 4;
+const BATCH_SIZE = 10;
 
 const WITHDRAW_THRESHOLD = ethers.parseUnits("997973", 6);
 const WITHDRAW_PERCENT = 1n;
