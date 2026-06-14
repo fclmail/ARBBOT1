@@ -9,9 +9,9 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= HARDENED PRODUCTION RPC POOL ================= */
 const RPCS = [
-   "https://polygon-bor-rpc.publicnode.com",
-   "https://polygon.drpc.org",
-   "https://rpc.ankr.com/polygon"
+   "https://polygon-bor-rpc.publicnode.com"
+  // "https://polygon.drpc.org",
+   //"https://rpc.ankr.com/polygon"
 ];
 
 let rpcIndex = 0;
