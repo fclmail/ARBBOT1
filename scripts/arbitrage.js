@@ -7,17 +7,17 @@ dotenv.config({ override: false });
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PK missing");
 
-/* ================= HARDENED PRODUCTION RPC POOL ================= */
+/* ================= PRODUCTION RPC POOL ================= */
 const RPCS = [
-   "https://polygon-bor-rpc.publicnode.com"
-  // "https://polygon.drpc.org",
-   //"https://rpc.ankr.com/polygon"
+   "https://polygon-bor-rpc.publicnode.com",
+   "https://polygon.drpc.org",
+   "https://rpc.ankr.com/polygon"
 ];
 
 let rpcIndex = 0;
 let provider, wallet, usdc, vault, routerContracts;
 
-/* ================= ORIGINAL HIGH-FREQUENCY CONFIGS ================= */
+/* ================= HIGH-FREQUENCY PARAMETERS ================= */
 const BASE_TRADE = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
@@ -29,7 +29,7 @@ const WITHDRAW_PERCENT = 1n;
 const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
-/* ================= CORE APPLICATION ABIs ================= */
+/* ================= APPLICATION ABIs ================= */
 const erc20Abi = [
     "function balanceOf(address) view returns(uint256)",
     "function approve(address,uint256) returns(bool)"
@@ -46,7 +46,7 @@ const routerAbi = [
     "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
 ];
 
-/* ================= RESTORED COMPLETE MATRIX SELECTION ================= */
+/* ================= ACTIVE ROUTER ROUTING MATRIX ================= */
 const routers = {
     QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
     SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -55,6 +55,7 @@ const routers = {
     Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
+/* ================= CLEANED HIGH-LIQUIDITY TOKENS ================= */
 const TOKENS = {
     AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
     QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
@@ -66,14 +67,15 @@ const TOKENS = {
     USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
     WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
     WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
+    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af"
 };
 
 const fmt = x => ethers.formatUnits(x, 6);
 
-/* ================= RESTORED HIGH-SPEED MEMORY CACHE ================= */
+/* ================= INTERNAL MEMORY CACHE MECHANICS ================= */
 const quoteCache = new Map();
-const CACHE_TTL = 1000; 
+const CACHE_TTL = 800; // 800ms window to keep track of fast blocks
 
 function getCachedQuote(router, path, amount) {
     const key = `${router}-${path.join('-')}-${amount.toString()}`;
@@ -87,7 +89,7 @@ function getCachedQuote(router, path, amount) {
 function setCachedQuote(router, path, amount, value) {
     const key = `${router}-${path.join('-')}-${amount.toString()}`;
     quoteCache.set(key, { value, timestamp: Date.now() });
-    if (quoteCache.size > 50000) {
+    if (quoteCache.size > 20000) {
         const now = Date.now();
         for (const [k, entry] of quoteCache) {
             if (now - entry.timestamp > CACHE_TTL) quoteCache.delete(k);
@@ -95,7 +97,7 @@ function setCachedQuote(router, path, amount, value) {
     }
 }
 
-/* ================= NETWORK INSTANTIATION ================= */
+/* ================= SYSTEM LAYER INITIALIZATION ================= */
 function newProvider() {
     const url = RPCS[rpcIndex];
     rpcIndex = (rpcIndex + 1) % RPCS.length;
@@ -111,7 +113,7 @@ function rebuildContracts() {
     );
 }
 
-/* ================= RESTORED CACHED RUNTIME QUOTE ENGINE ================= */
+/* ================= STABILITY-ENFORCED ON-CHAIN QUOTER ================= */
 async function quote(router, amount, path) {
     if (amount <= 0n) return null;
     const cached = getCachedQuote(router, path, amount);
@@ -140,15 +142,14 @@ function buildTriangularPaths() {
     return paths;
 }
 
-/* ================= INSTANT HYBRID BINARY SEARCH LOAN OPTIMIZER ================= */
+/* ================= HIGH-SPEED LOAN SIZE OPTIMIZER ================= */
 async function optimizeLoanSize(router, path) {
     let low = ethers.parseUnits("10.0", 6);    
     let high = ethers.parseUnits("500.0", 6); 
     let optimalAmountIn = BASE_TRADE;
     let maxNetProfit = 0n;
 
-    // Fast 5-step off-chain optimization iteration
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
         let mid = (low + high) / 2n;
         const out1 = await quote(router, mid, [path[0], path[1]]);
         if (!out1) { high = mid - 1n; continue; }
@@ -158,7 +159,7 @@ async function optimizeLoanSize(router, path) {
         if (!out3) { high = mid - 1n; continue; }
 
         const grossProfit = out3 - mid;
-        const aavePremiumFee = (mid * 5n) / 10000n; // Structural 0.05% Premium Fee calculation
+        const aavePremiumFee = (mid * 5n) / 10000n; 
         const netProfit = grossProfit - aavePremiumFee;
 
         if (netProfit > maxNetProfit) {
@@ -179,7 +180,7 @@ async function optimizeLoanSize(router, path) {
     };
 }
 
-/* ================= RESTORED FAST TRIANGULAR DISCOVERY PASS ================= */
+/* ================= TRIANGULAR MATCH VERIFICATION ================= */
 async function findTriangular(router, path) {
     const baseOut1 = await quote(router, BASE_TRADE, [path[0], path[1]]);
     if (!baseOut1) return null;
@@ -194,16 +195,13 @@ async function findTriangular(router, path) {
     if (profit <= 0n || profit < MIN_PROFIT) return null;
 
     console.log(`TRI FOUND ${fmt(BASE_TRADE)} → ${fmt(baseOut3)} PROFIT ${fmt(profit)}`);
-    
-    // Handshake isolated paths instantly over to the local binary sizer engine
     return optimizeLoanSize(router, path);
 }
 
-/* ================= RESTORED HIGH-CONCURRENCY PARALLEL SCANNER ================= */
+/* ================= HIGH-FREQUENCY PARALLEL RUNNER ================= */
 async function parallelScan(paths, routersList) {
     const batchResults = [];
     
-    // Restore original high-speed concurrent promise arrays
     for (let i = 0; i < paths.length; i += BATCH_SIZE) {
         const pathChunk = paths.slice(i, i + BATCH_SIZE);
         const scanPromises = [];
@@ -224,7 +222,7 @@ async function parallelScan(paths, routersList) {
     return batchResults.slice(0, BATCH_SIZE);
 }
 
-/* ================= BATCH TRANSACTION EXECUTION ================= */
+/* ================= TRANSACTION DISPATCH EXECUTION ================= */
 async function executeBatch(trades) {
     console.log("🏁 ZERO-REVALIDATION FLASH LOAN TESTER INITIALIZED");
     const before = await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -284,7 +282,7 @@ async function executeBatch(trades) {
     }
 }
 
-/* ================= RESTORED AUTOMATED REVENUE TOP-UP ================= */
+/* ================= REVENUE REBALANCING TOP-UP ================= */
 async function topUpGas() {
     try {
         const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
@@ -317,7 +315,7 @@ async function topUpGas() {
     }
 }
 
-/* ================= ASYNCHRONOUS ENGINE LOOPS ================= */
+/* ================= RUNTIME ACCESS POINT ================= */
 (async function main() {
     console.log("🚀 BOT STARTED\n");
     provider = newProvider();
@@ -326,16 +324,17 @@ async function topUpGas() {
     const triangularPaths = buildTriangularPaths();
     const routersList = Object.values(routers);
 
+    console.log(`📦 Matrix generation complete. Tracking ${triangularPaths.length} routes over ${routersList.length} DEX layouts.`);
+
     while (true) {
         try {
             const trades = await parallelScan(triangularPaths, routersList);
             if (trades.length > 0) {
                 await executeBatch(trades);
             } else {
-                await new Promise(resolve => setTimeout(resolve, 300));
+                await new Promise(resolve => setTimeout(resolve, 200));
             }
         } catch (error) {
-            console.error("❌ Error in main loop:", error.message);
             provider = newProvider();
             rebuildContracts();
             await new Promise(resolve => setTimeout(resolve, 1000));
