@@ -4,24 +4,29 @@ import { ethers } from "ethers";
 dotenv.config();
 
 /* =========================================================
-   WEBSOCKET PROVIDER SETUP
+   HIGH-SPEED POLLING ENGINE SETUP (NO REGISTRATION)
 ========================================================= */
-const WS_ENDPOINT = "wss://polygon-bor-rpc.publicnode.com";
+const HTTP_ENDPOINT = "https://polygon.drpc.org"; // Fast, resilient public endpoint
 
-console.log("⏳ Connecting to Polygon WebSocket...");
-const provider = new ethers.WebSocketProvider(WS_ENDPOINT);
+console.log("⏳ Initializing High-Speed Provider Engine...");
+const provider = new ethers.JsonRpcProvider(HTTP_ENDPOINT);
 
-provider.websocket.onopen = () => {
-  console.log("🟢 CONNECTED WEBSOCKET →", WS_ENDPOINT);
-  startWebsocketBot();
-};
+// Force the engine to query the network every 200ms instead of standard 4-second defaults
+provider.pollingInterval = 200;
 
-provider.websocket.onerror = (e) => {
-  console.error("❌ WS CONNECTION ERROR:", e.message || e);
-};
+// Instantly test connection capability and fire up the bot
+provider.getBlockNumber()
+  .then((blockNum) => {
+    console.log(`🟢 CONNECTED TO ENGINE → Current Polygon Block: #${blockNum}`);
+    startStreamingBot();
+  })
+  .catch((err) => {
+    console.error("❌ CONNECTION FAILURE:", err.message);
+    process.exit(1);
+  });
 
 /* =========================================================
-   WALLET & CONTRACT
+   WALLET & ARBITRAGE SMART CONTRACT CONFIGURATION
 ========================================================= */
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
@@ -35,7 +40,7 @@ const ABI = [
 const contract = new ethers.Contract(ARB_CONTRACT, ABI, wallet);
 
 /* =========================================================
-   TOKENS & DEX CONFIGURATION
+   TOKENS & DEX LIST ROUTING CONFIGURATION
 ========================================================= */
 const TOKENS = {
   USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
@@ -66,15 +71,15 @@ const PAIR_ABI = [
 ];
 
 /* =========================================================
-   EXECUTION SETTINGS
+   GAS & EXECUTION PROPERTIES
 ========================================================= */
 const GAS_LIMIT = 3000000n;
 const PRIORITY_GWEI = "120";
 const MAX_GWEI = "300";
-const MIN_PROFIT = 1n; // At least 1 micro-USDC balance jump
+const MIN_PROFIT = 1n; // Tracks raw micro-USDC differences
 
 /* =========================================================
-   RESERVES & MATH UTILITIES
+   PRICING UTILITIES & MATHEMATICAL EQUATIONS
 ========================================================= */
 function getAmountOut(amountIn, reserveIn, reserveOut) {
   const amountInWithFee = amountIn * 997n;
@@ -112,10 +117,10 @@ async function simulatePath(factoryAddr, amountIn, path) {
 }
 
 /* =========================================================
-   OPPORTUNITY FINDER LOGIC
+   OPPORTUNITY AGGREGATOR CALCULATOR
 ========================================================= */
 async function findBest() {
-  const dexList = Object.entries(FACTORIES);
+  const dexList = Object.entries(FACTORORIES);
   const tokens = Object.values(TOKENS).filter(t => t !== TOKENS.USDC);
   const hopTokens = [TOKENS.WETH, TOKENS.WMATIC];
 
@@ -133,7 +138,7 @@ async function findBest() {
         const tradeSize = reserves.reserveA / 1000n;
         if (tradeSize <= 0n) continue;
 
-        // DIRECT ROUTE SIMULATION
+        // DIRECT MATCH SIMULATION
         const directPath = [TOKENS.USDC, token];
         const tokenOut = await simulatePath(factoryA, tradeSize, directPath);
         if (!tokenOut) continue;
@@ -189,10 +194,9 @@ async function findBest() {
 }
 
 /* =========================================================
-   ON-CHAIN TRANSACTION SUBMISSION
+   TRANSACTION SUBMISSION HANDLER
 ========================================================= */
 async function execute(best) {
-  // Check and override minimum profit circuit breakers if configured
   try {
     const minimum = await contract.minimumProfitUSDC();
     if (minimum > 0n) {
@@ -203,30 +207,34 @@ async function execute(best) {
 
   console.log("⚡ Dispatching arbitrage transaction payload to mempool...");
 
-  const tx = await contract.executeAaveFlashLoanArbitrage(
-    ROUTERS[best.buy],
-    ROUTERS[best.sell],
-    best.tradeSize,
-    best.pathToToken,
-    best.pathToUSDC,
-    Math.floor(Date.now() / 1000) + 60,
-    {
-      gasLimit: GAS_LIMIT,
-      maxPriorityFeePerGas: ethers.parseUnits(PRIORITY_GWEI, "gwei"),
-      maxFeePerGas: ethers.parseUnits(MAX_GWEI, "gwei"),
-      nonce: await provider.getTransactionCount(wallet.address, "pending")
-    }
-  );
+  try {
+    const tx = await contract.executeAaveFlashLoanArbitrage(
+      ROUTERS[best.buy],
+      ROUTERS[best.sell],
+      best.tradeSize,
+      best.pathToToken,
+      best.pathToUSDC,
+      Math.floor(Date.now() / 1000) + 60,
+      {
+        gasLimit: GAS_LIMIT,
+        maxPriorityFeePerGas: ethers.parseUnits(PRIORITY_GWEI, "gwei"),
+        maxFeePerGas: ethers.parseUnits(MAX_GWEI, "gwei"),
+        nonce: await provider.getTransactionCount(wallet.address, "pending")
+      }
+    );
 
-  const receipt = await tx.wait(1);
-  console.log(`🟢 Transaction Confirmed! Tx Hash: ${tx.hash}`);
-  console.log("📈 Net PnL realized on-chain.");
+    await tx.wait(1);
+    console.log(`🟢 Transaction Confirmed! Tx Hash: ${tx.hash}`);
+    console.log("📈 Net PnL realized on-chain.");
+  } catch (txError) {
+    console.log("❌ Transaction dropped or reverted by node mempool.");
+  }
 }
 
 /* =========================================================
-   MAIN STREAM EVENT LOOP
+   MAIN BOT ENGINE STREAM EVENT LISTENER
 ========================================================= */
-async function startWebsocketBot() {
+async function startStreamingBot() {
   console.log("\n🚀 MULTI-DEX STREAMING BOT STARTED");
 
   provider.on("block", async (blockNumber) => {
@@ -238,7 +246,6 @@ async function startWebsocketBot() {
       if (bestProfit >= MIN_PROFIT) {
         console.log(`💰 PROFIT OPPORTUNITY GENERATED: ${ethers.formatUnits(bestProfit, 6)} USDC`);
         
-        // Reverse token lookup names for pristine path outputs
         const tokenName = Object.keys(TOKENS).find(key => TOKENS[key] === best.token) || "UNKNOWN";
         console.log(`[DEX PATH]: ${best.buy} (USDC -> ${tokenName}) ➡️ ${best.sell} (${tokenName} -> USDC)`);
         
@@ -248,7 +255,7 @@ async function startWebsocketBot() {
       }
     } catch (err) {
       console.log("\n❌ STREAM EXECUTION ERROR:");
-      console.error(err.reason || err.message || err);
+      console.log(err.reason || err.message || err);
     }
   });
 }
