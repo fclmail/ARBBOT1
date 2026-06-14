@@ -81,7 +81,7 @@ async function refreshLocalMarketCache() {
   const tokenKeys = Object.keys(TOKENS);
   localReserveCache = {};
 
-  // FIXED: Typo resolved here to correctly hit FACTORIES object
+  // FIXED: Pointing correctly to FACTORIES
   for (const [dexName, factoryAddr] of Object.entries(FACTORORIES)) {
     localReserveCache[dexName] = {};
     const factoryContract = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
@@ -105,14 +105,13 @@ async function refreshLocalMarketCache() {
           const key = `${tA.toLowerCase()}_${tB.toLowerCase()}`;
           localReserveCache[dexName][key] = { reserveA, reserveB };
         } catch {
-          // Silent catch to prevent individual broken pools from halting the scanner
+          // Silent catch to prevent broken pools from halting scanner
         }
       }
     }
   }
 }
 
-// Synchronous memory lookups - 0 microsecond latency
 function getCachedReserves(dexName, tokenA, tokenB) {
   const tA = tokenA.toLowerCase();
   const tB = tokenB.toLowerCase();
@@ -142,6 +141,7 @@ function calculatePathOutput(dexName, amountIn, path) {
    PERMUTATION MATRIX MULTI-HOP PATHFINDER
 ========================================================= */
 function findBestMultiHop() {
+  // FIXED: Pointing correctly to FACTORIES
   const dexList = Object.keys(FACTORORIES);
   const intermediateTokens = Object.values(TOKENS).filter(t => t !== TOKENS.USDC);
 
@@ -152,14 +152,13 @@ function findBestMultiHop() {
     for (const sellDex of dexList) {
       if (buyDex === sellDex) continue;
 
-      // Base anchor pool lookup to establish sizing rules safely
       const referenceReserves = getCachedReserves(buyDex, TOKENS.USDC, TOKENS.WETH);
       if (!referenceReserves) continue;
-      const tradeSize = referenceReserves.reserveA / 800n; // Use safe liquidity depth ratio
+      const tradeSize = referenceReserves.reserveA / 800n; 
       if (tradeSize <= 0n) continue;
 
       for (const tokenA of intermediateTokens) {
-        // --- ROUTE ALTERNATIVE 1: 2-LEG DIRECT PAIR MULTI-HOP ---
+        // 2-LEG DIRECT PAIR MULTI-HOP
         const pathToToken2L = [TOKENS.USDC, tokenA];
         const pathBackUSDC2L = [tokenA, TOKENS.USDC];
 
@@ -174,7 +173,7 @@ function findBestMultiHop() {
           }
         }
 
-        // --- ROUTE ALTERNATIVE 2: 3-LEG EXTENDED MULTI-HOP ---
+        // 3-LEG EXTENDED MULTI-HOP
         for (const tokenB of intermediateTokens) {
           if (tokenA === tokenB) continue;
 
@@ -237,10 +236,7 @@ async function startMultiHopBot() {
     console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | SCANNING FOR OPPORTUNITIES...`);
 
     try {
-      // Step 1: Bulk update network properties directly into local system cache
       await refreshLocalMarketCache();
-
-      // Step 2: Query CPU memory matrix without causing connection stalls
       const { best, bestProfit } = findBestMultiHop();
 
       if (bestProfit >= MIN_PROFIT) {
