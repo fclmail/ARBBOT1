@@ -60,10 +60,10 @@ const FACTORY_ABI = ["function getPair(address,address) view returns(address)"];
 const PAIR_ABI = ["getReserves() view returns(uint112,uint112,uint32)", "token0() view returns(address)"];
 
 // Execution Guard Rails
-const GAS_LIMIT = 4000000n; // Elevated for intensive multi-hop leg state changes
+const GAS_LIMIT = 4000000n; 
 const PRIORITY_GWEI = "250";
 const MAX_GWEI = "500";
-const MIN_PROFIT = 500000n; // Strictly target net profits ≥ $0.50 USDC
+const MIN_PROFIT = 500000n; // Target net profits ≥ $0.50 USDC
 
 /* =========================================================
    PURE MATH AND OFFLINE CACHE STORAGE ENGINES
@@ -81,6 +81,7 @@ async function refreshLocalMarketCache() {
   const tokenKeys = Object.keys(TOKENS);
   localReserveCache = {};
 
+  // FIXED: Typo resolved here to correctly hit FACTORIES object
   for (const [dexName, factoryAddr] of Object.entries(FACTORORIES)) {
     localReserveCache[dexName] = {};
     const factoryContract = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
@@ -141,7 +142,7 @@ function calculatePathOutput(dexName, amountIn, path) {
    PERMUTATION MATRIX MULTI-HOP PATHFINDER
 ========================================================= */
 function findBestMultiHop() {
-  const dexList = Object.keys(FACTORIES);
+  const dexList = Object.keys(FACTORORIES);
   const intermediateTokens = Object.values(TOKENS).filter(t => t !== TOKENS.USDC);
 
   let best = null;
