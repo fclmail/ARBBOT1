@@ -83,7 +83,7 @@ async function refreshLocalMarketCache() {
   localReserveCache = {};
 
   // FIXED: Pointing correctly to FACTORIES
-  for (const [dexName, factoryAddr] of Object.entries(FACTORORIES)) {
+  for (const [dexName, factoryAddr] of Object.entries(FACTORIES)) {
     localReserveCache[dexName] = {};
     const factoryContract = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
 
