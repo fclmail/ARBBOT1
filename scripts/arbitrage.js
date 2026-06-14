@@ -150,7 +150,7 @@ function findBestMultiHop() {
   let bestProfit = 0n;
 
   // Sandbox fixed trade size setup
-  const tradeSize = 100000n; 
+  const tradeSize = 70000n; 
 
   for (const buyDex of dexList) {
     for (const sellDex of dexList) {
