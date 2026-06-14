@@ -124,7 +124,7 @@ const PAIR_ABI = [
 const GAS_LIMIT = 4000000n; 
 const PRIORITY_GWEI = "250";
 const MAX_GWEI = "500";
-const MIN_PROFIT = 500000n; // Target net profits ≥ $0.50 USDC
+const MIN_PROFIT = 50n; // Target net profits ≥ $0.50 USDC
 
 /* =========================================================
    PURE MATH AND OFFLINE CACHE STORAGE ENGINES
