@@ -120,7 +120,7 @@ async function simulatePath(factoryAddr, amountIn, path) {
    OPPORTUNITY AGGREGATOR CALCULATOR
 ========================================================= */
 async function findBest() {
-  const dexList = Object.entries(FACTORORIES);
+  const dexList = Object.entries(FACTORIES);
   const tokens = Object.values(TOKENS).filter(t => t !== TOKENS.USDC);
   const hopTokens = [TOKENS.WETH, TOKENS.WMATIC];
 
