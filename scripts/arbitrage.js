@@ -27,12 +27,16 @@ provider.getBlockNumber()
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 const ARB_CONTRACT = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-// UPDATED ABI: Swapped out flash loan targets for direct execution signatures
+// ABI matched explicitly to your contract's parameters
 const ABI = [
-  "function executeDirectArbitrage(address buyRouter, address sellRouter, uint256 amountIn, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",
-  "function getContractBalance(address token) external view returns (uint256)"
+  "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
 const contract = new ethers.Contract(ARB_CONTRACT, ABI, wallet);
+
+// Standalone ERC20 ABI used to check contract balances safely
+const ERC20_ABI = [
+  "function balanceOf(address account) external view returns (uint256)"
+];
 
 /* =========================================================
    MARKET INVENTORY CONFIGURATION
@@ -65,11 +69,14 @@ const PAIR_ABI = [
   "function token0() external view returns (address)"
 ];
 
-// Production Execution Guard Rails
-const GAS_LIMIT = 280000n; // Direct vault swaps save gas by cutting out loan math overhead
+// Instantiating standard USDC contract reference for balance checks
+const usdcContract = new ethers.Contract(TOKENS.USDC, ERC20_ABI, provider);
+
+// Gas and hurdle settings
+const GAS_LIMIT = 260000n; 
 const PRIORITY_GWEI = "350";   
 const MAX_GWEI = "600";        
-const MIN_PROFIT = 1n; // Hurdle left down for instant confirmation testing
+const MIN_PROFIT = 1n; 
 
 /* =========================================================
    PURE MATH AND OFFLINE CACHE STORAGE ENGINES
@@ -109,7 +116,7 @@ async function refreshLocalMarketCache() {
           const key = `${tA.toLowerCase()}_${tB.toLowerCase()}`;
           localReserveCache[dexName][key] = { reserveA, reserveB };
         } catch {
-          // Silent catch
+          // System fallback catch
         }
       }
     }
@@ -151,8 +158,8 @@ function findBestMultiHop() {
   let best = null;
   let bestProfit = 0n;
 
-  // Sandbox fixed trade size
-  const tradeSize = 70000n; 
+  // Sandbox fixed trade size setup ($0.10 USDC = 100000 micro-units)
+  const tradeSize = 100000n; 
 
   for (const buyDex of dexList) {
     for (const sellDex of dexList) {
@@ -167,9 +174,12 @@ function findBestMultiHop() {
           const finalUSDC2L = calculatePathOutput(sellDex, outTokenA2L, pathBackUSDC2L);
           const profit2L = finalUSDC2L - tradeSize;
 
-          if (profit2L > bestProfit || best === null) {
-            bestProfit = profit2L;
-            best = { buy: buyDex, sell: sellDex, tradeSize, pathToToken: pathToToken2L, pathToUSDC: pathBackUSDC2L };
+          // Added explicit positive filtering constraint to stop negative trades from dispatching
+          if (profit2L >= MIN_PROFIT) {
+            if (best === null || profit2L > bestProfit) {
+              bestProfit = profit2L;
+              best = { buy: buyDex, sell: sellDex, tradeSize, pathToToken: pathToToken2L, pathToUSDC: pathBackUSDC2L };
+            }
           }
         }
       }
@@ -182,9 +192,9 @@ function findBestMultiHop() {
    ON-CHAIN CONTRACT CALL DISPATCHER
 ========================================================= */
 async function execute(best) {
-  console.log("⚡ DISPATCHING VAULT FUNDS FOR LIVE SWAP...");
+  console.log("⚡ DISPATCHING VAULT CAPITAL FOR LIVE SWAP...");
   try {
-    const tx = await contract.executeDirectArbitrage(
+    const tx = await contract.executeArbitrage(
       ROUTERS[best.buy],
       ROUTERS[best.sell],
       best.tradeSize,
@@ -204,10 +214,10 @@ async function execute(best) {
     
     const receipt = await tx.wait(1);
     console.log(`🟢 Transaction Confirmed in Block #${receipt.blockNumber}!`);
-    console.log(`⛽ Real Gas Fees Paid On-Chain: ${receipt.gasUsed.toString()} units`);
+    console.log(`⛽ On-Chain Gas Spent: ${receipt.gasUsed.toString()} units`);
   } catch (txError) {
     console.log("❌ Transaction completed execution but reverted on-chain.");
-    if (txError.data) console.log(`   └─ Evm Reversion Reason: ${txError.data}`);
+    if (txError.data) console.log(`   └─ EVM Reversion: ${txError.data}`);
   }
 }
 
@@ -215,27 +225,27 @@ async function execute(best) {
    MAIN AGGREGATOR LOOP STREAMER
 ========================================================= */
 async function startVaultBot() {
-  console.log("\n🚀 MULTI-DEX STREAMING BOT STARTED [VAULT RUN MODE]");
+  console.log("\n🚀 MULTI-DEX BOT ACTIVE [VAULT CAPITAL INJECTION ENGINE]");
 
   provider.on("block", async (blockNumber) => {
     console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | SCANNING FOR OPPORTUNITIES...`);
 
     try {
-      // Fetch current contract balance to log status
-      const vaultBalance = await contract.getContractBalance(TOKENS.USDC);
+      // FIX: Query the USDC Contract directly to get the balance of your deployed arbitrage contract
+      const vaultBalance = await usdcContract.balanceOf(ARB_CONTRACT);
       console.log(`💼 Current Contract Vault Balance: ${ethers.formatUnits(vaultBalance, 6)} USDC`);
 
       await refreshLocalMarketCache();
       const { best, bestProfit } = findBestMultiHop();
 
       if (best) {
-        console.log(`💰 FORCED OPPORTUNITY FOUND. Delta Calculation: ${ethers.formatUnits(bestProfit, 6)} USDC`);
+        console.log(`💰 PROFITABLE OPPORTUNITY FOUND. Delta Calculation: ${ethers.formatUnits(bestProfit, 6)} USDC`);
         const buildReadableName = (path) => path.map(addr => Object.keys(TOKENS).find(k => TOKENS[k] === addr) || "??").join(" -> ");
         console.log(`[DEX PATH]: ${best.buy} (${buildReadableName(best.pathToToken)}) ➡️ ${best.sell} (${buildReadableName(best.pathToUSDC)})`);
 
         await execute(best);
       } else {
-        console.log("⏱️ Scan Finished. No valid routing paths found in this block.");
+        console.log("⏱️ Scan Finished. No profitable routing paths found in this block.");
       }
     } catch (err) {
       console.log("\n❌ STREAM EXECUTION ERROR:", err.message);
