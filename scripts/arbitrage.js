@@ -93,7 +93,7 @@ async function refreshLocalMarketCache() {
   const tokenKeys = Object.keys(TOKENS);
   localReserveCache = {};
 
-  for (const [dexName, factoryAddr] of Object.entries(FACTORIES)) {
+  for (const [dexName, factoryAddr] of Object.entries(FACTORORIES)) {
     localReserveCache[dexName] = {};
     const factoryContract = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
 
@@ -152,7 +152,7 @@ function calculatePathOutput(dexName, amountIn, path) {
    PERMUTATION MATRIX MULTI-HOP PATHFINDER
 ========================================================= */
 function findBestMultiHop() {
-  const dexList = Object.keys(FACTORIES);
+  const dexList = Object.keys(FACTORORIES);
   const intermediateTokens = Object.values(TOKENS).filter(t => t !== TOKENS.USDC);
 
   let best = null;
