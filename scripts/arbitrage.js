@@ -86,7 +86,7 @@ async function refreshLocalMarketCache() {
   const tokenKeys = Object.keys(TOKENS);
   localReserveCache = {};
 
-  for (const [dexName, factoryAddr] of Object.entries(FACTORORIES)) {
+  for (const [dexName, factoryAddr] of Object.entries(FACTORIES)) {
     localReserveCache[dexName] = {};
     const factoryContract = new ethers.Contract(factoryAddr, FACTORY_ABI, provider);
 
