@@ -1,4 +1,3 @@
-Wss vault funds only 
 
 
 import dotenv from "dotenv";
