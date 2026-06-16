@@ -79,7 +79,7 @@ function generateScanningRoutes() {
 async function main() {
     console.log("⏳ Initializing Vault-Funded Processing Engine...");
     
-    // RESTORED: Traditional crash-on-missing initialization validation check
+    // Traditional connection check
     if (!RPC_URL || !PRIVATE_KEY || !VAULT_CONTRACT_ADDRESS) {
         console.error("❌ Critical configuration parameters missing inside operational environment.");
         process.exit(1);
