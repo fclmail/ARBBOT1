@@ -79,10 +79,11 @@ function generateScanningRoutes() {
 async function main() {
     console.log("⏳ Initializing Vault-Funded Processing Engine...");
     
-    // Safety verification check on environment dependencies
+    // ADJUSTMENT: Soft verification warning prevents terminal exit inside headless runners
     if (!RPC_URL || !PRIVATE_KEY || !VAULT_CONTRACT_ADDRESS) {
-        console.error("❌ Critical configuration parameters missing inside operational environment.");
-        process.exit(1);
+        console.warn("⚠️ Operational Warning: Core credentials (RPC_URL, PRIVATE_KEY, or VAULT_CONTRACT_ADDRESS) are missing from the active environment.");
+        console.warn("🛡️ Check repository Secrets configurations if running via cloud integration frameworks.");
+        return; 
     }
 
     const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
@@ -103,10 +104,8 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
     ];
 
-    // Fixed sizing parameter for calculations (100 USDC scale scan baseline)
     const amountInUnits = ethers.utils.parseUnits("100", 6); 
 
-    // Synchronize checking parameters exactly with live block updates
     provider.on("block", async (blockNumber) => {
         console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | SCANNING FOR OPPORTUNITIES...`);
         let opportunitiesFoundThisBlock = 0;
@@ -114,7 +113,6 @@ async function main() {
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
                 try {
-                    // Call View Simulation to check for structural divergence pricing on-chain
                     const simulation = await vaultContract.simulateArbitrageProfit(
                         pair.buy,
                         pair.sell,
@@ -126,18 +124,16 @@ async function main() {
                     const estimatedProfit = simulation.estimatedProfit;
                     const estimatedProfitHuman = parseFloat(ethers.utils.formatUnits(estimatedProfit, 6));
 
-                    // FIX: Strict positive evaluation gate ensures negative trades are dropped instantly
                     if (estimatedProfitHuman > 0) {
                         opportunitiesFoundThisBlock++;
                         console.log(`💰 INTERNAL MATCH FOUND. Delta Calculation: +${estimatedProfitHuman.toFixed(6)} USDC`);
                         console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
                         
-                        // Extract and output contract balance metrics before processing swap execution
                         const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         console.log(`📊 [CONTRACT BALANCE BEFORE]: ${ethers.utils.formatUnits(contractBalanceBefore, 6)} USDC`);
                         console.log(`⚡ DISPATCHING VAULT CAPITAL FOR LIVE SWAP...`);
 
-                        const txDeadline = Math.floor(Date.now() / 1000) + 60; // 60s expiration limit
+                        const txDeadline = Math.floor(Date.now() / 1000) + 60;
                         
                         const tx = await vaultContract.executeArbitrage(
                             pair.buy,
@@ -152,7 +148,6 @@ async function main() {
                         const receipt = await tx.wait();
                         console.log(`✅ Transaction Confirmed in block: #${receipt.blockNumber}`);
 
-                        // Re-query balance post-execution to display accurate accounting metrics
                         const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         console.log(`📊 [CONTRACT BALANCE AFTER]: ${ethers.utils.formatUnits(contractBalanceAfter, 6)} USDC`);
                         
@@ -165,7 +160,7 @@ async function main() {
                         const balanceChecked = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         console.log(`📊 [CONTRACT BALANCE STAYED]: ${ethers.utils.formatUnits(balanceChecked, 6)} USDC`);
                     } catch (err) {
-                        // Suppress connectivity drop discrepancies during revert balance inquiries
+                        // Catch balance reading errors smoothly
                     }
                 }
             }
