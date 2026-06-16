@@ -3,11 +3,10 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ==========================================
-// 1. HARDCODED NETWORK & SMART CONTRACT CONFIG
+// 1. HARDCODED NETWORK & SMART CONTRACT CONFIG (JS1 System Match)
 // ==========================================
-const RPC_URL = process.env.RPC_URL;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const VAULT_CONTRACT_ADDRESS = process.env.VAULT_CONTRACT_ADDRESS;
+const RPC_URL = "https://polygon.drpc.org";
+const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 // Core ERC20 Token Addresses on Polygon (Matic Mainnet)
 const USDC_ADDRESS  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -75,10 +74,11 @@ function generateScanningRoutes() {
 async function main() {
     console.log("⏳ Initializing Vault-Funded Processing Engine...");
     
-    if (!RPC_URL || !PRIVATE_KEY || !VAULT_CONTRACT_ADDRESS) {
-        console.error("❌ Critical configuration parameters missing inside operational environment.");
+    if (!process.env.PRIVATE_KEY) {
+        console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your local .env configuration file.");
         process.exit(1);
     }
+    const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
     // Upgraded to Ethers v6 structure with explicit fast-polling engine adjustments
     const provider = new ethers.JsonRpcProvider(RPC_URL);
