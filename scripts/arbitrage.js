@@ -3,14 +3,14 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ==========================================
-// 1. HARDCODED NETWORK & SMART CONTRACT CONFIG (JS1 System Match)
+// 1. HARDCODED NETWORK & SMART CONTRACT CONFIG
 // ==========================================
 const RPC_URL = "https://polygon.drpc.org";
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
 // Core ERC20 Token Addresses on Polygon (All Lowercase to Bypass Checksum Filters)
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
-const WMATIC_ADDRESS = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270";
+const WMATIC_ADDRESS = "0x0d500b1db8e8ef31e21c99d1db9a6444d3adf1270";
 const USDT_ADDRESS   = "0xc2132d05d31c914a87c6611c10748aeb04b58e8f";
 const WBTC_ADDRESS   = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6";
 
@@ -53,15 +53,6 @@ function generateScanningRoutes() {
             pathToUSDC: [intermediate, USDC_ADDRESS],
             label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ USDC`
         });
-        for (let secondIntermediate of intermediates) {
-            if (intermediate.toLowerCase() !== secondIntermediate.toLowerCase()) {
-                routeMatrix.push({
-                    pathToToken: [USDC_ADDRESS, intermediate, secondIntermediate],
-                    pathToUSDC: [secondIntermediate, USDC_ADDRESS],
-                    label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ ${getTokenLabel(secondIntermediate)} ➡️ USDC`
-                });
-            }
-        }
     }
     return routeMatrix;
 }
@@ -70,7 +61,7 @@ function generateScanningRoutes() {
 // 3. EXECUTION ENGINE STATE LOOP
 // ==========================================
 async function main() {
-    console.log("⏳ Initializing PIPELINE VERIFICATION MODE (Zero Profit Gate)...");
+    console.log("⏳ Initializing LIVE TRANSACTION PROVER (Micro-Balance Settings)...");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your local .env configuration file.");
@@ -79,59 +70,47 @@ async function main() {
     const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
     const provider = new ethers.JsonRpcProvider(RPC_URL);
-    provider.pollingInterval = 200; 
     
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
     const startBlock = await provider.getBlockNumber();
-    console.log(`\n🟢 CONNECTED → Vault Engine Active on Polygon Block: #${startBlock}`);
-    console.log(`🚀 PIPELINE TESTER ACTIVE [FORCING IMMEDIATE EXECUTION]`);
+    const walletBalance = await provider.getBalance(wallet.address);
+    
+    console.log(`\n🟢 CONNECTED`);
+    console.log(`💳 Wallet Native Balance: ${ethers.formatEther(walletBalance)} POL`);
+    console.log(`📦 Active on Polygon Block: #${startBlock}`);
 
     const tokenRoutes = generateScanningRoutes();
     const routerPairs = [
-        { buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI, buyName: "QUICK", sellName: "SUSHI" },
-        { buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK, buyName: "SUSHI", sellName: "QUICK" },
-        { buy: ROUTERS.DFYN,  sell: ROUTERS.QUICK, buyName: "DFYN",  sellName: "QUICK" },
-        { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
+        { buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI, buyName: "QUICK", sellName: "SUSHI" }
     ];
 
-    const amountInUnits = ethers.parseUnits("100", 6); 
+    // =================================================================
+    // ⚙️ CRITICAL FIX: Sized down to 0.01 USDC to clear your 0.076 contract balance
+    // =================================================================
+    const amountInUnits = ethers.parseUnits("0.01", 6); 
 
     provider.on("block", async (blockNumber) => {
-        console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | RUNNING PIPELINE FORCE TEST...`);
-        let opportunitiesFoundThisBlock = 0;
+        console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | DISPATCHING PIPELINE PROVER...`);
 
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
                 try {
-                    const simulation = await vaultContract.simulateArbitrageProfit(
-                        pair.buy,
-                        pair.sell,
-                        amountInUnits,
-                        route.pathToToken,
-                        route.pathToUSDC
-                    );
-
-                    const estimatedProfit = simulation.estimatedProfit;
-                    const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
-
-                    // =================================================================
-                    // 🛠️ PIPELINE VERIFICATION SETTING: REMOVED "> 0" GATE
-                    // This forces immediate log feedback and contract transaction firing
-                    // =================================================================
-                    opportunitiesFoundThisBlock++;
-                    console.log(`💰 [FORCED TEST MATCH]. Simulated Return: ${estimatedProfitHuman.toFixed(6)} USDC`);
-                    console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
-                    
                     const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                     console.log(`📊 [CONTRACT BALANCE BEFORE]: ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
-                    console.log(`⚡ DISPATCHING TEST CAPITAL TO MEMPOOL...`);
+                    
+                    if (contractBalanceBefore < amountInUnits) {
+                        console.error("❌ Test aborted: Contract holds less than the 0.01 USDC required.");
+                        process.exit(1);
+                    }
+
+                    console.log(`⚡ BROADCASTING TRANSACTION TO BLOCKCHAIN...`);
                     
                     const txDeadline = Math.floor(Date.now() / 1000) + 60;
                     
+                    // Sending transaction with standard gas properties
                     const tx = await vaultContract.executeArbitrage(
                         pair.buy,
                         pair.sell,
@@ -139,27 +118,24 @@ async function main() {
                         route.pathToToken,
                         route.pathToUSDC,
                         txDeadline,
-                        { gasLimit: 450000 }
+                        { gasLimit: 250000 } // Safe upper bound for a single 2-hop route
                     );
                     
+                    console.log(`🚨 TRANSACTION HASH DISPATCHED: ${tx.hash}`);
+                    console.log(`⏳ Waiting for block confirmation receipt...`);
+                    
                     const receipt = await tx.wait(1);
-                    console.log(`✅ Transaction Confirmed in block: #${receipt.blockNumber}`);
+                    console.log(`✅ TRANSACTION SUCCESSFUL IN BLOCK: #${receipt.blockNumber}`);
                     
                     const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                     console.log(`📊 [CONTRACT BALANCE AFTER]: ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
                     
-                    const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
-                    console.log(`💰 Realized Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC`);
-
-                    // Stop after forcing one transaction to prevent spamming the RPC / burning gas
-                    console.log("🛑 Test pipeline complete. Stopping process.");
+                    console.log("🛑 Prover completed successfully. Circuit breaker triggered.");
                     process.exit(0);
 
                 } catch (error) {
-                    // Filter out expected node errors, allow pipeline to keep searching for an active path to test
-                    if (error.message && !error.message.includes("argument=\"address\"") && !error.message.includes("execution reverted")) {
-                        console.log(`⚠️ Pipeline Scan Exception: ${error.message}`);
-                    }
+                    console.error(`❌ Transaction Processing Failed: ${error.message}`);
+                    process.exit(1);
                 }
             }
         }
