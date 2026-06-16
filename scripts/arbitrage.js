@@ -1,6 +1,5 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-
 dotenv.config();
 
 // ==========================================
@@ -29,7 +28,6 @@ const ENFORCER_ABI = [
     "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
     "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
-
 const ERC20_ABI = [
     "function balanceOf(address account) view returns (uint256)"
 ];
@@ -50,7 +48,6 @@ function getTokenLabel(address) {
 function generateScanningRoutes() {
     const intermediates = [WMATIC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS];
     let routeMatrix = [];
-
     for (let intermediate of intermediates) {
         // Direct Route: USDC -> Intermediate -> USDC
         routeMatrix.push({
@@ -58,7 +55,6 @@ function generateScanningRoutes() {
             pathToUSDC: [intermediate, USDC_ADDRESS],
             label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ USDC`
         });
-
         // Multi-Hop Path Formulation: USDC -> Int_1 -> Int_2 -> USDC
         for (let secondIntermediate of intermediates) {
             if (intermediate.toLowerCase() !== secondIntermediate.toLowerCase()) {
@@ -79,20 +75,22 @@ function generateScanningRoutes() {
 async function main() {
     console.log("⏳ Initializing Vault-Funded Processing Engine...");
     
-    // Fallback assignment to keep execution alive or assert variables
     if (!RPC_URL || !PRIVATE_KEY || !VAULT_CONTRACT_ADDRESS) {
         console.error("❌ Critical configuration parameters missing inside operational environment.");
         process.exit(1);
     }
 
-    const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
+    // Upgraded to Ethers v6 structure with explicit fast-polling engine adjustments
+    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    provider.pollingInterval = 200; 
+    
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
     const startBlock = await provider.getBlockNumber();
-    console.log(`🟢 CONNECTED → Vault Engine Active on Polygon Block: #${startBlock}`);
+    console.log(`\n🟢 CONNECTED → Vault Engine Active on Polygon Block: #${startBlock}`);
     console.log(`🚀 MULTI-DEX BOT ACTIVE [VAULT CAPITAL INJECTION ENGINE]`);
 
     const tokenRoutes = generateScanningRoutes();
@@ -103,8 +101,8 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
     ];
 
-    // Fixed sizing parameter for calculations (100 USDC scale scan baseline)
-    const amountInUnits = ethers.utils.parseUnits("100", 6); 
+    // Fixed sizing parameter for calculations (Ethers v6 format parsed up front)
+    const amountInUnits = ethers.parseUnits("100", 6); 
 
     // Continuous real-time block streaming cycle
     provider.on("block", async (blockNumber) => {
@@ -124,7 +122,7 @@ async function main() {
                     );
 
                     const estimatedProfit = simulation.estimatedProfit;
-                    const estimatedProfitHuman = parseFloat(ethers.utils.formatUnits(estimatedProfit, 6));
+                    const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
 
                     // Strict positive evaluation gate ensures negative trades are dropped instantly
                     if (estimatedProfitHuman > 0) {
@@ -134,9 +132,9 @@ async function main() {
                         
                         // Extract and output contract balance metrics before processing swap execution
                         const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        console.log(`📊 [CONTRACT BALANCE BEFORE]: ${ethers.utils.formatUnits(contractBalanceBefore, 6)} USDC`);
+                        console.log(`📊 [CONTRACT BALANCE BEFORE]: ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
                         console.log(`⚡ DISPATCHING VAULT CAPITAL FOR LIVE SWAP...`);
-
+                        
                         const txDeadline = Math.floor(Date.now() / 1000) + 60; // 60s expiration limit
                         
                         const tx = await vaultContract.executeArbitrage(
@@ -148,19 +146,22 @@ async function main() {
                             txDeadline,
                             { gasLimit: 450000 }
                         );
-
-                        const receipt = await tx.wait();
-                        console.log(`✅ Transaction Confirmed in block: #${receipt.blockNumber}`);
-
-                        // Re-query balance post-execution to display accurate accounting metrics
-                        const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        console.log(`📊 [CONTRACT BALANCE AFTER]: ${ethers.utils.formatUnits(contractBalanceAfter, 6)} USDC`);
                         
-                        const netProfitRealized = contractBalanceAfter.sub(contractBalanceBefore);
-                        console.log(`💰 Realized Profit: +${ethers.utils.formatUnits(netProfitRealized, 6)} USDC`);
+                        const receipt = await tx.wait(1);
+                        console.log(`✅ Transaction Confirmed in block: #${receipt.blockNumber}`);
+                        
+                        // Re-query balance post-execution using native BigInt subtraction
+                        const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                        console.log(`📊 [CONTRACT BALANCE AFTER]: ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
+                        
+                        const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
+                        console.log(`💰 Realized Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC`);
                     }
                 } catch (error) {
-                    // Failures handle gracefully to ensure engine keeps polling subsequent blocks
+                    // Logs real configuration or connection issues while safely passing over expected simulation reverts
+                    if (error.message && !error.message.includes("execution reverted")) {
+                        console.log(`⚠️ Diagnostic Scan Warning: ${error.message}`);
+                    }
                 }
             }
         }
