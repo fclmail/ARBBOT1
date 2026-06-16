@@ -50,18 +50,27 @@ function generateScanningRoutes() {
             pathToUSDC: [intermediate, USDC_ADDRESS],
             label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ USDC`
         });
+        for (let secondIntermediate of intermediates) {
+            if (intermediate.toLowerCase() !== secondIntermediate.toLowerCase()) {
+                routeMatrix.push({
+                    pathToToken: [USDC_ADDRESS, intermediate, secondIntermediate],
+                    pathToUSDC: [secondIntermediate, USDC_ADDRESS],
+                    label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ ${getTokenLabel(secondIntermediate)} ➡️ USDC`
+                });
+            }
+        }
     }
     return routeMatrix;
 }
 
 // ==========================================
-// 3. MAIN RUNNER LOOP (With Concurrency Control)
+// 3. MAIN RUNNER LOOP (Production Configuration)
 // ==========================================
 async function main() {
-    console.log("⏳ Initializing Locked Live Prover Script...");
+    console.log("⏳ Initializing Locked Production Engine...");
     
     if (!process.env.PRIVATE_KEY) {
-        console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your local .env configuration file.");
+        console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your .env configuration file.");
         process.exit(1);
     }
     const PRIVATE_KEY = process.env.PRIVATE_KEY;
@@ -77,16 +86,19 @@ async function main() {
 
     const tokenRoutes = generateScanningRoutes();
     const routerPairs = [
-        { buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI, buyName: "QUICK", sellName: "SUSHI" }
+        { buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI, buyName: "QUICK", sellName: "SUSHI" },
+        { buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK, buyName: "SUSHI", sellName: "QUICK" },
+        { buy: ROUTERS.DFYN,  sell: ROUTERS.QUICK, buyName: "DFYN",  sellName: "QUICK" },
+        { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
     ];
 
-    const amountInUnits = ethers.parseUnits("0.01", 6); 
+    // ADJUSTABLE: Standard production capital tier size
+    const amountInUnits = ethers.parseUnits("100", 6); 
     
-    // Concurrency Lock Variable
     let isExecuting = false;
 
     provider.on("block", async (blockNumber) => {
-        console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | Processing...`);
+        console.log(`📦 BLOCK: #${blockNumber} | Scanning Matrix Routes...`);
 
         if (isExecuting) {
             console.log("⏳ Execution lock active. Skipping this block scan to prevent collisions.");
@@ -96,46 +108,63 @@ async function main() {
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
                 try {
-                    const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                    console.log(`📊 [CONTRACT BALANCE BEFORE]: ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
-                    
-                    if (contractBalanceBefore < amountInUnits) {
-                        console.error("❌ Test aborted: Insufficient contract balance.");
-                        process.exit(1);
-                    }
-
-                    // Activate Lock immediately before starting the async transaction call
-                    isExecuting = true;
-                    console.log(`⚡ SINGLE-BROADCAST LOCK ACQUIRED. Dispatching transaction...`);
-                    
-                    const txDeadline = Math.floor(Date.now() / 1000) + 60;
-                    
-                    const tx = await vaultContract.executeArbitrage(
+                    // Query the on-chain simulation engine
+                    const simulation = await vaultContract.simulateArbitrageProfit(
                         pair.buy,
                         pair.sell,
                         amountInUnits,
                         route.pathToToken,
-                        route.pathToUSDC,
-                        txDeadline,
-                        { gasLimit: 250000 }
+                        route.pathToUSDC
                     );
-                    
-                    console.log(`🚨 TRANSACTION HASH DISPATCHED: ${tx.hash}`);
-                    console.log(`⏳ Waiting for block confirmation...`);
-                    
-                    const receipt = await tx.wait(1);
-                    console.log(`✅ TRANSACTION SUCCESSFUL IN BLOCK: #${receipt.blockNumber}`);
-                    
-                    const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                    console.log(`📊 [CONTRACT BALANCE AFTER]: ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
-                    
-                    console.log("🛑 Prover completed successfully. Shutting down.");
-                    process.exit(0);
 
+                    const estimatedProfit = simulation.estimatedProfit;
+                    const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
+
+                    // =================================================================
+                    // PRODUCTION FILTER: Only fires transaction if true profit is verified
+                    // =================================================================
+                    if (estimatedProfitHuman > 0.05) { 
+                        const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                        
+                        if (contractBalanceBefore < amountInUnits) {
+                            console.error(`❌ Opportunity found, but contract lacks required capital size.`);
+                            continue;
+                        }
+
+                        // Activate concurrency lock
+                        isExecuting = true;
+                        console.log(`💰 [PROFIT MATCH DETECTED]. Delta Calculation: +${estimatedProfitHuman.toFixed(6)} USDC`);
+                        console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
+                        console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
+                        
+                        const txDeadline = Math.floor(Date.now() / 1000) + 30; // 30s expiration limit
+                        
+                        const tx = await vaultContract.executeArbitrage(
+                            pair.buy,
+                            pair.sell,
+                            amountInUnits,
+                            route.pathToToken,
+                            route.pathToUSDC,
+                            txDeadline,
+                            { gasLimit: 400000 }
+                        );
+                        
+                        console.log(`🚨 TRANSACTION HASH DISPATCHED: ${tx.hash}`);
+                        const receipt = await tx.wait(1);
+                        console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
+                        
+                        const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                        const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
+                        console.log(`💰 Realized Net Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC`);
+                        
+                        // Release lock for subsequent block evaluations
+                        isExecuting = false;
+                    }
                 } catch (error) {
-                    console.error(`❌ Transaction Processing Failed: ${error.message}`);
-                    isExecuting = false; // Release lock if a network error occurs
-                    process.exit(1);
+                    // Suppress expected simulation reverts to keep runtime clean
+                    if (error.message && !error.message.includes("execution reverted")) {
+                        console.log(`⚠️ Simulation Exception: ${error.message}`);
+                    }
                 }
             }
         }
