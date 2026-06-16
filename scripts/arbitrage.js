@@ -48,13 +48,11 @@ function generateScanningRoutes() {
     const intermediates = [WMATIC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS];
     let routeMatrix = [];
     for (let intermediate of intermediates) {
-        // Direct Route: USDC -> Intermediate -> USDC
         routeMatrix.push({
             pathToToken: [USDC_ADDRESS, intermediate],
             pathToUSDC: [intermediate, USDC_ADDRESS],
             label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ USDC`
         });
-        // Multi-Hop Path Formulation: USDC -> Int_1 -> Int_2 -> USDC
         for (let secondIntermediate of intermediates) {
             if (intermediate.toLowerCase() !== secondIntermediate.toLowerCase()) {
                 routeMatrix.push({
@@ -72,7 +70,7 @@ function generateScanningRoutes() {
 // 3. EXECUTION ENGINE STATE LOOP
 // ==========================================
 async function main() {
-    console.log("⏳ Initializing Vault-Funded Processing Engine...");
+    console.log("⏳ Initializing PIPELINE VERIFICATION MODE (Zero Profit Gate)...");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your local .env configuration file.");
@@ -80,7 +78,6 @@ async function main() {
     }
     const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-    // Upgraded to Ethers v6 structure with explicit fast-polling engine adjustments
     const provider = new ethers.JsonRpcProvider(RPC_URL);
     provider.pollingInterval = 200; 
     
@@ -91,7 +88,7 @@ async function main() {
 
     const startBlock = await provider.getBlockNumber();
     console.log(`\n🟢 CONNECTED → Vault Engine Active on Polygon Block: #${startBlock}`);
-    console.log(`🚀 MULTI-DEX BOT ACTIVE [VAULT CAPITAL INJECTION ENGINE]`);
+    console.log(`🚀 PIPELINE TESTER ACTIVE [FORCING IMMEDIATE EXECUTION]`);
 
     const tokenRoutes = generateScanningRoutes();
     const routerPairs = [
@@ -101,18 +98,15 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
     ];
 
-    // Fixed sizing parameter for calculations (Ethers v6 format parsed up front)
     const amountInUnits = ethers.parseUnits("100", 6); 
 
-    // Continuous real-time block streaming cycle
     provider.on("block", async (blockNumber) => {
-        console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | SCANNING FOR OPPORTUNITIES...`);
+        console.log(`\n📦 NEW BLOCK MINED: #${blockNumber} | RUNNING PIPELINE FORCE TEST...`);
         let opportunitiesFoundThisBlock = 0;
 
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
                 try {
-                    // Call View Simulation to check for structural divergence pricing on-chain
                     const simulation = await vaultContract.simulateArbitrageProfit(
                         pair.buy,
                         pair.sell,
@@ -124,50 +118,50 @@ async function main() {
                     const estimatedProfit = simulation.estimatedProfit;
                     const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
 
-                    // Strict positive evaluation gate ensures negative trades are dropped instantly
-                    if (estimatedProfitHuman > 0) {
-                        opportunitiesFoundThisBlock++;
-                        console.log(`💰 INTERNAL MATCH FOUND. Delta Calculation: +${estimatedProfitHuman.toFixed(6)} USDC`);
-                        console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
-                        
-                        // Extract and output contract balance metrics before processing swap execution
-                        const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        console.log(`📊 [CONTRACT BALANCE BEFORE]: ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
-                        console.log(`⚡ DISPATCHING VAULT CAPITAL FOR LIVE SWAP...`);
-                        
-                        const txDeadline = Math.floor(Date.now() / 1000) + 60; // 60s expiration limit
-                        
-                        const tx = await vaultContract.executeArbitrage(
-                            pair.buy,
-                            pair.sell,
-                            amountInUnits,
-                            route.pathToToken,
-                            route.pathToUSDC,
-                            txDeadline,
-                            { gasLimit: 450000 }
-                        );
-                        
-                        const receipt = await tx.wait(1);
-                        console.log(`✅ Transaction Confirmed in block: #${receipt.blockNumber}`);
-                        
-                        // Re-query balance post-execution using native BigInt subtraction
-                        const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        console.log(`📊 [CONTRACT BALANCE AFTER]: ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
-                        
-                        const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
-                        console.log(`💰 Realized Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC`);
-                    }
+                    // =================================================================
+                    // 🛠️ PIPELINE VERIFICATION SETTING: REMOVED "> 0" GATE
+                    // This forces immediate log feedback and contract transaction firing
+                    // =================================================================
+                    opportunitiesFoundThisBlock++;
+                    console.log(`💰 [FORCED TEST MATCH]. Simulated Return: ${estimatedProfitHuman.toFixed(6)} USDC`);
+                    console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
+                    
+                    const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                    console.log(`📊 [CONTRACT BALANCE BEFORE]: ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
+                    console.log(`⚡ DISPATCHING TEST CAPITAL TO MEMPOOL...`);
+                    
+                    const txDeadline = Math.floor(Date.now() / 1000) + 60;
+                    
+                    const tx = await vaultContract.executeArbitrage(
+                        pair.buy,
+                        pair.sell,
+                        amountInUnits,
+                        route.pathToToken,
+                        route.pathToUSDC,
+                        txDeadline,
+                        { gasLimit: 450000 }
+                    );
+                    
+                    const receipt = await tx.wait(1);
+                    console.log(`✅ Transaction Confirmed in block: #${receipt.blockNumber}`);
+                    
+                    const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                    console.log(`📊 [CONTRACT BALANCE AFTER]: ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
+                    
+                    const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
+                    console.log(`💰 Realized Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC`);
+
+                    // Stop after forcing one transaction to prevent spamming the RPC / burning gas
+                    console.log("🛑 Test pipeline complete. Stopping process.");
+                    process.exit(0);
+
                 } catch (error) {
-                    // Logs real configuration or connection issues while safely passing over expected simulation reverts
+                    // Filter out expected node errors, allow pipeline to keep searching for an active path to test
                     if (error.message && !error.message.includes("argument=\"address\"") && !error.message.includes("execution reverted")) {
-                        console.log(`⚠️ Diagnostic Scan Warning: ${error.message}`);
+                        console.log(`⚠️ Pipeline Scan Exception: ${error.message}`);
                     }
                 }
             }
-        }
-
-        if (opportunitiesFoundThisBlock === 0) {
-            console.log(`⏱️ Scan Finished. No valid profitable routing paths found in this block.`);
         }
     });
 }
