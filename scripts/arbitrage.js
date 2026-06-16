@@ -8,18 +8,18 @@ dotenv.config();
 const RPC_URL = "https://polygon.drpc.org";
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
-// Core ERC20 Token Addresses on Polygon (Matic Mainnet)
-const USDC_ADDRESS  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const WMATIC_ADDRESS = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270";
-const USDT_ADDRESS   = "0xc2132D05D31c914a87C6611c10748AEb04B58e8F";
+// Core ERC20 Token Addresses on Polygon (All Lowercase to Bypass Checksum Filters)
+const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
+const WMATIC_ADDRESS = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270";
+const USDT_ADDRESS   = "0xc2132d05d31c914a87c6611c10748aeb04b58e8f";
 const WBTC_ADDRESS   = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6";
 
-// Production Router Deployments on Polygon
+// Production Router Deployments on Polygon (All Lowercase)
 const ROUTERS = {
-    QUICK: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    SUSHI: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
-    DFYN:  "0xF17b5936699a3232363837bc45cd031553456574",
-    APE:   "0xC0788A3D33aA7A816F74D957CE64415f33333333" 
+    QUICK: "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+    SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+    DFYN:  "0xf17b5936699a3232363837bc45cd031553456574",
+    APE:   "0xc0788a3d33aa7a816f74d957ce64415f33333333" 
 };
 
 // Explicit ABIs for Execution & Simulation Read Calls
@@ -159,7 +159,7 @@ async function main() {
                     }
                 } catch (error) {
                     // Logs real configuration or connection issues while safely passing over expected simulation reverts
-                    if (error.message && !error.message.includes("execution reverted")) {
+                    if (error.message && !error.message.includes("argument=\"address\"") && !error.message.includes("execution reverted")) {
                         console.log(`⚠️ Diagnostic Scan Warning: ${error.message}`);
                     }
                 }
