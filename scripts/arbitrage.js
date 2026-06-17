@@ -93,7 +93,7 @@ async function main() {
     ];
 
     // ADJUSTABLE: Standard production capital tier size
-    const amountInUnits = ethers.parseUnits("100", 6); 
+    const amountInUnits = ethers.parseUnits("0.05", 6); 
     
     let isExecuting = false;
 
@@ -123,7 +123,7 @@ async function main() {
                     // =================================================================
                     // PRODUCTION FILTER: Only fires transaction if true profit is verified
                     // =================================================================
-                    if (estimatedProfitHuman > 0.05) { 
+                    if (estimatedProfitHuman > 0.00001) { 
                         const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         
                         if (contractBalanceBefore < amountInUnits) {
