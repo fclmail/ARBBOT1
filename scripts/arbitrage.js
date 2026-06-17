@@ -7,6 +7,7 @@ dotenv.config();
 // 1. HARDCODED NETWORK & SMART CONTRACT CONFIG
 // ==========================================
 const RPC_URL = "https://polygon.drpc.org";
+
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 const WMATIC_ADDRESS = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270";
@@ -91,9 +92,8 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
     ];
 
-    /* ================= ADJUSTED SETTINGS FROM REFERENCE ================= */
-    // Line 96: Scaled trade sizing up to utilize deep pool metrics (e.g., 184,500 USDC)
-    const amountInUnits = ethers.parseUnits("184500", 6); 
+    // Line 96: Calibrated input size optimized for deep liquidity pools ($35,000.00 USDC)
+    const amountInUnits = ethers.parseUnits("35000", 6); 
     
     let isExecuting = false;
     provider.on("block", async (blockNumber) => {
@@ -117,10 +117,15 @@ async function main() {
                     const estimatedProfit = simulation.estimatedProfit;
                     const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
 
+                    // Live Diagnostics: Displays real-world market movements above $0.10
+                    if (estimatedProfitHuman > 0.10) {
+                        console.log(`   ℹ️ [Imbalance Detected] ${pair.buyName} ➡️ ${pair.sellName} | Route: ${route.label} | Delta: +${estimatedProfitHuman.toFixed(4)} USDC`);
+                    }
+
                     // =================================================================
-                    // Line 126: Production profit matching threshold updated to target high yield
+                    // Line 126: Production profit matching threshold set to capture realistic deep pool anomalies
                     // =================================================================
-                    if (estimatedProfitHuman > 1420.55) { 
+                    if (estimatedProfitHuman > 15.00) { 
                         const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         
                         if (contractBalanceBefore < amountInUnits) {
@@ -129,7 +134,7 @@ async function main() {
                         }
 
                         isExecuting = true;
-                        console.log(`💰 [PROFIT MATCH DETECTED]. Delta Calculation: +${estimatedProfitHuman.toFixed(6)} USDC`);
+                        console.log(`\n💰 [PROFIT MATCH DETECTED]. Delta Calculation: +${estimatedProfitHuman.toFixed(6)} USDC`);
                         console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
                         console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
                         
@@ -151,7 +156,7 @@ async function main() {
                         
                         const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
-                        console.log(`💰 Realized Net Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC`);
+                        console.log(`💰 Realized Net Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC\n`);
                         
                         isExecuting = false;
                     }
