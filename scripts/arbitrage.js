@@ -123,7 +123,7 @@ async function main() {
                     // =================================================================
                     // PRODUCTION FILTER: Only fires transaction if true profit is verified
                     // =================================================================
-                    if (estimatedProfitHuman > 0.000001) { 
+                    if (estimatedProfitHuman > 0) { 
                         const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         
                         if (contractBalanceBefore < amountInUnits) {
