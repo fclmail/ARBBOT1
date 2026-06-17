@@ -66,10 +66,11 @@ function generateScanningRoutes() {
 }
 
 // ==========================================
-// 3. MAIN RUNNER LOOP (Production Configuration)
+// 3. MAIN RUNNER LOOP (Dynamic Multitier Optimization)
 // ==========================================
 async function main() {
-    console.log("⏳ Initializing Locked Production Engine...");
+    console.log("🚀 BOT STARTED\n");
+    console.log("⏳ Initializing Dynamic Multi-Tier Production Engine...");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your .env configuration file.");
@@ -92,12 +93,12 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
     ];
 
-    // Line 96: Calibrated input size optimized for deep liquidity pools ($35,000.00 USDC)
-    const amountInUnits = ethers.parseUnits("35000", 6); 
+    // Structural tier array matching depth scaling targets
+    const capitalTiers = ["1000", "10000", "50000", "100000", "250000"];
     
     let isExecuting = false;
     provider.on("block", async (blockNumber) => {
-        console.log(`📦 BLOCK: #${blockNumber} | Scanning Matrix Routes...`);
+        console.log(`\n📦 BLOCK: #${blockNumber} | Scanning Matrix Routes Across All Capital Depth Tiers...`);
         if (isExecuting) {
             console.log("⏳ Execution lock active. Skipping this block scan to prevent collisions.");
             return;
@@ -105,64 +106,77 @@ async function main() {
 
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
-                try {
-                    const simulation = await vaultContract.simulateArbitrageProfit(
-                        pair.buy,
-                        pair.sell,
-                        amountInUnits,
-                        route.pathToToken,
-                        route.pathToUSDC
-                    );
-
-                    const estimatedProfit = simulation.estimatedProfit;
-                    const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
-
-                    // Live Diagnostics: Displays real-world market movements above $0.10
-                    if (estimatedProfitHuman > 0.10) {
-                        console.log(`   ℹ️ [Imbalance Detected] ${pair.buyName} ➡️ ${pair.sellName} | Route: ${route.label} | Delta: +${estimatedProfitHuman.toFixed(4)} USDC`);
-                    }
-
-                    // =================================================================
-                    // Line 126: Production profit matching threshold set to capture realistic deep pool anomalies
-                    // =================================================================
-                    if (estimatedProfitHuman > 15.00) { 
-                        const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        
-                        if (contractBalanceBefore < amountInUnits) {
-                            console.error(`❌ Opportunity found, but contract lacks required capital size.`);
-                            continue;
-                        }
-
-                        isExecuting = true;
-                        console.log(`\n💰 [PROFIT MATCH DETECTED]. Delta Calculation: +${estimatedProfitHuman.toFixed(6)} USDC`);
-                        console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
-                        console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
-                        
-                        const txDeadline = Math.floor(Date.now() / 1000) + 30; 
-                        
-                        const tx = await vaultContract.executeArbitrage(
+                for (let tier of capitalTiers) {
+                    const testAmountIn = ethers.parseUnits(tier, 6);
+                    
+                    try {
+                        const simulation = await vaultContract.simulateArbitrageProfit(
                             pair.buy,
                             pair.sell,
-                            amountInUnits,
+                            testAmountIn,
                             route.pathToToken,
-                            route.pathToUSDC,
-                            txDeadline,
-                            { gasLimit: 400000 }
+                            route.pathToUSDC
                         );
-                        
-                        console.log(`🚨 TRANSACTION HASH DISPATCHED: ${tx.hash}`);
-                        const receipt = await tx.wait(1);
-                        console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
-                        
-                        const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
-                        console.log(`💰 Realized Net Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC\n`);
-                        
-                        isExecuting = false;
-                    }
-                } catch (error) {
-                    if (error.message && !error.message.includes("execution reverted")) {
-                        console.log(`⚠️ Simulation Exception: ${error.message}`);
+
+                        const estimatedProfit = simulation.estimatedProfit;
+                        const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
+
+                        // MANDATORY LOGGER: Prints the output EVERY time for full block diagnostics
+                        console.log(`   📡 [AUDIT] Size: $${tier.padEnd(6)} USDC | ${pair.buyName} ➡️ ${pair.sellName} | Path: ${route.label.padEnd(35)} | Delta: +${estimatedProfitHuman.toFixed(6)} USDC`);
+
+                        // DYNAMIC TARGET LOGIC: Automatically scales required margins relative to sizing metrics
+                        let dynamicMinProfit = 1.00; 
+                        if (testAmountIn >= ethers.parseUnits("250000", 6)) dynamicMinProfit = 1000.00;
+                        else if (testAmountIn >= ethers.parseUnits("100000", 6)) dynamicMinProfit = 100.00;
+                        else if (testAmountIn >= ethers.parseUnits("50000", 6)) dynamicMinProfit = 10.00;
+                        else if (testAmountIn >= ethers.parseUnits("10000", 6)) dynamicMinProfit = 1.00;
+                        else if (testAmountIn >= ethers.parseUnits("1000", 6)) dynamicMinProfit = 0.10;
+
+                        if (estimatedProfitHuman >= dynamicMinProfit) { 
+                            const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                            
+                            if (contractBalanceBefore < testAmountIn) {
+                                console.error(`   ❌ Target met at $${tier} size, but contract lacks required wallet configuration capital.`);
+                                continue;
+                            }
+
+                            // Activate concurrency lock
+                            isExecuting = true;
+                            
+                            console.log(`\n🎯 [DYNAMIC MATCH FOUND] Sizer Selected Bracket: ${tier}.00 USDC | Expected Return: +${estimatedProfitHuman.toFixed(6)} USDC`);
+                            console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
+                            console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
+                            
+                            const txDeadline = Math.floor(Date.now() / 1000) + 30; 
+                            
+                            const tx = await vaultContract.executeArbitrage(
+                                pair.buy,
+                                pair.sell,
+                                testAmountIn,
+                                route.pathToToken,
+                                route.pathToUSDC,
+                                txDeadline,
+                                { gasLimit: 450000 }
+                            );
+                            
+                            console.log(`🚨 TRANSACTION HASH DISPATCHED: ${tx.hash}`);
+                            const receipt = await tx.wait(1);
+                            console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
+                            
+                            const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                            const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
+                            console.log(`💰 Realized Net Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC\n`);
+                            
+                            isExecuting = false;
+                            break; // Halt downstream tier auditing for this combination once a tx fires
+                        }
+                    } catch (error) {
+                        // Print exceptions alongside fallback zero tracking for reverted positions
+                        let errorMsg = "Reverted Block State";
+                        if (error.message && !error.message.includes("execution reverted")) {
+                            errorMsg = error.message.slice(0, 30);
+                        }
+                        console.log(`   📡 [AUDIT] Size: $${tier.padEnd(6)} USDC | ${pair.buyName} ➡️ ${pair.sellName} | Path: ${route.label.padEnd(35)} | Delta: 0.000000 USDC (${errorMsg})`);
                     }
                 }
             }
