@@ -2,16 +2,16 @@ import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
 
-// ==========================================
+// =========================================================
 // 1. HARDCODED NETWORK & SMART CONTRACT CONFIG
-// ==========================================
-const RPC_URL = "https://polygon.drpc.org";
+// =========================================================
+const WSS_URL = "wss://polygon.drpc.org"; 
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
-
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
-// ==========================================
+
+// =========================================================
 // ERC TOP 100 TOKENS (POLYGON POOL IMPORTS)
-// ==========================================
+// =========================================================
 const AVAX              = "0x2c89bbc92bd86f8075d1decc58c7f4e0107f286b";
 const FET               = "0x7583feddbcefa813dc18259940f76a02710a8905";
 const INJ               = "0x4e8dc2149eac3f3def36b1c281ea466338249371";
@@ -44,7 +44,7 @@ const TBTC              = "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b";
 const MANA              = "0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4";
 const TRB               = "0xe3322702bedaaed36cddab233360b939775ae5f1";
 const COMP              = "0x8505b9d2254a7ae468c0e9dd10ccea3a837aef5c";
-const ONEINCH           = "0x9c2c5fd7b07e95ee044ddeba0e97a665f142394f"; // Renamed 1INCH to safe identifier
+const ONEINCH           = "0x9c2c5fd7b07e95ee044ddeba0e97a665f142394f"; 
 const THETA             = "0xb46e0ae620efd98516f49bb00263317096c114b2";
 const CRO               = "0xada58df0f643d959c2a47c9d4d4c1a4defe3f11c";
 const XYO               = "0xd2507e7b5794179380673870d88b22f94da6abe0";
@@ -100,6 +100,7 @@ const VANRY             = "0x8de5b80a0c1b02fe4976851d030b36122dbb8624";
 const OMG               = "0x62414d03084eeb269e18c970a21f45d2967f0170";
 const TEL               = "0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32";
 const OXT               = "0x9880e3dda13c8e7d4804691a45160102d31f6060";
+
 const WMATIC_ADDRESS = "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270";
 const USDT_ADDRESS   = "0xc2132d05d31c914a87c6611c10748aeb04b58e8f";
 const WBTC_ADDRESS   = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6";
@@ -119,30 +120,49 @@ const ERC20_ABI = [
     "function balanceOf(address account) view returns (uint256)"
 ];
 
-// ==========================================
-// 2. ROUTE GENERATION
-// ==========================================
+// =========================================================
+// 2. MATRIX ROUTE GENERATION
+// =========================================================
 function getTokenLabel(address) {
     switch(address.toLowerCase()) {
         case USDC_ADDRESS.toLowerCase(): return "USDC";
         case WMATIC_ADDRESS.toLowerCase(): return "WMATIC";
         case USDT_ADDRESS.toLowerCase(): return "USDT";
         case WBTC_ADDRESS.toLowerCase(): return "WBTC";
-        default: return "UNKNOWN";
+        case AVAX.toLowerCase(): return "AVAX";
+        case FET.toLowerCase(): return "FET";
+        case INJ.toLowerCase(): return "INJ";
+        case RNDR.toLowerCase(): return "RNDR";
+        case UNI.toLowerCase(): return "UNI";
+        case CRV.toLowerCase(): return "CRV";
+        case LDO.toLowerCase(): return "LDO";
+        case SUSHI.toLowerCase(): return "SUSHI";
+        case GRT.toLowerCase(): return "GRT";
+        default: return "TOKEN_SYM";
     }
 }
 
 function generateScanningRoutes() {
-    const intermediates = [WMATIC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS];
+    const intermediates = [
+        WMATIC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS,
+        AVAX, FET, INJ, RNDR, UNI, CRV, LDO, SUSHI, GRT
+    ];
+    
     let routeMatrix = [];
+    
     for (let intermediate of intermediates) {
+        if (!intermediate) continue;
+        
+        // 2-Hop Direct Pathing Configurations
         routeMatrix.push({
             pathToToken: [USDC_ADDRESS, intermediate],
             pathToUSDC: [intermediate, USDC_ADDRESS],
             label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ USDC`
         });
+        
+        // 3-Hop Multi-Asset Pathing Configurations
         for (let secondIntermediate of intermediates) {
-            if (intermediate.toLowerCase() !== secondIntermediate.toLowerCase()) {
+            if (secondIntermediate && intermediate.toLowerCase() !== secondIntermediate.toLowerCase()) {
                 routeMatrix.push({
                     pathToToken: [USDC_ADDRESS, intermediate, secondIntermediate],
                     pathToUSDC: [secondIntermediate, USDC_ADDRESS],
@@ -154,26 +174,40 @@ function generateScanningRoutes() {
     return routeMatrix;
 }
 
-// ==========================================
-// 3. MAIN RUNNER LOOP (Production Configuration)
-// ==========================================
+// =========================================================
+// 3. MAIN RUNNER LOOP (WebSocket Real-Time Engine)
+// =========================================================
 async function main() {
-    console.log("⏳ Initializing Locked Production Engine...");
+    console.log("⏳ Initializing Locked Production Engine over WSS...");
     
     if (!process.env.PRIVATE_KEY) {
-        console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your .env configuration file.");
+        console.error("❌ CRITICAL ERROR: PRIVATE_KEY is missing from your .env file.");
         process.exit(1);
     }
     const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    // Initialize high-speed WebSockets Provider
+    const provider = new ethers.WebSocketProvider(WSS_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-    const startBlock = await provider.getBlockNumber();
-    console.log(`\n🟢 CONNECTED | Active on Polygon Block: #${startBlock}`);
+    console.log(`\n🟢 WSS STREAM ACTIVE | Connected to Live Polygon Mempool Feed`);
+
+    // Dynamic array of test capital injection values for simulation processing
+    const capitalTiers = [
+        { raw: ethers.parseUnits("20.00", 6), human: "20 USDC" },
+        { raw: ethers.parseUnits("100.00", 6), human: "100 USDC" },
+        { raw: ethers.parseUnits("500.00", 6), human: "500 USDC" }
+    ];
+
+    // Aggressive fee parameters optimized for lightning-fast inclusion
+    const gasConfig = {
+        gasLimit: 450000,
+        maxPriorityFeePerGas: ethers.parseUnits("250", "gwei"), 
+        maxFeePerGas: ethers.parseUnits("450", "gwei")          
+    };
 
     const tokenRoutes = generateScanningRoutes();
     const routerPairs = [
@@ -182,81 +216,102 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.QUICK, buyName: "DFYN",  sellName: "QUICK" },
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
     ];
-
-    // ADJUSTABLE: Standard production capital tier size
-    const amountInUnits = ethers.parseUnits("0.02", 6); 
     
     let isExecuting = false;
 
-    provider.on("block", async (blockNumber) => {
-        console.log(`📦 BLOCK: #${blockNumber} | Scanning Matrix Routes...`);
-
-        if (isExecuting) {
-            console.log("⏳ Execution lock active. Skipping this block scan to prevent collisions.");
-            return;
+    // Keep-Alive connection guard layer
+    setInterval(async () => {
+        try {
+            await provider.send("net_version", []);
+        } catch (e) {
+            console.error("⚠️ WebSocket ping timed out. Hard resetting process...");
+            process.exit(1); 
         }
+    }, 30000);
 
+    // Real-Time Mempool Transaction Streaming Trigger
+    provider.on("pending", async (txHash) => {
+        if (isExecuting) return; // Instantly skip evaluation if lock is currently captured
+
+        let bestOpportunity = null;
+
+        // Perform fast offline structural matrix scanning calculations
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
-                try {
-                    // Query the on-chain simulation engine
-                    const simulation = await vaultContract.simulateArbitrageProfit(
-                        pair.buy,
-                        pair.sell,
-                        amountInUnits,
-                        route.pathToToken,
-                        route.pathToUSDC
-                    );
-
-                    const estimatedProfit = simulation.estimatedProfit;
-                    const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
-
-                    // =================================================================
-                    // PRODUCTION FILTER: Only fires transaction if true profit is verified
-                    // =================================================================
-                    if (estimatedProfitHuman > 0) { 
-                        const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        
-                        if (contractBalanceBefore < amountInUnits) {
-                            console.error(`❌ Opportunity found, but contract lacks required capital size.`);
-                            continue;
-                        }
-
-                        // Activate concurrency lock
-                        isExecuting = true;
-                        console.log(`💰 [PROFIT MATCH DETECTED]. Delta Calculation: +${estimatedProfitHuman.toFixed(6)} USDC`);
-                        console.log(`[DEX PATH]: ${pair.buyName} (${route.label}) ➡️ ${pair.sellName}`);
-                        console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
-                        
-                        const txDeadline = Math.floor(Date.now() / 1000) + 30; // 30s expiration limit
-                        
-                        const tx = await vaultContract.executeArbitrage(
+                for (let tier of capitalTiers) {
+                    try {
+                        const simulation = await vaultContract.simulateArbitrageProfit(
                             pair.buy,
                             pair.sell,
-                            amountInUnits,
+                            tier.raw,
                             route.pathToToken,
-                            route.pathToUSDC,
-                            txDeadline,
-                            { gasLimit: 400000 }
+                            route.pathToUSDC
                         );
-                        
-                        console.log(`🚨 TRANSACTION HASH DISPATCHED: ${tx.hash}`);
-                        const receipt = await tx.wait(1);
-                        console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
-                        
-                        const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
-                        console.log(`💰 Realized Net Profit: +${ethers.formatUnits(netProfitRealized, 6)} USDC`);
-                        
-                        // Release lock for subsequent block evaluations
-                        isExecuting = false;
-                    }
-                } catch (error) {
-                    // Suppress expected simulation reverts to keep runtime clean
-                    if (error.message && !error.message.includes("execution reverted")) {
-                        console.log(`⚠️ Simulation Exception: ${error.message}`);
+
+                        const estimatedProfit = simulation.estimatedProfit;
+                        const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
+
+                        // Filter gate: Track only strictly profitable, non-zero occurrences
+                        if (estimatedProfitHuman > 0.000001) {
+                            if (!bestOpportunity || estimatedProfitHuman > bestOpportunity.profitHuman) {
+                                bestOpportunity = {
+                                    pair,
+                                    route,
+                                    tier,
+                                    profitHuman: estimatedProfitHuman
+                                };
+                            }
+                        }
+                    } catch (error) {
+                        // Silent catch updates to ignore uninstantiated pools or state reverts
                     }
                 }
+            }
+        }
+
+        // Actionable Gatekeeper Execution Dispatching
+        if (bestOpportunity) {
+            try {
+                // Lock concurrency process state immediately
+                isExecuting = true;
+
+                const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                if (contractBalanceBefore < bestOpportunity.tier.raw) {
+                    console.log(`❌ Target found (+${bestOpportunity.profitHuman.toFixed(6)} USDC), but Vault lacks capital size: ${bestOpportunity.tier.human}`);
+                    isExecuting = false;
+                    return;
+                }
+
+                console.log(`\n💰 [PROFIT DISCREPANCY IDENTIFIED]. Expected Delta: +${bestOpportunity.profitHuman.toFixed(6)} USDC`);
+                console.log(`[ROUTE]: ${bestOpportunity.pair.buyName} (${bestOpportunity.route.label}) ➡️ ${bestOpportunity.pair.sellName}`);
+                console.log(`[ALLOCATION]: ${bestOpportunity.tier.human}`);
+                console.log(`⚡ Broadcasting optimized arbitrage execution to mempool...`);
+
+                const txDeadline = Math.floor(Date.now() / 1000) + 30;
+
+                const tx = await vaultContract.executeArbitrage(
+                    bestOpportunity.pair.buy,
+                    bestOpportunity.pair.sell,
+                    bestOpportunity.tier.raw,
+                    bestOpportunity.route.pathToToken,
+                    bestOpportunity.route.pathToUSDC,
+                    txDeadline,
+                    gasConfig
+                );
+
+                console.log(`🚨 BROADCAST SUCCESSFUL. Pending Hash: ${tx.hash}`);
+                const receipt = await tx.wait(1);
+                console.log(`✅ CAPTURED IN BLOCK: #${receipt.blockNumber}`);
+
+                const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                const netProfitRealized = contractBalanceAfter - contractBalanceBefore;
+                console.log(`💰 Verified On-Chain Profit Realization: +${ethers.formatUnits(netProfitRealized, 6)} USDC\n`);
+
+            } catch (txError) {
+                console.log(`❌ On-Chain Transaction Reverted/Dropped: ${txError.message}`);
+            } finally {
+                // Clear state processing parameters
+                isExecuting = false;
             }
         }
     });
