@@ -5,7 +5,7 @@ dotenv.config();
 // =========================================================
 // 1. HARDCODED NETWORK & SMART CONTRACT CONFIG
 // =========================================================
-const WSS_URL = "wss://polygon.drpc.org"; 
+const WSS_URL = "wss://polygon-bor-rpc.publicnode.com"; 
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
