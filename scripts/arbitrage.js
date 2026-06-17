@@ -184,7 +184,7 @@ async function main() {
     ];
 
     // ADJUSTABLE: Standard production capital tier size
-    const amountInUnits = ethers.parseUnits("0.5", 6); 
+    const amountInUnits = ethers.parseUnits("0.02", 6); 
     
     let isExecuting = false;
 
