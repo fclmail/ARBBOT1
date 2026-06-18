@@ -84,7 +84,7 @@ async function main() {
     const triangularPaths = buildTriangularPaths();
     
     // Adjusted capital tiers to mirror your working baseline trade setups
-    const capitalTiers = ["1000", "5000", "10000", "25000"];
+    const capitalTiers = [".01", ".10", "1", "25000"];
 
     let loopBusy = false; 
     let currentBlock = 0;
@@ -150,7 +150,7 @@ async function main() {
                         console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | Router: ${routerStr} | Delta: ${res.displayDelta} USDC`);
 
                         // Minimum profit target threshold configuration ($0.05 minimum)
-                        const minProfitFloor = 0.05; 
+                        const minProfitFloor = 0.00001; 
 
                         if (res.isProfitable && res.profitHuman >= minProfitFloor && !executionTriggered) { 
                             const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
