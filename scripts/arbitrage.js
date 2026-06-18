@@ -132,12 +132,12 @@ async function main() {
                         console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: +${estimatedProfitHuman.toFixed(6)} USDC`);
 
                         // Execution Targets
-                        let dynamicMinProfit = 1.00; 
-                        if (testAmountIn >= ethers.parseUnits("250000", 6)) dynamicMinProfit = 1000.00;
-                        else if (testAmountIn >= ethers.parseUnits("100000", 6)) dynamicMinProfit = 100.00;
-                        else if (testAmountIn >= ethers.parseUnits("50000", 6)) dynamicMinProfit = 10.00;
-                        else if (testAmountIn >= ethers.parseUnits("10000", 6)) dynamicMinProfit = 1.00;
-                        else if (testAmountIn >= ethers.parseUnits("1000", 6)) dynamicMinProfit = 0.10;
+                        let dynamicMinProfit = 0.00001; 
+                        if (testAmountIn >= ethers.parseUnits("250000", 6)) dynamicMinProfit = 10.0;
+                        else if (testAmountIn >= ethers.parseUnits("100000", 6)) dynamicMinProfit = 1.00;
+                        else if (testAmountIn >= ethers.parseUnits("50000", 6)) dynamicMinProfit = 0.1;
+                        else if (testAmountIn >= ethers.parseUnits("10000", 6)) dynamicMinProfit = 0.0001;
+                        else if (testAmountIn >= ethers.parseUnits("1000", 6)) dynamicMinProfit = 0.0001;
 
                         if (estimatedProfitHuman >= dynamicMinProfit) { 
                             const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
