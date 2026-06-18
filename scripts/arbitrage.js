@@ -7,9 +7,9 @@ dotenv.config();
 // 1. HARDCODED CONFIG & ROTATING RPC ARRAYS
 // ==========================================
 const RPC_POOL = [
-    "https://polygon-rpc.com",
-    "https://polygon-bor-rpc.publicnode.com",
-    "https://rpc.ankr.com/polygon"
+  //  "https://polygon-rpc.com",
+    "https://polygon-bor-rpc.publicnode.com"
+   // "https://rpc.ankr.com/polygon"
 ];
 let currentRpcIndex = 0;
 
