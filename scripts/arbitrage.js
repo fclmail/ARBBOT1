@@ -4,7 +4,6 @@ import WebSocket from "ws";
 
 dotenv.config();
 
-// ANSI Color Escapes for Console Output
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
@@ -50,9 +49,6 @@ const ERC20_ABI = [
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const BATCH_SIZE = 4;
 
-// ==========================================
-// 2. ROUTER QUOTE MEMORY CACHING SYSTEM
-// ==========================================
 const quoteCache = new Map();
 const CACHE_TTL = 1000; 
 
@@ -68,7 +64,6 @@ function getCachedQuote(routerAddress, path) {
 function setCachedQuote(routerAddress, path, value) {
     const key = `${routerAddress}-${path.join('-')}`;
     quoteCache.set(key, { value, timestamp: Date.now() });
-    
     if (quoteCache.size > 50000) {
         const now = Date.now();
         for (const [k, entry] of quoteCache) {
@@ -77,12 +72,8 @@ function setCachedQuote(routerAddress, path, value) {
     }
 }
 
-// ==========================================
-// 3. SEQUENTIAL MULTI-HOP QUOTER 
-// ==========================================
 async function getSequentialTriangularQuote(routerContract, amountIn, path) {
     const routerAddr = routerContract.target;
-
     const path1 = [path[0], path[1]];
     let out1 = getCachedQuote(routerAddr, path1);
     if (out1 === undefined) {
@@ -133,9 +124,6 @@ function buildTriangularPaths() {
     return generatedPaths;
 }
 
-// ==========================================
-// 4. MAIN CONTROL LOOP & EVENT PIPELINE
-// ==========================================
 let provider;
 let wallet;
 let vaultContract;
@@ -152,7 +140,6 @@ function initWebSocketConnection(onDisconnect) {
     });
 
     provider = new ethers.WebSocketProvider(() => ws);
-    
     wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
@@ -182,12 +169,10 @@ async function main() {
     const handleReconnect = async () => {
         if (isReconnecting) return;
         isReconnecting = true;
-        
         if (provider) {
             try { provider.removeAllListeners("block"); } catch {}
             try { await provider.destroy(); } catch {}
         }
-        
         await sleep(4000); 
         isReconnecting = false;
         main().catch(() => {});
@@ -204,6 +189,10 @@ async function main() {
         console.log(`\n⚡ LIVE BLOCK DETECTED VIA WSS: #${freshBlock} | Scanning Matrix Pipelines...`);
 
         try {
+            // Read accumulated capital from the vault contract
+            const currentVaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+            const vaultBalanceHuman = parseFloat(ethers.formatUnits(currentVaultBalance, 6));
+
             for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
                 if (isReconnecting) break;
                 const pathChunk = triangularPaths.slice(i, i + BATCH_SIZE);
@@ -250,16 +239,22 @@ async function main() {
                     if (!res.success) continue;
                     if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
 
-                    // Colored Output Configuration
                     const logColor = res.isProfitable ? GREEN : RESET;
                     console.log(`${logColor}   📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
                     const minProfitFloor = 0.00001; 
-                    const isPhantomData = res.profitHuman > (parseFloat(res.tier) * 5); // Filters out broken token decimals (>500% yield irregularities)
+
+                    // FIX: Check absolute profit validity rather than tier-relative calculation to support accumulated balances
+                    const isPhantomData = res.profitHuman > 50000.0; 
 
                     if (res.isProfitable && res.profitHuman >= minProfitFloor && !isPhantomData && !executionTriggered) { 
-                        const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        if (balanceBefore < res.testAmountIn) continue;
+                        // Determine execution input based on contract's accumulated capacity
+                        let executionAmount = res.testAmountIn;
+                        if (currentVaultBalance > 0n && currentVaultBalance > res.testAmountIn) {
+                            executionAmount = currentVaultBalance;
+                        }
+
+                        if (currentVaultBalance < executionAmount) continue;
 
                         executionTriggered = true; 
                         console.log(`${GREEN}\n🎯 [MATCH FOUND] Profitable Sequence Confirmed: ${res.displayDelta} USDC${RESET}`);
@@ -270,14 +265,14 @@ async function main() {
                         const tx = await vaultContract.executeArbitrage(
                             targetRouterAddress, 
                             targetRouterAddress, 
-                            res.testAmountIn, 
+                            executionAmount, // Fires accumulated capital if greater than target tier
                             res.pathObj.pathToToken, 
                             res.pathObj.pathToUSDC, 
                             txDeadline,
                             { 
-                                gasLimit: 550000,
-                                maxFeePerGas: ethers.parseUnits("250", "gwei"),       
-                                maxPriorityFeePerGas: ethers.parseUnits("40", "gwei")  
+                                gasLimit: 600000,
+                                maxFeePerGas: ethers.parseUnits("280", "gwei"),       
+                                maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
                             }
                         );
                         
