@@ -1,12 +1,20 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
+import WebSocket from "ws"; // Use explicit ws import for granular event handling
 
 dotenv.config();
 
 // ==========================================
-// 1. LIVE WSS INFRASTRUCTURE & SETTINGS
+// 1. DYNAMIC HIGH-AVAILABILITY WSS ENDPOINTS
 // ==========================================
-const WSS_URL = "wss://polygon-bor-rpc.publicnode.com/ws"; 
+// Fallback array ensures that if one path is deprecated, your runner handles it cleanly
+const WSS_ENDPOINTS = [
+    "wss://polygon-mainnet.g.allthatnode.com/full/v1",
+    "wss://polygon-bor-rpc.publicnode.com", 
+    "wss://rpc-mainnet.maticvigil.com/ws/v1/71efbe22"
+];
+let currentEndpointIndex = 0;
+
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
@@ -129,26 +137,34 @@ let vaultContract;
 let usdcContract;
 const routerContracts = {};
 
-function initWebSocketConnection() {
-    provider = new ethers.WebSocketProvider(WSS_URL);
-    wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+function initWebSocketConnection(onDisconnect) {
+    const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
     
+    // Explicitly initialize raw WebSocket instance to catch immediate handshake failures (like 404s)
+    const ws = new WebSocket(targetUrl);
+    
+    ws.on("error", (err) => {
+        console.log(`⚠️ WebSocket Handshake Error [${targetUrl}]: ${err.message}`);
+        // Shift context pointer to next redundant RPC URL endpoint path
+        currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
+        ws.terminate();
+        onDisconnect();
+    });
+
+    // Pass custom WebSocket client to prevent uncaught runtime errors
+    provider = new ethers.WebSocketProvider(() => ws);
+    
+    wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
     routerContracts.QUICK = new ethers.Contract(ROUTERS.QUICK, ROUTER_ABI, provider);
     routerContracts.SUSHI = new ethers.Contract(ROUTERS.SUSHI, ROUTER_ABI, provider);
 
-    // Safe heartbeat monitoring using ethers native websocket abstraction
-    if (provider.websocket) {
-        provider.websocket.onopen = () => {
-            setInterval(() => {
-                if (provider.websocket && provider.websocket.readyState === 1) {
-                    provider.websocket.send(JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }));
-                }
-            }, 20000);
-        };
-    }
+    ws.on("close", () => {
+        console.log("🚨 WSS Socket Connection Closed. Retrying setup protocol...");
+        onDisconnect();
+    });
 }
 
 async function main() {
@@ -159,11 +175,26 @@ async function main() {
         process.exit(1);
     }
 
-    initWebSocketConnection();
+    let blockProcessingActive = false;
+    let isReconnecting = false;
+
+    const handleReconnect = async () => {
+        if (isReconnecting) return;
+        isReconnecting = true;
+        
+        if (provider) {
+            provider.removeAllListeners("block");
+            try { await provider.destroy(); } catch {}
+        }
+        
+        await sleep(5000);
+        isReconnecting = false;
+        main().catch(() => {});
+    };
+
+    initWebSocketConnection(handleReconnect);
     const triangularPaths = buildTriangularPaths();
     const capitalTiers = ["0.01", "0.10", "1", "10", "100", "1000"];
-
-    let blockProcessingActive = false;
 
     // Reactive Stream Listener
     provider.on("block", async (freshBlock) => {
@@ -221,7 +252,7 @@ async function main() {
                     console.log(`   📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC`);
 
                     const minProfitFloor = 0.00001; 
-                    const isPhantomData = res.profitHuman > (parseFloat(res.tier) * 5); // Filters out broken token decimals (>500% yield irregularities)
+                    const isPhantomData = res.profitHuman > (parseFloat(res.tier) * 5); 
 
                     if (res.isProfitable && res.profitHuman >= minProfitFloor && !isPhantomData && !executionTriggered) { 
                         const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
@@ -267,16 +298,6 @@ async function main() {
             blockProcessingActive = false; 
         }
     });
-
-    // Handle WebSocket disconnection gracefully via native hooks
-    if (provider.websocket) {
-        provider.websocket.onclose = async () => {
-            console.log("🚨 WSS Connection dropped. Rebuilding layout link...");
-            provider.removeAllListeners("block");
-            await sleep(5000);
-            main().catch(() => {});
-        };
-    }
 }
 
 main().catch((error) => {
