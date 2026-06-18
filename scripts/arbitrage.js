@@ -1,17 +1,17 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-import WebSocket from "ws"; // Use explicit ws import for granular event handling
+import WebSocket from "ws";
 
 dotenv.config();
 
 // ==========================================
-// 1. DYNAMIC HIGH-AVAILABILITY WSS ENDPOINTS
+// 1. ORDERED DYNAMIC HIGH-AVAILABILITY WSS ENDPOINTS
 // ==========================================
-// Fallback array ensures that if one path is deprecated, your runner handles it cleanly
 const WSS_ENDPOINTS = [
-    "wss://polygon-mainnet.g.allthatnode.com/full/v1",
-    "wss://polygon-bor-rpc.publicnode.com", 
-    "wss://rpc-mainnet.maticvigil.com/ws/v1/71efbe22"
+    "wss://polygon.drpc.org",
+    "wss://polygon-bor-rpc.publicnode.com",
+    "wss://polygon.api.onfinality.io/public-ws",
+    "wss://rpc-mainnet.matic.quiknode.pro"
 ];
 let currentEndpointIndex = 0;
 
@@ -129,29 +129,24 @@ function buildTriangularPaths() {
 }
 
 // ==========================================
-// 4. MAIN WSS INSTANTIATOR & CONTROL LOOP
+// 4. MAIN CONTROL LOOP & EVENT PIPELINE
 // ==========================================
 let provider;
 let wallet;
 let vaultContract;
 let usdcContract;
 const routerContracts = {};
+let isReconnecting = false;
 
 function initWebSocketConnection(onDisconnect) {
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
-    
-    // Explicitly initialize raw WebSocket instance to catch immediate handshake failures (like 404s)
     const ws = new WebSocket(targetUrl);
     
+    // Failover early on network handshake issue
     ws.on("error", (err) => {
-        console.log(`⚠️ WebSocket Handshake Error [${targetUrl}]: ${err.message}`);
-        // Shift context pointer to next redundant RPC URL endpoint path
-        currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
         ws.terminate();
-        onDisconnect();
     });
 
-    // Pass custom WebSocket client to prevent uncaught runtime errors
     provider = new ethers.WebSocketProvider(() => ws);
     
     wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
@@ -162,12 +157,15 @@ function initWebSocketConnection(onDisconnect) {
     routerContracts.SUSHI = new ethers.Contract(ROUTERS.SUSHI, ROUTER_ABI, provider);
 
     ws.on("close", () => {
-        console.log("🚨 WSS Socket Connection Closed. Retrying setup protocol...");
+        console.log(`🚨 WSS Socket Connection Closed [Index ${currentEndpointIndex}]. Shifting context...`);
+        currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
         onDisconnect();
     });
 }
 
 async function main() {
+    if (isReconnecting) return;
+    
     console.log("🚀 BOT STARTED - ENHANCED WSS EVENT ENGINE LOADED");
     
     if (!process.env.PRIVATE_KEY) {
@@ -176,18 +174,17 @@ async function main() {
     }
 
     let blockProcessingActive = false;
-    let isReconnecting = false;
 
     const handleReconnect = async () => {
         if (isReconnecting) return;
         isReconnecting = true;
         
         if (provider) {
-            provider.removeAllListeners("block");
+            try { provider.removeAllListeners("block"); } catch {}
             try { await provider.destroy(); } catch {}
         }
         
-        await sleep(5000);
+        await sleep(4000); 
         isReconnecting = false;
         main().catch(() => {});
     };
@@ -196,15 +193,15 @@ async function main() {
     const triangularPaths = buildTriangularPaths();
     const capitalTiers = ["0.01", "0.10", "1", "10", "100", "1000"];
 
-    // Reactive Stream Listener
     provider.on("block", async (freshBlock) => {
-        if (blockProcessingActive) return; 
+        if (blockProcessingActive || isReconnecting) return; 
         blockProcessingActive = true;
 
         console.log(`\n⚡ LIVE BLOCK DETECTED VIA WSS: #${freshBlock} | Scanning Matrix Pipelines...`);
 
         try {
             for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
+                if (isReconnecting) break;
                 const pathChunk = triangularPaths.slice(i, i + BATCH_SIZE);
                 const scanPromises = [];
 
