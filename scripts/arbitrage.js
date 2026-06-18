@@ -39,6 +39,9 @@ const ERC20_ABI = [
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const fmt = (x) => ethers.formatUnits(x, 6);
 
+// Parallel scan batch size setting to optimize HTTP pipeline
+const BATCH_SIZE = 4; 
+
 // ==========================================
 // 2. TRIANGULAR PATH GENERATION MATRICES
 // ==========================================
@@ -46,7 +49,6 @@ function buildTriangularPaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
 
-    // Builds paths structured exactly like your second script: [USDC, TokenA, TokenB, USDC]
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
@@ -65,7 +67,7 @@ function buildTriangularPaths() {
 // 3. MAIN RUNNER (Paced Control Loop)
 // ==========================================
 async function main() {
-    console.log("🚀 BOT STARTED WITH TRIANGULAR LOOKUPS\n");
+    console.log("🚀 BOT STARTED WITH TRIANGULAR LOOKUPS (PARALLELIZED)\n");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing.");
@@ -78,7 +80,6 @@ async function main() {
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-    // Initialize router contract tracking instances for direct getAmountsOut lookups
     const routerContracts = {
         QUICK: new ethers.Contract(ROUTERS.QUICK, ROUTER_ABI, provider),
         SUSHI: new ethers.Contract(ROUTERS.SUSHI, ROUTER_ABI, provider)
@@ -101,72 +102,91 @@ async function main() {
                 currentBlock = freshBlock;
                 console.log(`\n📦 BLOCK: #${currentBlock} | Auditing Triangular Flow Matrices...`);
 
-                for (let pathObj of triangularPaths) {
-                    for (let routerKey of Object.keys(routerContracts)) {
-                        for (let tier of capitalTiers) {
-                            
-                            // 45ms rate-limiting safety gap to maintain stable HTTP connections
-                            await sleep(45); 
+                // Break up checking into parallel promise chunks to eliminate nested loop latency
+                for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
+                    const pathChunk = triangularPaths.slice(i, i + BATCH_SIZE);
+                    const scanPromises = [];
 
-                            const testAmountIn = ethers.parseUnits(tier, 6);
-                            const activeRouterContract = routerContracts[routerKey];
-                            const targetRouterAddress = ROUTERS[routerKey];
-
-                            try {
-                                // Apply the sequential path simulation logic from your second configuration
-                                const amountsOut = await activeRouterContract.getAmountsOut(
-                                    testAmountIn, 
-                                    pathObj.fullPath
-                                );
+                    for (let pathObj of pathChunk) {
+                        for (let routerKey of Object.keys(routerContracts)) {
+                            for (let tier of capitalTiers) {
+                                const testAmountIn = ethers.parseUnits(tier, 6);
+                                const activeRouterContract = routerContracts[routerKey];
                                 
-                                const finalAmountOut = amountsOut[amountsOut.length - 1];
-                                const profit = finalAmountOut - testAmountIn;
-                                const profitHuman = parseFloat(ethers.formatUnits(profit, 6));
+                                // Push simulation task to parallel pool execution queue
+                                scanPromises.push(
+                                    activeRouterContract.getAmountsOut(testAmountIn, pathObj.fullPath)
+                                        .then(amountsOut => {
+                                            const finalAmountOut = amountsOut[amountsOut.length - 1];
+                                            const profit = finalAmountOut - testAmountIn;
+                                            const profitHuman = parseFloat(ethers.formatUnits(profit, 6));
 
-                                const sizeStr = `$${tier}`.padEnd(7);
-                                const routerStr = `${routerKey.padEnd(5)}`;
-                                console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | Router: ${routerStr} | Delta: +${profitHuman.toFixed(6)} USDC`);
-
-                                // Set execution floor threshold values 
-                                const dynamicMinProfit = 0.0001; 
-
-                                if (profitHuman >= dynamicMinProfit) { 
-                                    const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                                    if (balanceBefore < testAmountIn) continue;
-
-                                    console.log(`\n🎯 [TRIANGULAR MATCH] Profit Target Cleared: +${profitHuman.toFixed(6)} USDC`);
-                                    console.log(`⚡ Dispatching transaction onto ${routerKey}...`);
-                                    
-                                    const txDeadline = Math.floor(Date.now() / 1000) + 30; 
-                                    
-                                    // Trigger transaction using the router instance for both sides of the circuit swap
-                                    const tx = await vaultContract.executeArbitrage(
-                                        targetRouterAddress, 
-                                        targetRouterAddress, 
-                                        testAmountIn, 
-                                        pathObj.pathToToken, 
-                                        pathObj.pathToUSDC, 
-                                        txDeadline,
-                                        { 
-                                            gasLimit: 600000,
-                                            maxFeePerGas: ethers.parseUnits("280", "gwei"),       
-                                            maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
-                                        }
-                                    );
-                                    
-                                    console.log(`🚨 TX DISPATCHED: ${tx.hash}`);
-                                    const receipt = await tx.wait(1);
-                                    console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
-                                    
-                                    const balanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                                    console.log(`💰 Realized Net Profit: +${ethers.formatUnits(balanceAfter - balanceBefore, 6)} USDC\n`);
-                                    break;
-                                }
-                            } catch (err) {
-                                // Silently drop execution routes that revert due to low pool liquidity links
+                                            return {
+                                                success: true,
+                                                routerKey,
+                                                tier,
+                                                profitHuman,
+                                                testAmountIn,
+                                                pathObj
+                                            };
+                                        })
+                                        .catch(() => ({ success: false }))
+                                );
                             }
                         }
                     }
+
+                    // Execute current chunk in parallel over the HTTP endpoint
+                    const results = await Promise.all(scanPromises);
+                    let executionTriggered = false;
+
+                    for (const res of results) {
+                        if (!res.success) continue;
+
+                        const sizeStr = `$${res.tier}`.padEnd(7);
+                        const routerStr = `${res.routerKey.padEnd(5)}`;
+                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | Router: ${routerStr} | Delta: +${res.profitHuman.toFixed(6)} USDC`);
+
+                        const dynamicMinProfit = 0.0001; 
+
+                        if (res.profitHuman >= dynamicMinProfit && !executionTriggered) { 
+                            const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                            if (balanceBefore < res.testAmountIn) continue;
+
+                            executionTriggered = true; // Lock execution during this block cycle
+                            console.log(`\n🎯 [TRIANGULAR MATCH] Profit Target Cleared: +${res.profitHuman.toFixed(6)} USDC`);
+                            console.log(`⚡ Dispatching transaction onto ${res.routerKey}...`);
+                            
+                            const targetRouterAddress = ROUTERS[res.routerKey];
+                            const txDeadline = Math.floor(Date.now() / 1000) + 30; 
+                            
+                            const tx = await vaultContract.executeArbitrage(
+                                targetRouterAddress, 
+                                targetRouterAddress, 
+                                res.testAmountIn, 
+                                res.pathObj.pathToToken, 
+                                res.pathObj.pathToUSDC, 
+                                txDeadline,
+                                { 
+                                    gasLimit: 600000,
+                                    maxFeePerGas: ethers.parseUnits("280", "gwei"),       
+                                    maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
+                                }
+                            );
+                            
+                            console.log(`🚨 TX DISPATCHED: ${tx.hash}`);
+                            const receipt = await tx.wait(1);
+                            console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
+                            
+                            const balanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                            console.log(`💰 Realized Net Profit: +${ethers.formatUnits(balanceAfter - balanceBefore, 6)} USDC\n`);
+                            break; 
+                        }
+                    }
+
+                    // Small structural sleep between batch processing chunks to protect public node socket connections
+                    await sleep(40);
+                    if (executionTriggered) break; 
                 }
             }
         } catch (globalError) {
