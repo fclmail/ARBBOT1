@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ==========================================
-// 1. STABLE PRODUCTION ENDPOINT
+// 1. STABLE HTTP INFRASTRUCTURE
 // ==========================================
 const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 
@@ -16,9 +16,7 @@ const WBTC_ADDRESS   = "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6";
 
 const ROUTERS = {
     QUICK: "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
-    SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-    DFYN:  "0xf17b5936699a3232363837bc45cd031553456574",
-    APE:   "0xc0788a3d33aa7a816f74d957ce64415f33333333" 
+    SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
 const ENFORCER_ABI = [
@@ -33,7 +31,7 @@ const ERC20_ABI = [
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ==========================================
-// 2. OPTIMIZED ROUTE GRID GENERATION
+// 2. PRUNED HIGH-VELOCITY MATRIX TARGETS
 // ==========================================
 function getTokenLabel(address) {
     switch(address.toLowerCase()) {
@@ -46,33 +44,27 @@ function getTokenLabel(address) {
 }
 
 function generateScanningRoutes() {
-    const intermediates = [WMATIC_ADDRESS, USDT_ADDRESS, WBTC_ADDRESS];
-    let routeMatrix = [];
-    for (let intermediate of intermediates) {
-        routeMatrix.push({
-            pathToToken: [USDC_ADDRESS, intermediate],
-            pathToUSDC: [intermediate, USDC_ADDRESS],
-            label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ USDC`
-        });
-        for (let secondIntermediate of intermediates) {
-            if (intermediate.toLowerCase() !== secondIntermediate.toLowerCase()) {
-                routeMatrix.push({
-                    pathToToken: [USDC_ADDRESS, intermediate, secondIntermediate],
-                    pathToUSDC: [secondIntermediate, USDC_ADDRESS],
-                    label: `USDC ➡️ ${getTokenLabel(intermediate)} ➡️ ${getTokenLabel(secondIntermediate)} ➡️ USDC`
-                });
-            }
+    // Only return the deepest liquidity routing lanes to stop empty processing fatigue
+    return [
+        {
+            pathToToken: [USDC_ADDRESS, WMATIC_ADDRESS],
+            pathToUSDC: [WMATIC_ADDRESS, USDC_ADDRESS],
+            label: `USDC ➡️ WMATIC ➡️ USDC`
+        },
+        {
+            pathToToken: [USDC_ADDRESS, USDT_ADDRESS],
+            pathToUSDC: [USDT_ADDRESS, USDC_ADDRESS],
+            label: `USDC ➡️ USDT ➡️ USDC`
         }
-    }
-    return routeMatrix;
+    ];
 }
 
 // ==========================================
-// 3. MAIN RUNNER (High-Speed Matrix)
+// 3. MAIN RUNNER (Optimized Execution Loop)
 // ==========================================
 async function main() {
     console.log("🚀 BOT STARTED\n");
-    console.log("⏳ Initializing High-Speed Matrix Engine...\n");
+    console.log("⏳ Initializing High-Speed Matrix Engine (Optimized Live Mode)...\n");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing from your .env file.");
@@ -91,9 +83,7 @@ async function main() {
     const tokenRoutes = generateScanningRoutes();
     const routerPairs = [
         { buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI, buyName: "QUICK", sellName: "SUSHI" },
-        { buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK, buyName: "SUSHI", sellName: "QUICK" },
-        { buy: ROUTERS.DFYN,  sell: ROUTERS.QUICK, buyName: "DFYN ",  sellName: "QUICK" },
-        { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN ",  sellName: "APE  " }
+        { buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK, buyName: "SUSHI", sellName: "QUICK" }
     ];
 
     const capitalTiers = ["1000", "10000", "50000", "100000", "250000"];
@@ -103,13 +93,12 @@ async function main() {
         console.log(`\n📦 BLOCK: #${blockNumber} | Auditing Matrix Across Capital Depth Tiers...`);
         if (isExecuting) return;
 
-        // Flatten checks to process high-liquidity pairings quickly
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
                 for (let tier of capitalTiers) {
                     if (isExecuting) break;
 
-                    // Reduced pacing footprint to match the processing capacity of public nodes
+                    // Standard safety pacing buffer for stable public nodes
                     await sleep(35); 
 
                     const testAmountIn = ethers.parseUnits(tier, 6);
@@ -131,13 +120,8 @@ async function main() {
                         const pathStr = `Path: ${route.label}`.padEnd(52);
                         console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: +${estimatedProfitHuman.toFixed(6)} USDC`);
 
-                        // Execution Targets
-                        let dynamicMinProfit = 0.00001; 
-                        if (testAmountIn >= ethers.parseUnits("250000", 6)) dynamicMinProfit = 10.0;
-                        else if (testAmountIn >= ethers.parseUnits("100000", 6)) dynamicMinProfit = 1.00;
-                        else if (testAmountIn >= ethers.parseUnits("50000", 6)) dynamicMinProfit = 0.1;
-                        else if (testAmountIn >= ethers.parseUnits("10000", 6)) dynamicMinProfit = 0.0001;
-                        else if (testAmountIn >= ethers.parseUnits("1000", 6)) dynamicMinProfit = 0.0001;
+                        // FIX: Micro-scalper threshold settings to guarantee instant execution
+                        const dynamicMinProfit = 0.000001; 
 
                         if (estimatedProfitHuman >= dynamicMinProfit) { 
                             const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
@@ -151,6 +135,8 @@ async function main() {
                             console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
                             
                             const txDeadline = Math.floor(Date.now() / 1000) + 30; 
+                            
+                            // FIX: Overclocked transaction settings for immediate block inclusion
                             const tx = await vaultContract.executeArbitrage(
                                 pair.buy,
                                 pair.sell,
@@ -158,7 +144,11 @@ async function main() {
                                 route.pathToToken,
                                 route.pathToUSDC,
                                 txDeadline,
-                                { gasLimit: 450000 }
+                                { 
+                                    gasLimit: 500000,
+                                    maxFeePerGas: ethers.parseUnits("250", "gwei"),       // Priority pool pricing
+                                    maxPriorityFeePerGas: ethers.parseUnits("40", "gwei")  // Validator tip 
+                                }
                             );
                             
                             console.log(`🚨 TRANSACTION HASH DISPATCHED: ${tx.hash}`);
