@@ -7,10 +7,9 @@ dotenv.config();
 // 1. HARDCODED CONFIG & ROTATING RPC ARRAYS
 // ==========================================
 const RPC_POOL = [
+    "https://polygon-rpc.com",
     "https://polygon-bor-rpc.publicnode.com",
-    "https://polygon.drpc.org",
-    "https://rpc.ankr.com/polygon",
-    "https://polygon-rpc.com"
+    "https://rpc.ankr.com/polygon"
 ];
 let currentRpcIndex = 0;
 
@@ -36,7 +35,7 @@ const ERC20_ABI = [
     "function balanceOf(address account) view returns (uint256)"
 ];
 
-// Helper utility for pacing requests
+// Anti-rate-limiting pacing utility
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ==========================================
@@ -75,11 +74,11 @@ function generateScanningRoutes() {
 }
 
 // ==========================================
-// 3. MAIN ENGINE WITH AUTO-THROTTLING
+// 3. MAIN ENGINE IMPLEMENTATION
 // ==========================================
 async function main() {
     console.log("🚀 BOT STARTED\n");
-    console.log("⏳ Initializing Anti-Rate-Limit Production Engine...");
+    console.log("⏳ Initializing Anti-Rate-Limit Production Engine...\n");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing from your .env configuration.");
@@ -93,14 +92,14 @@ async function main() {
     let usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
     
     const startBlock = await provider.getBlockNumber();
-    console.log(`\n🟢 CONNECTED | Active Cluster Index: [${currentRpcIndex}] (${RPC_POOL[currentRpcIndex]}) | Block: #${startBlock}`);
+    console.log(`🟢 CONNECTED | Active Cluster Index: [${currentRpcIndex}] (${RPC_POOL[currentRpcIndex]}) | Block: #${startBlock}`);
 
     const tokenRoutes = generateScanningRoutes();
     const routerPairs = [
         { buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI, buyName: "QUICK", sellName: "SUSHI" },
         { buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK, buyName: "SUSHI", sellName: "QUICK" },
-        { buy: ROUTERS.DFYN,  sell: ROUTERS.QUICK, buyName: "DFYN",  sellName: "QUICK" },
-        { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN",  sellName: "APE" }
+        { buy: ROUTERS.DFYN,  sell: ROUTERS.QUICK, buyName: "DFYN ",  sellName: "QUICK" },
+        { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN ",  sellName: "APE  " }
     ];
 
     const capitalTiers = ["1000", "10000", "50000", "100000", "250000"];
@@ -115,8 +114,8 @@ async function main() {
                 for (let tier of capitalTiers) {
                     if (isExecuting) break;
 
-                    // Absolute sequential spacing to defeat free tier batch triggers
-                    await sleep(50); 
+                    // Fixed micro-delay pacing to eliminate rate limits
+                    await sleep(65); 
 
                     const testAmountIn = ethers.parseUnits(tier, 6);
                     
@@ -132,8 +131,13 @@ async function main() {
                         const estimatedProfit = simulation.estimatedProfit;
                         const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
 
-                        console.log(`   📡 [AUDIT] Size: $${tier.padEnd(6)} USDC | ${pair.buyName} ➡️ ${pair.sellName} | Path: ${route.label.padEnd(35)} | Delta: +${estimatedProfitHuman.toFixed(6)} USDC`);
+                        // Padded layout structure matching targeted visual schema perfectly
+                        const sizeStr = `$${tier}`.padEnd(7);
+                        const dexStr = `${pair.buyName} ➡️ ${pair.sellName}`;
+                        const pathStr = `Path: ${route.label}`.padEnd(52);
+                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: +${estimatedProfitHuman.toFixed(6)} USDC`);
 
+                        // Dynamic Profit Target Execution Logic
                         let dynamicMinProfit = 1.00; 
                         if (testAmountIn >= ethers.parseUnits("250000", 6)) dynamicMinProfit = 1000.00;
                         else if (testAmountIn >= ethers.parseUnits("100000", 6)) dynamicMinProfit = 100.00;
@@ -145,7 +149,6 @@ async function main() {
                             const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                             
                             if (contractBalanceBefore < testAmountIn) {
-                                console.error(`   ❌ Target met at $${tier} size, but contract lacks required capital.`);
                                 continue;
                             }
 
@@ -175,24 +178,28 @@ async function main() {
                             break; 
                         }
                     } catch (error) {
-                        let errorMsg = "Reverted Block State";
+                        let errorMsg = "";
                         
-                        // Failover logic if RPC returns server exceptions or throttling codes
-                        if (error.message && (error.message.includes("500") || error.message.includes("429") || error.message.includes("Batch of more than"))) {
+                        // Error evaluation & dynamic node failover
+                        if (error.message && (error.message.includes("500") || error.message.includes("429") || error.message.includes("401") || error.message.includes("Batch of more than"))) {
                             currentRpcIndex = (currentRpcIndex + 1) % RPC_POOL.length;
-                            errorMsg = `RPC Swapped ➡️ [${currentRpcIndex}]`;
                             
-                            // Hot reload providers to prevent execution lockup
                             provider = new ethers.JsonRpcProvider(RPC_POOL[currentRpcIndex]);
                             wallet = new ethers.Wallet(PRIVATE_KEY, provider);
                             vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
                             usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-                            await sleep(200);
-                        } else if (error.message && !error.message.includes("execution reverted")) {
-                            errorMsg = error.message.slice(0, 22);
+                            await sleep(250);
+                            continue;
+                        } else if (error.message && error.message.includes("execution reverted")) {
+                            errorMsg = " (Reverted Block State)";
+                        } else if (error.message) {
+                            errorMsg = ` (${error.message.slice(0, 20)})`;
                         }
                         
-                        console.log(`   📡 [AUDIT] Size: $${tier.padEnd(6)} USDC | ${pair.buyName} ➡️ ${pair.sellName} | Path: ${route.label.padEnd(35)} | Delta: 0.000000 USDC (${errorMsg})`);
+                        const sizeStr = `$${tier}`.padEnd(7);
+                        const dexStr = `${pair.buyName} ➡️ ${pair.sellName}`;
+                        const pathStr = `Path: ${route.label}`.padEnd(52);
+                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: 0.000000 USDC${errorMsg}`);
                     }
                 }
             }
