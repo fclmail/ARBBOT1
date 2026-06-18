@@ -7,7 +7,6 @@ dotenv.config();
 // 1. STABLE HTTP INFRASTRUCTURE & SETTINGS
 // ==========================================
 const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
-
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
@@ -16,36 +15,102 @@ const ROUTERS = {
     SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-// Top liquidity tokens matching your smart contract configuration
 const TOKENS = {
     WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-    DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
+    DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+    QUICK:  "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+    WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 };
 
 const ENFORCER_ABI = [
     "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
-
 const ROUTER_ABI = [
     "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory amounts)"
 ];
-
 const ERC20_ABI = [
     "function balanceOf(address account) view returns (uint256)"
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const BATCH_SIZE = 3; 
+const fmt = (x) => ethers.formatUnits(x, 6);
+const BATCH_SIZE = 4;
 
 // ==========================================
-// 2. TRIANGULAR PATH GENERATION MATRICES
+// 2. ROUTER QUOTE MEMORY CACHING SYSTEM (JS1)
 // ==========================================
+const quoteCache = new Map();
+const CACHE_TTL = 1000; // 1 second validity
+
+function getCachedQuote(routerAddress, path) {
+    const key = `${routerAddress}-${path.join('-')}`;
+    const cached = quoteCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.value;
+    }
+    return undefined;
+}
+
+function setCachedQuote(routerAddress, path, value) {
+    const key = `${routerAddress}-${path.join('-')}`;
+    quoteCache.set(key, { value, timestamp: Date.now() });
+    
+    if (quoteCache.size > 50000) {
+        const now = Date.now();
+        for (const [k, entry] of quoteCache) {
+            if (now - entry.timestamp > CACHE_TTL) quoteCache.delete(k);
+        }
+    }
+}
+
+// ==========================================
+// 3. JS1 SEQUENTIAL MULTI-HOP QUOTER 
+// ==========================================
+async function getSequentialTriangularQuote(routerContract, amountIn, path) {
+    const routerAddr = routerContract.target;
+
+    // Hop 1: USDC -> Token A
+    const path1 = [path[0], path[1]];
+    let out1 = getCachedQuote(routerAddr, path1);
+    if (out1 === undefined) {
+        try {
+            const res = await routerContract.getAmountsOut(amountIn, path1);
+            out1 = res[res.length - 1];
+            setCachedQuote(routerAddr, path1, out1);
+        } catch { setCachedQuote(routerAddr, path1, null); return null; }
+    }
+    if (!out1) return null;
+
+    // Hop 2: Token A -> Token B
+    const path2 = [path[1], path[2]];
+    let out2 = getCachedQuote(routerAddr, path2);
+    if (out2 === undefined) {
+        try {
+            const res = await routerContract.getAmountsOut(out1, path2);
+            out2 = res[res.length - 1];
+            setCachedQuote(routerAddr, path2, out2);
+        } catch { setCachedQuote(routerAddr, path2, null); return null; }
+    }
+    if (!out2) return null;
+
+    // Hop 3: Token B -> USDC
+    const path3 = [path[2], path[3]];
+    let out3 = getCachedQuote(routerAddr, path3);
+    if (out3 === undefined) {
+        try {
+            const res = await routerContract.getAmountsOut(out2, path3);
+            out3 = res[res.length - 1];
+            setCachedQuote(routerAddr, path3, out3);
+        } catch { setCachedQuote(routerAddr, path3, null); return null; }
+    }
+    return out3; // Final finalAmountOut in USDC
+}
+
 function buildTriangularPaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
-
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
@@ -60,19 +125,18 @@ function buildTriangularPaths() {
 }
 
 // ==========================================
-// 3. MAIN RUNNER (Paced Control Loop)
+// 4. MAIN RUNNER (Parallel Scanner & Control Loop)
 // ==========================================
 async function main() {
-    console.log("🚀 BOT STARTED WITH FIXED TRIANGULAR ENFORCEMENT\n");
+    console.log("🚀 BOT STARTED - ENHANCED ENGINE LOADED\n");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing.");
         process.exit(1);
     }
-    const PRIVATE_KEY = process.env.PRIVATE_KEY;
     
     const provider = new ethers.JsonRpcProvider(RPC_URL);
-    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
@@ -82,9 +146,7 @@ async function main() {
     };
     
     const triangularPaths = buildTriangularPaths();
-    
-    // Adjusted capital tiers to mirror your working baseline trade setups
-    const capitalTiers = [".01", ".10", "1", "25000"];
+    const capitalTiers = ["1000", "5000", "25000"];
 
     let loopBusy = false; 
     let currentBlock = 0;
@@ -95,10 +157,9 @@ async function main() {
 
         try {
             const freshBlock = await provider.getBlockNumber();
-            
             if (freshBlock > currentBlock) {
                 currentBlock = freshBlock;
-                console.log(`\n📦 BLOCK: #${currentBlock} | Auditing Triangular Flow Matrices...`);
+                console.log(`\n📦 BLOCK: #${currentBlock} | Auditing Chains via Cached Sequential Pipelines...`);
 
                 for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
                     const pathChunk = triangularPaths.slice(i, i + BATCH_SIZE);
@@ -111,11 +172,10 @@ async function main() {
                                 const activeRouterContract = routerContracts[routerKey];
                                 
                                 scanPromises.push(
-                                    activeRouterContract.getAmountsOut(testAmountIn, pathObj.fullPath)
-                                        .then(amountsOut => {
-                                            const finalAmountOut = amountsOut[amountsOut.length - 1];
+                                    getSequentialTriangularQuote(activeRouterContract, testAmountIn, pathObj.fullPath)
+                                        .then(finalAmountOut => {
+                                            if (!finalAmountOut) return { success: false };
                                             
-                                            // Explicit BigInt signed calculations to track clean positive directionality
                                             const isProfitable = finalAmountOut > testAmountIn;
                                             const profitDelta = isProfitable ? finalAmountOut - testAmountIn : 0n;
                                             const lossDelta = !isProfitable ? testAmountIn - finalAmountOut : 0n;
@@ -145,20 +205,19 @@ async function main() {
                     for (const res of results) {
                         if (!res.success) continue;
 
-                        const sizeStr = `$${res.tier}`.padEnd(7);
-                        const routerStr = `${res.routerKey.padEnd(5)}`;
-                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | Router: ${routerStr} | Delta: ${res.displayDelta} USDC`);
+                        // Filter out empty outputs or near-zero data noise
+                        if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
 
-                        // Minimum profit target threshold configuration ($0.05 minimum)
-                        const minProfitFloor = 0.00001; 
+                        console.log(`   📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC`);
+
+                        const minProfitFloor = 0.0002; // JS1 matching MIN_PROFIT floor threshold
 
                         if (res.isProfitable && res.profitHuman >= minProfitFloor && !executionTriggered) { 
                             const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                             if (balanceBefore < res.testAmountIn) continue;
 
                             executionTriggered = true; 
-                            console.log(`\n🎯 [TRIANGULAR MATCH] Real Profit Found: +${res.profitHuman.toFixed(6)} USDC`);
-                            console.log(`⚡ Dispatching transaction onto ${res.routerKey}...`);
+                            console.log(`\n🎯 [MATCH FOUND] Profitable Sequence Confirmed: ${res.displayDelta} USDC`);
                             
                             const targetRouterAddress = ROUTERS[res.routerKey];
                             const txDeadline = Math.floor(Date.now() / 1000) + 30; 
@@ -178,21 +237,16 @@ async function main() {
                             );
                             
                             console.log(`🚨 TX DISPATCHED: ${tx.hash}`);
-                            const receipt = await tx.wait(1);
-                            console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
-                            
-                            const balanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                            console.log(`💰 Realized Net Profit: +${ethers.formatUnits(balanceAfter - balanceBefore, 6)} USDC\n`);
+                            await tx.wait(1);
+                            console.log(`✅ BATCH BLOCK CONFIRMED`);
                             break; 
                         }
                     }
-
-                    await sleep(35);
-                    if (executionTriggered) break; 
+                    if (executionTriggered) break;
                 }
             }
         } catch (globalError) {
-            console.log("⚠️ RPC connection drop caught. Pacing next execution window...");
+            console.log("⚠️ RPC Pipeline drop handled cleanly. Advancing...");
         } finally {
             loopBusy = false; 
         }
@@ -200,6 +254,6 @@ async function main() {
 }
 
 main().catch((error) => {
-    console.error("Fatal Runtime Loop Error:", error);
+    console.error("Fatal Execution Fault:", error);
     process.exit(1);
 });
