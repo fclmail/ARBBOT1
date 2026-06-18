@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ==========================================
-// 1. CONFIGURATION & SINGLE STABLE OPEN RPC
+// 1. STABLE PRODUCTION ENDPOINT
 // ==========================================
 const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 
@@ -33,7 +33,7 @@ const ERC20_ABI = [
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ==========================================
-// 2. ROUTE MATRIX GENERATION
+// 2. OPTIMIZED ROUTE GRID GENERATION
 // ==========================================
 function getTokenLabel(address) {
     switch(address.toLowerCase()) {
@@ -68,11 +68,11 @@ function generateScanningRoutes() {
 }
 
 // ==========================================
-// 3. MAIN RUNNER (Pipeline Verification Mode)
+// 3. MAIN RUNNER (High-Speed Matrix)
 // ==========================================
 async function main() {
     console.log("🚀 BOT STARTED\n");
-    console.log("⏳ Initializing Pipeline Verification Engine (Option 1: Micro-Scalper)... \n");
+    console.log("⏳ Initializing High-Speed Matrix Engine...\n");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing from your .env file.");
@@ -96,7 +96,6 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN ",  sellName: "APE  " }
     ];
 
-    // Capital test tiers from small to large
     const capitalTiers = ["1000", "10000", "50000", "100000", "250000"];
     let isExecuting = false;
 
@@ -104,13 +103,14 @@ async function main() {
         console.log(`\n📦 BLOCK: #${blockNumber} | Auditing Matrix Across Capital Depth Tiers...`);
         if (isExecuting) return;
 
+        // Flatten checks to process high-liquidity pairings quickly
         for (let route of tokenRoutes) {
             for (let pair of routerPairs) {
                 for (let tier of capitalTiers) {
                     if (isExecuting) break;
 
-                    // Pacing limit to eliminate rate limits on public endpoints
-                    await sleep(65); 
+                    // Reduced pacing footprint to match the processing capacity of public nodes
+                    await sleep(35); 
 
                     const testAmountIn = ethers.parseUnits(tier, 6);
                     
@@ -131,20 +131,23 @@ async function main() {
                         const pathStr = `Path: ${route.label}`.padEnd(52);
                         console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: +${estimatedProfitHuman.toFixed(6)} USDC`);
 
-                        // OPTION 1 TARGET ADJUSTMENT: Set micro-profit execution floor across all tiers
-                        const dynamicMinProfit = 0.000001; 
+                        // Execution Targets
+                        let dynamicMinProfit = 1.00; 
+                        if (testAmountIn >= ethers.parseUnits("250000", 6)) dynamicMinProfit = 1000.00;
+                        else if (testAmountIn >= ethers.parseUnits("100000", 6)) dynamicMinProfit = 100.00;
+                        else if (testAmountIn >= ethers.parseUnits("50000", 6)) dynamicMinProfit = 10.00;
+                        else if (testAmountIn >= ethers.parseUnits("10000", 6)) dynamicMinProfit = 1.00;
+                        else if (testAmountIn >= ethers.parseUnits("1000", 6)) dynamicMinProfit = 0.10;
 
                         if (estimatedProfitHuman >= dynamicMinProfit) { 
                             const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                             
-                            // Ensure your contract possesses enough capital to settle the target swap tier
                             if (contractBalanceBefore < testAmountIn) {
                                 continue;
                             }
 
                             isExecuting = true;
                             console.log(`\n🎯 [DYNAMIC MATCH FOUND] Sizer Selected Bracket: ${tier}.00 USDC | Expected Return: +${estimatedProfitHuman.toFixed(6)} USDC`);
-                            console.log(`[VERIFYING INITIAL BAL]: ${ethers.formatUnits(contractBalanceBefore, 6)} USDC inside Vault Contract.`);
                             console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
                             
                             const txDeadline = Math.floor(Date.now() / 1000) + 30; 
@@ -162,12 +165,8 @@ async function main() {
                             const receipt = await tx.wait(1);
                             console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
                             
-                            // Re-query and verify actual balance adjustment on-chain
                             const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                            const rawDiff = contractBalanceAfter - contractBalanceBefore;
-                            
-                            console.log(`[VERIFYING FINAL BAL]: ${ethers.formatUnits(contractBalanceAfter, 6)} USDC inside Vault Contract.`);
-                            console.log(`💰 Realized Net Profit: +${ethers.formatUnits(rawDiff, 6)} USDC\n`);
+                            console.log(`💰 Realized Net Profit: +${ethers.formatUnits(contractBalanceAfter - contractBalanceBefore, 6)} USDC\n`);
                             
                             isExecuting = false;
                             break; 
@@ -183,7 +182,7 @@ async function main() {
                         const sizeStr = `$${tier}`.padEnd(7);
                         const dexStr = `${pair.buyName} ➡️ ${pair.sellName}`;
                         const pathStr = `Path: ${route.label}`.padEnd(52);
-                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: 0.000000 USDC${errorMsg}`);
+                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: +0.000000 USDC${errorMsg}`);
                     }
                 }
             }
