@@ -4,8 +4,13 @@ import WebSocket from "ws";
 
 dotenv.config();
 
+// ANSI Color Escapes for Console Output
+const GREEN = "\x1b[32m";
+const RED = "\x1b[31m";
+const RESET = "\x1b[0m";
+
 // ==========================================
-// 1. ORDERED DYNAMIC HIGH-AVAILABILITY WSS ENDPOINTS
+// 1. HIGH-AVAILABILITY WSS ENDPOINTS TIER
 // ==========================================
 const WSS_ENDPOINTS = [
     "wss://polygon.drpc.org",
@@ -142,8 +147,7 @@ function initWebSocketConnection(onDisconnect) {
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
     const ws = new WebSocket(targetUrl);
     
-    // Failover early on network handshake issue
-    ws.on("error", (err) => {
+    ws.on("error", () => {
         ws.terminate();
     });
 
@@ -246,17 +250,19 @@ async function main() {
                     if (!res.success) continue;
                     if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
 
-                    console.log(`   📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC`);
+                    // Colored Output Configuration
+                    const logColor = res.isProfitable ? GREEN : RESET;
+                    console.log(`${logColor}   📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
                     const minProfitFloor = 0.00001; 
-                    const isPhantomData = res.profitHuman > (parseFloat(res.tier) * 5); 
+                    const isPhantomData = res.profitHuman > (parseFloat(res.tier) * 5); // Filters out broken token decimals (>500% yield irregularities)
 
                     if (res.isProfitable && res.profitHuman >= minProfitFloor && !isPhantomData && !executionTriggered) { 
                         const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                         if (balanceBefore < res.testAmountIn) continue;
 
                         executionTriggered = true; 
-                        console.log(`\n🎯 [MATCH FOUND] Profitable Sequence Confirmed: ${res.displayDelta} USDC`);
+                        console.log(`${GREEN}\n🎯 [MATCH FOUND] Profitable Sequence Confirmed: ${res.displayDelta} USDC${RESET}`);
                         
                         const targetRouterAddress = ROUTERS[res.routerKey];
                         const txDeadline = Math.floor(Date.now() / 1000) + 30; 
