@@ -4,14 +4,9 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ==========================================
-// 1. HARDCODED CONFIG & ROTATING RPC ARRAYS
+// 1. CONFIGURATION & SINGLE STABLE OPEN RPC
 // ==========================================
-const RPC_POOL = [
-  //  "https://polygon-rpc.com",
-    "https://polygon-bor-rpc.publicnode.com"
-   // "https://rpc.ankr.com/polygon"
-];
-let currentRpcIndex = 0;
+const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
 
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
@@ -35,7 +30,6 @@ const ERC20_ABI = [
     "function balanceOf(address account) view returns (uint256)"
 ];
 
-// Anti-rate-limiting pacing utility
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ==========================================
@@ -74,25 +68,25 @@ function generateScanningRoutes() {
 }
 
 // ==========================================
-// 3. MAIN ENGINE IMPLEMENTATION
+// 3. MAIN RUNNER (Pipeline Verification Mode)
 // ==========================================
 async function main() {
     console.log("🚀 BOT STARTED\n");
-    console.log("⏳ Initializing Anti-Rate-Limit Production Engine...\n");
+    console.log("⏳ Initializing Pipeline Verification Engine (Option 1: Micro-Scalper)... \n");
     
     if (!process.env.PRIVATE_KEY) {
-        console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing from your .env configuration.");
+        console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing from your .env file.");
         process.exit(1);
     }
     const PRIVATE_KEY = process.env.PRIVATE_KEY;
     
-    let provider = new ethers.JsonRpcProvider(RPC_POOL[currentRpcIndex]);
-    let wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    let vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
-    let usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
+    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
+    const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
     
     const startBlock = await provider.getBlockNumber();
-    console.log(`🟢 CONNECTED | Active Cluster Index: [${currentRpcIndex}] (${RPC_POOL[currentRpcIndex]}) | Block: #${startBlock}`);
+    console.log(`🟢 CONNECTED | Active Endpoint: (${RPC_URL}) | Block: #${startBlock}`);
 
     const tokenRoutes = generateScanningRoutes();
     const routerPairs = [
@@ -102,6 +96,7 @@ async function main() {
         { buy: ROUTERS.DFYN,  sell: ROUTERS.APE,   buyName: "DFYN ",  sellName: "APE  " }
     ];
 
+    // Capital test tiers from small to large
     const capitalTiers = ["1000", "10000", "50000", "100000", "250000"];
     let isExecuting = false;
 
@@ -114,7 +109,7 @@ async function main() {
                 for (let tier of capitalTiers) {
                     if (isExecuting) break;
 
-                    // Fixed micro-delay pacing to eliminate rate limits
+                    // Pacing limit to eliminate rate limits on public endpoints
                     await sleep(65); 
 
                     const testAmountIn = ethers.parseUnits(tier, 6);
@@ -131,29 +126,25 @@ async function main() {
                         const estimatedProfit = simulation.estimatedProfit;
                         const estimatedProfitHuman = parseFloat(ethers.formatUnits(estimatedProfit, 6));
 
-                        // Padded layout structure matching targeted visual schema perfectly
                         const sizeStr = `$${tier}`.padEnd(7);
                         const dexStr = `${pair.buyName} ➡️ ${pair.sellName}`;
                         const pathStr = `Path: ${route.label}`.padEnd(52);
                         console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | ${dexStr} | ${pathStr} | Delta: +${estimatedProfitHuman.toFixed(6)} USDC`);
 
-                        // Dynamic Profit Target Execution Logic
-                        let dynamicMinProfit = 1.00; 
-                        if (testAmountIn >= ethers.parseUnits("250000", 6)) dynamicMinProfit = 1000.00;
-                        else if (testAmountIn >= ethers.parseUnits("100000", 6)) dynamicMinProfit = 100.00;
-                        else if (testAmountIn >= ethers.parseUnits("50000", 6)) dynamicMinProfit = 10.00;
-                        else if (testAmountIn >= ethers.parseUnits("10000", 6)) dynamicMinProfit = 1.00;
-                        else if (testAmountIn >= ethers.parseUnits("1000", 6)) dynamicMinProfit = 0.10;
+                        // OPTION 1 TARGET ADJUSTMENT: Set micro-profit execution floor across all tiers
+                        const dynamicMinProfit = 0.000001; 
 
                         if (estimatedProfitHuman >= dynamicMinProfit) { 
                             const contractBalanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                             
+                            // Ensure your contract possesses enough capital to settle the target swap tier
                             if (contractBalanceBefore < testAmountIn) {
                                 continue;
                             }
 
                             isExecuting = true;
                             console.log(`\n🎯 [DYNAMIC MATCH FOUND] Sizer Selected Bracket: ${tier}.00 USDC | Expected Return: +${estimatedProfitHuman.toFixed(6)} USDC`);
+                            console.log(`[VERIFYING INITIAL BAL]: ${ethers.formatUnits(contractBalanceBefore, 6)} USDC inside Vault Contract.`);
                             console.log(`⚡ LOCK ACQUIRED. Dispatching production transaction...`);
                             
                             const txDeadline = Math.floor(Date.now() / 1000) + 30; 
@@ -171,26 +162,19 @@ async function main() {
                             const receipt = await tx.wait(1);
                             console.log(`✅ CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
                             
+                            // Re-query and verify actual balance adjustment on-chain
                             const contractBalanceAfter = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                            console.log(`💰 Realized Net Profit: +${ethers.formatUnits(contractBalanceAfter - contractBalanceBefore, 6)} USDC\n`);
+                            const rawDiff = contractBalanceAfter - contractBalanceBefore;
+                            
+                            console.log(`[VERIFYING FINAL BAL]: ${ethers.formatUnits(contractBalanceAfter, 6)} USDC inside Vault Contract.`);
+                            console.log(`💰 Realized Net Profit: +${ethers.formatUnits(rawDiff, 6)} USDC\n`);
                             
                             isExecuting = false;
                             break; 
                         }
                     } catch (error) {
                         let errorMsg = "";
-                        
-                        // Error evaluation & dynamic node failover
-                        if (error.message && (error.message.includes("500") || error.message.includes("429") || error.message.includes("401") || error.message.includes("Batch of more than"))) {
-                            currentRpcIndex = (currentRpcIndex + 1) % RPC_POOL.length;
-                            
-                            provider = new ethers.JsonRpcProvider(RPC_POOL[currentRpcIndex]);
-                            wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-                            vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
-                            usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-                            await sleep(250);
-                            continue;
-                        } else if (error.message && error.message.includes("execution reverted")) {
+                        if (error.message && error.message.includes("execution reverted")) {
                             errorMsg = " (Reverted Block State)";
                         } else if (error.message) {
                             errorMsg = ` (${error.message.slice(0, 20)})`;
