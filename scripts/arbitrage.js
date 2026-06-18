@@ -139,8 +139,15 @@ function initWebSocketConnection() {
     routerContracts.QUICK = new ethers.Contract(ROUTERS.QUICK, ROUTER_ABI, provider);
     routerContracts.SUSHI = new ethers.Contract(ROUTERS.SUSHI, ROUTER_ABI, provider);
 
-    if (provider._websocket) {
-        provider._websocket.on("ping", () => provider._websocket.pong());
+    // Safe heartbeat monitoring using ethers native websocket abstraction
+    if (provider.websocket) {
+        provider.websocket.onopen = () => {
+            setInterval(() => {
+                if (provider.websocket && provider.websocket.readyState === 1) {
+                    provider.websocket.send(JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }));
+                }
+            }, 20000);
+        };
     }
 }
 
@@ -261,13 +268,15 @@ async function main() {
         }
     });
 
-    // Auto-Rebuilder Connection Safety Net
-    provider._websocket.on("close", async () => {
-        console.log("🚨 WSS Connection dropped. Rebuilding layout link...");
-        provider.removeAllListeners("block");
-        await sleep(5000);
-        main().catch(() => {});
-    });
+    // Handle WebSocket disconnection gracefully via native hooks
+    if (provider.websocket) {
+        provider.websocket.onclose = async () => {
+            console.log("🚨 WSS Connection dropped. Rebuilding layout link...");
+            provider.removeAllListeners("block");
+            await sleep(5000);
+            main().catch(() => {});
+        };
+    }
 }
 
 main().catch((error) => {
