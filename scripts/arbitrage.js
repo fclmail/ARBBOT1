@@ -16,7 +16,7 @@ const ROUTERS = {
     SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-// Top liquidity pairs pulled from your asset cluster
+// Top liquidity tokens matching your smart contract configuration
 const TOKENS = {
     WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
@@ -37,10 +37,7 @@ const ERC20_ABI = [
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const fmt = (x) => ethers.formatUnits(x, 6);
-
-// Parallel scan batch size setting to optimize HTTP pipeline
-const BATCH_SIZE = 4; 
+const BATCH_SIZE = 3; 
 
 // ==========================================
 // 2. TRIANGULAR PATH GENERATION MATRICES
@@ -55,8 +52,7 @@ function buildTriangularPaths() {
             generatedPaths.push({
                 fullPath: [USDC_ADDRESS, a, b, USDC_ADDRESS],
                 pathToToken: [USDC_ADDRESS, a, b],
-                pathToUSDC: [b, USDC_ADDRESS],
-                label: `USDC ➡️ ${a.slice(0, 6)}... ➡️ ${b.slice(0, 6)}... ➡️ USDC`
+                pathToUSDC: [b, USDC_ADDRESS]
             });
         }
     }
@@ -67,7 +63,7 @@ function buildTriangularPaths() {
 // 3. MAIN RUNNER (Paced Control Loop)
 // ==========================================
 async function main() {
-    console.log("🚀 BOT STARTED WITH TRIANGULAR LOOKUPS (PARALLELIZED)\n");
+    console.log("🚀 BOT STARTED WITH FIXED TRIANGULAR ENFORCEMENT\n");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing.");
@@ -86,7 +82,9 @@ async function main() {
     };
     
     const triangularPaths = buildTriangularPaths();
-    const capitalTiers = ["1000", "10000", "50000", "100000"];
+    
+    // Adjusted capital tiers to mirror your working baseline trade setups
+    const capitalTiers = ["1000", "5000", "10000", "25000"];
 
     let loopBusy = false; 
     let currentBlock = 0;
@@ -102,7 +100,6 @@ async function main() {
                 currentBlock = freshBlock;
                 console.log(`\n📦 BLOCK: #${currentBlock} | Auditing Triangular Flow Matrices...`);
 
-                // Break up checking into parallel promise chunks to eliminate nested loop latency
                 for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
                     const pathChunk = triangularPaths.slice(i, i + BATCH_SIZE);
                     const scanPromises = [];
@@ -113,19 +110,25 @@ async function main() {
                                 const testAmountIn = ethers.parseUnits(tier, 6);
                                 const activeRouterContract = routerContracts[routerKey];
                                 
-                                // Push simulation task to parallel pool execution queue
                                 scanPromises.push(
                                     activeRouterContract.getAmountsOut(testAmountIn, pathObj.fullPath)
                                         .then(amountsOut => {
                                             const finalAmountOut = amountsOut[amountsOut.length - 1];
-                                            const profit = finalAmountOut - testAmountIn;
-                                            const profitHuman = parseFloat(ethers.formatUnits(profit, 6));
-
+                                            
+                                            // Explicit BigInt signed calculations to track clean positive directionality
+                                            const isProfitable = finalAmountOut > testAmountIn;
+                                            const profitDelta = isProfitable ? finalAmountOut - testAmountIn : 0n;
+                                            const lossDelta = !isProfitable ? testAmountIn - finalAmountOut : 0n;
+                                            
                                             return {
                                                 success: true,
                                                 routerKey,
                                                 tier,
-                                                profitHuman,
+                                                isProfitable,
+                                                displayDelta: isProfitable 
+                                                    ? `+${ethers.formatUnits(profitDelta, 6)}` 
+                                                    : `-${ethers.formatUnits(lossDelta, 6)}`,
+                                                profitHuman: parseFloat(ethers.formatUnits(profitDelta, 6)),
                                                 testAmountIn,
                                                 pathObj
                                             };
@@ -136,7 +139,6 @@ async function main() {
                         }
                     }
 
-                    // Execute current chunk in parallel over the HTTP endpoint
                     const results = await Promise.all(scanPromises);
                     let executionTriggered = false;
 
@@ -145,16 +147,17 @@ async function main() {
 
                         const sizeStr = `$${res.tier}`.padEnd(7);
                         const routerStr = `${res.routerKey.padEnd(5)}`;
-                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | Router: ${routerStr} | Delta: +${res.profitHuman.toFixed(6)} USDC`);
+                        console.log(`   📡 [AUDIT] Size: ${sizeStr} USDC | Router: ${routerStr} | Delta: ${res.displayDelta} USDC`);
 
-                        const dynamicMinProfit = 0.0001; 
+                        // Minimum profit target threshold configuration ($0.05 minimum)
+                        const minProfitFloor = 0.05; 
 
-                        if (res.profitHuman >= dynamicMinProfit && !executionTriggered) { 
+                        if (res.isProfitable && res.profitHuman >= minProfitFloor && !executionTriggered) { 
                             const balanceBefore = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                             if (balanceBefore < res.testAmountIn) continue;
 
-                            executionTriggered = true; // Lock execution during this block cycle
-                            console.log(`\n🎯 [TRIANGULAR MATCH] Profit Target Cleared: +${res.profitHuman.toFixed(6)} USDC`);
+                            executionTriggered = true; 
+                            console.log(`\n🎯 [TRIANGULAR MATCH] Real Profit Found: +${res.profitHuman.toFixed(6)} USDC`);
                             console.log(`⚡ Dispatching transaction onto ${res.routerKey}...`);
                             
                             const targetRouterAddress = ROUTERS[res.routerKey];
@@ -168,9 +171,9 @@ async function main() {
                                 res.pathObj.pathToUSDC, 
                                 txDeadline,
                                 { 
-                                    gasLimit: 600000,
-                                    maxFeePerGas: ethers.parseUnits("280", "gwei"),       
-                                    maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
+                                    gasLimit: 550000,
+                                    maxFeePerGas: ethers.parseUnits("250", "gwei"),       
+                                    maxPriorityFeePerGas: ethers.parseUnits("40", "gwei")  
                                 }
                             );
                             
@@ -184,13 +187,12 @@ async function main() {
                         }
                     }
 
-                    // Small structural sleep between batch processing chunks to protect public node socket connections
-                    await sleep(40);
+                    await sleep(35);
                     if (executionTriggered) break; 
                 }
             }
         } catch (globalError) {
-            console.log("⚠️ Connection interruption caught. Resetting loop index state...");
+            console.log("⚠️ RPC connection drop caught. Pacing next execution window...");
         } finally {
             loopBusy = false; 
         }
