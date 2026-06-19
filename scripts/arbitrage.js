@@ -27,13 +27,13 @@ const ROUTERS = {
     SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
+// Target matrix tokens requested for expanded hop coverage
 const TOKENS = {
-    WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
-    WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+    WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-    QUICK:  "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
+    WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
 // Full ABI to completely support your contract's read and write workflows
@@ -47,20 +47,47 @@ const ERC20_ABI = [
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const BATCH_SIZE = 2; // Keeps read overhead lightweight on public sockets
+const BATCH_SIZE = 1; // Kept at 1 to offset higher permutation count per block processing slot
 
-function buildCrossExchangeTriangularPaths() {
+// =========================================================================
+// OPTIMIZATION: Combinatorial Generation for 3-Hop & 4-Hop Paths
+// =========================================================================
+function buildMultiHopCrossExchangePaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
+
+    // ---- GENERATE 3-HOP TRIANGULAR PATHS ----
+    // Path structure: USDC -> Token A -> Token B -> USDC
+    // pathToToken: [USDC, A, B], pathToUSDC: [B, USDC]
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
             generatedPaths.push({
+                hops: 3,
                 pathToToken: [USDC_ADDRESS, a, b],
                 pathToUSDC: [b, USDC_ADDRESS]
             });
         }
     }
+
+    // ---- GENERATE 4-HOP QUADRANGULAR PATHS ----
+    // Path structure: USDC -> Token A -> Token B -> Token C -> USDC
+    // pathToToken: [USDC, A, B, C], pathToUSDC: [C, USDC]
+    for (const a of tokenAddresses) {
+        for (const b of tokenAddresses) {
+            if (a === b) continue;
+            for (const c of tokenAddresses) {
+                if (c === a || c === b) continue;
+                generatedPaths.push({
+                    hops: 4,
+                    pathToToken: [USDC_ADDRESS, a, b, c],
+                    pathToUSDC: [c, USDC_ADDRESS]
+                });
+            }
+        }
+    }
+
+    console.log(`📊 Matrix initialized with ${generatedPaths.length} multi-hop routing paths.`);
     return generatedPaths;
 }
 
@@ -93,7 +120,7 @@ function initWebSocketConnection(onDisconnect) {
 async function main() {
     if (isReconnecting) return;
     
-    console.log("🚀 BOT STARTED - AAVE V3 FLASH LOAN ENGINE RUNNING");
+    console.log("🚀 BOT STARTED - AAVE V3 MULTI-HOP FLASH LOAN ENGINE RUNNING");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing.");
@@ -116,7 +143,6 @@ async function main() {
 
     initWebSocketConnection(handleReconnect);
     
-    // Dynamic initialization syncing our threshold check directly to the contract's setting
     try {
         globalMinProfitFloor = await vaultContract.minimumProfitUSDC();
         console.log(`ℹ️ Synced minimum profit threshold from contract: ${ethers.formatUnits(globalMinProfitFloor, 6)} USDC`);
@@ -124,9 +150,7 @@ async function main() {
         console.log(`⚠️ Could not fetch minProfit from contract, utilizing fallback: 0.05 USDC`);
     }
 
-    const triangularPaths = buildCrossExchangeTriangularPaths();
-    
-    // Expanded distribution to sweep out deep pool discrepancies
+    const multiHopPaths = buildMultiHopCrossExchangePaths();
     const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
 
     provider.on("block", async (freshBlock) => {
@@ -136,13 +160,12 @@ async function main() {
         console.log(`\n⚡ LIVE BLOCK DETECTED VIA WSS: #${freshBlock} | Scanning Matrix Pipelines...`);
 
         try {
-            for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
+            for (let i = 0; i < multiHopPaths.length; i += BATCH_SIZE) {
                 if (isReconnecting) break;
-                const pathChunk = triangularPaths.slice(i, i + BATCH_SIZE);
+                const pathChunk = multiHopPaths.slice(i, i + BATCH_SIZE);
                 const scanPromises = [];
 
                 for (let pathObj of pathChunk) {
-                    // Map asymmetric router cross-pairs 
                     const routerPairs = [
                         { buyName: "QUICK", sellName: "SUSHI", buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI },
                         { buyName: "SUSHI", sellName: "QUICK", buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK }
@@ -167,6 +190,7 @@ async function main() {
                                     return {
                                         success: true,
                                         routeStr: `${pair.buyName}->${pair.sellName}`,
+                                        hops: pathObj.hops,
                                         pair,
                                         tier,
                                         isProfitable,
@@ -192,13 +216,12 @@ async function main() {
                     if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
 
                     const logColor = res.isProfitable ? GREEN : RESET;
-                    console.log(`${logColor}    📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Route: ${res.routeStr.padEnd(12)} | Delta: ${res.displayDelta} USDC${RESET}`);
+                    console.log(`${logColor}    📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Hops: ${res.hops} | Route: ${res.routeStr.padEnd(12)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
-                    // Trigger execution strictly if profit criteria is exceeded
                     if (res.isProfitable && res.estimatedProfit >= globalMinProfitFloor && !executionTriggered) { 
                         executionTriggered = true; 
                         
-                        console.log(`${GREEN}\n🎯 [MATCH FOUND] Execution Triggered via Aave Flash Loan: ${res.displayDelta} USDC${RESET}`);
+                        console.log(`${GREEN}\n🎯 [MATCH FOUND] Multi-Hop Execution Triggered via Aave Flash Loan: ${res.displayDelta} USDC${RESET}`);
                         
                         const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                         
@@ -211,7 +234,7 @@ async function main() {
                                 res.pathObj.pathToUSDC, 
                                 txDeadline,
                                 { 
-                                    gasLimit: 850000, 
+                                    gasLimit: 950000, // Injected safety buffer allowance for extra 4-hop computational depth
                                     maxFeePerGas: ethers.parseUnits("280", "gwei"),       
                                     maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
                                 }
@@ -233,7 +256,7 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (globalError) {
-            // Drop execution block failures cleanly without halting the event cycle listener
+            // Drop execution block failures cleanly
         } finally {
             blockProcessingActive = false; 
         }
