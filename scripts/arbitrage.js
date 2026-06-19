@@ -1,4 +1,3 @@
-
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 import WebSocket from "ws";
@@ -46,9 +45,7 @@ const ERC20_ABI = [
     "function balanceOf(address account) view returns (uint256)"
 ];
 
-// Uniswap V2 / QuickSwap Core Standard Swap Event Signature Topic
 const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
-
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function buildMultiHopCrossExchangePaths() {
@@ -90,25 +87,16 @@ let vaultContract;
 let usdcContract;
 let isReconnecting = false;
 
-// Configured precisely to your contract requirement: 0.00001 USDC (6 decimals = 10 units)
-const contractMinimumProfitUSDC = 10n; 
+const contractMinimumProfitUSDC = 10n; // 0.00001 USDC (6 Decimals)
 
 function initWebSocketConnection(onDisconnect) {
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
-    console.log(`📡 Connecting to high-speed stream gateway: ${targetUrl}`);
-    const ws = new WebSocket(targetUrl);
-    
-    ws.on("error", () => {
-        ws.terminate();
-    });
-
-    provider = new ethers.WebSocketProvider(() => ws);
+    provider = new ethers.WebSocketProvider(() => new WebSocket(targetUrl));
     wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-    ws.on("close", () => {
-        console.log("⚠️ Connection dropped. Swapping to alternate high-availability node...");
+    provider._websocket.on("close", () => {
         currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
         onDisconnect();
     });
@@ -118,9 +106,10 @@ async function main() {
     if (isReconnecting) return;
     
     console.log("🚀 REACTIVE EVENT-DRIVEN MULTI-HOP ENGINE ONLINE");
+    console.log(`📡 Connecting to high-speed stream gateway: ${WSS_ENDPOINTS[currentEndpointIndex]}`);
     
     if (!process.env.PRIVATE_KEY) {
-        console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing in variables environment.");
+        console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing in environment variables.");
         process.exit(1);
     }
 
@@ -142,19 +131,17 @@ async function main() {
     const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
     
     console.log(`📊 Matrix initialized with ${multiHopPaths.length} multi-hop configurations.`);
-    console.log(`🎯 Active Execution Floor target set to: ${ethers.formatUnits(contractMinimumProfitUSDC, 6)} USDC (0.00001)`);
-    console.log(`⚡ Subscribed to pool Swap events. Listening for on-chain price dislocation hooks...`);
+    console.log(`🎯 Active Execution Floor target set to: 0.00001 USDC (0.00001)`);
+    console.log(`⚡ Subscribed to pool Swap events. Listening for on-chain price dislocation hooks...\n`);
 
     let processingQueueActive = false;
-
-    // Reactive Filter: Listen directly to raw logs matching standard Swap signatures 
-    const filter = {
-        topics: [SWAP_EVENT_TOPIC]
-    };
+    const filter = { topics: [SWAP_EVENT_TOPIC] };
 
     provider.on(filter, async (log) => {
         if (processingQueueActive || isReconnecting) return;
         processingQueueActive = true;
+
+        const currentBlock = log.blockNumber;
 
         try {
             const allScanPromises = [];
@@ -209,15 +196,16 @@ async function main() {
                 if (!res.success) continue;
                 if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
 
-                // Color-code winning metrics in green
-                const logColor = res.isProfitable && res.estimatedProfit >= contractMinimumProfitUSDC ? GREEN : RESET;
-                console.log(`${logColor}    📡 [WSS SWAP EVENT DETECTED] Size: $${res.tier.padEnd(6)} USDC | Hops: ${res.hops} | Route: ${res.routeStr.padEnd(12)} | Delta: ${res.displayDelta} USDC${RESET}`);
+                const passesThreshold = res.isProfitable && res.estimatedProfit >= contractMinimumProfitUSDC;
+                const logColor = passesThreshold ? GREEN : RESET;
+                
+                // Formatted terminal trace alignment matching your layout template exactly
+                console.log(`${logColor}    📡 [BLOCK #${currentBlock}] Size: $${res.tier.padEnd(6)} USDC | Hops: ${res.hops} | Route: ${res.routeStr.padEnd(14)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
-                // Direct instant execution route triggers when profit threshold condition is met
-                if (res.isProfitable && res.estimatedProfit >= contractMinimumProfitUSDC && !executionTriggered) { 
+                if (passesThreshold && !executionTriggered) { 
                     executionTriggered = true; 
                     
-                    console.log(`${GREEN}\n🎯 [PROFITABLE TRIGGER FOUND] Instantly executing flash loan: ${res.displayDelta} USDC${RESET}`);
+                    console.log(`\n🎯 [PROFITABLE TRIGGER FOUND IN #${currentBlock}] Instantly executing flash loan: ${res.displayDelta} USDC`);
                     const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                     
                     try {
@@ -236,16 +224,15 @@ async function main() {
                         );
                         
                         console.log(`🚨 FLASH LOAN TX SENT TO MEMPOOL: ${tx.hash}`);
-                        const receipt = await tx.wait(1);
-                        console.log(`✅ EXECUTED TRANSACTION CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
+                        await tx.wait(1);
                     } catch (txError) {
-                        console.log(`${RED}❌ Transaction reverted on-chain. Capital remains safe.${RESET}`);
+                        // Suppress tx failures to preserve pipeline loop speed
                     }
                     break;
                 }
             }
         } catch (err) {
-            // Drop execution anomalies cleanly
+            // Drop calculation exceptions smoothly
         } finally {
             processingQueueActive = false;
         }
