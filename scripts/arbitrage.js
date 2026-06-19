@@ -143,7 +143,7 @@ async function main() {
     }
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
-    const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
+    const capitalTiers = [".02", ".10", "1", "500", "1200", "2500", "5000"];
     
     // Will print: Matrix initialized with 80 routes * 4 variants = 320 total permutations
     console.log(`📊 Matrix initialized with ${multiHopPaths.length * 4} multi-hop permutations.`);
