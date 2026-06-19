@@ -1,6 +1,5 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-import WebSocket from "ws";
 
 dotenv.config();
 
@@ -89,32 +88,26 @@ let isReconnecting = false;
 
 const contractMinimumProfitUSDC = 10n; // 0.00001 USDC (6 Decimals)
 
-function initWebSocketConnection(onDisconnect) {
-    const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
+async function initWebSocketConnection(targetUrl, onDisconnect) {
+    // Correctly initialize using string url to allow internal native state engine control
+    provider = new ethers.WebSocketProvider(targetUrl);
     
-    // Explicitly define and listen to the raw WebSocket instance before abstraction
-    const ws = new WebSocket(targetUrl);
-    
-    ws.on("close", () => {
-        currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
-        onDisconnect();
-    });
-
-    ws.on("error", () => {
-        ws.terminate();
-    });
-
-    provider = new ethers.WebSocketProvider(() => ws);
     wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
+
+    // Keep internal network sockets monitored cleanly
+    provider.getNetwork().catch(() => {
+        onDisconnect();
+    });
 }
 
 async function main() {
     if (isReconnecting) return;
     
     console.log("🚀 REACTIVE EVENT-DRIVEN MULTI-HOP ENGINE ONLINE");
-    console.log(`📡 Connecting to high-speed stream gateway: ${WSS_ENDPOINTS[currentEndpointIndex]}`);
+    const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
+    console.log(`📡 Connecting to high-speed stream gateway: ${targetUrl}`);
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing in environment variables.");
@@ -124,16 +117,26 @@ async function main() {
     const handleReconnect = async () => {
         if (isReconnecting) return;
         isReconnecting = true;
+        
+        console.log(`⚠️ Connection faulted. Cycling to next endpoint position...`);
+        currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
+
         if (provider) {
             try { provider.removeAllListeners(); } catch {}
             try { await provider.destroy(); } catch {}
         }
-        await sleep(2000); 
+        
+        await sleep(3000); 
         isReconnecting = false;
         main().catch(() => {});
     };
 
-    initWebSocketConnection(handleReconnect);
+    try {
+        await initWebSocketConnection(targetUrl, handleReconnect);
+    } catch (err) {
+        handleReconnect();
+        return;
+    }
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
     const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
@@ -141,6 +144,13 @@ async function main() {
     console.log(`📊 Matrix initialized with ${multiHopPaths.length} multi-hop configurations.`);
     console.log(`🎯 Active Execution Floor target set to: 0.00001 USDC (0.00001)`);
     console.log(`⚡ Subscribed to pool Swap events. Listening for on-chain price dislocation hooks...\n`);
+
+    // --- HEAVY BLOCK TRACKER PROGRESSION HEADER ---
+    provider.on("block", (blockNumber) => {
+        if (!isReconnecting) {
+            console.log(`📦 [BLOCK PROGRESSION] Mined: #${blockNumber} | Pipeline active, scanning stream hooks...`);
+        }
+    });
 
     let processingQueueActive = false;
     const filter = { topics: [SWAP_EVENT_TOPIC] };
@@ -233,7 +243,7 @@ async function main() {
                         console.log(`🚨 FLASH LOAN TX SENT TO MEMPOOL: ${tx.hash}`);
                         await tx.wait(1);
                     } catch (txError) {
-                        // Suppress tx execution failures to keep pipeline latency minimal
+                        // Suppress execution exceptions to keep pipeline latency minimal
                     }
                     break;
                 }
