@@ -36,9 +36,9 @@ const TOKENS = {
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 };
 
-// Updated ABI string to clearly state Aave Flash Loan capability interface
+// Updated specifically to bind cleanly to your contract's entrypoint
 const ENFORCER_ABI = [
-    "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external returns (uint256)"
+    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
 const ROUTER_ABI = [
     "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory amounts)"
@@ -52,7 +52,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const BATCH_SIZE = 4;
 
 const quoteCache = new Map();
-const decimalCache = new Map(); // Performance cache to prevent blocking RPC loops for token metadata
+const decimalCache = new Map(); 
 const CACHE_TTL = 1000; 
 
 function getCachedQuote(routerAddress, path) {
@@ -75,7 +75,6 @@ function setCachedQuote(routerAddress, path, value) {
     }
 }
 
-// Helper to reliably fetch token decimals and store them locally
 async function getTokenDecimals(tokenAddress) {
     if (tokenAddress.toLowerCase() === USDC_ADDRESS.toLowerCase()) return 6;
     if (decimalCache.has(tokenAddress)) return decimalCache.get(tokenAddress);
@@ -86,14 +85,14 @@ async function getTokenDecimals(tokenAddress) {
         decimalCache.set(tokenAddress, decimals);
         return decimals;
     } catch {
-        return 18; // Fallback standard default
+        return 18; 
     }
 }
 
 async function getSequentialTriangularQuote(routerContract, amountIn, path) {
     const routerAddr = routerContract.target;
     
-    // Hop 1: USDC -> Token A
+    // Native decimals are preserved sequentially across hops to resolve math-mismatches
     const path1 = [path[0], path[1]];
     let out1 = getCachedQuote(routerAddr, path1);
     if (out1 === undefined) {
@@ -105,7 +104,6 @@ async function getSequentialTriangularQuote(routerContract, amountIn, path) {
     }
     if (!out1) return null;
 
-    // Hop 2: Token A -> Token B
     const path2 = [path[1], path[2]];
     let out2 = getCachedQuote(routerAddr, path2);
     if (out2 === undefined) {
@@ -117,7 +115,6 @@ async function getSequentialTriangularQuote(routerContract, amountIn, path) {
     }
     if (!out2) return null;
 
-    // Hop 3: Token B -> USDC
     const path3 = [path[2], path[3]];
     let out3 = getCachedQuote(routerAddr, path3);
     if (out3 === undefined) {
@@ -259,7 +256,7 @@ async function main() {
                     const logColor = res.isProfitable ? GREEN : RESET;
                     console.log(`${logColor}    📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
-                    // Clean threshold parameters configuration to properly outpace gas costs
+                    // Clean threshold config parameter outpaces on-chain Aave premium requirements
                     const minProfitFloor = 0.05; 
 
                     if (res.isProfitable && res.profitHuman >= minProfitFloor && !executionTriggered) { 
@@ -272,8 +269,8 @@ async function main() {
                         const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                         
                         try {
-                            // Submitting directly triggers an on-chain transactional event hash generation immediately
-                            const tx = await vaultContract.executeArbitrage(
+                            // Interfacing directly with the flash loan entrypoint on your contract
+                            const tx = await vaultContract.executeAaveFlashLoanArbitrage(
                                 targetRouterAddress, 
                                 targetRouterAddress, 
                                 executionAmount, 
@@ -281,7 +278,7 @@ async function main() {
                                 res.pathObj.pathToUSDC, 
                                 txDeadline,
                                 { 
-                                    gasLimit: 750000, // Safe headroom allowance for external flash-loan callback execution overhead
+                                    gasLimit: 850000, 
                                     maxFeePerGas: ethers.parseUnits("280", "gwei"),       
                                     maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
                                 }
