@@ -7,9 +7,6 @@ const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
-// ==========================================
-// 1. HIGH-AVAILABILITY WSS ENDPOINTS TIER
-// ==========================================
 const WSS_ENDPOINTS = [
     "wss://polygon.drpc.org",
     "wss://polygon-bor-rpc.publicnode.com",
@@ -51,7 +48,6 @@ function buildMultiHopCrossExchangePaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
 
-    // ---- 3-HOP TRIANGULAR PATHS ----
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
@@ -63,7 +59,6 @@ function buildMultiHopCrossExchangePaths() {
         }
     }
 
-    // ---- 4-HOP QUADRANGULAR PATHS ----
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
@@ -86,17 +81,14 @@ let vaultContract;
 let usdcContract;
 let isReconnecting = false;
 
-const contractMinimumProfitUSDC = 10n; // 0.00001 USDC (6 Decimals)
+const contractMinimumProfitUSDC = 10n; // 0.00001 USDC
 
 async function initWebSocketConnection(targetUrl, onDisconnect) {
-    // Correctly initialize using string url to allow internal native state engine control
     provider = new ethers.WebSocketProvider(targetUrl);
-    
     wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-    // Keep internal network sockets monitored cleanly
     provider.getNetwork().catch(() => {
         onDisconnect();
     });
@@ -145,7 +137,6 @@ async function main() {
     console.log(`🎯 Active Execution Floor target set to: 0.00001 USDC (0.00001)`);
     console.log(`⚡ Subscribed to pool Swap events. Listening for on-chain price dislocation hooks...\n`);
 
-    // --- HEAVY BLOCK TRACKER PROGRESSION HEADER ---
     provider.on("block", (blockNumber) => {
         if (!isReconnecting) {
             console.log(`📦 [BLOCK PROGRESSION] Mined: #${blockNumber} | Pipeline active, scanning stream hooks...`);
@@ -241,15 +232,16 @@ async function main() {
                         );
                         
                         console.log(`🚨 FLASH LOAN TX SENT TO MEMPOOL: ${tx.hash}`);
-                        await tx.wait(1);
+                        const receipt = await tx.wait(1);
+                        console.log(`✅ AAVE FLASH LOAN EXECUTED & FUNDS DEPOSITED IN BLOCK: #${receipt.blockNumber}`);
                     } catch (txError) {
-                        // Suppress execution exceptions to keep pipeline latency minimal
+                        // Suppress tx execution exceptions to preserve throughput
                     }
                     break;
                 }
             }
         } catch (err) {
-            // Drop exceptions smoothly
+            // Drop exceptions cleanly
         } finally {
             processingQueueActive = false;
         }
