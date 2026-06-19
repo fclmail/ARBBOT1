@@ -3,11 +3,16 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// ANSI Terminal Color Sequences
+const GREEN = "\x1b[32m";
+const RED = "\x1b[31m";
+const RESET = "\x1b[0m";
+
 // ==========================================
 // 1. HIGH-AVAILABILITY WSS ENDPOINTS TIER
 // ==========================================
 const WSS_ENDPOINTS = [
-    "wss://polygon-bor-rpc.publicnode.com", // Reliable unauthenticated public WSS
+    "wss://polygon-bor-rpc.publicnode.com", 
     "wss://polygon.drpc.org",
     "wss://polygon.gateway.tenderly.co"
 ];
@@ -46,7 +51,7 @@ function buildMultiHopCrossExchangePaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
 
-    // ---- 4-HOP QUADRANGULAR PATHS ONLY (Targeting Max-Imbalance Spreads) ----
+    // ---- 4-HOP QUADRANGULAR PATHS ONLY (Max-Imbalance Spreads) ----
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
@@ -68,7 +73,7 @@ let wallet;
 let vaultContract;
 let usdcContract;
 let isReconnecting = false;
-const contractMinimumProfitUSDC = 2000000n; // Set floor threshold to $2.00 target minimum
+const contractMinimumProfitUSDC = 2000000n; // Target profit floor set to 2.00 USDC
 
 async function initWebSocketConnection(targetUrl, onDisconnect) {
     provider = new ethers.WebSocketProvider(targetUrl);
@@ -85,6 +90,8 @@ async function main() {
     if (isReconnecting) return;
     
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
+    console.log("🚀 REACTIVE EVENT-DRIVEN MULTI-HOP ENGINE ONLINE");
+    console.log(`📡 Connecting to high-speed stream gateway: ${targetUrl}`);
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing in environment variables.");
@@ -95,6 +102,7 @@ async function main() {
         if (isReconnecting) return;
         isReconnecting = true;
         
+        console.log(`⚠️ Connection faulted. Cycling to next endpoint position...`);
         currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
 
         if (provider) {
@@ -115,9 +123,10 @@ async function main() {
     }
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
-    
-    // Narrowed Capital Tiers to Optimize Bandwidth
     const capitalTiers = ["150000", "200000"];
+
+    console.log(`📊 Matrix initialized with ${multiHopPaths.length * 4} multi-hop permutations.`);
+    console.log(`🎯 Active Execution Floor target set to: 2.000000 USDC\n`);
 
     let processingQueueActive = false;
 
@@ -187,7 +196,9 @@ async function main() {
                 }
 
                 if (passesThreshold) { 
-                    console.log(`\n🎯 [PROFITABLE HOOK TRIGGER FOUND IN BLOCK #${blockNumber}]`);
+                    // Dynamic color initialization for profitable branches
+                    console.log(`\n${GREEN}🎯 [PROFITABLE HOOK TRIGGER FOUND IN BLOCK #${blockNumber}]`);
+                    console.log(`⚡ Routing $${res.tier} USDC through ${res.pair.buyName} ➡️ ${res.pair.sellName} | Expected Delta: ${res.displayDelta} USDC`);
                     
                     const txDeadline = Math.floor(Date.now() / 1000) + 15; 
                     
@@ -220,20 +231,18 @@ async function main() {
                             );
                         }
                         
-                        console.log(`🚀 TRANSACTION DISPATCHED VIA FASTLANE: ${tx.hash.substring(0, 6)}...`);
+                        console.log(`🚀 TRANSACTION DISPATCHED VIA FASTLANE: ${tx.hash.substring(0, 10)}...`);
                         const receipt = await tx.wait(1);
                         console.log(`✅ EXECUTED SUCCESSFULLY IN BLOCK: #${receipt.blockNumber}`);
-                        
-                        const postVaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                        console.log(`🏁 NET BALANCE ACCUMULATED: +${ethers.formatUnits(res.estimatedProfit, 6)} USDC`);
+                        console.log(`🏁 NET BALANCE ACCUMULATED: +${ethers.formatUnits(res.estimatedProfit, 6)} USDC${RESET}\n`);
                     } catch (txError) {
-                        // Silent failover protection
+                        console.log(`${RED}❌ Execution dropped out: ${txError.message}${RESET}`);
                     }
                     break; 
                 }
             }
         } catch (err) {
-            // Catch error array variations cleanly
+            // Drop exceptions cleanly
         } finally {
             processingQueueActive = false;
         }
@@ -241,5 +250,6 @@ async function main() {
 }
 
 main().catch((error) => {
+    console.error("Fatal Operational Fault:", error);
     process.exit(1);
 });
