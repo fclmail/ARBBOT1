@@ -1,16 +1,22 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
+
 dotenv.config();
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
-// ==========================================
-// CONFIGURATION
-// ==========================================
-const USDC_ADDRESS = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
+const WSS_ENDPOINTS = [
+    "wss://polygon.drpc.org",
+    "wss://polygon-bor-rpc.publicnode.com",
+    "wss://polygon.api.onfinality.io/public-ws",
+    "wss://rpc-mainnet.matic.quiknode.pro"
+];
+let currentEndpointIndex = 0;
+
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
+const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
 const ROUTERS = {
     QUICK: "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
@@ -25,189 +31,224 @@ const TOKENS = {
     WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
-// ==========================================
-// SPECIFIC USDC POOLS TO MONITOR
-// ==========================================
-const POOLS_TO_MONITOR = [
-    // QuickSwap Pools
-    { address: "0x853ee4b2a13f8a742d64c8f088be7ba2131f670d", name: "QuickSwap-USDC/WETH" },
-    { address: "0x2cf7252e74036d1da831d11089d326296e64a728", name: "QuickSwap-USDC/USDT" },
-    { address: "0x6e7a5fafcec6bb1e78bae2a1f0b612012bf14827", name: "QuickSwap-USDC/WMATIC" },
-    { address: "0xa3fa99a148fa48d14ed51d610c367c61876997f1", name: "QuickSwap-USDC/DAI" },
-    // SushiSwap Pools
-    { address: "0x34965ba0ac2451a34a0471f04cca3f990b8dea27", name: "SushiSwap-USDC/WETH" },
-    { address: "0x2360d33932e6f5ec9b2a8928b8f9ebc9e6ae4e20", name: "SushiSwap-USDC/USDT" },
-];
-
 const ENFORCER_ABI = [
     "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
     "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
     "function minimumProfitUSDC() view returns (uint256)"
 ];
 
-const SWAP_ABI = [
-    "event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)"
+const ERC20_ABI = [
+    "function balanceOf(address account) view returns (uint256)"
 ];
 
-// ==========================================
-// BUILD FOCUSED PATHS (fewer, more relevant)
-// ==========================================
+const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 function buildMultiHopCrossExchangePaths() {
-    const tokens = Object.values(TOKENS);
-    const paths = [];
-    
-    // 2-hop: USDC -> Token -> USDC (direct arb across exchanges)
-    for (const token of tokens) {
-        paths.push({
-            hops: 2,
-            pathToToken: [USDC_ADDRESS, token],
-            pathToUSDC: [token, USDC_ADDRESS]
-        });
+    const tokenAddresses = Object.values(TOKENS);
+    let generatedPaths = [];
+
+    for (const a of tokenAddresses) {
+        for (const b of tokenAddresses) {
+            if (a === b) continue;
+            generatedPaths.push({
+                hops: 3,
+                pathToToken: [USDC_ADDRESS, a, b],
+                pathToUSDC: [b, USDC_ADDRESS]
+            });
+        }
     }
-    
-    // 3-hop: USDC -> WETH -> Token -> USDC (triangular)
-    for (const token of tokens) {
-        if (token === TOKENS.WETH) continue;
-        paths.push({
-            hops: 3,
-            pathToToken: [USDC_ADDRESS, TOKENS.WETH, token],
-            pathToUSDC: [token, USDC_ADDRESS]
-        });
+
+    for (const a of tokenAddresses) {
+        for (const b of tokenAddresses) {
+            if (a === b) continue;
+            for (const c of tokenAddresses) {
+                if (c === a || c === b) continue;
+                generatedPaths.push({
+                    hops: 4,
+                    pathToToken: [USDC_ADDRESS, a, b, c],
+                    pathToUSDC: [c, USDC_ADDRESS]
+                });
+            }
+        }
     }
-    
-    return paths;
+    return generatedPaths;
 }
 
-// ==========================================
-// MAIN BOT
-// ==========================================
+let provider;
+let wallet;
+let vaultContract;
+let usdcContract;
+let isReconnecting = false;
+
+const contractMinimumProfitUSDC = 10n; // 0.00001 USDC Floor
+
+async function initWebSocketConnection(targetUrl, onDisconnect) {
+    provider = new ethers.WebSocketProvider(targetUrl);
+    wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+    vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
+    usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
+
+    provider.getNetwork().catch(() => {
+        onDisconnect();
+    });
+}
+
 async function main() {
-    console.log("🚀 EVENT-DRIVEN ARBITRAGE LISTENER");
+    if (isReconnecting) return;
     
-    // Use HTTP for reliable polling, WSS for fast block updates
-    const httpProvider = new ethers.JsonRpcProvider("https://polygon-rpc.com");
-    const wssProvider = new ethers.WebSocketProvider("wss://polygon-bor-rpc.publicnode.com");
+    console.log("🚀 REACTIVE EVENT-DRIVEN MULTI-HOP ENGINE ONLINE");
+    const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
+    console.log(`📡 Connecting to high-speed stream gateway: ${targetUrl}`);
     
-    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, httpProvider);
-    const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
-    
-    const paths = buildMultiHopCrossExchangePaths();
-    const capitalTiers = ["500", "1000", "5000"];
-    
-    console.log(`📊 Monitoring ${POOLS_TO_MONITOR.length} pools across QuickSwap & SushiSwap`);
-    console.log(`📊 ${paths.length} arbitrage paths configured`);
-    console.log(`⚡ Listening for swaps to trigger opportunity scans...\n`);
-    
-    let lastScannedBlock = 0;
-    let scanning = false;
-    
-    // Listen for blocks via WSS (fast)
-    wssProvider.on("block", async (blockNumber) => {
-        if (scanning || blockNumber <= lastScannedBlock) return;
+    if (!process.env.PRIVATE_KEY) {
+        console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing in environment variables.");
+        process.exit(1);
+    }
+
+    const handleReconnect = async () => {
+        if (isReconnecting) return;
+        isReconnecting = true;
         
-        // Only scan every 2 blocks to avoid overload
-        if (blockNumber % 2 !== 0) return;
+        console.log(`⚠️ Connection faulted. Cycling to next endpoint position...`);
+        currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
+
+        if (provider) {
+            try { provider.removeAllListeners(); } catch {}
+            try { await provider.destroy(); } catch {}
+        }
         
-        scanning = true;
-        lastScannedBlock = blockNumber;
-        
+        await sleep(3000); 
+        isReconnecting = false;
+        main().catch(() => {});
+    };
+
+    try {
+        await initWebSocketConnection(targetUrl, handleReconnect);
+    } catch (err) {
+        handleReconnect();
+        return;
+    }
+
+    const multiHopPaths = buildMultiHopCrossExchangePaths();
+    const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
+    
+    console.log(`📊 Matrix initialized with ${multiHopPaths.length} multi-hop configurations.`);
+    console.log(`🎯 Active Execution Floor target set to: 0.00001 USDC (0.00001)`);
+    console.log(`⚡ Subscribed to pool Swap events. Listening for on-chain price dislocation hooks...\n`);
+
+    provider.on("block", (blockNumber) => {
+        if (!isReconnecting) {
+            console.log(`📦 [BLOCK PROGRESSION] Mined: #${blockNumber} | Pipeline active, scanning stream hooks...`);
+        }
+    });
+
+    let processingQueueActive = false;
+    const filter = { topics: [SWAP_EVENT_TOPIC] };
+
+    provider.on(filter, async (log) => {
+        if (processingQueueActive || isReconnecting) return;
+        processingQueueActive = true;
+
+        const currentBlock = log.blockNumber;
+
         try {
-            // Check each monitored pool for recent swaps
-            let swapsFound = false;
-            
-            for (const pool of POOLS_TO_MONITOR) {
-                const poolContract = new ethers.Contract(pool.address, SWAP_ABI, httpProvider);
-                
-                const events = await poolContract.queryFilter(
-                    poolContract.filters.Swap(),
-                    blockNumber - 2,
-                    blockNumber
-                );
-                
-                if (events.length > 0) {
-                    if (!swapsFound) {
-                        console.log(`\n🔔 [BLOCK #${blockNumber}] Swaps detected — scanning for arb opportunities...`);
-                        swapsFound = true;
+            const allScanPromises = [];
+
+            for (const pathObj of multiHopPaths) {
+                const routerPairs = [
+                    { buyName: "QUICK", sellName: "SUSHI", buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI },
+                    { buyName: "SUSHI", sellName: "QUICK", buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK }
+                ];
+
+                for (const pair of routerPairs) {
+                    for (const tier of capitalTiers) {
+                        const testAmountIn = ethers.parseUnits(tier, 6);
+                        
+                        allScanPromises.push(
+                            vaultContract.simulateArbitrageProfit(
+                                pair.buy,
+                                pair.sell,
+                                testAmountIn,
+                                pathObj.pathToToken,
+                                pathObj.pathToUSDC
+                            )
+                            .then(([estimatedFinalUSDC, estimatedProfit]) => {
+                                const isProfitable = estimatedProfit > 0n;
+                                const lossDelta = !isProfitable ? (testAmountIn > estimatedFinalUSDC ? testAmountIn - estimatedFinalUSDC : 0n) : 0n;
+                                
+                                return {
+                                    success: true,
+                                    routeStr: `${pair.buyName}->${pair.sellName}`,
+                                    hops: pathObj.hops,
+                                    pair,
+                                    tier,
+                                    isProfitable,
+                                    estimatedProfit,
+                                    displayDelta: isProfitable 
+                                        ? `+${ethers.formatUnits(estimatedProfit, 6)}` 
+                                        : `-${ethers.formatUnits(lossDelta, 6)}`,
+                                    testAmountIn,
+                                    pathObj
+                                };
+                            })
+                            .catch(() => ({ success: false }))
+                        );
                     }
-                    console.log(`   ${pool.name}: ${events.length} swap(s)`);
                 }
             }
-            
-            // Only scan for arb if swaps were detected
-            if (swapsFound) {
-                await scanForOpportunities(vaultContract, paths, capitalTiers, blockNumber);
-            }
-            
-        } catch (err) {
-            // Silently handle
-        } finally {
-            scanning = false;
-        }
-    });
-    
-    wssProvider.on("error", () => {
-        console.log("⚠️ WSS error, reconnecting...");
-        // Auto-reconnect handled by provider
-    });
-}
 
-async function scanForOpportunities(vaultContract, paths, capitalTiers, blockNumber) {
-    console.log(`   🔎 Running ${paths.length * 2 * capitalTiers.length} simulations...`);
-    
-    const promises = [];
-    
-    for (const path of paths) {
-        for (const pair of [
-            { buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI, name: "Quick->Sushi" },
-            { buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK, name: "Sushi->Quick" }
-        ]) {
-            for (const tier of capitalTiers) {
-                const amount = ethers.parseUnits(tier, 6);
+            const results = await Promise.all(allScanPromises);
+            let executionTriggered = false;
+
+            for (const res of results) {
+                if (!res.success) continue;
+                if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
+
+                const passesThreshold = res.isProfitable && res.estimatedProfit >= contractMinimumProfitUSDC;
+                const logColor = passesThreshold ? GREEN : RESET;
                 
-                promises.push(
-                    vaultContract.simulateArbitrageProfit(
-                        pair.buy, pair.sell, amount,
-                        path.pathToToken, path.pathToUSDC
-                    )
-                    .then(([final, profit]) => {
-                        if (profit > 0n) {
-                            console.log(`   ✅ PROFIT: ${pair.name} | $${tier} | ${ethers.formatUnits(profit, 6)} USDC`);
-                            return { profit, pair, amount, path, tier };
-                        }
-                        return null;
-                    })
-                    .catch(() => null)
-                );
+                console.log(`${logColor}    📡 [BLOCK #${currentBlock}] Size: $${res.tier.padEnd(6)} USDC | Hops: ${res.hops} | Route: ${res.routeStr.padEnd(14)} | Delta: ${res.displayDelta} USDC${RESET}`);
+
+                if (passesThreshold && !executionTriggered) { 
+                    executionTriggered = true; 
+                    
+                    console.log(`\n🎯 [PROFITABLE TRIGGER FOUND IN #${currentBlock}] Instantly executing flash loan: ${res.displayDelta} USDC`);
+                    const txDeadline = Math.floor(Date.now() / 1000) + 30; 
+                    
+                    try {
+                        const tx = await vaultContract.executeAaveFlashLoanArbitrage(
+                            res.pair.buy, 
+                            res.pair.sell, 
+                            res.testAmountIn, 
+                            res.pathObj.pathToToken, 
+                            res.pathObj.pathToUSDC, 
+                            txDeadline,
+                            { 
+                                gasLimit: 980000, 
+                                maxFeePerGas: ethers.parseUnits("320", "gwei"),       
+                                maxPriorityFeePerGas: ethers.parseUnits("60", "gwei")  
+                            }
+                        );
+                        
+                        console.log(`🚨 FLASH LOAN TX SENT TO MEMPOOL: ${tx.hash}`);
+                        const receipt = await tx.wait(1);
+                        console.log(`✅ AAVE FLASH LOAN EXECUTED & FUNDS DEPOSITED IN BLOCK: #${receipt.blockNumber}`);
+                    } catch (txError) {
+                        // Suppress tx execution exceptions to preserve pipeline latency minimal
+                    }
+                    break;
+                }
             }
+        } catch (err) {
+            // Drop exceptions smoothly
+        } finally {
+            processingQueueActive = false;
         }
-    }
-    
-    const results = await Promise.all(promises);
-    const profitable = results.filter(r => r !== null && r.profit > 10n); // > 0.00001 USDC
-    
-    if (profitable.length > 0) {
-        // Sort by profit descending
-        profitable.sort((a, b) => b.profit > a.profit ? 1 : -1);
-        
-        const best = profitable[0];
-        console.log(`\n🎯 EXECUTING: ${best.pair.name} | Profit: ${ethers.formatUnits(best.profit, 6)} USDC`);
-        
-        try {
-            const tx = await vaultContract.executeAaveFlashLoanArbitrage(
-                best.pair.buy, best.pair.sell, best.amount,
-                best.path.pathToToken, best.path.pathToUSDC,
-                Math.floor(Date.now() / 1000) + 30,
-                { gasLimit: 980000 }
-            );
-            console.log(`🚀 TX SENT: ${tx.hash}`);
-            await tx.wait();
-            console.log(`✅ EXECUTED in block`);
-        } catch (e) {
-            console.log(`❌ Execution failed: ${e.message?.slice(0, 100)}`);
-        }
-    } else {
-        console.log(`   ❌ No profitable opportunities found`);
-    }
+    });
 }
 
-main().catch(console.error);
+main().catch((error) => {
+    console.error("Fatal Operational Fault:", error);
+    process.exit(1);
+});
