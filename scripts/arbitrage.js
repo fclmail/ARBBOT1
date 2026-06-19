@@ -91,15 +91,23 @@ const contractMinimumProfitUSDC = 10n; // 0.00001 USDC (6 Decimals)
 
 function initWebSocketConnection(onDisconnect) {
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
-    provider = new ethers.WebSocketProvider(() => new WebSocket(targetUrl));
-    wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-    vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
-    usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-
-    provider._websocket.on("close", () => {
+    
+    // Explicitly define and listen to the raw WebSocket instance before abstraction
+    const ws = new WebSocket(targetUrl);
+    
+    ws.on("close", () => {
         currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
         onDisconnect();
     });
+
+    ws.on("error", () => {
+        ws.terminate();
+    });
+
+    provider = new ethers.WebSocketProvider(() => ws);
+    wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+    vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
+    usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 }
 
 async function main() {
@@ -199,7 +207,6 @@ async function main() {
                 const passesThreshold = res.isProfitable && res.estimatedProfit >= contractMinimumProfitUSDC;
                 const logColor = passesThreshold ? GREEN : RESET;
                 
-                // Formatted terminal trace alignment matching your layout template exactly
                 console.log(`${logColor}    📡 [BLOCK #${currentBlock}] Size: $${res.tier.padEnd(6)} USDC | Hops: ${res.hops} | Route: ${res.routeStr.padEnd(14)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
                 if (passesThreshold && !executionTriggered) { 
@@ -226,13 +233,13 @@ async function main() {
                         console.log(`🚨 FLASH LOAN TX SENT TO MEMPOOL: ${tx.hash}`);
                         await tx.wait(1);
                     } catch (txError) {
-                        // Suppress tx failures to preserve pipeline loop speed
+                        // Suppress tx execution failures to keep pipeline latency minimal
                     }
                     break;
                 }
             }
         } catch (err) {
-            // Drop calculation exceptions smoothly
+            // Drop exceptions smoothly
         } finally {
             processingQueueActive = false;
         }
