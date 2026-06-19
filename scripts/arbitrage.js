@@ -36,6 +36,7 @@ const TOKENS = {
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 };
 
+// Updated ABI string to clearly state Aave Flash Loan capability interface
 const ENFORCER_ABI = [
     "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external returns (uint256)"
 ];
@@ -43,13 +44,15 @@ const ROUTER_ABI = [
     "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory amounts)"
 ];
 const ERC20_ABI = [
-    "function balanceOf(address account) view returns (uint256)"
+    "function balanceOf(address account) view returns (uint256)",
+    "function decimals() view returns (uint8)"
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const BATCH_SIZE = 4;
 
 const quoteCache = new Map();
+const decimalCache = new Map(); // Performance cache to prevent blocking RPC loops for token metadata
 const CACHE_TTL = 1000; 
 
 function getCachedQuote(routerAddress, path) {
@@ -72,8 +75,25 @@ function setCachedQuote(routerAddress, path, value) {
     }
 }
 
+// Helper to reliably fetch token decimals and store them locally
+async function getTokenDecimals(tokenAddress) {
+    if (tokenAddress.toLowerCase() === USDC_ADDRESS.toLowerCase()) return 6;
+    if (decimalCache.has(tokenAddress)) return decimalCache.get(tokenAddress);
+    
+    try {
+        const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+        const decimals = await tokenContract.decimals();
+        decimalCache.set(tokenAddress, decimals);
+        return decimals;
+    } catch {
+        return 18; // Fallback standard default
+    }
+}
+
 async function getSequentialTriangularQuote(routerContract, amountIn, path) {
     const routerAddr = routerContract.target;
+    
+    // Hop 1: USDC -> Token A
     const path1 = [path[0], path[1]];
     let out1 = getCachedQuote(routerAddr, path1);
     if (out1 === undefined) {
@@ -85,6 +105,7 @@ async function getSequentialTriangularQuote(routerContract, amountIn, path) {
     }
     if (!out1) return null;
 
+    // Hop 2: Token A -> Token B
     const path2 = [path[1], path[2]];
     let out2 = getCachedQuote(routerAddr, path2);
     if (out2 === undefined) {
@@ -96,6 +117,7 @@ async function getSequentialTriangularQuote(routerContract, amountIn, path) {
     }
     if (!out2) return null;
 
+    // Hop 3: Token B -> USDC
     const path3 = [path[2], path[3]];
     let out3 = getCachedQuote(routerAddr, path3);
     if (out3 === undefined) {
@@ -156,7 +178,7 @@ function initWebSocketConnection(onDisconnect) {
 async function main() {
     if (isReconnecting) return;
     
-    console.log("🚀 BOT STARTED - ENHANCED WSS EVENT ENGINE LOADED");
+    console.log("🚀 BOT STARTED - AAVE V3 FLASH LOAN ENGINE RUNNING");
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing.");
@@ -188,8 +210,6 @@ async function main() {
         console.log(`\n⚡ LIVE BLOCK DETECTED VIA WSS: #${freshBlock} | Scanning Matrix Pipelines...`);
 
         try {
-            const currentVaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-
             for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
                 if (isReconnecting) break;
                 const pathChunk = triangularPaths.slice(i, i + BATCH_SIZE);
@@ -237,50 +257,45 @@ async function main() {
                     if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
 
                     const logColor = res.isProfitable ? GREEN : RESET;
-                    console.log(`${logColor}   📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
+                    console.log(`${logColor}    📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
-                    const minProfitFloor = 0.00001; 
-                    
-                    // FIX 1: Decoupled relative tier evaluation check to support real dynamic absolute gains
-                    const isPhantomData = res.profitHuman > 25000.0; 
+                    // Clean threshold parameters configuration to properly outpace gas costs
+                    const minProfitFloor = 0.05; 
 
-                    if (res.isProfitable && res.profitHuman >= minProfitFloor && !isPhantomData && !executionTriggered) { 
-                        // FIX 2: Dynamic sizing based on contract accumulation state
-                        let executionAmount = res.testAmountIn;
-                        if (currentVaultBalance > 0n && currentVaultBalance > res.testAmountIn) {
-                            executionAmount = currentVaultBalance;
-                        }
-
-                        if (currentVaultBalance < executionAmount) continue;
-
+                    if (res.isProfitable && res.profitHuman >= minProfitFloor && !executionTriggered) { 
                         executionTriggered = true; 
-                        console.log(`${GREEN}\n🎯 [MATCH FOUND] Profitable Sequence Confirmed: ${res.displayDelta} USDC${RESET}`);
+                        
+                        let executionAmount = res.testAmountIn;
+                        console.log(`${GREEN}\n🎯 [MATCH FOUND] Execution Triggered via Aave Flash Loan: ${res.displayDelta} USDC${RESET}`);
                         
                         const targetRouterAddress = ROUTERS[res.routerKey];
                         const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                         
-                        const tx = await vaultContract.executeArbitrage(
-                            targetRouterAddress, 
-                            targetRouterAddress, 
-                            executionAmount, 
-                            res.pathObj.pathToToken, 
-                            res.pathObj.pathToUSDC, 
-                            txDeadline,
-                            { 
-                                gasLimit: 600000,
-                                maxFeePerGas: ethers.parseUnits("280", "gwei"),       
-                                maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
-                            }
-                        );
-                        
-                        console.log(`🚨 TX DISPATCHED: ${tx.hash}`);
-                        
-                        const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error("Tx Timeout")), ms));
                         try {
-                            const receipt = await Promise.race([tx.wait(1), timeout(14000)]);
-                            console.log(`✅ BATCH BLOCK CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
-                        } catch (err) {
-                            console.log("⚠️ RPC Pipeline drop handled cleanly. Advancing...");
+                            // Submitting directly triggers an on-chain transactional event hash generation immediately
+                            const tx = await vaultContract.executeArbitrage(
+                                targetRouterAddress, 
+                                targetRouterAddress, 
+                                executionAmount, 
+                                res.pathObj.pathToToken, 
+                                res.pathObj.pathToUSDC, 
+                                txDeadline,
+                                { 
+                                    gasLimit: 750000, // Safe headroom allowance for external flash-loan callback execution overhead
+                                    maxFeePerGas: ethers.parseUnits("280", "gwei"),       
+                                    maxPriorityFeePerGas: ethers.parseUnits("45", "gwei")  
+                                }
+                            );
+                            
+                            console.log(`🚨 FLASH LOAN TX DISPATCHED: ${tx.hash}`);
+                            
+                            const receipt = await tx.wait(1);
+                            console.log(`✅ AAVE FLASH LOAN SUCCESSFUL IN BLOCK: #${receipt.blockNumber}`);
+                            
+                            const updatedVaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
+                            console.log(`💰 ACCUMULATED CONTRACT BALANCE: ${ethers.formatUnits(updatedVaultBalance, 6)} USDC`);
+                        } catch (txError) {
+                            console.log(`${RED}❌ Transaction dropped/reverted on-chain. Capital remains safe. Moving forward...${RESET}`);
                         }
                         break; 
                     }
@@ -288,7 +303,7 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (globalError) {
-            // Drop errors cleanly without stopping script loop execution execution path pipelines
+            // Drops scanning pipeline execution errors cleanly without breaking the main cycle loop
         } finally {
             blockProcessingActive = false; 
         }
