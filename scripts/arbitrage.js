@@ -36,96 +36,18 @@ const TOKENS = {
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 };
 
-// Updated specifically to bind cleanly to your contract's entrypoint
+// Full ABI to completely support your contract's read and write workflows
 const ENFORCER_ABI = [
-    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
-];
-const ROUTER_ABI = [
-    "function getAmountsOut(uint256 amountIn, address[] calldata path) view returns (uint256[] memory amounts)"
+    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
+    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
+    "function minimumProfitUSDC() view returns (uint256)"
 ];
 const ERC20_ABI = [
-    "function balanceOf(address account) view returns (uint256)",
-    "function decimals() view returns (uint8)"
+    "function balanceOf(address account) view returns (uint256)"
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const BATCH_SIZE = 4;
-
-const quoteCache = new Map();
-const decimalCache = new Map(); 
-const CACHE_TTL = 1000; 
-
-function getCachedQuote(routerAddress, path) {
-    const key = `${routerAddress}-${path.join('-')}`;
-    const cached = quoteCache.get(key);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return cached.value;
-    }
-    return undefined;
-}
-
-function setCachedQuote(routerAddress, path, value) {
-    const key = `${routerAddress}-${path.join('-')}`;
-    quoteCache.set(key, { value, timestamp: Date.now() });
-    if (quoteCache.size > 50000) {
-        const now = Date.now();
-        for (const [k, entry] of quoteCache) {
-            if (now - entry.timestamp > CACHE_TTL) quoteCache.delete(k);
-        }
-    }
-}
-
-async function getTokenDecimals(tokenAddress) {
-    if (tokenAddress.toLowerCase() === USDC_ADDRESS.toLowerCase()) return 6;
-    if (decimalCache.has(tokenAddress)) return decimalCache.get(tokenAddress);
-    
-    try {
-        const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
-        const decimals = await tokenContract.decimals();
-        decimalCache.set(tokenAddress, decimals);
-        return decimals;
-    } catch {
-        return 18; 
-    }
-}
-
-async function getSequentialTriangularQuote(routerContract, amountIn, path) {
-    const routerAddr = routerContract.target;
-    
-    // Native decimals are preserved sequentially across hops to resolve math-mismatches
-    const path1 = [path[0], path[1]];
-    let out1 = getCachedQuote(routerAddr, path1);
-    if (out1 === undefined) {
-        try {
-            const res = await routerContract.getAmountsOut(amountIn, path1);
-            out1 = res[res.length - 1];
-            setCachedQuote(routerAddr, path1, out1);
-        } catch { setCachedQuote(routerAddr, path1, null); return null; }
-    }
-    if (!out1) return null;
-
-    const path2 = [path[1], path[2]];
-    let out2 = getCachedQuote(routerAddr, path2);
-    if (out2 === undefined) {
-        try {
-            const res = await routerContract.getAmountsOut(out1, path2);
-            out2 = res[res.length - 1];
-            setCachedQuote(routerAddr, path2, out2);
-        } catch { setCachedQuote(routerAddr, path2, null); return null; }
-    }
-    if (!out2) return null;
-
-    const path3 = [path[2], path[3]];
-    let out3 = getCachedQuote(routerAddr, path3);
-    if (out3 === undefined) {
-        try {
-            const res = await routerContract.getAmountsOut(out2, path3);
-            out3 = res[res.length - 1];
-            setCachedQuote(routerAddr, path3, out3);
-        } catch { setCachedQuote(routerAddr, path3, null); return null; }
-    }
-    return out3; 
-}
+const BATCH_SIZE = 2; // Reduced batch size slightly since view calls to simulate have minor latency overhead
 
 function buildTriangularPaths() {
     const tokenAddresses = Object.values(TOKENS);
@@ -134,7 +56,6 @@ function buildTriangularPaths() {
         for (const b of tokenAddresses) {
             if (a === b) continue;
             generatedPaths.push({
-                fullPath: [USDC_ADDRESS, a, b, USDC_ADDRESS],
                 pathToToken: [USDC_ADDRESS, a, b],
                 pathToUSDC: [b, USDC_ADDRESS]
             });
@@ -147,8 +68,8 @@ let provider;
 let wallet;
 let vaultContract;
 let usdcContract;
-const routerContracts = {};
 let isReconnecting = false;
+let globalMinProfitFloor = 50000n; // Fallback 0.05 USDC (6 decimals)
 
 function initWebSocketConnection(onDisconnect) {
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
@@ -162,9 +83,6 @@ function initWebSocketConnection(onDisconnect) {
     wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-
-    routerContracts.QUICK = new ethers.Contract(ROUTERS.QUICK, ROUTER_ABI, provider);
-    routerContracts.SUSHI = new ethers.Contract(ROUTERS.SUSHI, ROUTER_ABI, provider);
 
     ws.on("close", () => {
         currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
@@ -197,6 +115,15 @@ async function main() {
     };
 
     initWebSocketConnection(handleReconnect);
+    
+    // Sync to the exact minimum profit specified inside your deployed smart contract instance
+    try {
+        globalMinProfitFloor = await vaultContract.minimumProfitUSDC();
+        console.log(`ℹ️ Synced minimum profit threshold from contract: ${ethers.formatUnits(globalMinProfitFloor, 6)} USDC`);
+    } catch (e) {
+        console.log(`⚠️ Could not fetch minProfit from contract, utilizing fallback: 0.05 USDC`);
+    }
+
     const triangularPaths = buildTriangularPaths();
     const capitalTiers = ["0.01", "0.10", "1", "10", "100", "1000"];
 
@@ -213,34 +140,38 @@ async function main() {
                 const scanPromises = [];
 
                 for (let pathObj of pathChunk) {
-                    for (let routerKey of Object.keys(routerContracts)) {
+                    for (let routerKey of Object.keys(ROUTERS)) {
                         for (let tier of capitalTiers) {
                             const testAmountIn = ethers.parseUnits(tier, 6);
-                            const activeRouterContract = routerContracts[routerKey];
+                            const targetRouterAddress = ROUTERS[routerKey];
                             
+                            // Let the contract simulate the exact path execution natively
                             scanPromises.push(
-                                getSequentialTriangularQuote(activeRouterContract, testAmountIn, pathObj.fullPath)
-                                    .then(finalAmountOut => {
-                                        if (!finalAmountOut) return { success: false };
-                                        
-                                        const isProfitable = finalAmountOut > testAmountIn;
-                                        const profitDelta = isProfitable ? finalAmountOut - testAmountIn : 0n;
-                                        const lossDelta = !isProfitable ? testAmountIn - finalAmountOut : 0n;
-                                        
-                                        return {
-                                            success: true,
-                                            routerKey,
-                                            tier,
-                                            isProfitable,
-                                            displayDelta: isProfitable 
-                                                ? `+${ethers.formatUnits(profitDelta, 6)}` 
-                                                : `-${ethers.formatUnits(lossDelta, 6)}`,
-                                            profitHuman: parseFloat(ethers.formatUnits(profitDelta, 6)),
-                                            testAmountIn,
-                                            pathObj
-                                        };
-                                    })
-                                    .catch(() => ({ success: false }))
+                                vaultContract.simulateArbitrageProfit(
+                                    targetRouterAddress,
+                                    targetRouterAddress,
+                                    testAmountIn,
+                                    pathObj.pathToToken,
+                                    pathObj.pathToUSDC
+                                )
+                                .then(([estimatedFinalUSDC, estimatedProfit]) => {
+                                    const isProfitable = estimatedProfit > 0n;
+                                    const lossDelta = !isProfitable ? (testAmountIn > estimatedFinalUSDC ? testAmountIn - estimatedFinalUSDC : 0n) : 0n;
+                                    
+                                    return {
+                                        success: true,
+                                        routerKey,
+                                        tier,
+                                        isProfitable,
+                                        estimatedProfit,
+                                        displayDelta: isProfitable 
+                                            ? `+${ethers.formatUnits(estimatedProfit, 6)}` 
+                                            : `-${ethers.formatUnits(lossDelta, 6)}`,
+                                        testAmountIn,
+                                        pathObj
+                                    };
+                                })
+                                .catch(() => ({ success: false }))
                             );
                         }
                     }
@@ -256,24 +187,20 @@ async function main() {
                     const logColor = res.isProfitable ? GREEN : RESET;
                     console.log(`${logColor}    📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
-                    // Clean threshold config parameter outpaces on-chain Aave premium requirements
-                    const minProfitFloor = 0.05; 
-
-                    if (res.isProfitable && res.profitHuman >= minProfitFloor && !executionTriggered) { 
+                    // Trigger execution only if profit exceeds the contract's strict requirement threshold
+                    if (res.isProfitable && res.estimatedProfit >= globalMinProfitFloor && !executionTriggered) { 
                         executionTriggered = true; 
                         
-                        let executionAmount = res.testAmountIn;
                         console.log(`${GREEN}\n🎯 [MATCH FOUND] Execution Triggered via Aave Flash Loan: ${res.displayDelta} USDC${RESET}`);
                         
                         const targetRouterAddress = ROUTERS[res.routerKey];
                         const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                         
                         try {
-                            // Interfacing directly with the flash loan entrypoint on your contract
                             const tx = await vaultContract.executeAaveFlashLoanArbitrage(
                                 targetRouterAddress, 
                                 targetRouterAddress, 
-                                executionAmount, 
+                                res.testAmountIn, 
                                 res.pathObj.pathToToken, 
                                 res.pathObj.pathToUSDC, 
                                 txDeadline,
@@ -300,7 +227,7 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (globalError) {
-            // Drops scanning pipeline execution errors cleanly without breaking the main cycle loop
+            // Drops scanning pipeline errors cleanly
         } finally {
             blockProcessingActive = false; 
         }
