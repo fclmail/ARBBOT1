@@ -47,9 +47,9 @@ const ERC20_ABI = [
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const BATCH_SIZE = 2; // Reduced batch size slightly since view calls to simulate have minor latency overhead
+const BATCH_SIZE = 2; // Keeps read overhead lightweight on public sockets
 
-function buildTriangularPaths() {
+function buildCrossExchangeTriangularPaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
     for (const a of tokenAddresses) {
@@ -69,7 +69,7 @@ let wallet;
 let vaultContract;
 let usdcContract;
 let isReconnecting = false;
-let globalMinProfitFloor = 50000n; // Fallback 0.05 USDC (6 decimals)
+let globalMinProfitFloor = 50000n; // Fallback to 0.05 USDC
 
 function initWebSocketConnection(onDisconnect) {
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
@@ -116,7 +116,7 @@ async function main() {
 
     initWebSocketConnection(handleReconnect);
     
-    // Sync to the exact minimum profit specified inside your deployed smart contract instance
+    // Dynamic initialization syncing our threshold check directly to the contract's setting
     try {
         globalMinProfitFloor = await vaultContract.minimumProfitUSDC();
         console.log(`ℹ️ Synced minimum profit threshold from contract: ${ethers.formatUnits(globalMinProfitFloor, 6)} USDC`);
@@ -124,8 +124,10 @@ async function main() {
         console.log(`⚠️ Could not fetch minProfit from contract, utilizing fallback: 0.05 USDC`);
     }
 
-    const triangularPaths = buildTriangularPaths();
-    const capitalTiers = ["0.01", "0.10", "1", "10", "100", "1000"];
+    const triangularPaths = buildCrossExchangeTriangularPaths();
+    
+    // Expanded distribution to sweep out deep pool discrepancies
+    const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
 
     provider.on("block", async (freshBlock) => {
         if (blockProcessingActive || isReconnecting) return; 
@@ -140,16 +142,20 @@ async function main() {
                 const scanPromises = [];
 
                 for (let pathObj of pathChunk) {
-                    for (let routerKey of Object.keys(ROUTERS)) {
+                    // Map asymmetric router cross-pairs 
+                    const routerPairs = [
+                        { buyName: "QUICK", sellName: "SUSHI", buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI },
+                        { buyName: "SUSHI", sellName: "QUICK", buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK }
+                    ];
+
+                    for (let pair of routerPairs) {
                         for (let tier of capitalTiers) {
                             const testAmountIn = ethers.parseUnits(tier, 6);
-                            const targetRouterAddress = ROUTERS[routerKey];
                             
-                            // Let the contract simulate the exact path execution natively
                             scanPromises.push(
                                 vaultContract.simulateArbitrageProfit(
-                                    targetRouterAddress,
-                                    targetRouterAddress,
+                                    pair.buy,
+                                    pair.sell,
                                     testAmountIn,
                                     pathObj.pathToToken,
                                     pathObj.pathToUSDC
@@ -160,7 +166,8 @@ async function main() {
                                     
                                     return {
                                         success: true,
-                                        routerKey,
+                                        routeStr: `${pair.buyName}->${pair.sellName}`,
+                                        pair,
                                         tier,
                                         isProfitable,
                                         estimatedProfit,
@@ -185,21 +192,20 @@ async function main() {
                     if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
 
                     const logColor = res.isProfitable ? GREEN : RESET;
-                    console.log(`${logColor}    📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
+                    console.log(`${logColor}    📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Route: ${res.routeStr.padEnd(12)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
-                    // Trigger execution only if profit exceeds the contract's strict requirement threshold
+                    // Trigger execution strictly if profit criteria is exceeded
                     if (res.isProfitable && res.estimatedProfit >= globalMinProfitFloor && !executionTriggered) { 
                         executionTriggered = true; 
                         
                         console.log(`${GREEN}\n🎯 [MATCH FOUND] Execution Triggered via Aave Flash Loan: ${res.displayDelta} USDC${RESET}`);
                         
-                        const targetRouterAddress = ROUTERS[res.routerKey];
                         const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                         
                         try {
                             const tx = await vaultContract.executeAaveFlashLoanArbitrage(
-                                targetRouterAddress, 
-                                targetRouterAddress, 
+                                res.pair.buy, 
+                                res.pair.sell, 
                                 res.testAmountIn, 
                                 res.pathObj.pathToToken, 
                                 res.pathObj.pathToUSDC, 
@@ -227,7 +233,7 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (globalError) {
-            // Drops scanning pipeline errors cleanly
+            // Drop execution block failures cleanly without halting the event cycle listener
         } finally {
             blockProcessingActive = false; 
         }
