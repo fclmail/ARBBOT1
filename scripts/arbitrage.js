@@ -148,7 +148,6 @@ function initWebSocketConnection(onDisconnect) {
     routerContracts.SUSHI = new ethers.Contract(ROUTERS.SUSHI, ROUTER_ABI, provider);
 
     ws.on("close", () => {
-        console.log(`🚨 WSS Socket Connection Closed [Index ${currentEndpointIndex}]. Shifting context...`);
         currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
         onDisconnect();
     });
@@ -189,9 +188,7 @@ async function main() {
         console.log(`\n⚡ LIVE BLOCK DETECTED VIA WSS: #${freshBlock} | Scanning Matrix Pipelines...`);
 
         try {
-            // Read accumulated capital from the vault contract
             const currentVaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-            const vaultBalanceHuman = parseFloat(ethers.formatUnits(currentVaultBalance, 6));
 
             for (let i = 0; i < triangularPaths.length; i += BATCH_SIZE) {
                 if (isReconnecting) break;
@@ -243,12 +240,12 @@ async function main() {
                     console.log(`${logColor}   📡 [AUDIT] Size: $${res.tier.padEnd(6)} USDC | Router: ${res.routerKey.padEnd(5)} | Delta: ${res.displayDelta} USDC${RESET}`);
 
                     const minProfitFloor = 0.00001; 
-
-                    // FIX: Check absolute profit validity rather than tier-relative calculation to support accumulated balances
-                    const isPhantomData = res.profitHuman > 50000.0; 
+                    
+                    // FIX 1: Decoupled relative tier evaluation check to support real dynamic absolute gains
+                    const isPhantomData = res.profitHuman > 25000.0; 
 
                     if (res.isProfitable && res.profitHuman >= minProfitFloor && !isPhantomData && !executionTriggered) { 
-                        // Determine execution input based on contract's accumulated capacity
+                        // FIX 2: Dynamic sizing based on contract accumulation state
                         let executionAmount = res.testAmountIn;
                         if (currentVaultBalance > 0n && currentVaultBalance > res.testAmountIn) {
                             executionAmount = currentVaultBalance;
@@ -265,7 +262,7 @@ async function main() {
                         const tx = await vaultContract.executeArbitrage(
                             targetRouterAddress, 
                             targetRouterAddress, 
-                            executionAmount, // Fires accumulated capital if greater than target tier
+                            executionAmount, 
                             res.pathObj.pathToToken, 
                             res.pathObj.pathToUSDC, 
                             txDeadline,
@@ -291,7 +288,7 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (globalError) {
-            console.log("⚠️ RPC Pipeline drop handled cleanly. Advancing...");
+            // Drop errors cleanly without stopping script loop execution execution path pipelines
         } finally {
             blockProcessingActive = false; 
         }
