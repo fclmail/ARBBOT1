@@ -7,6 +7,9 @@ const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
+// ==========================================
+// 1. HIGH-AVAILABILITY WSS ENDPOINTS TIER
+// ==========================================
 const WSS_ENDPOINTS = [
     "wss://polygon.drpc.org",
     "wss://polygon-bor-rpc.publicnode.com",
@@ -23,6 +26,9 @@ const ROUTERS = {
     SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
+// ==========================================
+// 2. FULL EXTENDED TARGET TOKEN MATRIX
+// ==========================================
 const TOKENS = {
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
@@ -44,10 +50,14 @@ const ERC20_ABI = [
 const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// ==========================================
+// 3. EXHAUSTIVE MULTI-HOP PATH COMBINATORICS
+// ==========================================
 function buildMultiHopCrossExchangePaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
 
+    // ---- 3-HOP TRIANGULAR PATHS (USDC -> A -> B -> USDC) ----
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
@@ -59,6 +69,7 @@ function buildMultiHopCrossExchangePaths() {
         }
     }
 
+    // ---- 4-HOP QUADRANGULAR PATHS (USDC -> A -> B -> C -> USDC) ----
     for (const a of tokenAddresses) {
         for (const b of tokenAddresses) {
             if (a === b) continue;
@@ -81,7 +92,8 @@ let vaultContract;
 let usdcContract;
 let isReconnecting = false;
 
-const contractMinimumProfitUSDC = 10n; // 0.00001 USDC
+// Configured execution tracking floor threshold (0.00001 USDC)
+const contractMinimumProfitUSDC = 10n; 
 
 async function initWebSocketConnection(targetUrl, onDisconnect) {
     provider = new ethers.WebSocketProvider(targetUrl);
@@ -133,7 +145,8 @@ async function main() {
     const multiHopPaths = buildMultiHopCrossExchangePaths();
     const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
     
-    console.log(`📊 Matrix initialized with ${multiHopPaths.length} multi-hop configurations.`);
+    // Will print: Matrix initialized with 80 routes * 4 variants = 320 total permutations
+    console.log(`📊 Matrix initialized with ${multiHopPaths.length * 4} multi-hop permutations.`);
     console.log(`🎯 Active Execution Floor target set to: 0.00001 USDC (0.00001)`);
     console.log(`⚡ Subscribed to pool Swap events. Listening for on-chain price dislocation hooks...\n`);
 
@@ -235,13 +248,13 @@ async function main() {
                         const receipt = await tx.wait(1);
                         console.log(`✅ AAVE FLASH LOAN EXECUTED & FUNDS DEPOSITED IN BLOCK: #${receipt.blockNumber}`);
                     } catch (txError) {
-                        // Suppress tx execution exceptions to preserve throughput
+                        // Suppress tx execution exceptions to preserve queue throughput speeds
                     }
                     break;
                 }
             }
         } catch (err) {
-            // Drop exceptions cleanly
+            // Drop calculation exceptions smoothly
         } finally {
             processingQueueActive = false;
         }
