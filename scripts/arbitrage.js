@@ -166,9 +166,22 @@ function buildMultiHopCrossExchangePaths() {
     const tokenAddresses = Object.values(TOKENS);
     let generatedPaths = [];
 
-    // ---- 3-HOP TRIANGULAR PATHS ----
-    for (const a of tokenAddresses) {
-        for (const b of tokenAddresses) {
+    // ---- ULTRA-FREQUENCY 2-HOP DIRECT PATHS ----
+    // Preserves integer capital value from rounding to zero across swaps
+    for (const token of tokenAddresses) {
+        if (token.toLowerCase() === USDC_ADDRESS.toLowerCase()) continue;
+        
+        generatedPaths.push({
+            hops: 2,
+            pathToToken: [USDC_ADDRESS, token],
+            pathToUSDC: [token, USDC_ADDRESS]
+        });
+    }
+
+    // High Liquidity Anchors 3-Hop Matrix
+    const highLiquidityAnchors = [TOKENS.WMATIC, TOKENS.WETH, TOKENS.USDT];
+    for (const a of highLiquidityAnchors) {
+        for (const b of highLiquidityAnchors) {
             if (a === b) continue;
             generatedPaths.push({
                 hops: 3,
@@ -178,20 +191,6 @@ function buildMultiHopCrossExchangePaths() {
         }
     }
 
-    // ---- 4-HOP QUADRANGULAR PATHS ----
-    for (const a of tokenAddresses) {
-        for (const b of tokenAddresses) {
-            if (a === b) continue;
-            for (const c of tokenAddresses) {
-                if (c === a || c === b) continue;
-                generatedPaths.push({
-                    hops: 4,
-                    pathToToken: [USDC_ADDRESS, a, b, c],
-                    pathToUSDC: [c, USDC_ADDRESS]
-                });
-            }
-        }
-    }
     return generatedPaths;
 }
 
@@ -254,11 +253,11 @@ async function main() {
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
     
-    // Balanced allocation framework preventing round-down zero math anomalies
-    const capitalTiers = ["50", "200", "800", "2500"]; 
+    // MICRO-TESTING ALLOCATION BRACKET 
+    const capitalTiers = ["0.10", "1.00", "5.00", "10.00"]; 
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
     
-    console.log(`📊 Matrix built: Loaded ${multiHopPaths.length} multi-hop path variants.`);
+    console.log(`📊 Matrix built: Loaded ${multiHopPaths.length} high-velocity target paths.`);
     console.log(`🎯 Trigger Threshold Floor: > 0.00001 USDC (Strict Raw Verification Mode)`);
 
     let processingQueueActive = false;
@@ -267,8 +266,6 @@ async function main() {
     provider.on(filter, async (log) => {
         if (processingQueueActive || isReconnecting) return;
         processingQueueActive = true;
-
-        const currentBlock = log.blockNumber;
 
         try {
             for (const chunk of pathChunks) {
@@ -321,7 +318,7 @@ async function main() {
                             console.log(`📡 [MICRO-IMBALANCE] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(6)} USDC`);
                         } 
                         // Tier 2: Low-Spread Arbitrage Found (0.01 to 0.99 USDC)
-                        else if (formattedProfit >= 0.000001 && formattedProfit < 0.000002) {
+                        else if (formattedProfit >= 0.01 && formattedProfit < 1.0) {
                             console.log(`⚡ [LOW-SPREAD MATCH] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(4)} USDC`);
                         } 
                         // Tier 3: Macro Arbitrage Window Found (>= 1.00 USDC)
@@ -362,7 +359,7 @@ async function main() {
                 if (executionTriggered) break; 
             }
         } catch (err) {
-            // Drop core exceptions cleanly
+            // Drop exceptions silently to stay on block- progression trace
         } finally {
             processingQueueActive = false;
         }
