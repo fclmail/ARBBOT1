@@ -135,9 +135,8 @@ async function main() {
 
     let processingQueueActive = false;
 
-    // CHANGED: Moved calculation trigger into standard block handler for 100% reliability
     provider.on("block", async (blockNumber) => {
-        console.log(`📦 Block #${blockNumber} Processing Stream...`);
+        console.log(`\n📦 Block #${blockNumber} Processing Stream...`);
         
         if (processingQueueActive || isReconnecting) return;
         processingQueueActive = true;
@@ -145,7 +144,6 @@ async function main() {
         try {
             const feeData = await provider.getFeeData();
             const currentGasPrice = feeData.maxFeePerGas || feeData.gasPrice || ethers.parseUnits("150", "gwei");
-            const estimatedGasCostUSDC = 0.08; 
 
             for (const chunk of pathChunks) {
                 const scanTasks = chunk.flatMap((pathObj) => {
@@ -204,17 +202,16 @@ async function main() {
                 let executionTriggered = false;
 
                 for (const res of results) {
-                    const grossProfit = Number(ethers.formatUnits(res.estimatedProfit, 6));
-                    const netProfit = grossProfit - estimatedGasCostUSDC;
+                    const rawProfit = Number(ethers.formatUnits(res.estimatedProfit, 6));
+                    const color = rawProfit > 0 ? GREEN : RED;
 
-                    const sign = netProfit >= 0 ? "+" : "";
-                    const color = netProfit >= 0 ? GREEN : RED;
+                    // CHANGED: Removed gas overhead calculations. Outputs raw blockchain numbers directly.
+                    console.log(`${color}📡 [SCAN STATE] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${rawProfit.toFixed(6)} USDC${RESET}`);
 
-                    console.log(`${color}📡 [SCAN STATE] Route: ${res.routeStr} | Input: $${res.tier} | Gross: +${grossProfit.toFixed(6)} | Net: ${sign}${netProfit.toFixed(6)} USDC${RESET}`);
-
-                    if (netProfit > 0 && res.estimatedProfit > 0n) {
+                    // Triggers execution if the raw simulation outputs any positive profit parameter
+                    if (rawProfit > 0 && res.estimatedProfit > 0n) {
                         executionTriggered = true;
-                        console.log(`${GREEN}🚨 POSITIVE NET EXPECTATION DETECTED: Dispatching Execution Block...${RESET}`);
+                        console.log(`${GREEN}🚨 RAW VALUE DETECTED: Dispatching Execution Block...${RESET}`);
                         
                         const txDeadline = Math.floor(Date.now() / 1000) + 30;
                         try {
@@ -237,7 +234,7 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (err) {
-            // Context bypass
+            // Silently escape stream failures
         } finally {
             processingQueueActive = false;
         }
