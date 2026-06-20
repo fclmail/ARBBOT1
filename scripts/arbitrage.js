@@ -321,7 +321,7 @@ async function main() {
                             console.log(`📡 [MICRO-IMBALANCE] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(6)} USDC`);
                         } 
                         // Tier 2: Low-Spread Arbitrage Found (0.01 to 0.99 USDC)
-                        else if (formattedProfit >= 0.01 && formattedProfit < 1.0) {
+                        else if (formattedProfit >= 0.000001 && formattedProfit < 0.000002) {
                             console.log(`⚡ [LOW-SPREAD MATCH] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(4)} USDC`);
                         } 
                         // Tier 3: Macro Arbitrage Window Found (>= 1.00 USDC)
