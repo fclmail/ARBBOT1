@@ -123,9 +123,10 @@ const TOKENS = {
     OXT:              "0x9880e3dda13c8e7d4804691a45160102d31f6060"
 };
 
+// MODIFIED FOR CONTRACT-OWNED ASSETS BASE EXECUTION
 const ENFORCER_ABI = [
     "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
-    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
+    "function executeDirectCapitalArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
     "function minimumProfitUSDC() view returns (uint256)"
 ];
 
@@ -167,7 +168,6 @@ function buildMultiHopCrossExchangePaths() {
     let generatedPaths = [];
 
     // ---- ULTRA-FREQUENCY 2-HOP DIRECT PATHS ----
-    // Preserves integer capital value from rounding to zero across swaps
     for (const token of tokenAddresses) {
         if (token.toLowerCase() === USDC_ADDRESS.toLowerCase()) continue;
         
@@ -218,7 +218,7 @@ async function initWebSocketConnection(targetUrl, onDisconnect) {
 async function main() {
     if (isReconnecting) return;
     
-    console.log("🚀 UNRESTRICTED RAW PROFIT & OBSERVER MATRIX ONLINE");
+    console.log("🚀 UNRESTRICTED RAW PROFIT ENGINE ONLINE [OWNED CAPITAL PLATFORM]");
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
     console.log(`📡 Stream link active: ${targetUrl}`);
     
@@ -253,7 +253,7 @@ async function main() {
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
     
-    // MICRO-TESTING ALLOCATION BRACKET 
+    // MICRO-TESTING ALLOCATION BRACKET
     const capitalTiers = ["0.10", "1.00", "5.00", "10.00"]; 
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
     
@@ -313,26 +313,25 @@ async function main() {
                     if (rawProfit >= STRICT_MINIMUM_PROFIT) {
                         const formattedProfit = Number(ethers.formatUnits(rawProfit, 6));
 
-                        // Tier 1: Micro Imbalance Found (0.0001 to 0.0099 USDC)
+                        // --- ALL NOTIFICATIONS SET TO ANSI GREEN TIER PER REQUEST ---
                         if (formattedProfit >= 0.0001 && formattedProfit < 0.01) {
-                            console.log(`📡 [MICRO-IMBALANCE] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(6)} USDC`);
+                            console.log(`${GREEN}📡 [MICRO-IMBALANCE] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(6)} USDC${RESET}`);
                         } 
-                        // Tier 2: Low-Spread Arbitrage Found (0.01 to 0.99 USDC)
                         else if (formattedProfit >= 0.01 && formattedProfit < 1.0) {
-                            console.log(`⚡ [LOW-SPREAD MATCH] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(4)} USDC`);
+                            console.log(`${GREEN}⚡ [LOW-SPREAD MATCH] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(4)} USDC${RESET}`);
                         } 
-                        // Tier 3: Macro Arbitrage Window Found (>= 1.00 USDC)
                         else if (formattedProfit >= 1.0) {
-                            console.log(`${GREEN}🔥 [MACRO WINDOW FOUND] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(2)} USDC ${RESET}`);
+                            console.log(`${GREEN}🔥 [MACRO WINDOW FOUND] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(2)} USDC${RESET}`);
                         }
 
                         executionTriggered = true; 
-                        console.log(`${GREEN}🚨 CRITERIA MET (>0.00001): Dispatching Atomic Flash Loan Execution Package...${RESET}`);
+                        console.log(`${GREEN}🚨 CRITERIA MET (>0.00001): Dispatching Direct Capital Execution Package...${RESET}`);
                         
                         const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                         
                         try {
-                            const tx = await vaultContract.executeAaveFlashLoanArbitrage(
+                            // EXECUTES VIA DIRECT CAPITAL SWAP INSTEAD OF FLASH LOAN
+                            const tx = await vaultContract.executeDirectCapitalArbitrage(
                                 res.pair.buy, 
                                 res.pair.sell, 
                                 res.testAmountIn, 
@@ -340,17 +339,17 @@ async function main() {
                                 res.pathObj.pathToUSDC, 
                                 txDeadline,
                                 { 
-                                    gasLimit: 550000, 
+                                    gasLimit: 400000, // Reduced gas limit since flash debt routing is omitted
                                     maxFeePerGas: ethers.parseUnits("300", "gwei"),       
                                     maxPriorityFeePerGas: ethers.parseUnits("60", "gwei")  
                                 }
                             );
                             
-                            console.log(`🚨 BROADCASTING TO MEMPOOL: ${tx.hash}`);
+                            console.log(`${GREEN}🚨 BROADCASTING TO MEMPOOL: ${tx.hash}${RESET}`);
                             const receipt = await tx.wait(1);
-                            console.log(`✅ ATOMIC EXECUTION TRANSACTION COMPLETE IN BLOCK: #${receipt.blockNumber}`);
+                            console.log(`${GREEN}✅ ATOMIC EXECUTION TRANSACTION COMPLETE IN BLOCK: #${receipt.blockNumber}${RESET}`);
                         } catch (txError) {
-                            console.log(`${RED}⚠️ Pipeline transmission failed or reverted during EVM flash checkout.${RESET}`);
+                            console.log(`${RED}⚠️ Pipeline transmission failed or reverted during EVM execution.${RESET}`);
                         }
                         break; 
                     }
@@ -359,7 +358,7 @@ async function main() {
                 if (executionTriggered) break; 
             }
         } catch (err) {
-            // Drop exceptions silently to stay on block- progression trace
+            // Drop exceptions cleanly
         } finally {
             processingQueueActive = false;
         }
