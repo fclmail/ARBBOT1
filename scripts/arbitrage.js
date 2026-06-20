@@ -228,7 +228,7 @@ async function main() {
     }
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
-    const capitalTiers = ["100", "500", "1500", "5000"]; 
+    const capitalTiers = [".02", ".1", "1", "5000"]; 
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
     
     console.log(`📊 Matrix built: Scanning ${multiHopPaths.length} configurations block-by-block.`);
