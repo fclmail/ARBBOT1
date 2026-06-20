@@ -18,17 +18,26 @@ let currentEndpointIndex = 0;
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
+// RESTORED & ADDED: Complete Expanded Exchange Router Architecture Matrix
 const ROUTERS = {
     QUICK: "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
-    SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+    SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+    DFYN:  "0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429",
+    WAULT: "0x594c3618E3CF4879524b11901d866E3578637C55"
 };
 
+// RESTORED: Full Target Multi-Asset Token Tokenology Matrix
 const TOKENS = {
     USDT:             "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     WETH:             "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
     WMATIC:           "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     DAI:              "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-    WBTC:             "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
+    WBTC:             "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+    LINK:             "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+    AAVE:             "0xd6df932a45c0f255f8574956119979251ddef78d",
+    CRV:              "0x172370d5cd63222165e1db2a84a1a0d422301c87",
+    SUSHI:            "0x0b3f868e0be5597d5db7feb59e1cadbb0fdda50a",
+    QUICK:            "0x831753dd7087aca61fa96a28909fb4e4043890d1"
 };
 
 const ENFORCER_ABI = [
@@ -84,15 +93,12 @@ let wallet;
 let vaultContract;
 let isReconnecting = false;
 
-// Optimization configuration settings
-const MAX_CONCURRENT_REQUESTS = 25; 
-const PATH_CHUNK_SIZE = 60; 
-
-// FIXED: Variable name reference now correctly maps to the uppercase constant above
+// Scaled configuration to support highly expanded permutation density
+const MAX_CONCURRENT_REQUESTS = 30; 
+const PATH_CHUNK_SIZE = 40; 
 const throttle = createConcurrencyLimit(MAX_CONCURRENT_REQUESTS);
 
-const STRICT_MINIMUM_PROFIT = 10n; 
-const ESTIMATED_GAS_LIMIT = 400000n;
+const ESTIMATED_GAS_LIMIT = 450000n;
 
 async function initWebSocketConnection(targetUrl, onDisconnect) {
     provider = new ethers.WebSocketProvider(targetUrl);
@@ -146,10 +152,23 @@ async function main() {
 
             for (const chunk of pathChunks) {
                 const scanTasks = chunk.flatMap((pathObj) => {
-                    const routerPairs = [
-                        { buyName: "QUICK", sellName: "SUSHI", buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI },
-                        { buyName: "SUSHI", sellName: "QUICK", buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK }
-                    ];
+                    // Dynamically generated permutation combinations including Dfyn & Wault
+                    const routerKeys = Object.keys(ROUTERS);
+                    const routerPairs = [];
+
+                    for (let i = 0; i < routerKeys.length; i++) {
+                        for (let j = 0; j < routerKeys.length; j++) {
+                            if (i === j) continue;
+                            const buyKey = routerKeys[i];
+                            const sellKey = routerKeys[j];
+                            routerPairs.push({
+                                buyName: buyKey,
+                                sellName: sellKey,
+                                buy: ROUTERS[buyKey],
+                                sell: ROUTERS[sellKey]
+                            });
+                        }
+                    }
 
                     return routerPairs.flatMap((pair) => {
                         return capitalTiers.map((tier) => {
@@ -170,7 +189,15 @@ async function main() {
                                         pathObj
                                     };
                                 } catch {
-                                    return { success: false };
+                                    return { 
+                                        success: true, 
+                                        routeStr: `${pair.buyName}->${pair.sellName}`,
+                                        pair,
+                                        estimatedProfit: 0n,
+                                        testAmountIn,
+                                        tier,
+                                        pathObj
+                                    };
                                 }
                             };
                         });
@@ -181,46 +208,40 @@ async function main() {
                 let executionTriggered = false;
 
                 for (const res of results) {
-                    if (!res.success) continue;
+                    const grossProfit = Number(ethers.formatUnits(res.estimatedProfit, 6));
+                    const netProfit = grossProfit - estimatedGasCostUSDC;
 
-                    const rawProfit = res.estimatedProfit;
+                    const sign = netProfit >= 0 ? "+" : "";
+                    const color = netProfit >= 0 ? GREEN : RED;
 
-                    if (rawProfit >= STRICT_MINIMUM_PROFIT) {
-                        const grossProfit = Number(ethers.formatUnits(rawProfit, 6));
-                        const netProfit = grossProfit - estimatedGasCostUSDC;
+                    console.log(`${color}📡 [SCAN STATE] Route: ${res.routeStr} | Input: $${res.tier} | Gross: +${grossProfit.toFixed(6)} | Net: ${sign}${netProfit.toFixed(6)} USDC${RESET}`);
 
-                        const sign = netProfit >= 0 ? "+" : "";
-                        const color = netProfit >= 0 ? GREEN : RED;
-
-                        console.log(`${color}📡 [SPREAD FOUND] Route: ${res.routeStr} | Input: $${res.tier} | Gross: +${grossProfit.toFixed(6)} | Net: ${sign}${netProfit.toFixed(6)} USDC${RESET}`);
-
-                        if (netProfit > 0) {
-                            executionTriggered = true;
-                            console.log(`${GREEN}🚨 POSITIVE NET EXPECTATION DETECTED: Dispatching Execution Block...${RESET}`);
-                            
-                            const txDeadline = Math.floor(Date.now() / 1000) + 30;
-                            try {
-                                const tx = await vaultContract.executeDirectCapitalArbitrage(
-                                    res.pair.buy, res.pair.sell, res.testAmountIn, res.pathObj.pathToToken, res.pathObj.pathToUSDC, txDeadline,
-                                    { 
-                                        gasLimit: ESTIMATED_GAS_LIMIT,
-                                        maxFeePerGas: currentGasPrice,       
-                                        maxPriorityFeePerGas: ethers.parseUnits("60", "gwei")  
-                                    }
-                                );
-                                console.log(`${GREEN}🚨 Mempool Broadcast: ${tx.hash}${RESET}`);
-                                await tx.wait(1);
-                            } catch (txError) {
-                                console.log(`${RED}⚠️ Reverted or outbid in flight.${RESET}`);
-                            }
-                            break;
+                    if (netProfit > 0 && res.estimatedProfit > 0n) {
+                        executionTriggered = true;
+                        console.log(`${GREEN}🚨 POSITIVE NET EXPECTATION DETECTED: Dispatching Execution Block...${RESET}`);
+                        
+                        const txDeadline = Math.floor(Date.now() / 1000) + 30;
+                        try {
+                            const tx = await vaultContract.executeDirectCapitalArbitrage(
+                                res.pair.buy, res.pair.sell, res.testAmountIn, res.pathObj.pathToToken, res.pathObj.pathToUSDC, txDeadline,
+                                { 
+                                    gasLimit: ESTIMATED_GAS_LIMIT,
+                                    maxFeePerGas: currentGasPrice,       
+                                    maxPriorityFeePerGas: ethers.parseUnits("60", "gwei")  
+                                }
+                            );
+                            console.log(`${GREEN}🚨 Mempool Broadcast: ${tx.hash}${RESET}`);
+                            await tx.wait(1);
+                        } catch (txError) {
+                            console.log(`${RED}⚠️ Reverted or outbid in flight.${RESET}`);
                         }
+                        break;
                     }
                 }
                 if (executionTriggered) break;
             }
         } catch (err) {
-            // Context bypass safe
+            // Safe silent fail
         } finally {
             processingQueueActive = false;
         }
