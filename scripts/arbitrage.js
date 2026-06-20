@@ -1,6 +1,5 @@
 import { ethers } from "ethers";
 import dotenv from "dotenv";
-import pLimit from "p-limit"; // Controls concurrent node flood
 
 dotenv.config();
 
@@ -11,7 +10,6 @@ const RESET = "\x1b[0m";
 // ==========================================================
 // 1. HIGH-PERFORMANCE PRIVATE/PREMIUM ENDPOINTS TIER
 // ==========================================================
-// Replace these with premium/MEV direct private endpoints for live production
 const WSS_ENDPOINTS = [
     "wss://polygon.drpc.org",
     "wss://polygon-bor-rpc.publicnode.com",
@@ -35,7 +33,7 @@ const TOKENS = {
     WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
     WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
-    // ... Append up to 100 tokens safely below. The chunking algorithm scales smoothly.
+    // ... Append up to 100 tokens safely here. The native chunking handles scaling smoothly.
 };
 
 const ENFORCER_ABI = [
@@ -46,6 +44,30 @@ const ENFORCER_ABI = [
 
 const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ==========================================================
+// 2. NATIVE ZERO-DEPENDENCY CONCURRENCY THROTTLE ENGINE
+// ==========================================================
+function createConcurrencyLimit(maxConcurrent) {
+    return async function (tasks) {
+        const results = [];
+        const executing = new Set();
+        
+        for (const task of tasks) {
+            const p = Promise.resolve().then(() => task());
+            results.push(p);
+            executing.add(p);
+            
+            const clean = () => executing.delete(p);
+            p.then(clean, clean);
+            
+            if (executing.size >= maxConcurrent) {
+                await Promise.race(executing);
+            }
+        }
+        return Promise.all(results);
+    };
+}
 
 // Helper function to segment arrays to enforce rate-limiting thresholds
 function chunkArray(array, size) {
@@ -97,7 +119,7 @@ let isReconnecting = false;
 // Concurrency limiting engine settings to control node query strain
 const MAX_CONCURRENT_REQUESTS = 15; 
 const PATH_CHUNK_SIZE = 40; 
-const limit = pLimit(MAX_CONCURRENT_REQUESTS);
+const throttle = createConcurrencyLimit(MAX_CONCURRENT_REQUESTS);
 
 async function initWebSocketConnection(targetUrl, onDisconnect) {
     provider = new ethers.WebSocketProvider(targetUrl);
@@ -110,7 +132,7 @@ async function initWebSocketConnection(targetUrl, onDisconnect) {
 async function main() {
     if (isReconnecting) return;
     
-    console.log("🚀 HIGH-SPEED AUTO-BATCHING MEMPOOL ENGINE ONLINE");
+    console.log("🚀 HIGH-SPEED AUTO-BATCHING NATIVE MEMPOOL ENGINE ONLINE");
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
     console.log(`📡 Connecting stream gateway: ${targetUrl}`);
     
@@ -148,7 +170,7 @@ async function main() {
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
     
     console.log(`📊 Matrix initialized: Loaded ${multiHopPaths.length} multi-hop configurations across token list.`);
-    console.log(`🛡️ Rate Limiting Active: Process segments chunked into blocks of ${PATH_CHUNK_SIZE}.`);
+    console.log(`🛡️ Native Throttling Active: Process segments chunked into blocks of ${PATH_CHUNK_SIZE}.`);
 
     let processingQueueActive = false;
     const filter = { topics: [SWAP_EVENT_TOPIC] };
@@ -171,7 +193,7 @@ async function main() {
 
             // Sequential chunk batch processing preventing rate limitations
             for (const chunk of pathChunks) {
-                const scanPromises = chunk.flatMap(pathObj => {
+                const scanTasks = chunk.flatMap(pathObj => {
                     const routerPairs = [
                         { buyName: "QUICK", sellName: "SUSHI", buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI },
                         { buyName: "SUSHI", sellName: "QUICK", buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK }
@@ -181,8 +203,8 @@ async function main() {
                         return capitalTiers.map(tier => {
                             const testAmountIn = ethers.parseUnits(tier, 6);
                             
-                            // Wrapped execution thread limiting maximum node resource pull
-                            return limit(async () => {
+                            // Return an un-invoked function task for the native throttle pool handler
+                            return async () => {
                                 try {
                                     const [estimatedFinalUSDC, estimatedProfit] = await vaultContract.simulateArbitrageProfit(
                                         pair.buy, pair.sell, testAmountIn, pathObj.pathToToken, pathObj.pathToUSDC
@@ -211,12 +233,13 @@ async function main() {
                                 } catch {
                                     return { success: false };
                                 }
-                            });
+                            };
                         });
                     });
                 });
 
-                const results = await Promise.all(scanPromises);
+                // Execute using the inline, dependency-free pool manager
+                const results = await throttle(scanTasks);
                 let executionTriggered = false;
 
                 for (const res of results) {
@@ -255,11 +278,11 @@ async function main() {
                     break; 
                 }
 
-                if (executionTriggered) break; // Break out of main loop processing to preserve latency windows
-                await sleep(15); // Dynamic 15ms breathing buffer inside path loops to satisfy standard RPC data pacing rules
+                if (executionTriggered) break; // Break out of processing chunk to preserve execution slot latency
+                await sleep(15); // Pacing buffer inside chunk processing loop to avoid node saturation
             }
         } catch (err) {
-            // Drop exceptions smoothly to lock process tracking securely
+            // Drop exceptions smoothly to preserve main operational tracking loop
         } finally {
             processingQueueActive = false;
         }
