@@ -1,3 +1,4 @@
+
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 
@@ -8,7 +9,7 @@ const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
 // ==========================================================
-// 1. HIGH-PERFORMANCE PRIVATE/PREMIUM ENDPOINTS TIER
+// 1. HIGH-PERFORMANCE ENDPOINTS TIER
 // ==========================================================
 const WSS_ENDPOINTS = [
     "wss://polygon.drpc.org",
@@ -26,102 +27,13 @@ const ROUTERS = {
     SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-// Expanded Object array skeleton container accommodating up to 100+ tokens securely
 const TOKENS = {
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
     WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-AVAX:    "0x2C89bbc92BD86F8075d1DEcc58C7F4E0107f286b",
-FET:     "0x7583feddbcefa813dc18259940f76a02710a8905",
-INJ:     "0x4e8dc2149eac3f3def36b1c281ea466338249371",
-RNDR:    "0x61299774020da444af134c82fa83e3810b309991",
-UNI:     "0xb33eaad8d922b1083446dc23f610c2567fb5180f",
-PYUSD0:  "0x99af3eea856556646c98c8b9b2548fe815240750",
-PAXG:    "0x553d3d295e0f695b9228246232edf400ed3560b5",
-SXP:     "0x6abb753c1893194de4a83c6e8b4eadfc105fd5f5",
-POLY:    "0xcb059c5573646047d6d88dddb87b745c18161d3b",
-CHZ:     "0xf1938ce12400f9a761084e7a80d37e732a4da056",
-SHIB:    "0x6f8a06447ff6fcf75d803135a7de15ce88c1d4ec",
-CRVUSD:  "0xc4Ce1D6F5D98D65eE25Cf85e9F2E9DcFEe6Cb5d6",
-APE:     "0xB7b31a6BC18e48888545CE79e83E06003bE70930",
-ZRO:     "0x6985884c4392d348587b19cb9eaaf157f13271cd",
-CRV:     "0x172370d5cd63279efa6d502dab29171933a610af",
-LDO:     "0xc3c7d422809852031b44ab29eec9f1eff2a58756",
-APEPE:   "0xa3f751662e282e83ec3cbc387d225ca56dd63d3a",
-STG:     "0x2f6f07cdcf3588944bf4c42ac74ff24bf56e7590",
-SAND:    "0xBbba073C31bF03b8ACf7c28EF0738DeCF3695683",
-TUSD:    "0x2e1ad108ff1d8c782fcbbb89aad783ac49586756",
-USDQ:    "0xb291996477504506bf5f583102b5b5ea5d1e40e0",
-FRXUSD:  "0x80eede496655fb9047dd39d9f418d5483ed600df",
-SUSHI:   "0x0b3f868e0be5597d5db7feb59e1cadbb0fdda50a",
-GRT:     "0x5fe2b58c013d7601147dcdd68c143a77499f5531",
-LPT:     "0x3962f4a0a0051dcce0be73a7e09cef5756736712",
-PAX:     "0x6f3b3286fd86d8b47ec737ceb3d0d354cc657b3e",
-AUSD:"0x00000000efe302beaa2b3e6e1b18d08d69a9012a",
-BAT:"0x3cef98bb43d732e2f285ee605a8158cde967d219",
-TBTC:"0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
-MANA:"0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4",
-TRB:"0xe3322702bedaaed36cddab233360b939775ae5f1",
-COMP:"0x8505b9d2254a7ae468c0e9dd10ccea3a837aef5c",
-INCH:"0x9c2c5fd7b07e95ee044ddeba0e97a665f142394f",
-THETA:"0xb46e0ae620efd98516f49bb00263317096c114b2",
-CRO:"0xada58df0f643d959c2a47c9d4d4c1a4defe3f11c",
-XYO:"0xd2507e7b5794179380673870d88b22f94da6abe0",
-MASK:"0x2b9e7ccdf0f4e5b24757c1e1a80e311e34cb10c7",
-EURQ:"0xd571edb2ef29df10fcd6200fd6d0ed2389983db3",
-APOLUSDT:"0x6ab707aca953edaefbc4fd23ba73294241490620",
-ENJ:"0x7ec26842f195c852fa843bb9f6d8b583a274a157",
-ZRX:"0x5559edb74751a0ede9dea4dc23aee72cca6be3d5",
-GMT:"0x714db550b574b3e927af3d93e26127d15721d4c2",
-SNX:"0x50b728d8d964fd00c2d0aad81718b71311fef68a",
-ANKR:"0x101a023270368c0d50bffb62780f4afd4ea79c35",
-GLM:"0x0b220b82f3ea3b7f6d9a1d8ab58930c064a2b5bf",
-COW:"0x2f4efd3aa42e15a1ec6114547151b63ee5d39958",
-BAND:"0xa8b1e0764f85f53dfe21760e8afe5446d82606ac",
-AXL:"0x6e4e624106cb12e168e6533f8ec7c82263358940",
-UMA:"0x3066818837c5e6ed6601bd5a91b0762877a6b731",
-YFI:"0xda537104d6a5edd53c6fbba9a898708e465260b6",
-ELON:"0xe0339c80ffde91f3e20494df88d4206d86024cdf",
-NEXO:"0x41b3966b4ff7b427969ddf5da3627d6aeae9a48e",
-EURAU:"0x4933A85b5b5466Fbaf179F72D3DE273c287EC2c2",
-ORDER:"0x4e200fe2f3efb977d5fd9c430a41531fb04d97b8",
-IOTX:"0xf6372cdb9c1d3674e83842e3800f2a62ac9f3c66",
-AMP:"0x0621d647cecbfb64b79e44302c1933cb4f27054d",
-CBK:"0x4EC203dD0699Fac6adAF483CDd2519BC05D2c573",
-ACX:"0xf328b73b6c685831f238c30a23fc19140cb4d8fc",
-RLC:"0xbe662058e00849c3eef2ac9664f37fefdf2cdbfe",
-POND:"0x73580a2416a57f1c4b6391dba688a9e4f7dbece0",
-BOBA:"0xa4b2b20b2c73c7046ed19ac6bff5e5285c58f20a",
-C98:"0x77f56cf9365955486b12c4816992388ee8606f0e",
-PYR:"0x430ef9263e76dae63c84292c3409d61c598e9682",
-USDD:"0xffa4d863c96e743a2e1513824ea006b8d0353c57",
-REQ:"0xb25e20de2f2ebb4cffd4d16a55c7b395e8a94762",
-KNC:"0x1c954e8fe737f99f68fa1ccda3e51ebdb291948c",
-POWR:"0x0aab8dc887d34f00d50e19aee48371a941390d14",
-ZKP:"0x9a06db14d639796b25a6cec6a1bf614fd98815ec",
-FRAX:"0x45c32fa6df82ead1e2ef74d17b76547eddfaff89",
-SOPH:"0xeb971fd26783f32694dbb392dd7289de23109148",
-HOT:"0x0c51f415cf478f8d08c246a6c6ee180c5dc3a012",
-GTC:"0xdb95f9188479575f3f718a245eca1b3bf74567ec",
-TELEBTC:"0x3bf668fe1ec79a84ca8481cead5dbb30d61cc685",
-WOO:"0x1b815d120b3ef02039ee11dc2d33de7aa4a8c603",
-AIOZ:"0xe2341718c6c0cbfa8e6686102dd8fbf4047a9e9b",
-GNO:"0x5ffd62d3c3ee2e81c00a7b9079fb248e7df024a8",
-FRXETH:"0x43edd7f3831b08fe70b7555ddd373c8bf65a9050",
-FRXETH_CANONICAL:"0xee327f889d5947c1dc1934bb208a1e792f953e96",
-UST:"0x692597b009d13c4049a947cab2239b7d6517875f",
-NPT:"0x306ee01a6ba3b4a8e993fa2c1adc7ea24462000c",
-ADX:"0xdda7b23d2d72746663e7939743f929a3d85fc975",
-SYN:"0xf8f9efc0db77d8881500bb06ff5d6abc3070e695",
-FLUID:"0xf50d05a1402d0adafa880d36050736f9f6ee7dee",
-ORBS:"0x614389eaae0a6821dc49062d56bda3d9d45fa2ff",
-VANRY:"0x8de5b80a0c1b02fe4976851d030b36122dbb8624",
-OMG:"0x62414d03084eeb269e18c970a21f45d2967f0170",
-TEL:"0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32",
-OXT:"0x9880e3dda13c8e7d4804691a45160102d31f6060",
     WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
-    // ... Append up to 100 tokens safely here. The native chunking handles scaling smoothly.
+    // ... Append additional token addresses directly here
 };
 
 const ENFORCER_ABI = [
@@ -133,9 +45,7 @@ const ENFORCER_ABI = [
 const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ==========================================================
-// 2. NATIVE ZERO-DEPENDENCY CONCURRENCY THROTTLE ENGINE
-// ==========================================================
+// Native zero-dependency concurrency worker pool
 function createConcurrencyLimit(maxConcurrent) {
     return async function (tasks) {
         const results = [];
@@ -157,7 +67,6 @@ function createConcurrencyLimit(maxConcurrent) {
     };
 }
 
-// Helper function to segment arrays to enforce rate-limiting thresholds
 function chunkArray(array, size) {
     const chunks = [];
     for (let i = 0; i < array.length; i += size) {
@@ -204,10 +113,13 @@ let wallet;
 let vaultContract;
 let isReconnecting = false;
 
-// Concurrency limiting engine settings to control node query strain
-const MAX_CONCURRENT_REQUESTS = 15; 
-const PATH_CHUNK_SIZE = 40; 
+// Optimization configuration parameters
+const MAX_CONCURRENT_REQUESTS = 20; 
+const PATH_CHUNK_SIZE = 50; 
 const throttle = createConcurrencyLimit(MAX_CONCURRENT_REQUESTS);
+
+// CRITERIA TRIGGER: 10n satisfies exactly 0.00001 USDC target limit (6 decimals)
+const STRICT_MINIMUM_PROFIT = 10n; 
 
 async function initWebSocketConnection(targetUrl, onDisconnect) {
     provider = new ethers.WebSocketProvider(targetUrl);
@@ -220,9 +132,9 @@ async function initWebSocketConnection(targetUrl, onDisconnect) {
 async function main() {
     if (isReconnecting) return;
     
-    console.log("🚀 HIGH-SPEED AUTO-BATCHING NATIVE MEMPOOL ENGINE ONLINE");
+    console.log("🚀 UNRESTRICTED RAW PROFIT ENGINE ONLINE");
     const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
-    console.log(`📡 Connecting stream gateway: ${targetUrl}`);
+    console.log(`📡 Stream link active: ${targetUrl}`);
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing in environment variables.");
@@ -233,7 +145,7 @@ async function main() {
         if (isReconnecting) return;
         isReconnecting = true;
         
-        console.log(`⚠️ Network packet lag detected. Switching endpoints...`);
+        console.log(`⚠️ Network node latency fallback triggered. Shifting connection...`);
         currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
 
         if (provider) {
@@ -241,7 +153,7 @@ async function main() {
             try { await provider.destroy(); } catch {}
         }
         
-        await sleep(3000); 
+        await sleep(2000); 
         isReconnecting = false;
         main().catch(() => {});
     };
@@ -254,11 +166,11 @@ async function main() {
     }
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
-    const capitalTiers = ["100", "500", "1500", "5000"]; // Optimized tiers balancing deep liquidity pools
+    const capitalTiers = ["100", "500", "1500", "5000"]; 
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
     
-    console.log(`📊 Matrix initialized: Loaded ${multiHopPaths.length} multi-hop configurations across token list.`);
-    console.log(`🛡️ Native Throttling Active: Process segments chunked into blocks of ${PATH_CHUNK_SIZE}.`);
+    console.log(`📊 Matrix built: Scanning ${multiHopPaths.length} configurations block-by-block.`);
+    console.log(`🎯 Trigger Threshold Floor: > 0.00001 USDC (Raw Math Only)`);
 
     let processingQueueActive = false;
     const filter = { topics: [SWAP_EVENT_TOPIC] };
@@ -270,16 +182,6 @@ async function main() {
         const currentBlock = log.blockNumber;
 
         try {
-            // DYNAMIC PRE-FLIGHT GAS CALCULATION ENGINE
-            const feeData = await provider.getFeeData();
-            const currentBaseFee = feeData.maxFeePerGas || feeData.gasPrice || ethers.parseUnits("150", "gwei");
-            const priorityFee = feeData.maxPriorityFeePerGas || ethers.parseUnits("40", "gwei");
-            const absoluteGasPrice = currentBaseFee + priorityFee;
-            
-            const estimatedGasLimit = 420000n; // Standard structural multi-hop EVM execution exhaustion estimate
-            const actualGasCostUSDC = (estimatedGasLimit * absoluteGasPrice) / ethers.parseUnits("1", "gwei"); // Dynamic normalization calculation
-
-            // Sequential chunk batch processing preventing rate limitations
             for (const chunk of pathChunks) {
                 const scanTasks = chunk.flatMap(pathObj => {
                     const routerPairs = [
@@ -291,30 +193,21 @@ async function main() {
                         return capitalTiers.map(tier => {
                             const testAmountIn = ethers.parseUnits(tier, 6);
                             
-                            // Return an un-invoked function task for the native throttle pool handler
                             return async () => {
                                 try {
-                                    const [estimatedFinalUSDC, estimatedProfit] = await vaultContract.simulateArbitrageProfit(
+                                    const [, estimatedProfit] = await vaultContract.simulateArbitrageProfit(
                                         pair.buy, pair.sell, testAmountIn, pathObj.pathToToken, pathObj.pathToUSDC
                                     );
 
-                                    // CALCULATE REAL FRICTION: Dynamic gas + Aave 0.05% loan fee protection filter
-                                    const aaveFeeUSDC = (testAmountIn * 5n) / 10000n;
-                                    const totalFrictionUSDC = actualGasCostUSDC + aaveFeeUSDC;
-                                    
-                                    const grossProfitUSDC = estimatedProfit;
-                                    const isProfitable = grossProfitUSDC > totalFrictionUSDC;
+                                    // Pure raw verification rule
+                                    const isProfitable = estimatedProfit >= STRICT_MINIMUM_PROFIT;
 
                                     return {
                                         success: true,
                                         routeStr: `${pair.buyName}->${pair.sellName}`,
-                                        hops: pathObj.hops,
                                         pair,
-                                        tier,
                                         isProfitable,
-                                        netProfit: isProfitable ? grossProfitUSDC - totalFrictionUSDC : 0n,
-                                        grossProfitUSDC,
-                                        totalFrictionUSDC,
+                                        estimatedProfit,
                                         testAmountIn,
                                         pathObj
                                     };
@@ -326,21 +219,16 @@ async function main() {
                     });
                 });
 
-                // Execute using the inline, dependency-free pool manager
                 const results = await throttle(scanTasks);
                 let executionTriggered = false;
 
                 for (const res of results) {
                     if (!res.success || !res.isProfitable) continue;
-                    
-                    // Enforce absolute protection: Target trade parameters MUST exceed total structural friction
-                    const targetProfitFloor = ethers.parseUnits("1.0", 6); // Hard floor targeting a clean $1.00 net margin min
-                    if (res.netProfit < targetProfitFloor) continue;
 
                     executionTriggered = true; 
-                    console.log(`${GREEN}\n🎯 [PROFIT MATCH CONFIRMED IN BLOCK #${currentBlock}] Net Yield: +${ethers.formatUnits(res.netProfit, 6)} USDC (After Fees)${RESET}`);
+                    console.log(`${GREEN}\n🎯 [RAW PROFIT TRIGGERED IN BLOCK #${currentBlock}] Profit Found: +${ethers.formatUnits(res.estimatedProfit, 6)} USDC${RESET}`);
                     
-                    const txDeadline = Math.floor(Date.now() / 1000) + 20; 
+                    const txDeadline = Math.floor(Date.now() / 1000) + 30; 
                     
                     try {
                         const tx = await vaultContract.executeAaveFlashLoanArbitrage(
@@ -351,26 +239,25 @@ async function main() {
                             res.pathObj.pathToUSDC, 
                             txDeadline,
                             { 
-                                gasLimit: estimatedGasLimit, 
-                                maxFeePerGas: currentBaseFee + ethers.parseUnits("50", "gwei"),       
-                                maxPriorityFeePerGas: priorityFee + ethers.parseUnits("20", "gwei")  
+                                gasLimit: 550000, 
+                                maxFeePerGas: ethers.parseUnits("280", "gwei"),       
+                                maxPriorityFeePerGas: ethers.parseUnits("50", "gwei")  
                             }
                         );
                         
-                        console.log(`🚨 TRANSACTION BUNDLE BROADCASTED: ${tx.hash}`);
+                        console.log(`🚨 BROADCASTING TO MEMPOOL: ${tx.hash}`);
                         const receipt = await tx.wait(1);
-                        console.log(`✅ EXECUTED ARBITRAGE CONFIRMED IN BLOCK: #${receipt.blockNumber}`);
+                        console.log(`✅ ATOMIC EXECUTION TRANSACTION COMPLETE IN BLOCK: #${receipt.blockNumber}`);
                     } catch (txError) {
-                        console.log(`${RED}⚠️ Execution missed structural transaction window or frontrun by competitive block.${RESET}`);
+                        console.log(`${RED}⚠️ Pipeline transmission failed or reverted during EVM flash checkout.${RESET}`);
                     }
                     break; 
                 }
 
-                if (executionTriggered) break; // Break out of processing chunk to preserve execution slot latency
-                await sleep(15); // Pacing buffer inside chunk processing loop to avoid node saturation
+                if (executionTriggered) break; 
             }
         } catch (err) {
-            // Drop exceptions smoothly to preserve main operational tracking loop
+            // Absorb logging noise cleanly
         } finally {
             processingQueueActive = false;
         }
@@ -378,12 +265,12 @@ async function main() {
 
     provider.on("block", (blockNumber) => {
         if (!isReconnecting) {
-            console.log(`📦 Block Progression Sync: Mined #${blockNumber} | Parsing tracking hooks...`);
+            console.log(`📦 Progression Track: Mined #${blockNumber} | Stream scanning...`);
         }
     });
 }
 
 main().catch((error) => {
-    console.error("Fatal Operational Fault:", error);
+    console.error("Fatal Pipeline Fault:", error);
     process.exit(1);
 });
