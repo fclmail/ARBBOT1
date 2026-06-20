@@ -272,4 +272,110 @@ async function main() {
 
         try {
             for (const chunk of pathChunks) {
-                const scanTasks = chunk.flatMap(path
+                const scanTasks = chunk.flatMap((pathObj) => {
+                    const routerPairs = [
+                        { buyName: "QUICK", sellName: "SUSHI", buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI },
+                        { buyName: "SUSHI", sellName: "QUICK", buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK }
+                    ];
+
+                    return routerPairs.flatMap((pair) => {
+                        return capitalTiers.map((tier) => {
+                            const testAmountIn = ethers.parseUnits(tier, 6);
+                            
+                            return async () => {
+                                try {
+                                    const [, estimatedProfit] = await vaultContract.simulateArbitrageProfit(
+                                        pair.buy, pair.sell, testAmountIn, pathObj.pathToToken, pathObj.pathToUSDC
+                                    );
+
+                                    return {
+                                        success: true,
+                                        routeStr: `${pair.buyName}->${pair.sellName}`,
+                                        pair,
+                                        estimatedProfit,
+                                        testAmountIn,
+                                        tier,
+                                        pathObj
+                                    };
+                                } catch {
+                                    return { success: false };
+                                }
+                            };
+                        });
+                    });
+                });
+
+                const results = await throttle(scanTasks);
+                let executionTriggered = false;
+
+                for (const res of results) {
+                    if (!res.success) continue;
+
+                    const rawProfit = res.estimatedProfit;
+
+                    if (rawProfit >= STRICT_MINIMUM_PROFIT) {
+                        const formattedProfit = Number(ethers.formatUnits(rawProfit, 6));
+
+                        // Tier 1: Micro Imbalance Found (0.0001 to 0.0099 USDC)
+                        if (formattedProfit >= 0.0001 && formattedProfit < 0.01) {
+                            console.log(`📡 [MICRO-IMBALANCE] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(6)} USDC`);
+                        } 
+                        // Tier 2: Low-Spread Arbitrage Found (0.01 to 0.99 USDC)
+                        else if (formattedProfit >= 0.01 && formattedProfit < 1.0) {
+                            console.log(`⚡ [LOW-SPREAD MATCH] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(4)} USDC`);
+                        } 
+                        // Tier 3: Macro Arbitrage Window Found (>= 1.00 USDC)
+                        else if (formattedProfit >= 1.0) {
+                            console.log(`${GREEN}🔥 [MACRO WINDOW FOUND] Route: ${res.routeStr} | Input: $${res.tier} | Raw Profit: +${formattedProfit.toFixed(2)} USDC ${RESET}`);
+                        }
+
+                        executionTriggered = true; 
+                        console.log(`${GREEN}🚨 CRITERIA MET (>0.00001): Dispatching Atomic Flash Loan Execution Package...${RESET}`);
+                        
+                        const txDeadline = Math.floor(Date.now() / 1000) + 30; 
+                        
+                        try {
+                            const tx = await vaultContract.executeAaveFlashLoanArbitrage(
+                                res.pair.buy, 
+                                res.pair.sell, 
+                                res.testAmountIn, 
+                                res.pathObj.pathToToken, 
+                                res.pathObj.pathToUSDC, 
+                                txDeadline,
+                                { 
+                                    gasLimit: 550000, 
+                                    maxFeePerGas: ethers.parseUnits("300", "gwei"),       
+                                    maxPriorityFeePerGas: ethers.parseUnits("60", "gwei")  
+                                }
+                            );
+                            
+                            console.log(`🚨 BROADCASTING TO MEMPOOL: ${tx.hash}`);
+                            const receipt = await tx.wait(1);
+                            console.log(`✅ ATOMIC EXECUTION TRANSACTION COMPLETE IN BLOCK: #${receipt.blockNumber}`);
+                        } catch (txError) {
+                            console.log(`${RED}⚠️ Pipeline transmission failed or reverted during EVM flash checkout.${RESET}`);
+                        }
+                        break; 
+                    }
+                }
+
+                if (executionTriggered) break; 
+            }
+        } catch (err) {
+            // Drop core exceptions cleanly
+        } finally {
+            processingQueueActive = false;
+        }
+    });
+
+    provider.on("block", (blockNumber) => {
+        if (!isReconnecting) {
+            console.log(`📦 Progression Track: Mined #${blockNumber} | Stream scanning...`);
+        }
+    });
+}
+
+main().catch((error) => {
+    console.error("Fatal Pipeline Fault:", error);
+    process.exit(1);
+});
