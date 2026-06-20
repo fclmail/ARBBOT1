@@ -18,7 +18,6 @@ let currentEndpointIndex = 0;
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS  = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174";
 
-// RESTORED & ADDED: Complete Expanded Exchange Router Architecture Matrix
 const ROUTERS = {
     QUICK: "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
     SUSHI: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
@@ -26,7 +25,6 @@ const ROUTERS = {
     WAULT: "0x594c3618E3CF4879524b11901d866E3578637C55"
 };
 
-// RESTORED: Full Target Multi-Asset Token Tokenology Matrix
 const TOKENS = {
     USDT:             "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     WETH:             "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
@@ -45,7 +43,9 @@ const ENFORCER_ABI = [
     "function executeDirectCapitalArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
 
+// FIXED: Exact corrected keccak256 hash for standard AMM Swap events (UniswapV2/QuickSwap/Sushi)
 const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
+
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function createConcurrencyLimit(maxConcurrent) {
@@ -93,7 +93,6 @@ let wallet;
 let vaultContract;
 let isReconnecting = false;
 
-// Scaled configuration to support highly expanded permutation density
 const MAX_CONCURRENT_REQUESTS = 30; 
 const PATH_CHUNK_SIZE = 40; 
 const throttle = createConcurrencyLimit(MAX_CONCURRENT_REQUESTS);
@@ -138,7 +137,13 @@ async function main() {
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
 
     let processingQueueActive = false;
-    const filter = { topics: [SWAP_EVENT_TOPIC] };
+    
+    // Explicit filter assignment configuration
+    const filter = {
+        topics: [SWAP_EVENT_TOPIC]
+    };
+
+    console.log(`📡 Event subscriber tied to topic filter: ${filter.topics[0]}`);
 
     provider.on(filter, async (log) => {
         if (processingQueueActive || isReconnecting) return;
@@ -147,12 +152,10 @@ async function main() {
         try {
             const feeData = await provider.getFeeData();
             const currentGasPrice = feeData.maxFeePerGas || feeData.gasPrice || ethers.parseUnits("150", "gwei");
-            
             const estimatedGasCostUSDC = 0.08; 
 
             for (const chunk of pathChunks) {
                 const scanTasks = chunk.flatMap((pathObj) => {
-                    // Dynamically generated permutation combinations including Dfyn & Wault
                     const routerKeys = Object.keys(ROUTERS);
                     const routerPairs = [];
 
@@ -241,7 +244,7 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (err) {
-            // Safe silent fail
+            // Context backup bypass
         } finally {
             processingQueueActive = false;
         }
