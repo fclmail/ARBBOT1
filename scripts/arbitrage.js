@@ -84,11 +84,13 @@ let wallet;
 let vaultContract;
 let isReconnecting = false;
 
+// Optimization configuration settings
 const MAX_CONCURRENT_REQUESTS = 25; 
 const PATH_CHUNK_SIZE = 60; 
-const throttle = createConcurrencyLimit(maxConcurrentRequests);
 
-// Raw check baseline remains micro-scale to verify calculation streams
+// FIXED: Variable name reference now correctly maps to the uppercase constant above
+const throttle = createConcurrencyLimit(MAX_CONCURRENT_REQUESTS);
+
 const STRICT_MINIMUM_PROFIT = 10n; 
 const ESTIMATED_GAS_LIMIT = 400000n;
 
@@ -137,11 +139,9 @@ async function main() {
         processingQueueActive = true;
 
         try {
-            // Fetch live gas environment context dynamically
             const feeData = await provider.getFeeData();
             const currentGasPrice = feeData.maxFeePerGas || feeData.gasPrice || ethers.parseUnits("150", "gwei");
             
-            // Approximate gas fee baseline calculation in USDC terms ($0.05 - $0.15 typically)
             const estimatedGasCostUSDC = 0.08; 
 
             for (const chunk of pathChunks) {
@@ -192,10 +192,8 @@ async function main() {
                         const sign = netProfit >= 0 ? "+" : "";
                         const color = netProfit >= 0 ? GREEN : RED;
 
-                        // Unified Stream Tracking logging both net wins and fee-drag losses
                         console.log(`${color}📡 [SPREAD FOUND] Route: ${res.routeStr} | Input: $${res.tier} | Gross: +${grossProfit.toFixed(6)} | Net: ${sign}${netProfit.toFixed(6)} USDC${RESET}`);
 
-                        // Execution logic strictly guarded by mathematical viability
                         if (netProfit > 0) {
                             executionTriggered = true;
                             console.log(`${GREEN}🚨 POSITIVE NET EXPECTATION DETECTED: Dispatching Execution Block...${RESET}`);
