@@ -43,9 +43,6 @@ const ENFORCER_ABI = [
     "function executeDirectCapitalArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
 
-// FIXED: Exact corrected keccak256 hash for standard AMM Swap events (UniswapV2/QuickSwap/Sushi)
-const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
-
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function createConcurrencyLimit(maxConcurrent) {
@@ -137,15 +134,11 @@ async function main() {
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
 
     let processingQueueActive = false;
-    
-    // Explicit filter assignment configuration
-    const filter = {
-        topics: [SWAP_EVENT_TOPIC]
-    };
 
-    console.log(`📡 Event subscriber tied to topic filter: ${filter.topics[0]}`);
-
-    provider.on(filter, async (log) => {
+    // CHANGED: Moved calculation trigger into standard block handler for 100% reliability
+    provider.on("block", async (blockNumber) => {
+        console.log(`📦 Block #${blockNumber} Processing Stream...`);
+        
         if (processingQueueActive || isReconnecting) return;
         processingQueueActive = true;
 
@@ -244,14 +237,10 @@ async function main() {
                 if (executionTriggered) break;
             }
         } catch (err) {
-            // Context backup bypass
+            // Context bypass
         } finally {
             processingQueueActive = false;
         }
-    });
-
-    provider.on("block", (blockNumber) => {
-        if (!isReconnecting) console.log(`📦 Block #${blockNumber} Processing Stream...`);
     });
 }
 
