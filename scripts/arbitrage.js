@@ -7,10 +7,14 @@ const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
+// ==========================================
+// 1. HIGH-AVAILABILITY WSS ENDPOINTS TIER
+// ==========================================
 const WSS_ENDPOINTS = [
-    "wss://polygon-bor-rpc.publicnode.com", 
     "wss://polygon.drpc.org",
-    "wss://polygon.gateway.tenderly.co"
+    "wss://polygon-bor-rpc.publicnode.com",
+    "wss://polygon.api.onfinality.io/public-ws",
+    "wss://rpc-mainnet.matic.quiknode.pro"
 ];
 let currentEndpointIndex = 0;
 
@@ -23,97 +27,234 @@ const ROUTERS = {
 };
 
 const TOKENS = {
-    WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
+    USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+    WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+    DAI:    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+    WBTC:   "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
 };
 
 const ENFORCER_ABI = [
-    "function executeDirectArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
-    "function balanceOf(address account) view returns (uint256)"
+    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
+    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
+    "function minimumProfitUSDC() view returns (uint256)"
 ];
 
 const ERC20_ABI = [
     "function balanceOf(address account) view returns (uint256)"
 ];
 
+const SWAP_EVENT_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130140159d82c";
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function buildMultiHopCrossExchangePaths() {
+    const tokenAddresses = Object.values(TOKENS);
+    let generatedPaths = [];
+
+    // ---- 3-HOP TRIANGULAR PATHS ----
+    for (const a of tokenAddresses) {
+        for (const b of tokenAddresses) {
+            if (a === b) continue;
+            generatedPaths.push({
+                hops: 3,
+                pathToToken: [USDC_ADDRESS, a, b],
+                pathToUSDC: [b, USDC_ADDRESS]
+            });
+        }
+    }
+
+    // ---- 4-HOP QUADRANGULAR PATHS ----
+    for (const a of tokenAddresses) {
+        for (const b of tokenAddresses) {
+            if (a === b) continue;
+            for (const c of tokenAddresses) {
+                if (c === a || c === b) continue;
+                generatedPaths.push({
+                    hops: 4,
+                    pathToToken: [USDC_ADDRESS, a, b, c],
+                    pathToUSDC: [c, USDC_ADDRESS]
+                });
+            }
+        }
+    }
+    return generatedPaths;
+}
+
 let provider;
 let wallet;
 let vaultContract;
 let usdcContract;
-let testOverrideTriggered = false;
+let isReconnecting = false;
 
-async function initWebSocketConnection(targetUrl) {
+// 10n = 0.00001 USDC (Adjust this higher to shield against gas friction if needed)
+const contractMinimumProfitUSDC = 10n; 
+
+async function initWebSocketConnection(targetUrl, onDisconnect) {
     provider = new ethers.WebSocketProvider(targetUrl);
     wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
-}
 
-async function main() {
-    const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
-    console.log("🚀 STARTING ON-CHAIN VALIDATION (HIGH LIQUIDITY PATH)");
-    
-    try {
-        await initWebSocketConnection(targetUrl);
-    } catch (err) {
-        console.error("Connection failed");
-        return;
-    }
-
-    provider.on("block", async (blockNumber) => {
-        if (testOverrideTriggered) return;
-        testOverrideTriggered = true; // Run exactly once immediately
-
-        console.log(`📦 [BLOCK #^{blockNumber}] Launching liquid verification pipeline...`);
-
-        // HIGH-LIQUIDITY GUARANTEED ROUTE (USDC -> WMATIC -> USDC)
-        const verifiedPathToToken = [USDC_ADDRESS, TOKENS.WMATIC];
-        const verifiedPathToUSDC  = [TOKENS.WMATIC, USDC_ADDRESS];
-        const testAmount = ethers.parseUnits("0.07", 6);
-
-        console.log(`\n${GREEN}🎯 [PROFITABLE HOOK TRIGGER FOUND IN BLOCK #${blockNumber}]`);
-        console.log(`⚡ Testing 0.07 USDC via high-liquidity WMATIC route...${RESET}`);
-
-        const txDeadline = Math.floor(Date.now() / 1000) + 300; // 5 minute deadline safety window
-
-        try {
-            const vaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-            console.log(`💰 [VAULT FUNDING] Internal capital available: $${ethers.formatUnits(vaultBalance, 6)} USDC`);
-
-            const feeData = await provider.getFeeData();
-            // Aggressive gas configuration to guarantee inclusion
-            const baseFee = feeData.maxFeePerGas ? feeData.maxFeePerGas : ethers.parseUnits("350", "gwei");
-            const txOptions = { 
-                gasLimit: 500000, 
-                maxFeePerGas: (baseFee * 20n) / 10n, 
-                maxPriorityFeePerGas: ethers.parseUnits("100", "gwei")  
-            };
-
-            console.log(`📤 Sending execution payload to contract...`);
-            
-            // Execute using QuickSwap for the buy swap, SushiSwap for the sell swap
-            const tx = await vaultContract.executeDirectArbitrage(
-                ROUTERS.QUICK, 
-                ROUTERS.SUSHI, 
-                testAmount, 
-                verifiedPathToToken, 
-                verifiedPathToUSDC, 
-                txDeadline, 
-                txOptions
-            );
-
-            console.log(`${GREEN}🚀 TRANSACTION BROADCASTED SUCCESSFULLY!`);
-            console.log(`🏁 HASH: ${tx.hash}${RESET}\n`);
-            
-            console.log("⏳ Waiting for block inclusion receipt...");
-            const receipt = await tx.wait(1);
-            console.log(`${GREEN}✅ TRANSACTION CONFIRMED IN BLOCK #${receipt.blockNumber}!${RESET}`);
-
-        } catch (txError) {
-            console.log(`${RED}❌ Execution faulted: ${txError.message}${RESET}`);
-        }
-        
-        process.exit(0);
+    provider.getNetwork().catch(() => {
+        onDisconnect();
     });
 }
 
-main().catch(() => process.exit(1));
+async function main() {
+    if (isReconnecting) return;
+    
+    console.log("🚀 REACTIVE EVENT-DRIVEN MULTI-HOP ENGINE ONLINE");
+    const targetUrl = WSS_ENDPOINTS[currentEndpointIndex];
+    console.log(`📡 Connecting to high-speed stream gateway: ${targetUrl}`);
+    
+    if (!process.env.PRIVATE_KEY) {
+        console.error("❌ CRITICAL ERROR: PRIVATE_KEY missing in environment variables.");
+        process.exit(1);
+    }
+
+    const handleReconnect = async () => {
+        if (isReconnecting) return;
+        isReconnecting = true;
+        
+        console.log(`⚠️ Connection faulted. Cycling to next endpoint position...`);
+        currentEndpointIndex = (currentEndpointIndex + 1) % WSS_ENDPOINTS.length;
+
+        if (provider) {
+            try { provider.removeAllListeners(); } catch {}
+            try { await provider.destroy(); } catch {}
+        }
+        
+        await sleep(3000); 
+        isReconnecting = false;
+        main().catch(() => {});
+    };
+
+    try {
+        await initWebSocketConnection(targetUrl, handleReconnect);
+    } catch (err) {
+        handleReconnect();
+        return;
+    }
+
+    const multiHopPaths = buildMultiHopCrossExchangePaths();
+    const capitalTiers = ["10", "50", "200", "500", "1200", "2500", "5000"];
+    
+    console.log(`📊 Matrix initialized with ${multiHopPaths.length} multi-hop configurations.`);
+    console.log(`🎯 Active Execution Floor target set to: 0.00001 USDC (0.00001)`);
+    console.log(`⚡ Subscribed to pool Swap events. Listening for on-chain price dislocation hooks...\n`);
+
+    provider.on("block", (blockNumber) => {
+        if (!isReconnecting) {
+            console.log(`📦 [BLOCK PROGRESSION] Mined: #${blockNumber} | Pipeline active, scanning stream hooks...`);
+        }
+    });
+
+    let processingQueueActive = false;
+    const filter = { topics: [SWAP_EVENT_TOPIC] };
+
+    provider.on(filter, async (log) => {
+        if (processingQueueActive || isReconnecting) return;
+        processingQueueActive = true;
+
+        const currentBlock = log.blockNumber;
+
+        try {
+            const allScanPromises = [];
+
+            for (const pathObj of multiHopPaths) {
+                const routerPairs = [
+                    { buyName: "QUICK", sellName: "SUSHI", buy: ROUTERS.QUICK, sell: ROUTERS.SUSHI },
+                    { buyName: "SUSHI", sellName: "QUICK", buy: ROUTERS.SUSHI, sell: ROUTERS.QUICK }
+                ];
+
+                for (const pair of routerPairs) {
+                    for (const tier of capitalTiers) {
+                        const testAmountIn = ethers.parseUnits(tier, 6);
+                        
+                        allScanPromises.push(
+                            vaultContract.simulateArbitrageProfit(
+                                pair.buy,
+                                pair.sell,
+                                testAmountIn,
+                                pathObj.pathToToken,
+                                pathObj.pathToUSDC
+                            )
+                            .then(([estimatedFinalUSDC, estimatedProfit]) => {
+                                const isProfitable = estimatedProfit > 0n;
+                                const lossDelta = !isProfitable ? (testAmountIn > estimatedFinalUSDC ? testAmountIn - estimatedFinalUSDC : 0n) : 0n;
+                                
+                                return {
+                                    success: true,
+                                    routeStr: `${pair.buyName}->${pair.sellName}`,
+                                    hops: pathObj.hops,
+                                    pair,
+                                    tier,
+                                    isProfitable,
+                                    estimatedProfit,
+                                    displayDelta: isProfitable 
+                                        ? `+${ethers.formatUnits(estimatedProfit, 6)}` 
+                                        : `-${ethers.formatUnits(lossDelta, 6)}`,
+                                    testAmountIn,
+                                    pathObj
+                                };
+                            })
+                            .catch(() => ({ success: false }))
+                        );
+                    }
+                }
+            }
+
+            const results = await Promise.all(allScanPromises);
+            let executionTriggered = false;
+
+            for (const res of results) {
+                if (!res.success) continue;
+                if (res.displayDelta === "-0.000000" || res.displayDelta === "+0.000000") continue;
+
+                const passesThreshold = res.isProfitable && res.estimatedProfit >= contractMinimumProfitUSDC;
+                const logColor = passesThreshold ? GREEN : RESET;
+                
+                console.log(`${logColor}    📡 [BLOCK #${currentBlock}] Size: $${res.tier.padEnd(6)} USDC | Hops: ${res.hops} | Route: ${res.routeStr.padEnd(14)} | Delta: ${res.displayDelta} USDC${RESET}`);
+
+                if (passesThreshold && !executionTriggered) { 
+                    executionTriggered = true; 
+                    
+                    console.log(`\n🎯 [PROFITABLE TRIGGER FOUND IN #${currentBlock}] Instantly executing flash loan: ${res.displayDelta} USDC`);
+                    const txDeadline = Math.floor(Date.now() / 1000) + 30; 
+                    
+                    try {
+                        const tx = await vaultContract.executeAaveFlashLoanArbitrage(
+                            res.pair.buy, 
+                            res.pair.sell, 
+                            res.testAmountIn, 
+                            res.pathObj.pathToToken, 
+                            res.pathObj.pathToUSDC, 
+                            txDeadline,
+                            { 
+                                gasLimit: 980000, 
+                                maxFeePerGas: ethers.parseUnits("320", "gwei"),       
+                                maxPriorityFeePerGas: ethers.parseUnits("60", "gwei")  
+                            }
+                        );
+                        
+                        console.log(`🚨 FLASH LOAN TX SENT TO MEMPOOL: ${tx.hash}`);
+                        const receipt = await tx.wait(1);
+                        console.log(`✅ AAVE FLASH LOAN EXECUTED & FUNDS DEPOSITED IN BLOCK: #${receipt.blockNumber}`);
+                    } catch (txError) {
+                        // Suppress tx execution exceptions to preserve pipeline latency minimal
+                    }
+                    break;
+                }
+            }
+        } catch (err) {
+            // Drop exceptions smoothly
+        } finally {
+            processingQueueActive = false;
+        }
+    });
+}
+
+main().catch((error) => {
+    console.error("Fatal Operational Fault:", error);
+    process.exit(1);
+});
