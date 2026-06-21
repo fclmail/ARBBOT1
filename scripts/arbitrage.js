@@ -130,7 +130,7 @@ async function main() {
     }
 
     const multiHopPaths = buildMultiHopCrossExchangePaths();
-    const capitalTiers = ["0.10", "1.00", "5.00", "10.00"]; 
+    const capitalTiers = ["0.01", "1.00", "5.00", "10.00"]; 
     const pathChunks = chunkArray(multiHopPaths, PATH_CHUNK_SIZE);
 
     let processingQueueActive = false;
