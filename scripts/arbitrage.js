@@ -46,7 +46,7 @@ const CANDIDATE_SIZES_6_DECIMALS = [
 ];
 
 // Target threshold: minimum profit criteria before triggering execution
-const MINIMUM_PROFIT_USDC = 100.00; 
+const MINIMUM_PROFIT_USDC = 0.000001; 
 
 function buildPaths() {
     const generatedPaths = [];
