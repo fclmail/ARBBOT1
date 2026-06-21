@@ -1,4 +1,3 @@
-
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 
@@ -66,8 +65,18 @@ async function main() {
     console.log(` Honeycomb Engine Routing directly via EVM state changes`);
     console.log(`${CYAN}📡 Connected to FastLane Relay: ${FASTLANE_RPC}${RESET}\n`);
 
+    // 1. Maintain block-streaming WebSocket
     const streamProvider = new ethers.WebSocketProvider(WSS_NODE);
-    const privateProvider = new ethers.JsonRpcProvider(FASTLANE_RPC);
+
+    // 2. FIXED: Hardcode the network setup parameters to skip automated network discovery calls
+    const polygonNetwork = ethers.Network.from(137); 
+    const privateProvider = new ethers.JsonRpcProvider(
+        FASTLANE_RPC, 
+        polygonNetwork, 
+        { staticNetwork: polygonNetwork }
+    );
+
+    // 3. Bind engines to the non-probing private provider
     const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, privateProvider);
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
 
@@ -149,13 +158,13 @@ async function main() {
                             }
                             
                             processingBlock = false;
-                            return; // Break strategy loop to wait for state updates next block
+                            return; 
                         }
                     }
                 }
             }
         } catch (err) {
-            // Drop failures silently to keep the engine iteration at zero latency
+            // Drop simulation failures silently to keep block tracking smooth
         } finally {
             processingBlock = false;
         }
