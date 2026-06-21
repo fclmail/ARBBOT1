@@ -166,7 +166,7 @@ if (isMainThread) {
                                       `   ├── Tx 0 (Target): Backrunning pending mempool sequence\n` +
                                       `   └── Tx 1 (Your Vault Contract): executeBestFlashLoanArbitrage()\n` +
                                       `   └── Miner Tip Bribe: ${minerTipBribe.toFixed(6)} USDC (35% of total profit)\n\n` +
-                                      `${GREEN}🚀 Sending Flash/Fastlane Direct Bundle to Relay...${RESET}` pile
+                                      `${GREEN}🚀 Sending Flash/Fastlane Direct Bundle to Relay...${RESET}` 
                             });
 
                             const txDeadline = Math.floor(Date.now() / 1000) + 30;
