@@ -38,7 +38,7 @@ const ENFORCER_ABI = [
 
 // Scaled Up Capital Tiers ($1k to $50k) to catch actual whale-driven imbalances
 const CANDIDATE_SIZES_6_DECIMALS = [
-    ethers.parseUnits("0.01", 6),
+    ethers.parseUnits("0.1", 6),
     ethers.parseUnits("5000", 6),
     ethers.parseUnits("10000", 6),
     ethers.parseUnits("25000", 6),
