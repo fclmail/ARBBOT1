@@ -55,13 +55,13 @@ const ENFORCER_ABI = [
 ];
 
 const CANDIDATE_SIZES_6_DECIMALS = [
-    ethers.parseUnits("1000", 6),
+    ethers.parseUnits(".02", 6),
     ethers.parseUnits("5000", 6),
     ethers.parseUnits("15000", 6),
     ethers.parseUnits("40000", 6)
 ];
 
-const MINIMUM_PROFIT_USDC = 100.00;
+const MINIMUM_PROFIT_USDC = 0.00001;
 
 /* ========================================================================
    COORDINATOR (MAIN THREAD)
