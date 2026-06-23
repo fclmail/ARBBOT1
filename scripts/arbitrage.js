@@ -88,7 +88,7 @@ if (isMainThread) {
     console.log(`${CYAN}📡 Connected to FastLane Relay: ${FASTLANE_RPC}${RESET}\n`);
 
     const streamProvider = new ethers.WebSocketProvider(WSS_NODE);
-    const workerCount = 16;
+    const workerCount = 4;
     const workers = [];
 
     const chunkSize = Math.ceil(ALL_TOKENS.length / workerCount);
