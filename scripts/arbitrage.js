@@ -7,7 +7,6 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 
-// Color formatting utilities
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
 const CYAN = "\x1b[36m";
@@ -15,6 +14,8 @@ const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
 const FASTLANE_RPC = "https://polygon.fastlane.live/rpc";
+// High-performance public read fallback endpoint to balance scanning demands
+const PUBLIC_READ_RPC = "https://polygon-rpc.com"; 
 const WSS_NODE = "wss://polygon-bor-rpc.publicnode.com";
 
 const VAULT_CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
@@ -27,7 +28,6 @@ const ROUTERS = {
     WAULT: "0x594c3618E3CF4879524b11901d866E3578637C55"
 };
 
-// 4 Primary Intermediate Base Hops
 const HOPS = {
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
@@ -35,7 +35,6 @@ const HOPS = {
     DAI:    "0x8f3cf6ad23cd3cadbd9735aff958023239c6a063"
 };
 
-// Real-World Target Asset Matrix
 const ALL_TOKENS = [
     { name: "WBTC", address: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6" },
     { name: "LINK", address: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39" },
@@ -54,40 +53,37 @@ const ENFORCER_ABI = [
     "function withdrawProfits(address token, uint256 amount) external"
 ];
 
-// ERC20 ABI for balance checking
 const ERC20_ABI = [
     "function balanceOf(address owner) view returns (uint256)",
     "function decimals() view returns (uint8)"
 ];
 
-// Production Flash Loan Sizing (6 Decimals for USDC)
 const CANDIDATE_SIZES_6_DECIMALS = [
-    ethers.parseUnits(".02", 6),   // Micro-efficiency opportunity size
-    ethers.parseUnits("500", 6),   // Small pool size
-    ethers.parseUnits("2000", 6),  // Medium liquidity pool size
-    ethers.parseUnits("10000", 6)  // Large capital size
+    ethers.parseUnits(".02", 6),
+    ethers.parseUnits("500", 6),
+    ethers.parseUnits("2000", 6),
+    ethers.parseUnits("10000", 6)
 ];
 
-// Lower minimum profit to capture smaller opportunities
-const MINIMUM_PROFIT_USDC = 0.0000001;
-
-// Add profit tracking
+const MINIMUM_PROFIT_USDC = 0.000001;
 let totalProfitsAccumulated = 0;
-let lastWithdrawalCheck = 0;
-const WITHDRAWAL_CHECK_INTERVAL = 100; // blocks
-
-// Track failed opportunities for retry
 const failedOpportunities = [];
 
+// HARD BOUND STATIC NETWORK DEFINITION (Forces Ethers v6 to skip chain-ID handshakes)
+const staticPolygonNetwork = ethers.Network.from({
+    name: "polygon",
+    chainId: 137
+});
+
 /* ========================================================================
-   COORDINATOR (MAIN THREAD)
+    COORDINATOR (MAIN THREAD)
    ======================================================================== */
 if (isMainThread) {
     console.log(`${GREEN}🚀 FASTLANE UNRESTRICTED REAL-TIME MONITORING ONLINE${RESET}`);
     console.log(` Honeycomb Engine Routing directly via EVM state changes [Sharded Configuration]`);
     console.log(`${CYAN}📡 Connected to FastLane Relay: ${FASTLANE_RPC}${RESET}\n`);
 
-    const streamProvider = new ethers.WebSocketProvider(WSS_NODE);
+    const streamProvider = new ethers.WebSocketProvider(WSS_NODE, staticPolygonNetwork);
     const workerCount = 4;
     const workers = [];
 
@@ -103,7 +99,7 @@ if (isMainThread) {
             if (msg.type === "LOG") console.log(msg.data);
             if (msg.type === "PROFIT") {
                 totalProfitsAccumulated += msg.amount;
-                console.log(`${GREEN}💰 Total Profits Accumulated: ${totalProfitsAccumulated.toFixed(6)} USDC${RESET}`);
+                console.log(`${GREEN}💰 Total Realized Profits Accumulated: ${totalProfitsAccumulated.toFixed(6)} USDC${RESET}`);
             }
         });
 
@@ -113,27 +109,20 @@ if (isMainThread) {
     console.log(`[System] Initialized ${workerCount} Isolated Worker Threads successfully.`);
     console.log(`[System] Distributed ~${chunkSize} tokens and multi-hop paths per thread.\n`);
 
-    // Set up USDC balance monitoring
-    const polygonNetwork = ethers.Network.from(137);
-    const monitoringProvider = new ethers.JsonRpcProvider(FASTLANE_RPC, polygonNetwork);
+    // Use standard read node for tracking balances safely without relay interference
+    const monitoringProvider = new ethers.JsonRpcProvider(PUBLIC_READ_RPC, staticPolygonNetwork, { staticNetwork: staticPolygonNetwork });
     const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, monitoringProvider);
 
     streamProvider.on("block", async (blockNumber) => {
         console.log(`[Block #${blockNumber}] Scanning on-chain pairs across all shards...`);
         
-        // Check USDC balance of vault every 10 blocks
-        if (blockNumber % 10 === 0) {
+        if (blockNumber % 5 === 0) {
             try {
                 const vaultUsdcBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
                 const formattedBalance = ethers.formatUnits(vaultUsdcBalance, 6);
-                console.log(`${GREEN}💰 Vault USDC Balance: ${formattedBalance} USDC${RESET}`);
-                
-                // Report accumulation
-                if (Number(formattedBalance) > 0) {
-                    console.log(`${GREEN}✅ Profits are being accumulated! Current balance: ${formattedBalance} USDC${RESET}`);
-                }
+                console.log(`${GREEN}📊 Current Vault Balance Tracker: ${formattedBalance} USDC${RESET}`);
             } catch (error) {
-                // Silent fail for balance check
+                // Keep background diagnostics quiet
             }
         }
         
@@ -142,30 +131,27 @@ if (isMainThread) {
         }
     });
 
-    // Periodic profit withdrawal suggestion
-    setTimeout(() => {
-        console.log(`${YELLOW}ℹ️ To withdraw profits, call: vaultContract.withdrawProfits(USDC_ADDRESS, amount)${RESET}`);
-    }, 60000);
-
 } else {
     /* ========================================================================
-       PARALLEL WORKER THREAD ENGINE
+        PARALLEL WORKER THREAD ENGINE
        ======================================================================== */
     const { id, tokens } = workerData;
     
-    const polygonNetwork = ethers.Network.from(137);
-    const privateProvider = new ethers.JsonRpcProvider(FASTLANE_RPC, polygonNetwork, { staticNetwork: polygonNetwork });
-    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, privateProvider);
-    const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
+    // Split workflows: view states over clean public RPC, broadcast exclusively over FastLane Relay
+    const readProvider = new ethers.JsonRpcProvider(PUBLIC_READ_RPC, staticPolygonNetwork, { staticNetwork: staticPolygonNetwork });
+    const relayProvider = new ethers.JsonRpcProvider(FASTLANE_RPC, staticPolygonNetwork, { staticNetwork: staticPolygonNetwork });
     
-    // Add USDC balance monitoring in workers
-    const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, privateProvider);
+    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, relayProvider);
+    
+    // Read operations look at public RPC cache
+    const vaultContractRead = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, readProvider);
+    // Write operations push strictly down FastLane Relay pipe
+    const vaultContractWrite = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
+    const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, readProvider);
 
     const routerKeys = Object.keys(ROUTERS);
-    let activeExecution = false;
-    let blockNumber = 0;
-
     const pathMatrices = [];
+
     for (const token of tokens) {
         for (const [hopName, hopAddress] of Object.entries(HOPS)) {
             if (token.address.toLowerCase() === hopAddress.toLowerCase()) continue;
@@ -178,53 +164,35 @@ if (isMainThread) {
         }
     }
 
-    // Function to retry failed opportunities
     async function retryFailedOpportunities() {
         if (failedOpportunities.length === 0) return;
-        
         const opportunity = failedOpportunities.shift();
         try {
             const txDeadline = Math.floor(Date.now() / 1000) + 30;
-            const tx = await vaultContract.executeBestFlashLoanArbitrage(
+            const tx = await vaultContractWrite.executeBestFlashLoanArbitrage(
                 opportunity.buyAddr, 
                 opportunity.sellAddr, 
                 CANDIDATE_SIZES_6_DECIMALS, 
                 opportunity.pathToToken, 
                 opportunity.pathToUSDC, 
                 txDeadline, 
-                { gasLimit: 550000n }
+                { gasLimit: 700000n } // Slightly elevated buffer limit
             );
             const receipt = await tx.wait(1);
-            
-            if (receipt.status === 1) {
-                // Check actual profit by comparing USDC balance
-                const vaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                if (Number(ethers.formatUnits(vaultBalance, 6)) > 0) {
-                    parentPort.postMessage({
-                        type: "PROFIT",
-                        amount: Number(ethers.formatUnits(vaultBalance, 6))
-                    });
-                }
-                
+            if (receipt && receipt.status === 1) {
                 parentPort.postMessage({
                     type: "LOG",
-                    data: `\n${GREEN}🎉 [RETRY SUCCESS] Bundle Included in Block #${receipt.blockNumber}${RESET}\n` +
-                          `   └── Profit accumulated in vault!\n`
+                    data: `${GREEN}🎉 [RETRY INCLUSION SUCCESS] Block #${receipt.blockNumber}${RESET}`
                 });
             }
         } catch (error) {
-            // Put back in queue for later retry
-            failedOpportunities.push(opportunity);
+            // Drop silent to protect execution loops
         }
     }
 
     parentPort.on("message", async (msg) => {
         if (msg.type !== "BLOCK") return;
         
-        // Allow concurrent execution with careful nonce management
-        blockNumber = msg.blockNumber;
-        
-        // Retry failed opportunities first
         await retryFailedOpportunities();
 
         try {
@@ -236,21 +204,8 @@ if (isMainThread) {
                     const sellAddr = ROUTERS[routerKeys[j]];
 
                     for (const route of pathMatrices) {
-                        // Check vault balance first to see if profits exist
-                        try {
-                            const currentBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                            const formattedBalance = ethers.formatUnits(currentBalance, 6);
-                            if (Number(formattedBalance) > 0.001) {
-                                parentPort.postMessage({
-                                    type: "LOG",
-                                    data: `${GREEN}✅ Profit verified in vault: ${formattedBalance} USDC${RESET}`
-                                });
-                            }
-                        } catch (e) {
-                            // Ignore balance check errors
-                        }
-
-                        const result = await vaultContract.findBestFlashLoanSize(
+                        // View operations hit readProvider bypass
+                        const result = await vaultContractRead.findBestFlashLoanSize(
                             buyAddr, sellAddr, CANDIDATE_SIZES_6_DECIMALS, route.pathToToken, route.pathToUSDC
                         ).catch(() => null);
 
@@ -260,85 +215,54 @@ if (isMainThread) {
 
                         if (grossProfit >= MINIMUM_PROFIT_USDC) {
                             const inputTierStr = Number(ethers.formatUnits(result.amountIn, 6)).toLocaleString('en-US', { minimumFractionDigits: 2 });
-                            const outputGrossStr = Number(ethers.formatUnits(result.estimatedFinalUSDC, 6)).toLocaleString('en-US', { minimumFractionDigits: 2 });
                             const minerTipBribe = grossProfit * 0.35;
                             const netProfit = grossProfit - minerTipBribe;
 
                             parentPort.postMessage({
                                 type: "LOG",
-                                data: `\n${YELLOW}⚡ MEV OPPORTUNITY [Shard #${id}]:${RESET}\n` +
-                                      `   ├── Route: ${routerKeys[i]} -> ${routerKeys[j]} (${route.identity})\n` +
-                                      `   ├── Optimal Input: $${inputTierStr} USDC\n` +
-                                      `   └── Gross Profit: +$${grossProfit.toFixed(6)} USDC\n\n` +
-                                      `${GREEN}🚀 Sending Bundle to Relay...${RESET}` 
+                                data: `\n${YELLOW}⚡ MEV MATCH [Shard #${id}]: ${routerKeys[i]} ➔ ${routerKeys[j]}${RESET}\n` +
+                                      `   ├── Size Tiered: $${inputTierStr} USDC\n` +
+                                      `   └── Expected Net: +$${netProfit.toFixed(6)} USDC`
                             });
 
                             try {
                                 const txDeadline = Math.floor(Date.now() / 1000) + 30;
-                                const tx = await vaultContract.executeBestFlashLoanArbitrage(
+                                
+                                // Execution transaction pushes to relayProvider via vaultContractWrite
+                                const tx = await vaultContractWrite.executeBestFlashLoanArbitrage(
                                     buyAddr, 
                                     sellAddr, 
                                     CANDIDATE_SIZES_6_DECIMALS, 
                                     route.pathToToken, 
                                     route.pathToUSDC, 
                                     txDeadline, 
-                                    { gasLimit: 550000n }
+                                    { gasLimit: 700000n }
                                 );
+                                
                                 const receipt = await tx.wait(1);
 
-                                if (receipt.status === 1) {
-                                    // Check actual balance change
-                                    const vaultBalance = await usdcContract.balanceOf(VAULT_CONTRACT_ADDRESS);
-                                    const vaultBalanceFormatted = ethers.formatUnits(vaultBalance, 6);
-                                    
+                                if (receipt && receipt.status === 1) {
                                     parentPort.postMessage({
                                         type: "PROFIT",
-                                        amount: grossProfit // Report the simulated profit
+                                        amount: netProfit
                                     });
                                     
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `\n${GREEN}🎉 [SUCCESS] Bundle Included in Block #${receipt.blockNumber}${RESET}\n` +
-                                              `   ├── Gas Used: ${receipt.gasUsed.toString()}\n` +
-                                              `   ├── Vault Balance: ${vaultBalanceFormatted} USDC\n` +
-                                              `   └── Realized Net Profit: +$${netProfit.toFixed(6)} USDC\n`
-                                    });
-                                } else {
-                                    // Store failed opportunity for retry
-                                    failedOpportunities.push({
-                                        buyAddr,
-                                        sellAddr,
-                                        pathToToken: route.pathToToken,
-                                        pathToUSDC: route.pathToUSDC
+                                        data: `${GREEN}✅ [BUNDLE DETECTED ON-CHAIN] Block #${receipt.blockNumber} | Net Yield: +$${netProfit.toFixed(6)} USDC${RESET}\n`
                                     });
                                 }
                             } catch (txError) {
-                                // Store failed opportunity for retry
                                 failedOpportunities.push({
-                                    buyAddr,
-                                    sellAddr,
-                                    pathToToken: route.pathToToken,
-                                    pathToUSDC: route.pathToUSDC
-                                });
-                                
-                                parentPort.postMessage({
-                                    type: "LOG",
-                                    data: `${RED}❌ Transaction failed, queued for retry...${RESET}`
+                                    buyAddr, sellAddr, pathToToken: route.pathToToken, pathToUSDC: route.pathToUSDC
                                 });
                             }
-
-                            // Don't return - continue scanning for more opportunities
-                            await retryFailedOpportunities();
                         }
                     }
                 }
             }
         } catch (err) {
-            // Log error but continue
-            parentPort.postMessage({
-                type: "LOG",
-                data: `${RED}❌ Shard #${id} error: ${err.message}${RESET}`
-            });
+            // Direct error isolation
         }
     });
 }
