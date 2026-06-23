@@ -54,14 +54,14 @@ const ENFORCER_ABI = [
 
 // Production Flash Loan Sizing (6 Decimals for USDC)
 const CANDIDATE_SIZES_6_DECIMALS = [
-    ethers.parseUnits("100", 6),   // Micro-efficiency opportunity size
+    ethers.parseUnits(".02", 6),   // Micro-efficiency opportunity size
     ethers.parseUnits("500", 6),   // Small pool size
     ethers.parseUnits("2000", 6),  // Medium liquidity pool size
     ethers.parseUnits("10000", 6)  // Large capital size
 ];
 
 // Reverted to true, non-zero profit gate to cover gas priority overhead
-const MINIMUM_PROFIT_USDC = 2.00; 
+const MINIMUM_PROFIT_USDC = 0.000001; 
 
 /* ========================================================================
    COORDINATOR (MAIN THREAD)
@@ -72,7 +72,7 @@ if (isMainThread) {
     console.log(`${CYAN}📡 Connected to FastLane Relay: ${FASTLANE_RPC}${RESET}\n`);
 
     const streamProvider = new ethers.WebSocketProvider(WSS_NODE);
-    const workerCount = 4;
+    const workerCount = 16;
     const workers = [];
 
     const chunkSize = Math.ceil(ALL_TOKENS.length / workerCount);
