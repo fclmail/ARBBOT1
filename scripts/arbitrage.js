@@ -1,6 +1,3 @@
-2
-
-
 
 import { ethers } from "ethers";
 import dotenv from "dotenv";
