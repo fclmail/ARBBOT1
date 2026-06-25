@@ -102,6 +102,102 @@ const staticPolygonNetwork = ethers.Network.from({
     chainId: 137
 });
 
+// ========== PROFIT ANALYSIS FUNCTION ==========
+function analyzeProfit(grossProfit, gasCost, priorityFee) {
+    const netProfit = grossProfit - gasCost - priorityFee;
+    const profitPercentage = (netProfit / grossProfit) * 100;
+    
+    return {
+        grossProfit,
+        netProfit,
+        gasCost,
+        priorityFee,
+        profitPercentage,
+        isProfitable: netProfit > MIN_REAL_PROFIT
+    };
+}
+
+// ========== EXECUTE ARBITRAGE FUNCTION ==========
+async function executeArbitrage(buyRouter, sellRouter, route, result, id, vaultContractWrite) {
+    const deadline = Math.floor(Date.now() / 1000) + 30; // 30 second deadline
+    
+    try {
+        console.log(`${GREEN}🚀 [Worker ${id}] Executing arbitrage on ${route.token}...${RESET}`);
+        
+        const tx = await vaultContractWrite.executeBestFlashLoanArbitrage(
+            buyRouter,
+            sellRouter,
+            CANDIDATE_SIZES_6_DECIMALS,
+            route.pathToToken,
+            route.pathToUSDC,
+            deadline,
+            { gasLimit: 700000n, maxPriorityFeePerGas: ethers.parseUnits("50", "gwei") }
+        );
+        
+        console.log(`${GREEN}📝 [Worker ${id}] Transaction submitted: ${tx.hash}${RESET}`);
+        
+        // Wait for confirmation
+        const receipt = await tx.wait(1);
+        
+        if (receipt && receipt.status === 1) {
+            const gasUsed = receipt.gasUsed;
+            const txBlockNumber = receipt.blockNumber;
+            
+            console.log(`${GREEN}✅ [Worker ${id}] ARBITRAGE SUCCESSFUL!${RESET}`);
+            console.log(`${GREEN}   Token: ${route.token}${RESET}`);
+            console.log(`${GREEN}   Block: ${txBlockNumber}${RESET}`);
+            console.log(`${GREEN}   Gas Used: ${gasUsed.toString()}${RESET}`);
+            console.log(`${GREEN}   TX: ${receipt.hash}${RESET}`);
+            
+            // Calculate actual profit with gas cost
+            const estimatedProfit = ethers.formatUnits(result.estimatedProfit, 6);
+            const gasCostInUSD = Number(gasUsed.toString()) * 50 * 1e-9; // Rough MATIC to USD conversion
+
+            const actualProfit = Number(estimatedProfit) - gasCostInUSD;
+            
+            parentPort.postMessage({
+                type: "PROFIT_VERIFIED",
+                txHash: receipt.hash,
+                blockNumber: txBlockNumber,
+                profitAmount: actualProfit,
+                timestamp: Date.now(),
+                token: route.token,
+                route: route.hop
+            });
+            
+            return true;
+        } else {
+            console.log(`${RED}❌ [Worker ${id}] Transaction failed on-chain${RESET}`);
+            
+            // Store failed opportunity for retry
+            failedOpportunities.push({
+                buyRouter,
+                sellRouter,
+                route,
+                token: route.token,
+                attempts: 1,
+                timestamp: Date.now()
+            });
+            
+            return false;
+        }
+    } catch (error) {
+        console.log(`${RED}❌ [Worker ${id}] Execution error: ${error.message}${RESET}`);
+        
+        // Store failed opportunity for retry
+        failedOpportunities.push({
+            buyRouter,
+            sellRouter,
+            route,
+            token: route.token,
+            attempts: 1,
+            timestamp: Date.now()
+        });
+        
+        return false;
+    }
+}
+
 /* ========================================================================
     COORDINATOR (MAIN THREAD)
    ======================================================================== */
@@ -280,7 +376,7 @@ if (isMainThread) {
                                     data: `${GREEN}🎯 EXECUTING ARBITRAGE: ${route.token} | Est. Profit: $${realProfit.toFixed(6)}${RESET}`
                                 });
                                 
-                                await executeArbitrage(buyRouter, sellRouter, route, quickResult);
+                                await executeArbitrage(buyRouter, sellRouter, route, quickResult, id, vaultContractWrite);
                             }
                         }
                         
@@ -308,7 +404,7 @@ if (isMainThread) {
                                     data: `${GREEN}🎯 EXECUTING LARGER ARBITRAGE: ${route.token} | Est. Profit: $${realProfit.toFixed(6)}${RESET}`
                                 });
                                 
-                                await executeArbitrage(buyRouter, sellRouter, route, fullResult);
+                                await executeArbitrage(buyRouter, sellRouter, route, fullResult, id, vaultContractWrite);
                             }
                         }
                     }
@@ -341,7 +437,7 @@ if (isMainThread) {
                                 
                                 if (realProfit > MIN_REAL_PROFIT) {
                                     console.log(`${GREEN}✅ RETRY SUCCESSFUL - ${failed.token} | $${realProfit.toFixed(6)}${RESET}`);
-                                    await executeArbitrage(failed.buyRouter, failed.sellRouter, failed.route, retryResult);
+                                    await executeArbitrage(failed.buyRouter, failed.sellRouter, failed.route, retryResult, id, vaultContractWrite);
                                     continue;
                                 }
                             }
@@ -358,102 +454,6 @@ if (isMainThread) {
             console.log(`${RED}[Worker ${id}] Scan error: ${err.message}${RESET}`);
         }
     });
-
-    // ========== EXECUTE ARBITRAGE FUNCTION ==========
-    async function executeArbitrage(buyRouter, sellRouter, route, result) {
-        const deadline = Math.floor(Date.now() / 1000) + 30; // 30 second deadline
-        
-        try {
-            console.log(`${GREEN}🚀 [Worker ${id}] Executing arbitrage on ${route.token}...${RESET}`);
-            
-            const tx = await vaultContractWrite.executeBestFlashLoanArbitrage(
-                buyRouter,
-                sellRouter,
-                CANDIDATE_SIZES_6_DECIMALS,
-                route.pathToToken,
-                route.pathToUSDC,
-                deadline,
-                { gasLimit: 700000n, maxPriorityFeePerGas: ethers.parseUnits("50", "gwei") }
-            );
-            
-            console.log(`${GREEN}📝 [Worker ${id}] Transaction submitted: ${tx.hash}${RESET}`);
-            
-            // Wait for confirmation
-            const receipt = await tx.wait(1);
-            
-            if (receipt && receipt.status === 1) {
-                const gasUsed = receipt.gasUsed;
-                const txBlockNumber = receipt.blockNumber;
-                
-                console.log(`${GREEN}✅ [Worker ${id}] ARBITRAGE SUCCESSFUL!${RESET}`);
-                console.log(`${GREEN}   Token: ${route.token}${RESET}`);
-                console.log(`${GREEN}   Block: ${txBlockNumber}${RESET}`);
-                console.log(`${GREEN}   Gas Used: ${gasUsed.toString()}${RESET}`);
-                console.log(`${GREEN}   TX: ${receipt.hash}${RESET}`);
-                
-                // Calculate actual profit with gas cost
-                const estimatedProfit = ethers.formatUnits(result.estimatedProfit, 6);
-                const gasCostInUSD = Number(gasUsed.toString()) * 50 * 1e-9; // Rough MATIC to USD conversion
-
-                const actualProfit = Number(estimatedProfit) - gasCostInUSD;
-                
-                parentPort.postMessage({
-                    type: "PROFIT_VERIFIED",
-                    txHash: receipt.hash,
-                    blockNumber: txBlockNumber,
-                    profitAmount: actualProfit,
-                    timestamp: Date.now(),
-                    token: route.token,
-                    route: route.hop
-                });
-                
-                return true;
-            } else {
-                console.log(`${RED}❌ [Worker ${id}] Transaction failed on-chain${RESET}`);
-                
-                // Store failed opportunity for retry
-                failedOpportunities.push({
-                    buyRouter,
-                    sellRouter,
-                    route,
-                    token: route.token,
-                    attempts: 1,
-                    timestamp: Date.now()
-                });
-                
-                return false;
-            }
-        } catch (error) {
-            console.log(`${RED}❌ [Worker ${id}] Execution error: ${error.message}${RESET}`);
-            
-            // Store failed opportunity for retry
-            failedOpportunities.push({
-                buyRouter,
-                sellRouter,
-                route,
-                token: route.token,
-                attempts: 1,
-                timestamp: Date.now()
-            });
-            
-            return false;
-        }
-    }
-
-    // ========== PROFIT ANALYSIS FUNCTION ==========
-    function analyzeProfit(grossProfit, gasCost, priorityFee) {
-        const netProfit = grossProfit - gasCost - priorityFee;
-        const profitPercentage = (netProfit / grossProfit) * 100;
-        
-        return {
-            grossProfit,
-            netProfit,
-            gasCost,
-            priorityFee,
-            profitPercentage,
-            isProfitable: netProfit > MIN_REAL_PROFIT
-        };
-    }
 }
 
 // ========== MAIN EXECUTION ==========
