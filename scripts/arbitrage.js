@@ -1,8 +1,7 @@
 /**
- * ARBBOT1 - Core Arbitrage Execution Engine
- * Architecture: WSS Stream Driven -> Multi-Threaded Worker Grid -> FastLane Bundle Relay
- * Fix Applied: Local JavaScript verification of Aave V3 Flash Loan Premium (0.05%)
- * Standard: Ethers v6 Production Specification
+ * ARBBOT1 - Full Reactive Multi-Threaded Arbitrage Engine
+ * Architecture: WSS Core Stream Gate -> 4 Thread Worker Cluster -> FastLane Bundle Relay
+ * Specification: Ethers v6 Production Build
  */
 
 import { ethers } from "ethers";
@@ -12,7 +11,7 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 
 // ============================================================================
-// GLOBAL SYSTEM CONFIGURATION
+// RESTORED COMPREHENSIVE GLOBAL CONFIGURATION
 // ============================================================================
 const CONFIG = {
     // Infrastructure Endpoints
@@ -28,25 +27,28 @@ const CONFIG = {
     estimatedGasCost: 0.15,     // Hard base gas cost buffer 
     priorityFeeGwei: 50n,       // Aggressive miner tip for zero-revalidation speed
     
-    // Test Bracket Sizes (Input parameters to findBestFlashLoanSize)
+    // Dynamic Input Sizing Matrix (Input parameters to findBestFlashLoanSize)
     candidateSizes: [
         "1000000000",           // $1,000 USDC
         "5000000000",           // $5,000 USDC
         "10000000000",          // $10,000 USDC
-        "25000000000"           // $25,000 USDC
+        "25000000000",          // $25,000 USDC
+        "50000000000"           // $50,000 USDC
     ],
     
-    // UniswapV2 Structural Router Matrix
+    // RESTORED: Full 7-DEX V2 Router Matrix
     routers: {
-        QUICK: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-        SUSHI: "0x1b02dA8Cb0d097e645729F65733526440d599963",
-        DFYN:  "0xF18056Bbd320E96A48e3Fbf8bC061322531aac99",
-        WAULT: "0x3a1D873C37abE9244065524bAd7F7a2f35f7999A",
-        APESWAP:"0xC0788A3D1DE900874986012c4feEd447C1be9486"
+        QUICK:   "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+        SUSHI:   "0x1b02dA8Cb0d097e645729F65733526440d599963",
+        DFYN:    "0xF18056Bbd320E96A48e3Fbf8bC061322531aac99",
+        WAULT:   "0x3a1D873C37abE9244065524bAd7F7a2f35f7999A",
+        JETSWAP: "0x5C6EC38c28eCD03d18a540552a914A8f1b6214A5",
+        APESWAP: "0xC0788A3D1DE900874986012c4feEd447C1be9486",
+        KATA:    "0x1b02dA8Cb0d097e645729F65733526440d599963" // Back-fallback or alternate AMM
     }
 };
 
-// Minimal target ABI strictly mapping simulation and zero-revalidation paths
+// Target Contract Interface Spec
 const CONTRACT_ABI = [
     "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (tuple(uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit) best)",
     "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
@@ -56,29 +58,42 @@ const CONTRACT_ABI = [
 // MAIN ORCHESTRATION THREAD
 // ============================================================================
 if (isMainThread) {
-    console.log("📋 [System] Initializing ARBBOT1 Reactive Engine...");
+    console.log("📋 Bot Configuration: Running AGGRESSIVE_INSTANT Engine Mode.");
+    console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
     
     if (!process.env.PRIVATE_KEY) {
         console.error("❌ Critical Error: PRIVATE_KEY environment variable is missing.");
         process.exit(1);
     }
 
-    // ETHERS V6 CORRECTION: No '.providers' instantiation layer
     const mainProvider = new ethers.WebSocketProvider(CONFIG.providerWss);
     
-    // Tokens to cycle cross-router combinations against
+    // RESTORED: Complete 15-Asset High-Volatility Token Vector
     const tokenMatrix = [
-        { name: "WETH", token: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
+        { name: "WETH",   token: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
         { name: "WMATIC", token: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" },
-        { name: "WBTC", token: "0x1BFD67037B42cf73acF2047067bd4F2C47D9BfD6" },
-        { name: "DAI", token: "0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0" }
+        { name: "WBTC",   token: "0x1BFD67037B42cf73acF2047067bd4F2C47D9BfD6" },
+        { name: "DAI",    token: "0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0" },
+        { name: "USDT",   token: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F" },
+        { name: "LINK",   token: "0x53E0bca35eCE356BD5ddDFebbD1BB0Bc891dC611" },
+        { name: "AAVE",   token: "0xD6DF932A45C0f255f857453786923655859951f3" },
+        { name: "UNI",    token: "0xb33EaAd8d922B108342553e35760940176d149c8" },
+        { name: "CRV",    token: "0x172370d5Cd63229abA15d6547758714e30b6af59" },
+        { name: "SUSHI",  token: "0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a" },
+        { name: "WOO",    token: "0x1B565668729ce78b95bCd7c6A701053E77ED593c" },
+        { name: "GRT",    token: "0x5fe2B58c013d764999778A227074492aB17C38a1" },
+        { name: "GHST",   token: "0x385AB5439542e6402264584e03c0043896f05221" },
+        { name: "BAL",    token: "0x9a71012B13CA4d3D0Cdc72b177DF3ef03b0E76A3" },
+        { name: "QUICK",  token: "0xB5C064F959943346541fC60914b77f985bde3A0A" }
     ];
 
     const workerThreads = [];
     const totalWorkers = 4;
     const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
 
-    // Dynamic Worker Allocations 
+    console.log(`[System] Initializing ${totalWorkers} Worker Threads...`);
+
+    // Distribute tokens systematically across separate execution threads
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
         if (structuralSlice.length === 0) continue;
@@ -92,26 +107,25 @@ if (isMainThread) {
         });
 
         workerThreads.push(engineWorker);
-        console.log(`[System] Worker ${i + 1} spawned running processing loops for: ${structuralSlice.map(t => t.name).join(", ")}`);
+        console.log(`[System] Worker ${i + 1} Spatially Handling tokens: ${structuralSlice.map(t => t.name).join(", ")}`);
     }
 
-    console.log("⚡ Stream Interface Gateway Activated. Awaiting blocks...");
+    console.log("⚡ Reactive WSS Event Engine Online. Awaiting state changes...");
 
-    // Core WSS block trigger listener
+    // Main real-time head mining listener
     mainProvider.on("block", (blockNumber) => {
-        console.log(`\n[Block #${blockNumber}] Chain state update registered.`);
+        console.log(`\n[Block #${blockNumber}] Scanning for instant profits...`);
         workerThreads.forEach((worker) => {
             worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });
         });
     });
 
-    // Resilience Error Handling
     mainProvider.websocket.on("error", (err) => {
-        console.error("⚠️ WSS Connection Socket Error:", err.message);
+        console.error("⚠️ WSS WebSocket Stream Link Error:", err.message);
     });
 
     mainProvider.websocket.on("close", () => {
-        console.error("❌ WSS Link severed. Exiting system context for external daemon recovery.");
+        console.error("❌ WSS Link dropped. Terminating context for node wrapper daemon reboot.");
         process.exit(1);
     });
 
@@ -121,13 +135,13 @@ if (isMainThread) {
 } else {
     const { workerId, config, tokenPaths } = workerData;
     
-    // ETHERS V6 CORRECTION: Instantiate Providers directly off the base module
+    // Low latency execution environment signers
     const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc);
     const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
     
     const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
 
-    parentPort.postMessage({ type: "LOG", data: `[Worker ${workerId}] Runtime initialization complete.` });
+    parentPort.postMessage({ type: "LOG", data: `[Worker ${workerId}] Loaded paths successfully for ${tokenPaths.length} tokens` });
 
     parentPort.on("message", async (message) => {
         if (message.type === "BLOCK_TRIGGER") {
@@ -135,11 +149,11 @@ if (isMainThread) {
 
             const routerIdentifiers = Object.keys(config.routers);
 
-            // Execute triangular routing sweep calculations
+            // Dynamic Cross-Matrix Arbitrage Ingestion Loops
             for (const asset of tokenPaths) {
                 for (let b = 0; b < routerIdentifiers.length; b++) {
                     for (let s = 0; s < routerIdentifiers.length; s++) {
-                        if (b === s) continue; // Skip matching configurations
+                        if (b === s) continue; // Skip matching DEX pipelines
 
                         const buyRouterName = routerIdentifiers[b];
                         const sellRouterName = routerIdentifiers[s];
@@ -147,11 +161,12 @@ if (isMainThread) {
                         const buyRouterAddress = config.routers[buyRouterName];
                         const sellRouterAddress = config.routers[sellRouterName];
 
+                        // Configured standard triangular mappings
                         const pathToToken = [config.usdcAddress, asset.token];
                         const pathToUSDC = [asset.token, config.usdcAddress];
 
                         try {
-                            // Query view function on target blockchain state snapshot
+                            // On-chain view tracking simulation
                             const rawSimulationOutput = await vaultInstance.findBestFlashLoanSize(
                                 buyRouterAddress,
                                 sellRouterAddress,
@@ -165,8 +180,8 @@ if (isMainThread) {
 
                             if (targetedVolume > 0n && rawContractEstimatedProfit > 0n) {
                                 // ----------------------------------------------------------------
-                                // JAVASCRIPT CORRECTION: DEDUCT AAVE V3 PREMIUM (0.05%)
-                                // Premium = volume * 5 / 10000
+                                // THE JAVASCRIPT FIX: CALCULATE AND DEDUCT AAVE V3 0.05% PREMIUM
+                                // Math: premium = (volume * 5) / 10000
                                 // ----------------------------------------------------------------
                                 const localAavePremium = (targetedVolume * 5n) / 10000n;
                                 
@@ -174,17 +189,17 @@ if (isMainThread) {
                                     ? rawContractEstimatedProfit - localAavePremium 
                                     : 0n;
 
-                                const cleanNetProfitUSDC = Number(accurateTrueProfit) / 1e6;
+                                const cleanNetProfitUSDC = Number(accurateTrueProfit) / 1e6; // USDC = 6 Decimals
 
                                 if (cleanNetProfitUSDC >= config.minRealProfit) {
                                     parentPort.postMessage({ 
                                         type: "LOG", 
-                                        data: `⚡ [Worker ${workerId}] MARGIN REQUIREMENT MET! Route: ${buyRouterName} -> ${sellRouterName} | Asset: ${asset.name} | Verified Expected Profit: $${cleanNetProfitUSDC.toFixed(6)} USDC` 
+                                        data: `⚡ [Worker ${workerId}] PROFIT DETECTED on ${asset.name} via ${buyRouterName} -> ${sellRouterName} | Net Margin: $${cleanNetProfitUSDC.toFixed(6)} USDC` 
                                     });
 
                                     const processingDeadline = Math.floor(Date.now() / 1000) + 45;
 
-                                    // ETHERS V6 CORRECTION: Parse gas configurations directly using the top-level module
+                                    // Direct zero-revalidation transaction execution sequence via FastLane
                                     const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
                                         buyRouterAddress,
                                         sellRouterAddress,
@@ -193,23 +208,23 @@ if (isMainThread) {
                                         pathToUSDC,
                                         processingDeadline,
                                         {
-                                            gasLimit: 480000,
+                                            gasLimit: 520000, // Safe overhead allocation for complex path execution
                                             maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
                                             maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
                                         }
                                     );
 
-                                    parentPort.postMessage({ type: "LOG", data: `🚀 Transaction Broadcast Complete: ${txResponse.hash}` });
+                                    parentPort.postMessage({ type: "LOG", data: `🚀 [Worker ${workerId}] Transaction submitted: ${txResponse.hash}` });
 
                                     const confirmationReceipt = await txResponse.wait(1);
                                     parentPort.postMessage({ 
                                         type: "LOG", 
-                                        data: `✅ ON-CHAIN VERIFIED - Inclusion Confirmed in Block #${confirmationReceipt.blockNumber}` 
+                                        data: `✅ ON-CHAIN VERIFIED - Block #${confirmationReceipt.blockNumber} | Success!` 
                                     });
                                 }
                             }
                         } catch (simError) {
-                            // Suppressed to ensure loop continuity and strict low-latency execution performance
+                            // Catching routing pool reverts silently keeps loop performance ultra-low latency
                         }
                     }
                 }
