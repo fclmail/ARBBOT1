@@ -59,8 +59,8 @@ const ERC20_ABI = [
 ];
 
 const CANDIDATE_SIZES_6_DECIMALS = [
-    ethers.parseUnits(".02", 6),
-    ethers.parseUnits("500", 6),
+    ethers.parseUnits(".002", 6),
+    ethers.parseUnits("0.0500", 6),
     ethers.parseUnits("2000", 6),
     ethers.parseUnits("10000", 6)
 ];
