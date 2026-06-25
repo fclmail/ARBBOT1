@@ -1,4 +1,3 @@
-
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
@@ -46,9 +45,6 @@ const ALL_TOKENS = [
     { name: "WOO", address: "0x1b815d120b3e76ad17f0490bf7e9ff923a1329c8" },
     { name: "GRT", address: "0x5fe2b30c797e656c3d416974759469e320f5c8ab" },
     { name: "GHST", address: "0x385ab54d003429a320478963283614a4bc23160a" },
-
-
-
     { name: "BAL", address: "0x3a283d9ef08d8b0d3f0edc2ce5d1b6b4ba748eb0" },
     { name: "QUICK", address: "0xb5c064f955d8e7f38fe0460c556a72987494ee17" },
     { name: "MATIC", address: "0x0000000000000000000000000000000000001010" }
@@ -120,9 +116,6 @@ if (isMainThread) {
 
     const chunkSize = Math.ceil(ALL_TOKENS.length / workerCount);
 
-
-
-    const chunkSize = Math.ceil(ALL_TOKENS.length / workerCount);
     for (let i = 0; i < workerCount; i++) {
         const tokenChunk = ALL_TOKENS.slice(i * chunkSize, (i + 1) * chunkSize);
         
@@ -208,206 +201,199 @@ if (isMainThread) {
     const vaultContractRead = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, readProvider);
     const vaultContractWrite = new ethers.Contract(VAULT_CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
 
+    // Generate path matrices for ALL tokens assigned to this worker
+    const routerKeys = Object.keys(ROUTERS);
+    const pathMatrices = [];
 
-
-// Generate path matrices for ALL tokens assigned to this worker
-const routerKeys = Object.keys(ROUTERS);
-const pathMatrices = [];
-
-// Generate all possible token hop combinations
-for (const token of tokens) {
-    for (const [hopName, hopAddress] of Object.entries(HOPS)) {
-        pathMatrices.push({
-            token: token.name,
-            tokenAddress: token.address,
-            pathToToken: [USDC_ADDRESS, hopAddress, token.address],
-            pathToUSDC: [token.address, hopAddress, USDC_ADDRESS],
-            hop: hopName
-        });
-        
-        // Also add direct paths (no hop)
-        pathMatrices.push({
-            token: token.name,
-            tokenAddress: token.address,
-            pathToToken: [USDC_ADDRESS, token.address],
-            pathToUSDC: [token.address, USDC_ADDRESS],
-            hop: "DIRECT"
-        });
-    }
-}
-
-console.log(`[Worker ${id}] Loaded ${pathMatrices.length} paths for ${tokens.length} tokens`);
-
-parentPort.on("message", async (msg) => {
-    if (msg.type !== "BLOCK") return;
-    
-    // Reset processed pairs tracking for new block
-    const processedPairs = new Set();
-    
-    // ========== INSTANT SCAN - QUICK CHECK FIRST ==========
-    console.log(`${CYAN}[Worker ${id}] Starting instant profit scan...${RESET}`);
-
-    try {
-        // Scan with quick check sizes first - IMMEDIATE RESULTS
-        for (let i = 0; i < routerKeys.length; i++) {
-            const buyRouter = ROUTERS[routerKeys[i]];
+    // Generate all possible token hop combinations
+    for (const token of tokens) {
+        for (const [hopName, hopAddress] of Object.entries(HOPS)) {
+            pathMatrices.push({
+                token: token.name,
+                tokenAddress: token.address,
+                pathToToken: [USDC_ADDRESS, hopAddress, token.address],
+                pathToUSDC: [token.address, hopAddress, USDC_ADDRESS],
+                hop: hopName
+            });
             
-            for (let j = i + 1; j < routerKeys.length; j++) {
-                const sellRouter = ROUTERS[routerKeys[j]];
-                
-                // Create a unique key for this pair
-                const pairKey = `${buyRouter}-${sellRouter}`;
-                if (processedPairs.has(pairKey)) continue;
-                processedPairs.add(pairKey);
-                
-                // Quick scan with small sizes first
-                for (const route of pathMatrices) {
-                    // Quick check with MINIMAL sizes
-                    const quickResult = await vaultContractRead.findBestFlashLoanSize(
-                        buyRouter,
-                        sellRouter,
-                        QUICK_CHECK_SIZES_6_DECIMALS,  // Use quick check sizes
-                        route.pathToToken,
-                        route.pathToUSDC
-                    ).catch(() => null);
-
-                    if (!quickResult) continue;
-
-                    const quickProfit = ethers.formatUnits(quickResult.estimatedProfit, 6);
-                    
-                    // ALERT IMMEDIATELY if ANY profit detected
-                    if (Number(quickProfit) > MINIMUM_PROFIT_USDC) {
-                        const realProfit = Number(quickProfit) - GAS_COST_USDC - PRIORITY_FEE_USDC;
-                        
-                        console.log(`${GREEN}⚡ [Worker ${id}] PROFIT DETECTED on ${route.token} via ${route.hop}${RESET}`);
-                        console.log(`${GREEN}   Gross: $${quickProfit} | Net: $${realProfit.toFixed(6)}${RESET}`);
-                        
-                        // EXECUTE IMMEDIATELY - don't wait for full scan
-                        if (realProfit > MIN_REAL_PROFIT) {
-                            parentPort.postMessage({
-                                type: "LOG",
-                                data: `${GREEN}🎯 EXECUTING ARBITRAGE: ${route.token} | Est. Profit: $${realProfit.toFixed(6)}${RESET}`
-                            });
-                            
-                            await executeArbitrage(buyRouter, sellRouter, route, quickResult);
-                        }
-                    }
-                    
-                    // Full scan with all sizes for better opportunities
-                    const fullResult = await vaultContractRead.findBestFlashLoanSize(
-                        buyRouter,
-                        sellRouter,
-                        CANDIDATE_SIZES_6_DECIMALS,
-                        route.pathToToken,
-                        route.pathToUSDC
-                    ).catch(() => null);
-
-                    if (!fullResult) continue;
-
-                    const fullProfit = ethers.formatUnits(fullResult.estimatedProfit, 6);
-                    
-                    if (Number(fullProfit) > MINIMUM_PROFIT_USDC) {
-                        const realProfit = Number(fullProfit) - GAS_COST_USDC - PRIORITY_FEE_USDC;
-                        
-                        console.log(`${GREEN}💰 [Worker ${id}] LARGER OPPORTUNITY: ${route.token} via ${route.hop} | $${realProfit.toFixed(6)}${RESET}`);
-                        
-if (realProfit > MIN_REAL_PROFIT * 2) {  // Double the minimum for larger execution
-                            parentPort.postMessage({
-                                type: "LOG",
-                                data: `${GREEN}🎯 EXECUTING LARGER ARBITRAGE: ${route.token} | Est. Profit: $${realProfit.toFixed(6)}${RESET}`
-                            });
-                            
-                            await executeArbitrage(buyRouter, sellRouter, route, fullResult);
-                        }
-                    }
-                }
-            }
+            // Also add direct paths (no hop)
+            pathMatrices.push({
+                token: token.name,
+                tokenAddress: token.address,
+                pathToToken: [USDC_ADDRESS, token.address],
+                pathToUSDC: [token.address, USDC_ADDRESS],
+                hop: "DIRECT"
+            });
         }
-        
-        // Retry any failed opportunities from previous blocks
-        if (failedOpportunities.length > 0) {
-            const retryCount = Math.min(failedOpportunities.length, 3); // Max 3 retries per block
-            console.log(`${YELLOW}[Worker ${id}] Retrying ${retryCount} failed opportunities...${RESET}`);
-            
-            for (let i = 0; i < retryCount; i++) {
-                const failed = failedOpportunities.shift();
-                if (failed && failed.attempts < 3) { // Max 3 attempts per opportunity
-                    console.log(`${YELLOW}   Retry attempt ${failed.attempts + 1} for ${failed.token}${RESET}`);
-                    
-                    const retryResult = await vaultContractRead.findBestFlashLoanSize(
-                        failed.buyRouter,
-                        failed.sellRouter,
-                        QUICK_CHECK_SIZES_6_DECIMALS,  // Use smaller sizes for retry
-                        failed.route.pathToToken,
-                        failed.route.pathToUSDC
-                    ).catch(() => null);
+    }
 
-                    if (retryResult) {
-                        const retryProfit = ethers.formatUnits(retryResult.estimatedProfit, 6);
+    console.log(`[Worker ${id}] Loaded ${pathMatrices.length} paths for ${tokens.length} tokens`);
+
+    parentPort.on("message", async (msg) => {
+        if (msg.type !== "BLOCK") return;
+        
+        // Reset processed pairs tracking for new block
+        const processedPairs = new Set();
+        
+        // ========== INSTANT SCAN - QUICK CHECK FIRST ==========
+        console.log(`${CYAN}[Worker ${id}] Starting instant profit scan...${RESET}`);
+
+        try {
+            // Scan with quick check sizes first - IMMEDIATE RESULTS
+            for (let i = 0; i < routerKeys.length; i++) {
+                const buyRouter = ROUTERS[routerKeys[i]];
+                
+                for (let j = i + 1; j < routerKeys.length; j++) {
+                    const sellRouter = ROUTERS[routerKeys[j]];
+                    
+                    // Create a unique key for this pair
+                    const pairKey = `${buyRouter}-${sellRouter}`;
+                    if (processedPairs.has(pairKey)) continue;
+                    processedPairs.add(pairKey);
+                    
+                    // Quick scan with small sizes first
+                    for (const route of pathMatrices) {
+                        // Quick check with MINIMAL sizes
+                        const quickResult = await vaultContractRead.findBestFlashLoanSize(
+                            buyRouter,
+                            sellRouter,
+                            QUICK_CHECK_SIZES_6_DECIMALS,  // Use quick check sizes
+                            route.pathToToken,
+                            route.pathToUSDC
+                        ).catch(() => null);
+
+                        if (!quickResult) continue;
+
+                        const quickProfit = ethers.formatUnits(quickResult.estimatedProfit, 6);
                         
-                        if (Number(retryProfit) > MINIMUM_PROFIT_USDC) {
-                            const realProfit = Number(retryProfit) - GAS_COST_USDC - PRIORITY_FEE_USDC;
+                        // ALERT IMMEDIATELY if ANY profit detected
+                        if (Number(quickProfit) > MINIMUM_PROFIT_USDC) {
+                            const realProfit = Number(quickProfit) - GAS_COST_USDC - PRIORITY_FEE_USDC;
                             
+                            console.log(`${GREEN}⚡ [Worker ${id}] PROFIT DETECTED on ${route.token} via ${route.hop}${RESET}`);
+                            console.log(`${GREEN}   Gross: $${quickProfit} | Net: $${realProfit.toFixed(6)}${RESET}`);
+                            
+                            // EXECUTE IMMEDIATELY - don't wait for full scan
                             if (realProfit > MIN_REAL_PROFIT) {
-                                console.log(`${GREEN}✅ RETRY SUCCESSFUL - ${failed.token} | $${realProfit.toFixed(6)}${RESET}`);
-                                await executeArbitrage(failed.buyRouter, failed.sellRouter, failed.route, retryResult);
-                                continue;
+                                parentPort.postMessage({
+                                    type: "LOG",
+                                    data: `${GREEN}🎯 EXECUTING ARBITRAGE: ${route.token} | Est. Profit: $${realProfit.toFixed(6)}${RESET}`
+                                });
+                                
+                                await executeArbitrage(buyRouter, sellRouter, route, quickResult);
+                            }
+                        }
+                        
+                        // Full scan with all sizes for better opportunities
+                        const fullResult = await vaultContractRead.findBestFlashLoanSize(
+                            buyRouter,
+                            sellRouter,
+                            CANDIDATE_SIZES_6_DECIMALS,
+                            route.pathToToken,
+                            route.pathToUSDC
+                        ).catch(() => null);
+
+                        if (!fullResult) continue;
+
+                        const fullProfit = ethers.formatUnits(fullResult.estimatedProfit, 6);
+                        
+                        if (Number(fullProfit) > MINIMUM_PROFIT_USDC) {
+                            const realProfit = Number(fullProfit) - GAS_COST_USDC - PRIORITY_FEE_USDC;
+                            
+                            console.log(`${GREEN}💰 [Worker ${id}] LARGER OPPORTUNITY: ${route.token} via ${route.hop} | $${realProfit.toFixed(6)}${RESET}`);
+                            
+                            if (realProfit > MIN_REAL_PROFIT * 2) {  // Double the minimum for larger execution
+                                parentPort.postMessage({
+                                    type: "LOG",
+                                    data: `${GREEN}🎯 EXECUTING LARGER ARBITRAGE: ${route.token} | Est. Profit: $${realProfit.toFixed(6)}${RESET}`
+                                });
+                                
+                                await executeArbitrage(buyRouter, sellRouter, route, fullResult);
                             }
                         }
                     }
-                    
-                    // Still failing - put back in queue with incremented attempts
-                    failed.attempts++;
-                    failedOpportunities.push(failed);
                 }
             }
+            
+            // Retry any failed opportunities from previous blocks
+            if (failedOpportunities.length > 0) {
+                const retryCount = Math.min(failedOpportunities.length, 3); // Max 3 retries per block
+                console.log(`${YELLOW}[Worker ${id}] Retrying ${retryCount} failed opportunities...${RESET}`);
+                
+                for (let i = 0; i < retryCount; i++) {
+                    const failed = failedOpportunities.shift();
+                    if (failed && failed.attempts < 3) { // Max 3 attempts per opportunity
+                        console.log(`${YELLOW}   Retry attempt ${failed.attempts + 1} for ${failed.token}${RESET}`);
+                        
+                        const retryResult = await vaultContractRead.findBestFlashLoanSize(
+                            failed.buyRouter,
+                            failed.sellRouter,
+                            QUICK_CHECK_SIZES_6_DECIMALS,  // Use smaller sizes for retry
+                            failed.route.pathToToken,
+                            failed.route.pathToUSDC
+                        ).catch(() => null);
+
+                        if (retryResult) {
+                            const retryProfit = ethers.formatUnits(retryResult.estimatedProfit, 6);
+                            
+                            if (Number(retryProfit) > MINIMUM_PROFIT_USDC) {
+                                const realProfit = Number(retryProfit) - GAS_COST_USDC - PRIORITY_FEE_USDC;
+                                
+                                if (realProfit > MIN_REAL_PROFIT) {
+                                    console.log(`${GREEN}✅ RETRY SUCCESSFUL - ${failed.token} | $${realProfit.toFixed(6)}${RESET}`);
+                                    await executeArbitrage(failed.buyRouter, failed.sellRouter, failed.route, retryResult);
+                                    continue;
+                                }
+                            }
+                        }
+                        
+                        // Still failing - put back in queue with incremented attempts
+                        failed.attempts++;
+                        failedOpportunities.push(failed);
+                    }
+                }
+            }
+            
+        } catch (err) {
+            console.log(`${RED}[Worker ${id}] Scan error: ${err.message}${RESET}`);
         }
-        
-    } catch (err) {
-        console.log(`${RED}[Worker ${id}] Scan error: ${err.message}${RESET}`);
-    }
-});
+    });
 
-// ========== EXECUTE ARBITRAGE FUNCTION ==========
-async function executeArbitrage(buyRouter, sellRouter, route, result) {
-    const deadline = Math.floor(Date.now() / 1000) + 30; // 30 second deadline
-    
-    try {
-        console.log(`${GREEN}🚀 [Worker ${id}] Executing arbitrage on ${route.token}...${RESET}`);
+    // ========== EXECUTE ARBITRAGE FUNCTION ==========
+    async function executeArbitrage(buyRouter, sellRouter, route, result) {
+        const deadline = Math.floor(Date.now() / 1000) + 30; // 30 second deadline
         
-        const tx = await vaultContractWrite.executeBestFlashLoanArbitrage(
-            buyRouter,
-            sellRouter,
-            CANDIDATE_SIZES_6_DECIMALS,
-            route.pathToToken,
-            route.pathToUSDC,
-            deadline,
-            { gasLimit: 700000n, maxPriorityFeePerGas: ethers.parseUnits("50", "gwei") }
-        );
-        
-        console.log(`${GREEN}📝 [Worker ${id}] Transaction submitted: ${tx.hash}${RESET}`);
-        
-        // Wait for confirmation
-        const receipt = await tx.wait(1);
-        
-        if (receipt && receipt.status === 1) {
-            const gasUsed = receipt.gasUsed;
-            const txBlockNumber = receipt.blockNumber;
+        try {
+            console.log(`${GREEN}🚀 [Worker ${id}] Executing arbitrage on ${route.token}...${RESET}`);
             
-            console.log(`${GREEN}✅ [Worker ${id}] ARBITRAGE SUCCESSFUL!${RESET}`);
-            console.log(`${GREEN}   Token: ${route.token}${RESET}`);
-            console.log(`${GREEN}   Block: ${txBlockNumber}${RESET}`);
-            console.log(`${GREEN}   Gas Used: ${gasUsed.toString()}${RESET}`);
-            console.log(`${GREEN}   TX: ${receipt.hash}${RESET}`);
+            const tx = await vaultContractWrite.executeBestFlashLoanArbitrage(
+                buyRouter,
+                sellRouter,
+                CANDIDATE_SIZES_6_DECIMALS,
+                route.pathToToken,
+                route.pathToUSDC,
+                deadline,
+                { gasLimit: 700000n, maxPriorityFeePerGas: ethers.parseUnits("50", "gwei") }
+            );
             
-            // Calculate actual profit with gas cost
-            const estimatedProfit = ethers.formatUnits(result.estimatedProfit, 6);
-            const gasCostInUSD = Number(gasUsed.toString()) * 50 * 1e-9; // Rough MATIC to USD conversion
-
-
-
-
-
+            console.log(`${GREEN}📝 [Worker ${id}] Transaction submitted: ${tx.hash}${RESET}`);
+            
+            // Wait for confirmation
+            const receipt = await tx.wait(1);
+            
+            if (receipt && receipt.status === 1) {
+                const gasUsed = receipt.gasUsed;
+                const txBlockNumber = receipt.blockNumber;
+                
+                console.log(`${GREEN}✅ [Worker ${id}] ARBITRAGE SUCCESSFUL!${RESET}`);
+                console.log(`${GREEN}   Token: ${route.token}${RESET}`);
+                console.log(`${GREEN}   Block: ${txBlockNumber}${RESET}`);
+                console.log(`${GREEN}   Gas Used: ${gasUsed.toString()}${RESET}`);
+                console.log(`${GREEN}   TX: ${receipt.hash}${RESET}`);
+                
+                // Calculate actual profit with gas cost
+                const estimatedProfit = ethers.formatUnits(result.estimatedProfit, 6);
+                const gasCostInUSD = Number(gasUsed.toString()) * 50 * 1e-9; // Rough MATIC to USD conversion
 
                 const actualProfit = Number(estimatedProfit) - gasCostInUSD;
                 
