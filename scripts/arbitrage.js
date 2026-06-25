@@ -55,7 +55,7 @@ const HOPS = {
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-    DAI:    "0x8f3cf6ad23cd3cadbd9735aff958023239c6a063"
+    DAI:    "0x8f3cf6ad23cd3cadbd9735aff958023239c6a475"
 };
 
 const ENFORCER_ABI = [
@@ -501,4 +501,6 @@ const BOT_CONFIG = {
 };
 
 console.log(`${CYAN}📋 Bot Configuration:${RESET}`);
-console.log(JSON.stringify(BOT_CONFIG, null, 2));
+console.log(JSON.stringify(BOT_CONFIG, (key, value) => 
+    typeof value === "bigint" ? value.toString() : value, 
+2));
