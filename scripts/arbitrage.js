@@ -2,6 +2,7 @@
  * ARBBOT1 - Core Arbitrage Execution Engine
  * Architecture: WSS Stream Driven -> Multi-Threaded Worker Grid -> FastLane Bundle Relay
  * Fix Applied: Local JavaScript verification of Aave V3 Flash Loan Premium (0.05%)
+ * Standard: Ethers v6 Production Specification
  */
 
 import { ethers } from "ethers";
@@ -62,7 +63,8 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    const mainProvider = new ethers.providers.WebSocketProvider(CONFIG.providerWss);
+    // ETHERS V6 CORRECTION: No '.providers' instantiation layer
+    const mainProvider = new ethers.WebSocketProvider(CONFIG.providerWss);
     
     // Tokens to cycle cross-router combinations against
     const tokenMatrix = [
@@ -104,11 +106,11 @@ if (isMainThread) {
     });
 
     // Resilience Error Handling
-    mainProvider._websocket.on("error", (err) => {
+    mainProvider.websocket.on("error", (err) => {
         console.error("⚠️ WSS Connection Socket Error:", err.message);
     });
 
-    mainProvider._websocket.on("close", () => {
+    mainProvider.websocket.on("close", () => {
         console.error("❌ WSS Link severed. Exiting system context for external daemon recovery.");
         process.exit(1);
     });
@@ -119,8 +121,8 @@ if (isMainThread) {
 } else {
     const { workerId, config, tokenPaths } = workerData;
     
-    // Workers utilize an ultra-low latency dedicated bundle relay RPC execution signer 
-    const fastLaneRelayProvider = new ethers.providers.JsonRpcProvider(config.fastLaneRpc);
+    // ETHERS V6 CORRECTION: Instantiate Providers directly off the base module
+    const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc);
     const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
     
     const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
@@ -182,7 +184,7 @@ if (isMainThread) {
 
                                     const processingDeadline = Math.floor(Date.now() / 1000) + 45;
 
-                                    // Direct Broadcast pipeline bypassing standard public mempool pools via FastLane
+                                    // ETHERS V6 CORRECTION: Parse gas configurations directly using the top-level module
                                     const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
                                         buyRouterAddress,
                                         sellRouterAddress,
@@ -192,8 +194,8 @@ if (isMainThread) {
                                         processingDeadline,
                                         {
                                             gasLimit: 480000,
-                                            maxPriorityFeePerGas: ethers.utils.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
-                                            maxFeePerGas: ethers.utils.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
+                                            maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
+                                            maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
                                         }
                                     );
 
