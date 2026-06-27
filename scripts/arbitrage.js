@@ -149,7 +149,7 @@ if (isMainThread) {
             await mainProvider.ready;
 
             mainProvider.on("block", async (blockNumber) => {
-                console.log(`\n[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
+                console.log(`[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
                 if (blockNumber === 88985201) {
                     console.log(`📊 Current Vault Balance Tracker: 142.503912 USDC`);
                 }
@@ -191,7 +191,7 @@ if (isMainThread) {
             const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });
             
             fallbackProvider.on("block", (blockNumber) => {
-                console.log(`\n[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
+                console.log(`[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
                 
                 if (blockNumber === 88985201) {
                     console.log(`📊 Current Vault Balance Tracker: 142.503912 USDC`);
@@ -206,7 +206,6 @@ if (isMainThread) {
         }
     }
 
-    // Delay initiation window slightly so workers output initialization messages first
     setTimeout(() => {
         connectWebSocketStream();
     }, 400);
@@ -221,6 +220,7 @@ if (isMainThread) {
     let executionWallet;
     let vaultInstance;
     let isWorkerReady = false;
+    let isProcessing = false; // Thread concurrency structural lock
 
     try {
         if (!process.env.PRIVATE_KEY) {
@@ -246,89 +246,92 @@ if (isMainThread) {
     }
 
     parentPort.on("message", async (message) => {
-        if (!isWorkerReady) return;
+        if (!isWorkerReady || isProcessing) return; // Drop triggers if shard is busy simulating
 
         if (message.type === "BLOCK_TRIGGER") {
+            isProcessing = true; 
             const currentBlock = message.blockNumber;
             const routerIdentifiers = Object.keys(config.routers);
 
-            for (const asset of tokenPaths) {
-                for (let b = 0; b < routerIdentifiers.length; b++) {
-                    for (let s = 0; s < routerIdentifiers.length; s++) {
-                        if (b === s) continue; 
+            try {
+                for (const asset of tokenPaths) {
+                    for (let b = 0; b < routerIdentifiers.length; b++) {
+                        for (let s = 0; s < routerIdentifiers.length; s++) {
+                            if (b === s) continue; 
 
-                        const buyRouterName = routerIdentifiers[b];
-                        const sellRouterName = routerIdentifiers[s];
-                        const buyRouterAddress = config.routers[buyRouterName];
-                        const sellRouterAddress = config.routers[sellRouterName];
+                            const buyRouterName = routerIdentifiers[b];
+                            const sellRouterName = routerIdentifiers[s];
+                            const buyRouterAddress = config.routers[buyRouterName];
+                            const sellRouterAddress = config.routers[sellRouterName];
 
-                        const pathToToken = [config.usdcAddress, asset.token];
-                        const pathToUSDC = [asset.token, config.usdcAddress];
+                            const pathToToken = [config.usdcAddress, asset.token];
+                            const pathToUSDC = [asset.token, config.usdcAddress];
 
-                        try {
-                            const rawSimulationOutput = await vaultInstance.findBestFlashLoanSize(
-                                buyRouterAddress,
-                                sellRouterAddress,
-                                config.candidateSizes,
-                                pathToToken,
-                                pathToUSDC
-                            ).catch(() => null);
+                            try {
+                                const rawSimulationOutput = await vaultInstance.findBestFlashLoanSize(
+                                    buyRouterAddress,
+                                    sellRouterAddress,
+                                    config.candidateSizes,
+                                    pathToToken,
+                                    pathToUSDC
+                                );
 
-                            if (!rawSimulationOutput) continue;
+                                if (!rawSimulationOutput) continue;
 
-                            const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
-                            const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
+                                const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
+                                const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
 
-                            if (targetedVolume > 0n) {
-                                const localAavePremium = (targetedVolume * 5n) / 10000n;
-                                const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
+                                if (targetedVolume > 0n) {
+                                    const localAavePremium = (targetedVolume * 5n) / 10000n;
+                                    const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
 
-                                // ANSI Escape Definitions
-                                const greenText = "\x1b[32m";
-                                const redText = "\x1b[31m";
-                                const resetText = "\x1b[0m";
+                                    const greenText = "\x1b[32m";
+                                    const redText = "\x1b[31m";
+                                    const resetText = "\x1b[0m";
 
-                                if (cleanNetProfitUSDC >= config.minRealProfit) {
-                                    if (cleanNetProfitUSDC >= 0) {
-                                        parentPort.postMessage({
-                                            type: "LOG",
-                                            data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
-                                        });
-                                    } else {
-                                        parentPort.postMessage({
-                                            type: "LOG",
-                                            data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
-                                        });
-                                    }
-
-                                    // Defensive execution floor: execution only fires if profitable in production reality
-                                    if (cleanNetProfitUSDC >= 0.05) {
-                                        const processingDeadline = Math.floor(Date.now() / 1000) + 45;
-                                        const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
-                                            buyRouterAddress, sellRouterAddress, config.candidateSizes,
-                                            pathToToken, pathToUSDC, processingDeadline,
-                                            {
-                                                gasLimit: 520000,
-                                                maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
-                                                maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
-                                            }
-                                        );
-                                        const confirmationReceipt = await txResponse.wait(1);
-                                        if (confirmationReceipt.status === 1) {
+                                    if (cleanNetProfitUSDC >= config.minRealProfit) {
+                                        if (cleanNetProfitUSDC >= 0) {
                                             parentPort.postMessage({
                                                 type: "LOG",
-                                                data: `${greenText}✅ [BUNDLE DETECTED ON-CHAIN] Net Yield: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}\n`
+                                                data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
                                             });
-                                            parentPort.postMessage({ type: "PROFIT", amount: cleanNetProfitUSDC });
+                                        } else {
+                                            parentPort.postMessage({
+                                                type: "LOG",
+                                                data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
+                                            });
+                                        }
+
+                                        if (cleanNetProfitUSDC >= 0.05) {
+                                            const processingDeadline = Math.floor(Date.now() / 1000) + 45;
+                                            const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
+                                                buyRouterAddress, sellRouterAddress, config.candidateSizes,
+                                                pathToToken, pathToUSDC, processingDeadline,
+                                                {
+                                                    gasLimit: 520000,
+                                                    maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
+                                                    maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
+                                                }
+                                            );
+                                            const confirmationReceipt = await txResponse.wait(1);
+                                            if (confirmationReceipt.status === 1) {
+                                                parentPort.postMessage({
+                                                    type: "LOG",
+                                                    data: `${greenText}✅ [BUNDLE DETECTED ON-CHAIN] Net Yield: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}\n`
+                                                });
+                                                parentPort.postMessage({ type: "PROFIT", amount: cleanNetProfitUSDC });
+                                            }
                                         }
                                     }
                                 }
+                            } catch (simError) {
+                                // catch silent execution state reverts
                             }
-                        } catch (simError) {
-                            // Suppress simulation revert noise
                         }
                     }
                 }
+            } finally {
+                isProcessing = false; // Always clear thread lock when complete
             }
         }
     });
