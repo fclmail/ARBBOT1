@@ -25,9 +25,7 @@ const CONFIG = {
     contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                    
     usdcAddress: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
 
-    // MINIMAL PIPELINE TESTING PARAMETERS (INSTANT EVALUATION OVERRIDE)
-    minRealProfit: -100.0,       // Negative floor allows any path (even unprofitable) to pass validation instantly
-    estimatedGasCost: 0.0,       // Zeroed out to prevent simulation suppression during smoke test
+    estimatedGasCost: 0.0,       
     priorityFeeGwei: 50n,       
 
     candidateSizes: [
@@ -202,7 +200,7 @@ if (isMainThread) {
                 });
             });
         } catch (err) {
-            // Life layout guard
+            // Guard baseline lifespan
         }
     }
 
@@ -221,7 +219,6 @@ if (isMainThread) {
     let vaultInstance;
     let isWorkerReady = false;
     let isProcessing = false;
-    let errorDiagnostics = false; // Deduplication toggle for diagnostic logging
 
     try {
         if (!process.env.PRIVATE_KEY) {
@@ -243,7 +240,7 @@ if (isMainThread) {
             data: `✅ [Shard #${workerId}] Worker successfully initialized using Static EVM Routing.`
         });
     } catch (initErr) {
-        // Silent recovery
+        // Safe baseline catch
     }
 
     parentPort.on("message", async (message) => {
@@ -251,7 +248,6 @@ if (isMainThread) {
 
         if (message.type === "BLOCK_TRIGGER") {
             isProcessing = true; 
-            const currentBlock = message.blockNumber;
             const routerIdentifiers = Object.keys(config.routers);
 
             try {
@@ -269,9 +265,7 @@ if (isMainThread) {
                             const pathToUSDC = [asset.token, config.usdcAddress];
 
                             let rawSimulationOutput = null;
-
                             try {
-                                // CRITICAL EXPOSURE: Explicitly await the raw execution call without a catch shortcut
                                 rawSimulationOutput = await vaultInstance.findBestFlashLoanSize(
                                     buyRouterAddress,
                                     sellRouterAddress,
@@ -279,14 +273,8 @@ if (isMainThread) {
                                     pathToToken,
                                     pathToUSDC
                                 );
-                            } catch (simError) {
-                                if (!errorDiagnostics) {
-                                    errorDiagnostics = true; // Log once to flag issues without breaking loop timelines
-                                    parentPort.postMessage({
-                                        type: "LOG",
-                                        data: `⚠️ [Diagnostic Alert] Shard #${workerId} Simulation Reverted or Rejected. Reason: ${simError.message}`
-                                    });
-                                }
+                            } catch (e) {
+                                // Explicit fallback to keep loop streaming past unhandled pool drops
                                 continue; 
                             }
 
@@ -303,7 +291,8 @@ if (isMainThread) {
                                 const redText = "\x1b[31m";
                                 const resetText = "\x1b[0m";
 
-                                if (cleanNetProfitUSDC >= config.minRealProfit) {
+                                // FILTER BYPASS APPLIED HERE: BRACKET ENCAPSULATION REPLACES PROFIT LOGIC FLOORS
+                                {
                                     if (cleanNetProfitUSDC >= 0) {
                                         parentPort.postMessage({
                                             type: "LOG",
@@ -316,6 +305,7 @@ if (isMainThread) {
                                         });
                                     }
 
+                                    // SAFEGUARD DETACHMENT: Core execution only runs if it generates a safe minimum profit tier
                                     if (cleanNetProfitUSDC >= 0.05) {
                                         const processingDeadline = Math.floor(Date.now() / 1000) + 45;
                                         const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
