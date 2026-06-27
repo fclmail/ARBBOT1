@@ -20,7 +20,8 @@ const CONFIG = {
         "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws" 
     ], 
-    fastLaneRpc: "https://polygon.fastlane.live/rpc",               
+    // INFRASTRUCTURE FIX: Replaced polygon.fastlane.live with high-availability route to clear GitHub DNS restrictions
+    fastLaneRpc: "https://polygon-rpc.com",               
 
     contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                    
     usdcAddress: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
@@ -99,7 +100,7 @@ if (isMainThread) {
 
     console.log("🚀 FASTLANE UNRESTRICTED REAL-TIME MONITORING ONLINE\n");
     console.log(" Honeycomb Engine Routing directly via EVM state changes [Sharded Configuration]\n");
-    console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
+    console.log(`📡 Connected to State Read Node: ${CONFIG.fastLaneRpc}`);
 
     let totalRealizedProfits = 0.0;
     let workerThreads = [];
@@ -131,7 +132,7 @@ if (isMainThread) {
     const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
 
     console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
-    console.log(`[System] Distributed ~2 tokens and multi-hop paths per thread.\n`);
+    console.log(`[System] Distributed ~4 tokens and multi-hop paths per thread.\n`);
 
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
@@ -208,7 +209,7 @@ if (isMainThread) {
     function setupHttpFallbackMode() {
         try {
             activeEngineName = "HTTP Fallback Engine";
-            console.log(`📡 Spawning HTTP Polling Engine via FastLane RPC Node: ${CONFIG.fastLaneRpc}\n`);
+            console.log(`📡 Spawning HTTP Polling Engine via State RPC Node: ${CONFIG.fastLaneRpc}\n`);
             const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });
             
             fallbackProvider.on("block", (blockNumber) => {
@@ -251,7 +252,6 @@ if (isMainThread) {
 
         executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
         
-        // SANITIZATION FIX: Ensuring contract address lowercase compatibility 
         vaultInstance = new ethers.Contract(config.contractAddress.toLowerCase(), CONTRACT_ABI, executionWallet);
         isWorkerReady = true;
 
@@ -279,7 +279,6 @@ if (isMainThread) {
                             const buyRouterName = routerIdentifiers[b];
                             const sellRouterName = routerIdentifiers[s];
                             
-                            // SANITIZATION FIX: Lowercase conversion clears Ethers mixed-case validation bounds
                             const buyRouterAddress = config.routers[buyRouterName].toLowerCase();
                             const sellRouterAddress = config.routers[sellRouterName].toLowerCase();
 
@@ -307,7 +306,7 @@ if (isMainThread) {
                             const greyText = "\x1b[90m";
                             const resetText = "\x1b[0m";
 
-                            // METRICS LOGGING FIX: Moved entirely outside structural constraints 
+                            // UNFILTERED METRICS LOGGING LAYER
                             if (contractRevertMessage) {
                                 parentPort.postMessage({
                                     type: "LOG",
@@ -320,7 +319,7 @@ if (isMainThread) {
                                 const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
                                 const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
                                 
-                                const localAavePremium = (targetedVolume * 5n) / 10000n; // 0.05% simple flash loan cost representation
+                                const localAavePremium = (targetedVolume * 5n) / 10000n; // Aave V3 0.05% Premium representation
                                 const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
 
                                 if (targetedVolume === 0n) {
