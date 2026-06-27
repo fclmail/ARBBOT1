@@ -17,9 +17,6 @@ const CONFIG = {
     providerWssEndpoints: [
         "wss://polygon-rpc.com/ws",
         
-
-{
-  "wssEndpoints": [
     "wss://polygon-rpc.com/ws",                          // #1 Best - Official Polygon RPC
     "wss://rpc.ankr.com/polygon/ws",                     // #2 Ankr public endpoint
     "wss://polygon-mainnet.gateway.pokt.network/v1/lb/ws", // #3 Pocket Network
@@ -31,7 +28,7 @@ const CONFIG = {
 
    
 
-"wss://polygon-bor-rpc.publicnode.com";
+"wss://polygon-bor-rpc.publicnode.com",
 
 "wss://matic.getblock.io/mainnet/ws",                 // #7 GetBlock (rate limited)
     "wss://polygon-mainnet-public.unifra.io/ws",          // #8 Unifra
