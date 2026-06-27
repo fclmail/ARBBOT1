@@ -15,9 +15,10 @@ const __filename = fileURLToPath(import.meta.url);
 const CONFIG = {
     // High-capacity WSS Endpoint Cluster for zero-drop redundancy
     providerWssEndpoints: [
-        "wss://polygon-rpc.com/ws",
-        "wss://rpc-mainnet.matterlight.xyz/ws",
-        "wss://polygon.gateway.tenderly.co",
+      //  "wss://polygon-rpc.com/ws",
+        "wss://polygon-bor-rpc.publicnode.com",
+    //    "wss://rpc-mainnet.matterlight.xyz/ws",
+   //     "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws" // Retained as lowest priority fallback
     ], 
     fastLaneRpc: "https://polygon.fastlane.live/rpc",                      
