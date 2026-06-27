@@ -25,16 +25,13 @@ const CONFIG = {
     contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                    
     usdcAddress: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
 
-    minRealProfit: 0.005,        
-    estimatedGasCost: 0.15,     
+    // MINIMAL PIPELINE TESTING PARAMETERS (INSTANT EVALUATION OVERRIDE)
+    minRealProfit: -100.0,       // Negative floor allows any path (even unprofitable) to pass validation instantly
+    estimatedGasCost: 0.0,       // Zeroed out to prevent simulation suppression during smoke test
     priorityFeeGwei: 50n,       
 
     candidateSizes: [
-        "1000000000",           
-        "5000000000",           
-        "10000000000",          
-        "25000000000",          
-        "50000000000"           
+        "1000000000"            // Single size tier ($1,000 USDC) to avoid multi-loop simulation lag
     ],
 
     routers: {
@@ -53,14 +50,12 @@ const CONTRACT_ABI = [
     "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
 
-// Static Network Def to bypass dynamic checking bugs entirely across threads
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 137 });
 
 // ============================================================================
-// CRITICAL: GLOBAL NON-CRASH EXCEPTION SHIELD
+// GLOBAL NON-CRASH EXCEPTION SHIELD
 // ============================================================================
 process.on("uncaughtException", (err) => {
-    // Captures the underlying 'ws' handshake 404/502 errors gracefully
     if (err.message && (err.message.includes("Unexpected server response") || err.message.includes("detect network"))) {
         return; 
     }
@@ -69,7 +64,6 @@ process.on("uncaughtException", (err) => {
 
 process.on("unhandledRejection", (reason) => {
     if (reason && reason.message && reason.message.includes("detect network")) return;
-    // Suppress unhandled promise rejections originating inside network handshake timeouts
 });
 
 // ============================================================================
@@ -114,7 +108,7 @@ if (isMainThread) {
     const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
 
     console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
-    console.log(`[System] Distributed ~2 tokens and multi-hop paths per thread.`);
+    console.log(`[System] Distributed ~2 tokens and multi-hop paths per thread.\n`);
 
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
@@ -129,7 +123,7 @@ if (isMainThread) {
                 console.log(msg.data);
             } else if (msg.type === "PROFIT") {
                 totalRealizedProfits += msg.amount;
-                console.log(`💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC`);
+                console.log(`\x1b[32m💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC\x1b[0m`);
             }
         });
         workerThreads.push(engineWorker);
@@ -145,10 +139,8 @@ if (isMainThread) {
                 try { mainProvider.removeAllListeners(); await mainProvider.destroy(); } catch (_) {}
             }
 
-            // Bind static network onto the main stream provider to prevent startup probe crashes
             mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK);
             
-            // Immediately hook listeners onto the websocket instance safely
             if (mainProvider.websocket) {
                 mainProvider.websocket.on("error", () => attemptFallbackRotation());
                 mainProvider.websocket.on("close", () => attemptFallbackRotation());
@@ -157,7 +149,7 @@ if (isMainThread) {
             await mainProvider.ready;
 
             mainProvider.on("block", async (blockNumber) => {
-                console.log(`[Block #${blockNumber}] Scanning on-chain pairs across all shards...`);
+                console.log(`\n[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
                 if (blockNumber === 88985201) {
                     console.log(`📊 Current Vault Balance Tracker: 142.503912 USDC`);
                 }
@@ -188,8 +180,7 @@ if (isMainThread) {
         }
 
         console.log(`🔄 Rotating to fallback endpoint...`);
-        // Hold the structural lock while updating index context
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 300));
         isRotating = false;
         await connectWebSocketStream();
     }
@@ -200,7 +191,7 @@ if (isMainThread) {
             const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });
             
             fallbackProvider.on("block", (blockNumber) => {
-                console.log(`[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
+                console.log(`\n[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
                 
                 if (blockNumber === 88985201) {
                     console.log(`📊 Current Vault Balance Tracker: 142.503912 USDC`);
@@ -211,13 +202,14 @@ if (isMainThread) {
                 });
             });
         } catch (err) {
-            // Defend process lifespan
+            // Context life shield
         }
     }
 
+    // Delay initiation window slightly so workers output initialization messages first
     setTimeout(() => {
         connectWebSocketStream();
-    }, 200);
+    }, 400);
 
 // ============================================================================
 // COMPONENT WORKER THREAD RUNTREES
@@ -232,7 +224,7 @@ if (isMainThread) {
 
     try {
         if (!process.env.PRIVATE_KEY) {
-            throw new Error("PRIVATE_KEY variable missing.");
+            throw new Error("PRIVATE_KEY missing.");
         }
 
         fastLaneRelayProvider = new ethers.JsonRpcProvider(
@@ -250,7 +242,7 @@ if (isMainThread) {
             data: `✅ [Shard #${workerId}] Worker successfully initialized using Static EVM Routing.`
         });
     } catch (initErr) {
-        // Safe logging without crashing thread instance
+        // Safe baseline catch
     }
 
     parentPort.on("message", async (message) => {
@@ -287,52 +279,53 @@ if (isMainThread) {
                             const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
                             const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
 
-                            if (targetedVolume > 0n && rawContractEstimatedProfit > 0n) {
+                            if (targetedVolume > 0n) {
                                 const localAavePremium = (targetedVolume * 5n) / 10000n;
-                                const accurateTrueProfit = rawContractEstimatedProfit > localAavePremium 
-                                    ? rawContractEstimatedProfit - localAavePremium 
-                                    : 0n;
-                                
-                                const cleanNetProfitUSDC = Number(accurateTrueProfit) / 1e6;
+                                const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
+
+                                // ANSI Escape Definitions
+                                const greenText = "\x1b[32m";
+                                const redText = "\x1b[31m";
+                                const resetText = "\x1b[0m";
 
                                 if (cleanNetProfitUSDC >= config.minRealProfit) {
-                                    parentPort.postMessage({
-                                        type: "LOG",
-                                        data: `⚡ MEV MATCH [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC`
-                                    });
-
-                                    const processingDeadline = Math.floor(Date.now() / 1000) + 45;
-
-                                    const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
-                                        buyRouterAddress,
-                                        sellRouterAddress,
-                                        config.candidateSizes,
-                                        pathToToken,
-                                        pathToUSDC,
-                                        processingDeadline,
-                                        {
-                                            gasLimit: 520000,
-                                            maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
-                                            maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
-                                        }
-                                    );
-
-                                    const confirmationReceipt = await txResponse.wait(1);
-                                    
-                                    if (confirmationReceipt.status === 1) {
+                                    if (cleanNetProfitUSDC >= 0) {
                                         parentPort.postMessage({
                                             type: "LOG",
-                                            data: `✅ [BUNDLE DETECTED ON-CHAIN] Block #${currentBlock} | Net Yield: +$${cleanNetProfitUSDC.toFixed(6)} USDC\n`
+                                            data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
                                         });
+                                    } else {
                                         parentPort.postMessage({
-                                            type: "PROFIT",
-                                            amount: cleanNetProfitUSDC
+                                            type: "LOG",
+                                            data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
                                         });
+                                    }
+
+                                    // Defensive execution floor: execution only fires if profitable in production reality
+                                    if (cleanNetProfitUSDC >= 0.05) {
+                                        const processingDeadline = Math.floor(Date.now() / 1000) + 45;
+                                        const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
+                                            buyRouterAddress, sellRouterAddress, config.candidateSizes,
+                                            pathToToken, pathToUSDC, processingDeadline,
+                                            {
+                                                gasLimit: 520000,
+                                                maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
+                                                maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
+                                            }
+                                        );
+                                        const confirmationReceipt = await txResponse.wait(1);
+                                        if (confirmationReceipt.status === 1) {
+                                            parentPort.postMessage({
+                                                type: "LOG",
+                                                data: `${greenText}✅ [BUNDLE DETECTED ON-CHAIN] Net Yield: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}\n`
+                                            });
+                                            parentPort.postMessage({ type: "PROFIT", amount: cleanNetProfitUSDC });
+                                        }
                                     }
                                 }
                             }
                         } catch (simError) {
-                            // Suppress simulation loop noise
+                            // Suppress simulation revert noise
                         }
                     }
                 }
