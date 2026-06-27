@@ -15,31 +15,31 @@ const __filename = fileURLToPath(import.meta.url);
 const CONFIG = {
     // High-capacity Wg SS Endpoint Cluster for zero-drop redundancy
     providerWssEndpoints: [
-        "wss://polygon-rpc.com/ws",
+      //  "wss://polygon-rpc.com/ws",
         
-    "wss://polygon-rpc.com/ws",                          // #1 Best - Official Polygon RPC
-    "wss://rpc.ankr.com/polygon/ws",                     // #2 Ankr public endpoint
-    "wss://polygon-mainnet.gateway.pokt.network/v1/lb/ws", // #3 Pocket Network
-    "wss://polygon-mainnet.chainstack.com/ws",            // #4 Chainstack
-    "wss://polygon-mainnet.public.blastapi.io/ws",        // #5 Blast API
-    "wss://matic-mainnet-ws.chainnodes.org/ws",           // #6 Chainnodes
+  //  "wss://polygon-rpc.com/ws",                          // #1 Best - Official Polygon RPC
+ //   "wss://rpc.ankr.com/polygon/ws",                     // #2 Ankr public endpoint
+   // "wss://polygon-mainnet.gateway.pokt.network/v1/lb/ws", // #3 Pocket Network
+    //"wss://polygon-mainnet.chainstack.com/ws",            // #4 Chainstack
+    //"wss://polygon-mainnet.public.blastapi.io/ws",        // #5 Blast API
+    //"wss://matic-mainnet-ws.chainnodes.org/ws",           // #6 Chainnodes
  
 
 
    
 
-"wss://polygon-bor-rpc.publicnode.com",
+"wss://polygon-bor-rpc.publicnode.com"
 
-"wss://matic.getblock.io/mainnet/ws",                 // #7 GetBlock (rate limited)
-    "wss://polygon-mainnet-public.unifra.io/ws",          // #8 Unifra
-    "wss://matic-mainnet.chainstacklabs.com/ws",          // #9 Chainstack Labs
-    "wss://ws-matic-mainnet.chainstacklabs.com/ws",    // #10 Least reliable
+//"wss://matic.getblock.io/mainnet/ws",                 // #7 GetBlock (rate limited)
+  //  "wss://polygon-mainnet-public.unifra.io/ws",          // #8 Unifra
+    //"wss://matic-mainnet.chainstacklabs.com/ws",          // #9 Chainstack Labs
+    //"wss://ws-matic-mainnet.chainstacklabs.com/ws",    // #10 Least reliable
 
 
         
-"wss://polygon-bor-rpc.publicnode.com",
-        "wss://rpc-mainnet.matterlight.xyz/ws",
-        "wss://polygon.gateway.tenderly.co"
+//"wss://polygon-bor-rpc.publicnode.com",
+  //      "wss://rpc-mainnet.matterlight.xyz/ws",
+    //    "wss://polygon.gateway.tenderly.co"
      //   "wss://polygon.rpc.subquery.network/public/ws" // Retained as lowest priority fallback
     ], 
     fastLaneRpc: "https://polygon.fastlane.live/rpc",                      
