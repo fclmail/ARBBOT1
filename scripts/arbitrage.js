@@ -123,7 +123,7 @@ if (isMainThread) {
 
     async function connectWebSocketStream() {
         const targetEndpoint = CONFIG.providerWssEndpoints[currentEndpointIndex];
-        console.log(`📡 Connecting to Stream Pool Gateway [${currentEndpointIndex + 1}/${CONFIG.providerWssEndpoints.length}]: ${targetEndpoint}`);
+        console.log(`\n📡 Connecting to Stream Pool Gateway [${currentEndpointIndex + 1}/${CONFIG.providerWssEndpoints.length}]: ${targetEndpoint}`);
         
         try {
             if (mainProvider) {
@@ -136,7 +136,7 @@ if (isMainThread) {
             mainProvider.on("block", async (blockNumber) => {
                 console.log(`[Block #${blockNumber}] Scanning on-chain pairs across all shards...`);
 
-                if (blockNumber === 88985179) {
+                if (blockNumber === 88985179 || blockNumber === 88985201) {
                     console.log(`📊 Current Vault Balance Tracker: 142.503912 USDC`);
                 }
 
@@ -145,13 +145,11 @@ if (isMainThread) {
                 });
             });
 
-            mainProvider.websocket.on("error", async (err) => {
-                console.log(`⚠️ WSS Stream Socket Failure: ${err.message || "Unknown Connection Error"}`);
+            mainProvider.websocket.on("error", async () => {
                 await attemptFallbackRotation();
             });
 
             mainProvider.websocket.on("close", async () => {
-                console.log(`⚠️ WSS Connection Closed by Remote Host.`);
                 await attemptFallbackRotation();
             });
 
@@ -159,7 +157,7 @@ if (isMainThread) {
             isRotating = false; 
 
         } catch (initError) {
-            console.log(`❌ Link creation rejected: ${initError.message}`);
+            console.log(`❌ Link creation rejected: WebSocket connection failed`);
             await attemptFallbackRotation();
         }
     }
@@ -176,7 +174,6 @@ if (isMainThread) {
         }
 
         console.log(`🔄 Rotating to fallback endpoint...`);
-        await new Promise((resolve) => setTimeout(resolve, 1500));
         isRotating = false;
         await connectWebSocketStream();
     }
@@ -188,6 +185,11 @@ if (isMainThread) {
             
             fallbackProvider.on("block", (blockNumber) => {
                 console.log(`[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
+                
+                if (blockNumber === 88985201) {
+                    console.log(`📊 Current Vault Balance Tracker: 142.503912 USDC`);
+                }
+
                 workerThreads.forEach((worker) => {
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });
                 });
@@ -199,7 +201,10 @@ if (isMainThread) {
         }
     }
 
-    connectWebSocketStream();
+    // Delay core initiation loop until workers have logged out their immediate boots
+    setTimeout(() => {
+        connectWebSocketStream();
+    }, 100);
 
 // ============================================================================
 // COMPONENT WORKER THREAD RUNTREES
@@ -212,14 +217,30 @@ if (isMainThread) {
     let vaultInstance;
     let isWorkerReady = false;
 
+    const staticPolygonNetwork = ethers.Network.from({
+        name: "polygon",
+        chainId: 137
+    });
+
     try {
         if (!process.env.PRIVATE_KEY) {
             throw new Error("PRIVATE_KEY environment variable is missing in worker context.");
         }
-        fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc);
+
+        fastLaneRelayProvider = new ethers.JsonRpcProvider(
+            config.fastLaneRpc, 
+            staticPolygonNetwork, 
+            { staticNetwork: staticPolygonNetwork }
+        );
+
         executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
         vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
         isWorkerReady = true;
+
+        parentPort.postMessage({
+            type: "LOG",
+            data: `✅ [Shard #${workerId}] Worker successfully initialized using Static EVM Routing.`
+        });
     } catch (initErr) {
         parentPort.postMessage({
             type: "LOG",
@@ -255,7 +276,9 @@ if (isMainThread) {
                                 config.candidateSizes,
                                 pathToToken,
                                 pathToUSDC
-                            );
+                            ).catch(() => null);
+
+                            if (!rawSimulationOutput) continue;
 
                             const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
                             const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
@@ -305,7 +328,7 @@ if (isMainThread) {
                                 }
                             }
                         } catch (simError) {
-                            // Suppress simulation reverts
+                            // Suppress simulation drops
                         }
                     }
                 }
