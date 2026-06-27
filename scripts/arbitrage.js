@@ -33,14 +33,13 @@ const CONFIG = {
 "wss://matic.getblock.io/mainnet/ws",                 // #7 GetBlock (rate limited)
     "wss://polygon-mainnet-public.unifra.io/ws",          // #8 Unifra
     "wss://matic-mainnet.chainstacklabs.com/ws",          // #9 Chainstack Labs
-    "wss://ws-matic-mainnet.chainstacklabs.com/ws"        // #10 Least reliable
-  ]
-}
+    "wss://ws-matic-mainnet.chainstacklabs.com/ws",    // #10 Least reliable
+
 
         
 "wss://polygon-bor-rpc.publicnode.com",
         "wss://rpc-mainnet.matterlight.xyz/ws",
-        "wss://polygon.gateway.tenderly.co",
+        "wss://polygon.gateway.tenderly.co"
      //   "wss://polygon.rpc.subquery.network/public/ws" // Retained as lowest priority fallback
     ], 
     fastLaneRpc: "https://polygon.fastlane.live/rpc",                      
@@ -119,7 +118,7 @@ if (isMainThread) {
         { name: "QUICK",  token: "0xB5C064F959943346541fC60914b77f985bde3A0A" }
     ];
 
-    const totalWorkers = 4;
+    const totalWorkers = 1;
     const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
 
     console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
