@@ -13,36 +13,15 @@ const __filename = fileURLToPath(import.meta.url);
 // COMPREHENSIVE GLOBAL CONFIGURATION
 // ============================================================================
 const CONFIG = {
-    // High-capacity Wg SS Endpoint Cluster for zero-drop redundancy
+    // High-capacity WSS Endpoint Cluster for zero-drop redundancy
     providerWssEndpoints: [
-      //  "wss://polygon-rpc.com/ws",
-        
-  //  "wss://polygon-rpc.com/ws",                          // #1 Best - Official Polygon RPC
- //   "wss://rpc.ankr.com/polygon/ws",                     // #2 Ankr public endpoint
-   // "wss://polygon-mainnet.gateway.pokt.network/v1/lb/ws", // #3 Pocket Network
-    //"wss://polygon-mainnet.chainstack.com/ws",            // #4 Chainstack
-    //"wss://polygon-mainnet.public.blastapi.io/ws",        // #5 Blast API
-    //"wss://matic-mainnet-ws.chainnodes.org/ws",           // #6 Chainnodes
- 
-
-
-   
-
-"wss://polygon-bor-rpc.publicnode.com"
-
-//"wss://matic.getblock.io/mainnet/ws",                 // #7 GetBlock (rate limited)
-  //  "wss://polygon-mainnet-public.unifra.io/ws",          // #8 Unifra
-    //"wss://matic-mainnet.chainstacklabs.com/ws",          // #9 Chainstack Labs
-    //"wss://ws-matic-mainnet.chainstacklabs.com/ws",    // #10 Least reliable
-
-
-        
-//"wss://polygon-bor-rpc.publicnode.com",
-  //      "wss://rpc-mainnet.matterlight.xyz/ws",
-    //    "wss://polygon.gateway.tenderly.co"
-     //   "wss://polygon.rpc.subquery.network/public/ws" // Retained as lowest priority fallback
+        "wss://polygon-rpc.com/ws",
+        "wss://polygon-bor-rpc.publicnode.com",
+        "wss://rpc-mainnet.matterlight.xyz/ws",
+        "wss://polygon.gateway.tenderly.co",
+        "wss://polygon.rpc.subquery.network/public/ws" 
     ], 
-    fastLaneRpc: "https://polygon.fastlane.live/rpc",                      
+    fastLaneRpc: "https://polygon.fastlane.live/rpc",               
 
     // Deployment Parameters
     contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                    
@@ -89,7 +68,6 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    // Print Header matching explicit layout
     console.log("🚀 FASTLANE UNRESTRICTED REAL-TIME MONITORING ONLINE\n");
     console.log(" Honeycomb Engine Routing directly via EVM state changes [Sharded Configuration]\n");
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
@@ -98,8 +76,8 @@ if (isMainThread) {
     let workerThreads = [];
     let mainProvider;
     let currentEndpointIndex = 0;
+    let isRotating = false;
 
-    // Complete 15-Asset High-Volatility Token Vector
     const tokenMatrix = [
         { name: "WETH",   token: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
         { name: "WMATIC", token: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" },
@@ -118,13 +96,12 @@ if (isMainThread) {
         { name: "QUICK",  token: "0xB5C064F959943346541fC60914b77f985bde3A0A" }
     ];
 
-    const totalWorkers = 1;
+    const totalWorkers = 4;
     const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
 
     console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
     console.log(`[System] Distributed ~2 tokens and multi-hop paths per thread.`);
 
-    // Distribute tokens systematically across separate execution threads
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
         if (structuralSlice.length === 0) continue;
@@ -144,17 +121,21 @@ if (isMainThread) {
         workerThreads.push(engineWorker);
     }
 
-    // Dynamic Connection Manager to eliminate ENOTFOUND crashes
-    function connectWebSocketStream() {
+    async function connectWebSocketStream() {
         const targetEndpoint = CONFIG.providerWssEndpoints[currentEndpointIndex];
+        console.log(`📡 Connecting to Stream Pool Gateway [${currentEndpointIndex + 1}/${CONFIG.providerWssEndpoints.length}]: ${targetEndpoint}`);
         
         try {
-            mainProvider = new ethers.WebSocketProvider(targetEndpoint);
-            
-            mainProvider.on("block", async (blockNumber) => {
-                console.log(`[Block #${blockNumber}] Scanning on-chain pairs across all shards...\n`);
+            if (mainProvider) {
+                try { await mainProvider.destroy(); } catch (_) {}
+            }
 
-                // Vault balance log trigger aligned to exact expected block cadence
+            mainProvider = new ethers.WebSocketProvider(targetEndpoint);
+            await mainProvider.ready;
+
+            mainProvider.on("block", async (blockNumber) => {
+                console.log(`[Block #${blockNumber}] Scanning on-chain pairs across all shards...`);
+
                 if (blockNumber === 88985179) {
                     console.log(`📊 Current Vault Balance Tracker: 142.503912 USDC`);
                 }
@@ -164,35 +145,60 @@ if (isMainThread) {
                 });
             });
 
-            mainProvider.websocket.on("error", (err) => {
-                // Prevent unhandled exception termination, trigger failover rotation
-                attemptFallbackRotation();
+            mainProvider.websocket.on("error", async (err) => {
+                console.log(`⚠️ WSS Stream Socket Failure: ${err.message || "Unknown Connection Error"}`);
+                await attemptFallbackRotation();
             });
 
-            mainProvider.websocket.on("close", () => {
-                attemptFallbackRotation();
+            mainProvider.websocket.on("close", async () => {
+                console.log(`⚠️ WSS Connection Closed by Remote Host.`);
+                await attemptFallbackRotation();
             });
+
+            console.log(`✅ Connected successfully to WebSocket Stream Cluster.`);
+            isRotating = false; 
 
         } catch (initError) {
-            attemptFallbackRotation();
+            console.log(`❌ Link creation rejected: ${initError.message}`);
+            await attemptFallbackRotation();
         }
     }
 
-    function attemptFallbackRotation() {
-        if (mainProvider) {
-            try { mainProvider.removeAllListeners(); } catch(e){}
-        }
-        
+    async function attemptFallbackRotation() {
+        if (isRotating) return;
+        isRotating = true;
+
         currentEndpointIndex++;
         if (currentEndpointIndex >= CONFIG.providerWssEndpoints.length) {
-            console.error("❌ All configured WSS endpoints failed. Terminating engine context.");
-            process.exit(1);
+            console.log("\n⚠️ All configured WSS endpoints failed. Initializing Non-Crash Emergency HTTP Fallback Mode...");
+            setupHttpFallbackMode();
+            return;
         }
-        
-        connectWebSocketStream();
+
+        console.log(`🔄 Rotating to fallback endpoint...`);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        isRotating = false;
+        await connectWebSocketStream();
     }
 
-    // Start stream engine execution
+    function setupHttpFallbackMode() {
+        try {
+            console.log(`📡 Spawning HTTP Polling Engine via FastLane RPC Node: ${CONFIG.fastLaneRpc}\n`);
+            const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc);
+            
+            fallbackProvider.on("block", (blockNumber) => {
+                console.log(`[HTTP Fallback Engine - Block #${blockNumber}] Polling state changes...`);
+                workerThreads.forEach((worker) => {
+                    worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });
+                });
+            });
+            isRotating = false;
+        } catch (err) {
+            console.error("🛑 Emergency infrastructure floor collapsed. Terminating.", err);
+            process.exit(1);
+        }
+    }
+
     connectWebSocketStream();
 
 // ============================================================================
@@ -206,7 +212,6 @@ if (isMainThread) {
     let vaultInstance;
     let isWorkerReady = false;
 
-    // Safety Patch: Wrap provider & identity assignment in an explicit initialization guard
     try {
         if (!process.env.PRIVATE_KEY) {
             throw new Error("PRIVATE_KEY environment variable is missing in worker context.");
@@ -223,7 +228,6 @@ if (isMainThread) {
     }
 
     parentPort.on("message", async (message) => {
-        // Prevent running call iterations if the network instance or wallet keys failed to parse
         if (!isWorkerReady) return;
 
         if (message.type === "BLOCK_TRIGGER") {
@@ -301,7 +305,7 @@ if (isMainThread) {
                                 }
                             }
                         } catch (simError) {
-                            // Suppress reverts to maintain zero-latency scanning loops
+                            // Suppress simulation reverts
                         }
                     }
                 }
