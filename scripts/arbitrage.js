@@ -17,14 +17,14 @@ const CONFIG = {
     providerWssEndpoints: [
         "wss://polygon-rpc.com/ws",
         "wss://polygon-bor-rpc.publicnode.com",
-       "wss://rpc-mainnet.matterlight.xyz/ws",
-       "wss://polygon.gateway.tenderly.co",
+        "wss://rpc-mainnet.matterlight.xyz/ws",
+        "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws" // Retained as lowest priority fallback
     ], 
     fastLaneRpc: "https://polygon.fastlane.live/rpc",                      
 
     // Deployment Parameters
-    contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                   
+    contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                    
     usdcAddress: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",              // Polygon Native USDC (6 Decimals)
 
     // Profit & Execution Settings
@@ -180,11 +180,31 @@ if (isMainThread) {
 } else {
     const { workerId, config, tokenPaths } = workerData;
     
-    const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc);
-    const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
-    const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
+    let fastLaneRelayProvider;
+    let executionWallet;
+    let vaultInstance;
+    let isWorkerReady = false;
+
+    // Safety Patch: Wrap provider & identity assignment in an explicit initialization guard
+    try {
+        if (!process.env.PRIVATE_KEY) {
+            throw new Error("PRIVATE_KEY environment variable is missing in worker context.");
+        }
+        fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc);
+        executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
+        vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
+        isWorkerReady = true;
+    } catch (initErr) {
+        parentPort.postMessage({
+            type: "LOG",
+            data: `❌ [Shard #${workerId}] Defensively halted worker initialization thread: ${initErr.message}`
+        });
+    }
 
     parentPort.on("message", async (message) => {
+        // Prevent running call iterations if the network instance or wallet keys failed to parse
+        if (!isWorkerReady) return;
+
         if (message.type === "BLOCK_TRIGGER") {
             const currentBlock = message.blockNumber;
             const routerIdentifiers = Object.keys(config.routers);
