@@ -202,7 +202,7 @@ if (isMainThread) {
                 });
             });
         } catch (err) {
-            // Context life shield
+            // Life layout guard
         }
     }
 
@@ -220,7 +220,8 @@ if (isMainThread) {
     let executionWallet;
     let vaultInstance;
     let isWorkerReady = false;
-    let isProcessing = false; // Thread concurrency structural lock
+    let isProcessing = false;
+    let errorDiagnostics = false; // Deduplication toggle for diagnostic logging
 
     try {
         if (!process.env.PRIVATE_KEY) {
@@ -242,11 +243,11 @@ if (isMainThread) {
             data: `✅ [Shard #${workerId}] Worker successfully initialized using Static EVM Routing.`
         });
     } catch (initErr) {
-        // Safe baseline catch
+        // Silent recovery
     }
 
     parentPort.on("message", async (message) => {
-        if (!isWorkerReady || isProcessing) return; // Drop triggers if shard is busy simulating
+        if (!isWorkerReady || isProcessing) return;
 
         if (message.type === "BLOCK_TRIGGER") {
             isProcessing = true; 
@@ -267,71 +268,74 @@ if (isMainThread) {
                             const pathToToken = [config.usdcAddress, asset.token];
                             const pathToUSDC = [asset.token, config.usdcAddress];
 
+                            let rawSimulationOutput = null;
+
                             try {
-                                const rawSimulationOutput = await vaultInstance.findBestFlashLoanSize(
+                                // CRITICAL EXPOSURE: Explicitly await the raw execution call without a catch shortcut
+                                rawSimulationOutput = await vaultInstance.findBestFlashLoanSize(
                                     buyRouterAddress,
                                     sellRouterAddress,
                                     config.candidateSizes,
                                     pathToToken,
                                     pathToUSDC
                                 );
+                            } catch (simError) {
+                                if (!errorDiagnostics) {
+                                    errorDiagnostics = true; // Log once to flag issues without breaking loop timelines
+                                    parentPort.postMessage({
+                                        type: "LOG",
+                                        data: `⚠️ [Diagnostic Alert] Shard #${workerId} Simulation Reverted or Rejected. Reason: ${simError.message}`
+                                    });
+                                }
+                                continue; 
+                            }
 
-                                if (!rawSimulationOutput) continue;
+                            if (!rawSimulationOutput) continue;
 
-                                const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
-                                const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
+                            const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
+                            const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
 
-                                if (targetedVolume > 0n) {
-                                    const localAavePremium = (targetedVolume * 5n) / 10000n;
-                                    const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
+                            if (targetedVolume > 0n) {
+                                const localAavePremium = (targetedVolume * 5n) / 10000n;
+                                const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
 
-                                    const greenText = "\x1b[32m";
-                                    const redText = "\x1b[31m";
-                                    const resetText = "\x1b[0m";
+                                const greenText = "\x1b[32m";
+                                const redText = "\x1b[31m";
+                                const resetText = "\x1b[0m";
 
-                                    if (cleanNetProfitUSDC >= config.minRealProfit) {
-                                        if (cleanNetProfitUSDC >= 0) {
-                                            parentPort.postMessage({
-                                                type: "LOG",
-                                                data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
-                                            });
-                                        } else {
-                                            parentPort.postMessage({
-                                                type: "LOG",
-                                                data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
-                                            });
-                                        }
+                                if (cleanNetProfitUSDC >= config.minRealProfit) {
+                                    if (cleanNetProfitUSDC >= 0) {
+                                        parentPort.postMessage({
+                                            type: "LOG",
+                                            data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
+                                        });
+                                    } else {
+                                        parentPort.postMessage({
+                                            type: "LOG",
+                                            data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
+                                        });
+                                    }
 
-                                        if (cleanNetProfitUSDC >= 0.05) {
-                                            const processingDeadline = Math.floor(Date.now() / 1000) + 45;
-                                            const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
-                                                buyRouterAddress, sellRouterAddress, config.candidateSizes,
-                                                pathToToken, pathToUSDC, processingDeadline,
-                                                {
-                                                    gasLimit: 520000,
-                                                    maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
-                                                    maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
-                                                }
-                                            );
-                                            const confirmationReceipt = await txResponse.wait(1);
-                                            if (confirmationReceipt.status === 1) {
-                                                parentPort.postMessage({
-                                                    type: "LOG",
-                                                    data: `${greenText}✅ [BUNDLE DETECTED ON-CHAIN] Net Yield: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}\n`
-                                                });
-                                                parentPort.postMessage({ type: "PROFIT", amount: cleanNetProfitUSDC });
+                                    if (cleanNetProfitUSDC >= 0.05) {
+                                        const processingDeadline = Math.floor(Date.now() / 1000) + 45;
+                                        const txResponse = await vaultInstance.executeBestFlashLoanArbitrage(
+                                            buyRouterAddress, sellRouterAddress, config.candidateSizes,
+                                            pathToToken, pathToUSDC, processingDeadline,
+                                            {
+                                                gasLimit: 520000,
+                                                maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
+                                                maxFeePerGas: ethers.parseUnits((config.priorityFeeGwei + 35n).toString(), "gwei")
                                             }
-                                        }
+                                        );
+                                        await txResponse.wait(1);
                                     }
                                 }
-                            } catch (simError) {
-                                // catch silent execution state reverts
                             }
                         }
                     }
                 }
             } finally {
-                isProcessing = false; // Always clear thread lock when complete
+                isProcessing = false; 
             }
         }
     });
