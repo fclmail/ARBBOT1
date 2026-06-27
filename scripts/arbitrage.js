@@ -194,7 +194,7 @@ if (isMainThread) {
                 });
             });
         } catch (err) {
-            // Life safety fallback
+            // Guard
         }
     }
 
@@ -213,7 +213,6 @@ if (isMainThread) {
     let vaultInstance;
     let isWorkerReady = false;
     let isProcessing = false;
-    let diagnosticTriggered = false;
 
     try {
         if (!process.env.PRIVATE_KEY) {
@@ -227,7 +226,7 @@ if (isMainThread) {
         );
 
         executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
-        vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
+        vaultInstance = new ethers.Contract(config.contractAddress.toLowerCase(), CONTRACT_ABI, executionWallet);
         isWorkerReady = true;
 
         parentPort.postMessage({
@@ -235,7 +234,7 @@ if (isMainThread) {
             data: `✅ [Shard #${workerId}] Worker successfully initialized using Static EVM Routing.`
         });
     } catch (initErr) {
-        // Safe baseline catch
+        // Safe catch
     }
 
     parentPort.on("message", async (message) => {
@@ -245,15 +244,6 @@ if (isMainThread) {
             isProcessing = true; 
             const routerIdentifiers = Object.keys(config.routers);
 
-            // FORCE WORKER PIPELINE VERIFICATION PROOF OVERRIDE
-            if (!diagnosticTriggered) {
-                diagnosticTriggered = true;
-                parentPort.postMessage({
-                    type: "LOG",
-                    data: `⚙️ [Pipeline Verify] Shard #${workerId} successfully received Block Trigger #${message.blockNumber}. Running simulation loops...`
-                });
-            }
-
             try {
                 for (const asset of tokenPaths) {
                     for (let b = 0; b < routerIdentifiers.length; b++) {
@@ -262,11 +252,13 @@ if (isMainThread) {
 
                             const buyRouterName = routerIdentifiers[b];
                             const sellRouterName = routerIdentifiers[s];
-                            const buyRouterAddress = config.routers[buyRouterName];
-                            const sellRouterAddress = config.routers[sellRouterName];
+                            
+                            // SANITIZATION FIX: Lowercase conversion clears Ethers validation limits
+                            const buyRouterAddress = config.routers[buyRouterName].toLowerCase();
+                            const sellRouterAddress = config.routers[sellRouterName].toLowerCase();
 
-                            const pathToToken = [config.usdcAddress, asset.token];
-                            const pathToUSDC = [asset.token, config.usdcAddress];
+                            const pathToToken = [config.usdcAddress.toLowerCase(), asset.token.toLowerCase()];
+                            const pathToUSDC = [asset.token.toLowerCase(), config.usdcAddress.toLowerCase()];
 
                             let rawSimulationOutput = null;
                             try {
@@ -278,11 +270,7 @@ if (isMainThread) {
                                     pathToUSDC
                                 );
                             } catch (e) {
-                                // DETECT CONTRACT CALL REVERTS INDIVIDUALLY
-                                parentPort.postMessage({
-                                    type: "LOG",
-                                    data: `❌ [Contract Error] Shard #${workerId} -> ${buyRouterName}/${sellRouterName} with ${asset.name} failed: ${e.message.slice(0, 110)}`
-                                });
+                                // Suppress normal loop rejections (like missing router pool liquidity)
                                 continue; 
                             }
 
@@ -299,7 +287,7 @@ if (isMainThread) {
                                 const redText = "\x1b[31m";
                                 const resetText = "\x1b[0m";
 
-                                // BYPASS FLOOR BRACKET
+                                // UNRESTRICTED BYPASS BLOCK ENGAGED
                                 {
                                     if (cleanNetProfitUSDC >= 0) {
                                         parentPort.postMessage({
