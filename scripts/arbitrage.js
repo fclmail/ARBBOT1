@@ -20,8 +20,7 @@ const CONFIG = {
         "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws" 
     ], 
-    // INFRASTRUCTURE FIX: Replaced polygon.fastlane.live with high-availability route to clear GitHub DNS restrictions
-    fastLaneRpc: "https://polygon-rpc.com",               
+    fastLaneRpc: "https://polygon.fastlane.live/rpc",               
 
     contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                    
     usdcAddress: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
@@ -100,7 +99,7 @@ if (isMainThread) {
 
     console.log("🚀 FASTLANE UNRESTRICTED REAL-TIME MONITORING ONLINE\n");
     console.log(" Honeycomb Engine Routing directly via EVM state changes [Sharded Configuration]\n");
-    console.log(`📡 Connected to State Read Node: ${CONFIG.fastLaneRpc}`);
+    console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
 
     let totalRealizedProfits = 0.0;
     let workerThreads = [];
@@ -132,7 +131,6 @@ if (isMainThread) {
     const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
 
     console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
-    console.log(`[System] Distributed ~4 tokens and multi-hop paths per thread.\n`);
 
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
@@ -209,7 +207,7 @@ if (isMainThread) {
     function setupHttpFallbackMode() {
         try {
             activeEngineName = "HTTP Fallback Engine";
-            console.log(`📡 Spawning HTTP Polling Engine via State RPC Node: ${CONFIG.fastLaneRpc}\n`);
+            console.log(`📡 Spawning HTTP Polling Engine via FastLane RPC Node: ${CONFIG.fastLaneRpc}\n`);
             const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });
             
             fallbackProvider.on("block", (blockNumber) => {
@@ -251,7 +249,6 @@ if (isMainThread) {
         );
 
         executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
-        
         vaultInstance = new ethers.Contract(config.contractAddress.toLowerCase(), CONTRACT_ABI, executionWallet);
         isWorkerReady = true;
 
@@ -286,6 +283,7 @@ if (isMainThread) {
                             const pathToUSDC = [asset.token.toLowerCase(), config.usdcAddress.toLowerCase()];
 
                             let rawSimulationOutput = null;
+                            let rpcAuthError = false;
                             let contractRevertMessage = null;
 
                             try {
@@ -297,7 +295,12 @@ if (isMainThread) {
                                     pathToUSDC
                                 );
                             } catch (e) {
-                                contractRevertMessage = e.message.slice(0, 95);
+                                const errMsg = e.message || "";
+                                if (errMsg.includes("401") || errMsg.includes("Unauthorized")) {
+                                    rpcAuthError = true;
+                                } else {
+                                    contractRevertMessage = errMsg.slice(0, 95);
+                                }
                             }
 
                             const greenText = "\x1b[32m";
@@ -306,38 +309,53 @@ if (isMainThread) {
                             const greyText = "\x1b[90m";
                             const resetText = "\x1b[0m";
 
-                            // UNFILTERED METRICS LOGGING LAYER
-                            if (contractRevertMessage) {
+                            // Fix #2: Differentiate 401s from standard smart contract logic exceptions
+                            if (rpcAuthError) {
                                 parentPort.postMessage({
                                     type: "LOG",
-                                    data: `${greyText}⚠️ [On-Chain Revert] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: ${contractRevertMessage}${resetText}`
+                                    data: `${redText}🔴 RPC AUTH ERROR (401) [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) - Verify API Key credentials.${resetText}`
                                 });
-                                continue;
+                                // Fix #1: Do not execute a short-circuit 'continue;'. Let it evaluate down into mock parameters.
+                            } else if (contractRevertMessage) {
+                                parentPort.postMessage({
+                                    type: "LOG",
+                                    data: `${yellowText}🟡 CONTRACT REVERT [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: ${contractRevertMessage}${resetText}`
+                                });
                             }
 
-                            if (rawSimulationOutput) {
-                                const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
-                                const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
-                                
-                                const localAavePremium = (targetedVolume * 5n) / 10000n; // Aave V3 0.05% Premium representation
-                                const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
+                            // Fix #1 & #3: Handle mock instantiation downstream so variables compute without skipping
+                            if (rpcAuthError || contractRevertMessage || !rawSimulationOutput) {
+                                rawSimulationOutput = {
+                                    amountIn: 0n,
+                                    estimatedProfit: 0n,
+                                    estimatedFinalUSDC: 0n
+                                };
+                            }
 
-                                if (targetedVolume === 0n) {
+                            const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
+                            const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
+                            
+                            const localAavePremium = (targetedVolume * 5n) / 10000n; 
+                            const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
+
+                            if (targetedVolume === 0n) {
+                                // If it didn't throw an RPC or Revert error, it means it's an actual structural zero liquidity state
+                                if (!rpcAuthError && !contractRevertMessage) {
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `${yellowText}⚪ ZERO LIQUIDITY [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) contract returned $0 volume.${resetText}`
-                                    });
-                                } else if (cleanNetProfitUSDC >= 0) {
-                                    parentPort.postMessage({
-                                        type: "LOG",
-                                        data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
-                                    });
-                                } else {
-                                    parentPort.postMessage({
-                                        type: "LOG",
-                                        data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
+                                        data: `${greyText}⚪ ZERO LIQUIDITY [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) contract returned $0 volume.${resetText}`
                                     });
                                 }
+                            } else if (cleanNetProfitUSDC >= 0) {
+                                parentPort.postMessage({
+                                    type: "LOG",
+                                    data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
+                                });
+                            } else {
+                                parentPort.postMessage({
+                                    type: "LOG",
+                                    data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
+                                });
                             }
                         }
                     }
