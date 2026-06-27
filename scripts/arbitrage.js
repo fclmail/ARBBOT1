@@ -25,7 +25,7 @@ const CONFIG = {
     contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                    
     usdcAddress: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
 
-    minRealProfit: 0.05,        
+    minRealProfit: 0.005,        
     estimatedGasCost: 0.15,     
     priorityFeeGwei: 50n,       
 
