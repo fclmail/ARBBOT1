@@ -43,8 +43,32 @@ const CONFIG = {
     }
 };
 
+// ABI explicitly mapped to target contract's custom structs & method interfaces
 const CONTRACT_ABI = [
-    "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (tuple(uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit) best)",
+    {
+        "inputs": [
+            { "internalType": "address", "name": "buyRouter", "type": "address" },
+            { "internalType": "address", "name": "sellRouter", "type": "address" },
+            { "internalType": "uint256[]", "name": "candidateSizes", "type": "uint256[]" },
+            { "internalType": "address[]", "name": "pathToToken", "type": "address[]" },
+            { "internalType": "address[]", "name": "pathToUSDC", "type": "address[]" }
+        ],
+        "name": "findBestFlashLoanSize",
+        "outputs": [
+            {
+                "components": [
+                    { "internalType": "uint256", "name": "amountIn", "type": "uint256" },
+                    { "internalType": "uint256", "name": "estimatedFinalUSDC", "type": "uint256" },
+                    { "internalType": "uint256", "name": "estimatedProfit", "type": "uint256" }
+                ],
+                "internalType": "struct VaultArbitrageEnforcer.SimulationResult",
+                "name": "best",
+                "type": "tuple"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
     "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];
 
@@ -226,6 +250,8 @@ if (isMainThread) {
         );
 
         executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
+        
+        // SANITIZATION FIX: Ensuring contract address lowercase compatibility 
         vaultInstance = new ethers.Contract(config.contractAddress.toLowerCase(), CONTRACT_ABI, executionWallet);
         isWorkerReady = true;
 
@@ -253,7 +279,7 @@ if (isMainThread) {
                             const buyRouterName = routerIdentifiers[b];
                             const sellRouterName = routerIdentifiers[s];
                             
-                            // SANITIZATION FIX: Lowercase conversion clears Ethers validation limits
+                            // SANITIZATION FIX: Lowercase conversion clears Ethers mixed-case validation bounds
                             const buyRouterAddress = config.routers[buyRouterName].toLowerCase();
                             const sellRouterAddress = config.routers[sellRouterName].toLowerCase();
 
@@ -261,6 +287,8 @@ if (isMainThread) {
                             const pathToUSDC = [asset.token.toLowerCase(), config.usdcAddress.toLowerCase()];
 
                             let rawSimulationOutput = null;
+                            let contractRevertMessage = null;
+
                             try {
                                 rawSimulationOutput = await vaultInstance.findBestFlashLoanSize(
                                     buyRouterAddress,
@@ -270,36 +298,46 @@ if (isMainThread) {
                                     pathToUSDC
                                 );
                             } catch (e) {
-                                // Suppress normal loop rejections (like missing router pool liquidity)
-                                continue; 
+                                contractRevertMessage = e.message.slice(0, 95);
                             }
 
-                            if (!rawSimulationOutput) continue;
+                            const greenText = "\x1b[32m";
+                            const redText = "\x1b[31m";
+                            const yellowText = "\x1b[33m";
+                            const greyText = "\x1b[90m";
+                            const resetText = "\x1b[0m";
 
-                            const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
-                            const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
+                            // METRICS LOGGING FIX: Moved entirely outside structural constraints 
+                            if (contractRevertMessage) {
+                                parentPort.postMessage({
+                                    type: "LOG",
+                                    data: `${greyText}⚠️ [On-Chain Revert] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: ${contractRevertMessage}${resetText}`
+                                });
+                                continue;
+                            }
 
-                            if (targetedVolume > 0n) {
-                                const localAavePremium = (targetedVolume * 5n) / 10000n;
+                            if (rawSimulationOutput) {
+                                const targetedVolume = BigInt(rawSimulationOutput.amountIn.toString());
+                                const rawContractEstimatedProfit = BigInt(rawSimulationOutput.estimatedProfit.toString());
+                                
+                                const localAavePremium = (targetedVolume * 5n) / 10000n; // 0.05% simple flash loan cost representation
                                 const cleanNetProfitUSDC = (Number(rawContractEstimatedProfit) - Number(localAavePremium)) / 1e6;
 
-                                const greenText = "\x1b[32m";
-                                const redText = "\x1b[31m";
-                                const resetText = "\x1b[0m";
-
-                                // UNRESTRICTED BYPASS BLOCK ENGAGED
-                                {
-                                    if (cleanNetProfitUSDC >= 0) {
-                                        parentPort.postMessage({
-                                            type: "LOG",
-                                            data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
-                                        });
-                                    } else {
-                                        parentPort.postMessage({
-                                            type: "LOG",
-                                            data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName}\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
-                                        });
-                                    }
+                                if (targetedVolume === 0n) {
+                                    parentPort.postMessage({
+                                        type: "LOG",
+                                        data: `${yellowText}⚪ ZERO LIQUIDITY [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) contract returned $0 volume.${resetText}`
+                                    });
+                                } else if (cleanNetProfitUSDC >= 0) {
+                                    parentPort.postMessage({
+                                        type: "LOG",
+                                        data: `${greenText}⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: +$${cleanNetProfitUSDC.toFixed(6)} USDC${resetText}`
+                                    });
+                                } else {
+                                    parentPort.postMessage({
+                                        type: "LOG",
+                                        data: `${redText}📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $${(Number(targetedVolume)/1e6).toFixed(2)} USDC\n   └── Expected Net: -$${Math.abs(cleanNetProfitUSDC).toFixed(6)} USDC${resetText}`
+                                    });
                                 }
                             }
                         }
