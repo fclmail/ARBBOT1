@@ -1,8 +1,8 @@
 /**
- * ARBBOT1 - Full Reactive Multi-Threaded Arbitrage Engine
+ * ARBBOT1 - Full Reactive Multi-Threaded 3-Hop Triangular Engine
  * Architecture: WSS Resilient Stream Pool -> 4 Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
- * Configuration: High-Frequency Core Liquidity Hop Paths ($0.10 USDC Micro-Verification)
+ * Configuration: 3-Hop Multi-Bridge Liquidity Paths ($0.10 USDC Micro-Verification)
  * Execution Threshold: Minimum Profit Enforced (>= 0.000001 USDC)
  * Contract: 0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc
  */
@@ -29,8 +29,8 @@ const CONFIG = {
     contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),                
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
 
-    gasLimitOverride: 650000n, // Safe buffer limit for standard multi-hop flash loan execution      
-    priorityFeeGwei: 45n,       // Balanced testing priority fee
+    gasLimitOverride: 750000n, // Incremented slightly to account for the additional 3-hop execution step      
+    priorityFeeGwei: 45n,       
 
     candidateSizes: [
         "100000"                // MICRO VALUE CONFIGURATION: Exactly $0.10 USDC (6 Decimals)
@@ -100,8 +100,8 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 FASTLANE HIGH-FREQUENCY CORE LIQUIDITY PIPELINE TEST ONLINE\n");
-    console.log(" Honeycomb Engine Routing via EVM state changes [Sharded Configuration]\n");
+    console.log("🚀 FASTLANE HIGH-FREQUENCY 3-HOP TRIANGULAR COUPLING ONLINE\n");
+    console.log(" Honeycomb Engine Mapping Multi-Bridge EVM Cycles [Sharded Cluster]\n");
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
     console.log(`🧪 Testing Vector Target Amount: $0.10 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);
 
@@ -113,10 +113,8 @@ if (isMainThread) {
     let fallbackTriggered = false;
     let activeEngineName = "WebSocket Stream Cluster";
 
-    // ============================================================================
-    // HIGH-FREQUENCY LIQUIDITY BRIDGES (CORE VOLUME HOP PATHS)
-    // ============================================================================
-    const tokenMatrix = [
+    // High-Volume Core Assets for cross-rate triangular generation
+    const coreBridges = [
         { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },
         { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },
         { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },
@@ -124,16 +122,10 @@ if (isMainThread) {
     ];
 
     const totalWorkers = 4;
-    const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
-
-    console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads mapping 1:1 to Core Liquidity Bridges.\n`);
-
+    // Each worker thread focuses on one dedicated primary asset entry point to shard the EVM compute load
     for (let i = 0; i < totalWorkers; i++) {
-        const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
-        if (structuralSlice.length === 0) continue;
-
         const engineWorker = new Worker(__filename, {
-            workerData: { workerId: i + 1, config: CONFIG, tokenPaths: structuralSlice }
+            workerData: { workerId: i + 1, config: CONFIG, primaryAsset: coreBridges[i], allBridges: coreBridges }
         });
 
         engineWorker.on("message", (msg) => {
@@ -167,17 +159,17 @@ if (isMainThread) {
             activeEngineName = "WebSocket Stream Cluster";
             
             console.log(`\n═══════════════════════════════════════════════════════════`);
-            console.log(`  ✅ PIPELINE VERIFICATION: HIGH-VOLUME HOPS ARMED          `);
+            console.log(`  ✅ PIPELINE VERIFICATION: 3-HOP CROSS CYCLES ARMED       `);
             console.log(`  ├── WebSocket Stream Cluster        ● LIVE                 `);
-            console.log(`  ├── ${totalWorkers} Worker Threads            ● ACTIVE (1:1 Allocation)`);
-            console.log(`  ├── Targets: WMATIC, WETH, USDT, DAI ● DEEP HOPS LOADED     `);
-            console.log(`  └── Monitoring high-velocity state changes...              `);
+            console.log(`  ├── ${totalWorkers} Worker Threads            ● ACTIVE (Sharded Cross-Paths)`);
+            console.log(`  ├── Topology: USDC ➔ Bridge A ➔ Bridge B ➔ USDC           `);
+            console.log(`  └── Monitoring multi-hop triangular anomalies...          `);
             console.log(`═══════════════════════════════════════════════════════════\n`);
 
             isRotating = false; 
 
             mainProvider.on("block", async (blockNumber) => {
-                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling high-volume state changes...`);
+                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling 3-hop triangular state changes...`);
                 workerThreads.forEach((worker) => {
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });
                 });
@@ -226,7 +218,7 @@ if (isMainThread) {
 // COMPONENT WORKER THREAD RUNTREES
 // ============================================================================
 } else {
-    const { workerId, config, tokenPaths } = workerData;
+    const { workerId, config, primaryAsset, allBridges } = workerData;
     
     const fastLaneRelayProvider = new ethers.JsonRpcProvider(
         config.fastLaneRpc, 
@@ -239,7 +231,7 @@ if (isMainThread) {
 
     parentPort.postMessage({
         type: "LOG",
-        data: `✅ [Shard #${workerId}] Dedicated liquidity bridge thread active for: ${tokenPaths.map(t => t.name).join(", ")}`
+        data: `✅ [Shard #${workerId}] 3-Hop Shard Active. Primary Gate: ${primaryAsset.name}`
     });
 
     parentPort.on("message", async (message) => {
@@ -253,7 +245,10 @@ if (isMainThread) {
                 const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");
                 const calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;
 
-                for (const asset of tokenPaths) {
+                // Loop through secondary bridges to complete the 3-hop triangle topology
+                for (const secondaryAsset of allBridges) {
+                    if (primaryAsset.token === secondaryAsset.token) continue;
+
                     for (let b = 0; b < routerIdentifiers.length; b++) {
                         for (let s = 0; s < routerIdentifiers.length; s++) {
                             if (b === s) continue; 
@@ -264,8 +259,11 @@ if (isMainThread) {
                             const buyRouterAddress = config.routers[buyRouterName];
                             const sellRouterAddress = config.routers[sellRouterName];
 
-                            const pathToToken = [config.usdcAddress, asset.token];
-                            const pathToUSDC = [asset.token, config.usdcAddress];
+                            // Dynamic 3-Hop path initialization
+                            // Path A: USDC -> Primary Asset -> Secondary Asset
+                            const pathToToken = [config.usdcAddress, primaryAsset.token, secondaryAsset.token];
+                            // Path B: Secondary Asset -> USDC
+                            const pathToUSDC = [secondaryAsset.token, config.usdcAddress];
 
                             try {
                                 const simulation = await vaultInstance.findBestFlashLoanSize(
@@ -282,13 +280,12 @@ if (isMainThread) {
                                 if (amountIn === 0n) continue; 
                                 if (estimatedProfit === 0n) continue; 
 
-                                // Fix: Threshold lowered to 1n (0.000001 USDC) to capture minimum margins
                                 if (estimatedProfit >= 1n) {
                                     const rawProfitNormalized = Number(estimatedProfit) / 1e6;
                                     
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `\x1b[32m⚡ RAW MICRO-PROFIT CRITERIA MET [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) | Net expected: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`
+                                        data: `\x1b[32m⚡ RAW MICRO-PROFIT CRITERIA MET [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${primaryAsset.name}➔${secondaryAsset.name}) | Net expected: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`
                                     });
 
                                     const txDeadline = Math.floor(Date.now() / 1000) + 30;
@@ -298,7 +295,6 @@ if (isMainThread) {
                                         data: `🔥 [Shard #${workerId}] FORCE DISPATCHING LIVE PIPELINE TRANSACTION FOR MINIMUM MARGIN EXTRACTION...`
                                     });
 
-                                    // Asynchronous execution call
                                     vaultInstance.executeBestFlashLoanArbitrage(
                                         buyRouterAddress,
                                         sellRouterAddress,
@@ -339,7 +335,7 @@ if (isMainThread) {
                                 }
 
                             } catch (simError) {
-                                // Block execution read error drop
+                                // Ignore standard read exceptions during fast multi-router iteration
                             }
                         }
                     }
