@@ -21,14 +21,14 @@ const CONFIG = {
         "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws" 
     ], 
-    fastLaneRpc: "https://polygon-rpc.com", // Swapped to primary high-availability to prevent boot blocks             
+    fastLaneRpc: "https://polygon-rpc.com",             
     fallbackRpc: "https://polygon.drpc.org", 
 
     contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),                
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
 
-    estimatedGasCost: 0.0,       
-    priorityFeeGwei: 50n,       
+    gasLimitOverride: 650000n, // Safe buffer limit for standard multi-hop flash loan execution      
+    priorityFeeGwei: 65n,       // Aggressive priority fee to beat competing searchers
 
     candidateSizes: [
         "1000000000"            // Single size tier ($1,000 USDC) to avoid multi-loop simulation lag
@@ -98,7 +98,7 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 FASTLANE UNRESTRICTED REAL-TIME MONITORING ONLINE\n");
+    console.log("🚀 FASTLANE UNRESTRICTED REAL-TIME MEV MONITORING & EXECUTION ENGINE ONLINE\n");
     console.log(" Honeycomb Engine Routing directly via EVM state changes [Sharded Configuration]\n");
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
 
@@ -180,7 +180,6 @@ if (isMainThread) {
             console.log(`  ├── Contract: ${CONFIG.contractAddress.slice(0,10)}...    ● DEPLOYED             `);
             console.log(`  └── Waiting for profitable blocks...                       `);
             console.log(`═══════════════════════════════════════════════════════════\n`);
-            console.log(`  ⚡ NO WAIT SETTINGS APPLIED — INSTANT PIPELINE VERIFICATION\n`);
 
             isRotating = false; 
 
@@ -236,53 +235,32 @@ if (isMainThread) {
 } else {
     const { workerId, config, tokenPaths } = workerData;
     
-    let fastLaneRelayProvider;
-    let executionWallet;
-    let vaultInstance;
-    let isWorkerReady = false;
-    let isProcessing = false;
+    const fastLaneRelayProvider = new ethers.JsonRpcProvider(
+        config.fastLaneRpc, 
+        STATIC_POLYGON_NETWORK, 
+        { staticNetwork: STATIC_POLYGON_NETWORK }
+    );
+    
+    const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
+    const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
 
-    async function initializeWorkerProvider() {
-        const structuralTargets = [config.fastLaneRpc, config.fallbackRpc];
-        
-        for (const rpcTarget of structuralTargets) {
-            try {
-                fastLaneRelayProvider = new ethers.JsonRpcProvider(
-                    rpcTarget, 
-                    STATIC_POLYGON_NETWORK, 
-                    { staticNetwork: STATIC_POLYGON_NETWORK }
-                );
-                
-                executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
-                vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
-                isWorkerReady = true;
-                
-                parentPort.postMessage({
-                    type: "LOG",
-                    data: `✅ [Shard #${workerId}] Worker successfully initialized using Active HTTP Failover Stack.`
-                });
-                return;
-            } catch (connectionError) {
-                if (rpcTarget === config.fallbackRpc) {
-                    parentPort.postMessage({
-                        type: "LOG",
-                        data: `❌ [Shard #${workerId}] Worker Critical Error: All internal network providers unreachable.`
-                    });
-                }
-            }
-        }
-    }
-
-    initializeWorkerProvider();
+    parentPort.postMessage({
+        type: "LOG",
+        data: `✅ [Shard #${workerId}] Worker successfully initialized in active write mode.`
+    });
 
     parentPort.on("message", async (message) => {
-        if (!isWorkerReady || isProcessing) return;
-
         if (message.type === "BLOCK_TRIGGER") {
-            isProcessing = true; 
             const routerIdentifiers = Object.keys(config.routers);
 
             try {
+                // Fetch current base fee once per block trigger to calculate EIP-1559 gas prices dynamically
+                const feeData = await fastLaneRelayProvider.getFeeData();
+                const currentBaseFee = feeData.estimatedBaseFee || 0n;
+                const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");
+                // Max Fee = (Base Fee * 2) + Priority Fee
+                const calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;
+
                 for (const asset of tokenPaths) {
                     for (let b = 0; b < routerIdentifiers.length; b++) {
                         for (let s = 0; s < routerIdentifiers.length; s++) {
@@ -296,6 +274,11 @@ if (isMainThread) {
 
                             const pathToToken = [config.usdcAddress, asset.token];
                             const pathToUSDC = [asset.token, config.usdcAddress];
+
+                            parentPort.postMessage({
+                                type: "LOG",
+                                data: `🔍 [Debug Shard #${workerId}] Simulating route: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})`
+                            });
 
                             try {
                                 const simulation = await vaultInstance.findBestFlashLoanSize(
@@ -312,16 +295,15 @@ if (isMainThread) {
                                 if (amountIn === 0n) {
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `⚪ ZERO LIQUIDITY [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) contract returned $0 volume.`
+                                        data: `⚪ ZERO LIQUIDITY [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})`
                                     });
                                     continue;
                                 }
 
                                 if (estimatedProfit === 0n) {
-                                    // 🔴 TURN LOG RED FOR UNPROFITABLE/MINUS RESULTS
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `\x1b[31m📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: -$0.412500 USDC\x1b[0m`
+                                        data: `\x1b[31m📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) | Yield: Unprofitable\x1b[0m`
                                     });
                                     continue;
                                 }
@@ -329,37 +311,75 @@ if (isMainThread) {
                                 if (estimatedProfit > 0n) {
                                     const rawProfitNormalized = Number(estimatedProfit) / 1e6;
                                     
-                                    // 🟢 TURN LOG GREEN FOR PROFITABLE/PLUS RESULTS
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `\x1b[32m⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`
+                                        data: `\x1b[32m⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) | Net expected: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`
                                     });
 
-                                    parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });
+                                    // ------------------------------------------------------------------------
+                                    // PRODUCTION LIVE EXECUTION PIPELINE
+                                    // ------------------------------------------------------------------------
+                                    const txDeadline = Math.floor(Date.now() / 1000) + 30; // 30 second deadline safety
+
+                                    parentPort.postMessage({
+                                        type: "LOG",
+                                        data: `🔥 [Shard #${workerId}] BROADCASTING LIVE ATOMIC TRANSACTION FOR REAL PROFIT...`
+                                    });
+
+                                    // Fire and forget without blocking iteration loops
+                                    vaultInstance.executeBestFlashLoanArbitrage(
+                                        buyRouterAddress,
+                                        sellRouterAddress,
+                                        config.candidateSizes,
+                                        pathToToken,
+                                        pathToUSDC,
+                                        txDeadline,
+                                        {
+                                            gasLimit: config.gasLimitOverride,
+                                            maxFeePerGas: calculatedMaxFee,
+                                            maxPriorityFeePerGas: calculatedMaxPriority
+                                        }
+                                    ).then(async (txResponse) => {
+                                        parentPort.postMessage({
+                                            type: "LOG",
+                                            data: `📡 [Shard #${workerId}] Tx Broadcasted successfully! Hash: ${txResponse.hash}`
+                                        });
+
+                                        const receipt = await txResponse.wait();
+                                        if (receipt.status === 1) {
+                                            parentPort.postMessage({
+                                                type: "LOG",
+                                                data: `\x1b[32m✨ TRANSACTION CONFIRMED IN BLOCK ${receipt.blockNumber}! Extract successful.\x1b[0m`
+                                            });
+                                            parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });
+                                        } else {
+                                            parentPort.postMessage({
+                                                type: "LOG",
+                                                data: `🔴 [Shard #${workerId}] On-chain transaction reverted post-flight.`
+                                            });
+                                        }
+                                    }).catch((txError) => {
+                                        parentPort.postMessage({
+                                            type: "LOG",
+                                            data: `⚠️ [Shard #${workerId}] Transaction submission rejected or dropped: ${txError.message.slice(0, 85)}`
+                                        });
+                                    });
                                 }
 
                             } catch (simError) {
                                 let errMsg = simError.message || "";
-                                if (errMsg.includes("Identical addresses")) {
-                                    parentPort.postMessage({
-                                        type: "LOG",
-                                        data: `🟡 CONTRACT REVERT [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: execution reverted: Identical addresses`
-                                    });
-                                    continue;
-                                }
+                                if (errMsg.includes("Identical addresses")) continue;
 
                                 parentPort.postMessage({
                                     type: "LOG",
-                                    data: `🟡 CONTRACT REVERT [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: ${errMsg.slice(0, 75)}`
+                                    data: `静态 CONTRACT REVERT [Shard #${workerId}]: Exception: ${errMsg.slice(0, 65)}`
                                 });
                             }
                         }
                     }
                 }
             } catch (loopErr) {
-                // Guard 
-            } finally {
-                isProcessing = false;
+                // Shield Exception Drop
             }
         }
     });
