@@ -23,9 +23,9 @@ const CONFIG = {
     ], 
     fastLaneRpc: "https://polygon.fastlane.live/rpc",               
 
-    // Enforce Checksums at the root config level
-    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"),                
-    usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
+    // Normalizing addresses to lower case first prevents checksum calculation errors in Ethers v6
+    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),                
+    usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
 
     estimatedGasCost: 0.0,       
     priorityFeeGwei: 50n,       
@@ -35,13 +35,13 @@ const CONFIG = {
     ],
 
     routers: {
-        QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
-        SUSHI:   ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963"),
-        DFYN:    ethers.getAddress("0xF18056Bbd320E96A48e3Fbf8bC061322531aac99"),
-        WAULT:   ethers.getAddress("0x3a1D873C37abE9244065524bAd7F7a2f35f7999A"),
-        JETSWAP: ethers.getAddress("0x5C6EC38c28eCD03d18a540552a914A8f1b6214A5"),
-        APESWAP: ethers.getAddress("0xC0788A3D1DE900874986012c4feEd447C1be9486"),
-        KATA:    ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963") 
+        QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
+        SUSHI:   ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963".toLowerCase()),
+        DFYN:    ethers.getAddress("0xF18056Bbd320E96A48e3Fbf8bC061322531aac99".toLowerCase()),
+        WAULT:   ethers.getAddress("0x3a1D873C37abE9244065524bAd7F7a2f35f7999A".toLowerCase()),
+        JETSWAP: ethers.getAddress("0x5C6EC38c28eCD03d18a540552a914A8f1b6214A5".toLowerCase()),
+        APESWAP: ethers.getAddress("0xC0788A3D1DE900874986012c4feEd447C1be9486".toLowerCase()),
+        KATA:    ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963".toLowerCase()) 
     }
 };
 
@@ -111,23 +111,23 @@ if (isMainThread) {
     let fallbackTriggered = false;
     let activeEngineName = "WSS Engine Cluster";
 
-    // ✅ Cleaned and sanity-wrapped token tracking arrays with auto-checksumming
+    // ✅ Added strict normalization using formatting loop hooks across Matrix entries
     const tokenMatrix = [
-        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619") },
-        { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270") },
-        { name: "WBTC",   token: ethers.getAddress("0x1BFD67037B42cf73acF2047067bd4F2C47D9BfD6") },
-        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0") },
-        { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F") },
-        { name: "LINK",   token: ethers.getAddress("0x53E0bca35eCE356BD5ddDFebbD1BB0Bc891dC611") },
-        { name: "AAVE",   token: ethers.getAddress("0xD6DF932A45C0f255f857453786923655859951f3") },
-        { name: "UNI",    token: ethers.getAddress("0xb33EaAd8d922B108342553e35760940176d149c8") },
-        { name: "CRV",    token: ethers.getAddress("0x172370d5Cd63229abA15d6547758714e30b6af59") },
-        { name: "SUSHI",  token: ethers.getAddress("0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a") },
-        { name: "WOO",    token: ethers.getAddress("0x1B565668729ce78b95bCd7c6A701053E77ED593c") },
-        { name: "GRT",    token: ethers.getAddress("0x5fe2B58c013d764999778A227074492aB17C38a1") },
-        { name: "GHST",   token: ethers.getAddress("0x385AB5439542e6402264584e03c0043896f05221") },
-        { name: "BAL",    token: ethers.getAddress("0x9a71012B13CA4d3D0Cdc72b177DF3ef03b0E76A3") },
-        { name: "QUICK",  token: ethers.getAddress("0xB5C064F959943346541fC60914b77f985bde3A0A") }
+        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },
+        { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },
+        { name: "WBTC",   token: ethers.getAddress("0x1BFD67037B42cf73acF2047067bd4F2C47D9BfD6".toLowerCase()) },
+        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0".toLowerCase()) },
+        { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },
+        { name: "LINK",   token: ethers.getAddress("0x53E0bca35eCE356BD5ddDFebbD1BB0Bc891dC611".toLowerCase()) },
+        { name: "AAVE",   token: ethers.getAddress("0xD6DF932A45C0f255f857453786923655859951f3".toLowerCase()) },
+        { name: "UNI",    token: ethers.getAddress("0xb33EaAd8d922B108342553e35760940176d149c8".toLowerCase()) },
+        { name: "CRV",    token: ethers.getAddress("0x172370d5Cd63229abA15d6547758714e30b6af59".toLowerCase()) },
+        { name: "SUSHI",  token: ethers.getAddress("0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a".toLowerCase()) },
+        { name: "WOO",    token: ethers.getAddress("0x1B565668729ce78b95bCd7c6A701053E77ED593c".toLowerCase()) },
+        { name: "GRT",    token: ethers.getAddress("0x5fe2B58c013d764999778A227074492aB17C38a1".toLowerCase()) },
+        { name: "GHST",   token: ethers.getAddress("0x385AB5439542e6402264584e03c0043896f05221".toLowerCase()) },
+        { name: "BAL",    token: ethers.getAddress("0x9a71012B13CA4d3D0Cdc72b177DF3ef03b0E76A3".toLowerCase()) },
+        { name: "QUICK",  token: ethers.getAddress("0xB5C064F959943346541fC60914b77f985bde3A0A".toLowerCase()) }
     ];
 
     const totalWorkers = 4;
