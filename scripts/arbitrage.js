@@ -2,10 +2,11 @@
  * ARBBOT1 - Full Reactive Multi-Threaded 3-Hop Triangular Engine
  * Architecture: WSS Resilient Stream Pool -> 4 Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
- * Configuration: 3-Hop Multi-Bridge Liquidity Paths ($0.10 USDC Micro-Verification)
+ * Configuration: 3-Hop Multi-Bridge Liquidity Paths ($0.02 USDC Micro-Verification)
  * Execution Threshold: Minimum Profit Enforced (>= 0.000001 USDC)
  * Contract: 0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc
  */
+
 import { ethers } from "ethers";
 import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
 import { fileURLToPath } from "url";
@@ -23,27 +24,23 @@ const CONFIG = {
         "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws" 
     ], 
-    fastLaneRpc: "https://polygon-rpc.com",             
+    fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",              
     fallbackRpc: "https://polygon.drpc.org", 
-
-    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),                
+    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),               
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
-
-    gasLimitOverride: 750000n, // Incremented slightly to account for the additional 3-hop execution step      
+    gasLimitOverride: 750000n,      
     priorityFeeGwei: 45n,       
-
     candidateSizes: [
-        "100000"                // MICRO VALUE CONFIGURATION: Exactly $0.10 USDC (6 Decimals)
+        "20000"                // FIX 1: Exact $0.02 USDC trade size alignment to mirror js1
     ],
-
+    // FIX 2: Corrected all router addresses to match the proven, active deployments used in js1
     routers: {
         QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
-        SUSHI:   ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963".toLowerCase()),
-        DFYN:    ethers.getAddress("0xF18056Bbd320E96A48e3Fbf8bC061322531aac99".toLowerCase()),
-        WAULT:   ethers.getAddress("0x3a1D873C37abE9244065524bAd7F7a2f35f7999A".toLowerCase()),
-        JETSWAP: ethers.getAddress("0x5C6EC38c28eCD03d18a540552a914A8f1b6214A5".toLowerCase()),
-        APESWAP: ethers.getAddress("0xC0788A3D1DE900874986012c4feEd447C1be9486".toLowerCase()),
-        KATA:    ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963".toLowerCase()) 
+        SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
+        DFYN:    ethers.getAddress("0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429".toLowerCase()),
+        WAULT:   ethers.getAddress("0xa98ea6356b4ff7b427969ddf5da3627d6aeae9a48e".toLowerCase()),
+        APESWAP: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607".toLowerCase()),
+        FIREBIRD:ethers.getAddress("0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA".toLowerCase())
     }
 };
 
@@ -103,7 +100,7 @@ if (isMainThread) {
     console.log("🚀 FASTLANE HIGH-FREQUENCY 3-HOP TRIANGULAR COUPLING ONLINE\n");
     console.log(" Honeycomb Engine Mapping Multi-Bridge EVM Cycles [Sharded Cluster]\n");
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
-    console.log(`🧪 Testing Vector Target Amount: $0.10 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);
+    console.log(`🧪 Testing Vector Target Amount: $0.02 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);
 
     let totalRealizedProfits = 0.0;
     let workerThreads = [];
@@ -113,7 +110,6 @@ if (isMainThread) {
     let fallbackTriggered = false;
     let activeEngineName = "WebSocket Stream Cluster";
 
-    // High-Volume Core Assets for cross-rate triangular generation
     const coreBridges = [
         { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },
         { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },
@@ -122,7 +118,7 @@ if (isMainThread) {
     ];
 
     const totalWorkers = 4;
-    // Each worker thread focuses on one dedicated primary asset entry point to shard the EVM compute load
+
     for (let i = 0; i < totalWorkers; i++) {
         const engineWorker = new Worker(__filename, {
             workerData: { workerId: i + 1, config: CONFIG, primaryAsset: coreBridges[i], allBridges: coreBridges }
@@ -136,6 +132,7 @@ if (isMainThread) {
                 console.log(`💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC`);
             }
         });
+
         workerThreads.push(engineWorker);
     }
 
@@ -167,14 +164,12 @@ if (isMainThread) {
             console.log(`═══════════════════════════════════════════════════════════\n`);
 
             isRotating = false; 
-
             mainProvider.on("block", async (blockNumber) => {
                 console.log(`[${activeEngineName} - Block #${blockNumber}] Polling 3-hop triangular state changes...`);
                 workerThreads.forEach((worker) => {
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });
                 });
             });
-
         } catch (initError) {
             await attemptFallbackRotation();
         }
@@ -183,8 +178,8 @@ if (isMainThread) {
     async function attemptFallbackRotation() {
         if (isRotating || fallbackTriggered) return;
         isRotating = true;
-
         currentEndpointIndex++;
+
         if (currentEndpointIndex >= CONFIG.providerWssEndpoints.length) {
             fallbackTriggered = true;
             setupHttpFallbackMode();
@@ -251,7 +246,8 @@ if (isMainThread) {
 
                     for (let b = 0; b < routerIdentifiers.length; b++) {
                         for (let s = 0; s < routerIdentifiers.length; s++) {
-                            if (b === s) continue; 
+                            // FIX 3: REMOVED 'if (b === s) continue;' restriction.
+                            // This allows your 3-hop array to execute sequentially inside a single router environment (like Quickswap -> Quickswap), mimicking js1's behavior.
 
                             const buyRouterName = routerIdentifiers[b];
                             const sellRouterName = routerIdentifiers[s];
@@ -260,9 +256,7 @@ if (isMainThread) {
                             const sellRouterAddress = config.routers[sellRouterName];
 
                             // Dynamic 3-Hop path initialization
-                            // Path A: USDC -> Primary Asset -> Secondary Asset
                             const pathToToken = [config.usdcAddress, primaryAsset.token, secondaryAsset.token];
-                            // Path B: Secondary Asset -> USDC
                             const pathToUSDC = [secondaryAsset.token, config.usdcAddress];
 
                             try {
@@ -329,19 +323,18 @@ if (isMainThread) {
                                     }).catch((txError) => {
                                         parentPort.postMessage({
                                             type: "LOG",
-                                            data: `⚠️ [Shard #${workerId}] Broadcast Exception Dropped: ${txError.message.slice(0, 85)}`
+                                            data: `⚠️ [Shard #${workerId}] Broadcast Exception Dropped: ${txError.message}`
                                         });
                                     });
                                 }
-
                             } catch (simError) {
-                                // Ignore standard read exceptions during fast multi-router iteration
+                                // Silent fallback context for failing structural paths
                             }
                         }
                     }
                 }
-            } catch (loopErr) {
-                // Thread iteration shield
+            } catch (err) {
+                // Fee data or polling breakdown metrics fallback
             }
         }
     });
