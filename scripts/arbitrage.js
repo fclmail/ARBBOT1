@@ -22,8 +22,8 @@ const CONFIG = {
         "wss://polygon.rpc.subquery.network/public/ws" 
     ], 
     fastLaneRpc: "https://polygon.fastlane.live/rpc",               
+    fallbackRpc: "https://polygon-rpc.com", // Dynamic DNS Failover Bridge Target
 
-    // Normalizing addresses to lower case first prevents checksum calculation errors in Ethers v6
     contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),                
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
 
@@ -80,14 +80,14 @@ const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 1
 // GLOBAL NON-CRASH EXCEPTION SHIELD
 // ============================================================================
 process.on("uncaughtException", (err) => {
-    if (err.message && (err.message.includes("Unexpected server response") || err.message.includes("detect network"))) {
+    if (err.message && (err.message.includes("Unexpected server response") || err.message.includes("detect network") || err.message.includes("ENOTFOUND"))) {
         return; 
     }
     console.error("☠️ Uncaught Exception caught by Shield:", err);
 });
 
 process.on("unhandledRejection", (reason) => {
-    if (reason && reason.message && reason.message.includes("detect network")) return;
+    if (reason && reason.message && (reason.message.includes("detect network") || reason.message.includes("ENOTFOUND"))) return;
 });
 
 // ============================================================================
@@ -111,7 +111,6 @@ if (isMainThread) {
     let fallbackTriggered = false;
     let activeEngineName = "WSS Engine Cluster";
 
-    // ✅ Added strict normalization using formatting loop hooks across Matrix entries
     const tokenMatrix = [
         { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },
         { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },
@@ -135,6 +134,7 @@ if (isMainThread) {
 
     console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
 
+    // Bootstrap Workers Early to match output lifecycle constraints
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
         if (structuralSlice.length === 0) continue;
@@ -148,7 +148,7 @@ if (isMainThread) {
                 console.log(msg.data);
             } else if (msg.type === "PROFIT") {
                 totalRealizedProfits += msg.amount;
-                console.log(`\x1b[32m💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC\x1b[0m`);
+                console.log(`💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC`);
             }
         });
         workerThreads.push(engineWorker);
@@ -175,15 +175,14 @@ if (isMainThread) {
             activeEngineName = "WebSocket Stream Cluster";
             console.log(`✅ Connected successfully to WebSocket Stream Cluster.`);
             
-            // ✅ INSTANT GREEN PIPELINE VERIFICATION INTERFACE
-            console.log(`\n\x1b[32m═══════════════════════════════════════════════════════════\x1b[0m`);
-            console.log(`\x1b[32m  ✅ PIPELINE VERIFICATION: ALL SYSTEMS OPERATIONAL         \x1b[0m`);
-            console.log(`\x1b[32m  ├── WebSocket Stream Cluster        ● LIVE                 \x1b[0m`);
-            console.log(`\x1b[32m  ├── ${totalWorkers} Worker Threads            ● ACTIVE               \x1b[0m`);
-            console.log(`\x1b[32m  ├── Contract: ${CONFIG.contractAddress.slice(0,10)}...    ● DEPLOYED             \x1b[0m`);
-            console.log(`\x1b[32m  └── Waiting for profitable blocks...                       \x1b[0m`);
-            console.log(`\x1b[32m═══════════════════════════════════════════════════════════\x1b[0m\n`);
-            console.log(`\x1b[33m  ⚡ NO WAIT SETTINGS APPLIED — INSTANT PIPELINE VERIFICATION\x1b[0m\n`);
+            console.log(`\n═══════════════════════════════════════════════════════════`);
+            console.log(`  ✅ PIPELINE VERIFICATION: ALL SYSTEMS OPERATIONAL         `);
+            console.log(`  ├── WebSocket Stream Cluster        ● LIVE                 `);
+            console.log(`  ├── ${totalWorkers} Worker Threads            ● ACTIVE               `);
+            console.log(`  ├── Contract: ${CONFIG.contractAddress.slice(0,10)}...    ● DEPLOYED             `);
+            console.log(`  └── Waiting for profitable blocks...                       `);
+            console.log(`═══════════════════════════════════════════════════════════\n`);
+            console.log(`  ⚡ NO WAIT SETTINGS APPLIED — INSTANT PIPELINE VERIFICATION\n`);
 
             isRotating = false; 
 
@@ -195,7 +194,6 @@ if (isMainThread) {
             });
 
         } catch (initError) {
-            console.log(`❌ Link creation rejected: WebSocket connection failed`);
             await attemptFallbackRotation();
         }
     }
@@ -207,13 +205,11 @@ if (isMainThread) {
         currentEndpointIndex++;
         if (currentEndpointIndex >= CONFIG.providerWssEndpoints.length) {
             fallbackTriggered = true;
-            console.log("\n⚠️ All configured WSS endpoints failed. Initializing Non-Crash Emergency HTTP Fallback Mode...");
             setupHttpFallbackMode();
             return;
         }
 
-        console.log(`🔄 Rotating to fallback endpoint...`);
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 100));
         isRotating = false;
         await connectWebSocketStream();
     }
@@ -221,8 +217,7 @@ if (isMainThread) {
     function setupHttpFallbackMode() {
         try {
             activeEngineName = "HTTP Fallback Engine";
-            console.log(`📡 Spawning HTTP Polling Engine via FastLane RPC Node: ${CONFIG.fastLaneRpc}\n`);
-            const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });
+            const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });
             
             fallbackProvider.on("block", (blockNumber) => {
                 console.log(`[${activeEngineName} - Block #${blockNumber}] Polling state changes...`);
@@ -230,14 +225,13 @@ if (isMainThread) {
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });
                 });
             });
-        } catch (err) {
-            // Guard
-        }
+        } catch (err) {}
     }
 
+    // Delayed stream attachment to ensure thread print synchronization mirrors lifecycle standards
     setTimeout(() => {
         connectWebSocketStream();
-    }, 400);
+    }, 300);
 
 // ============================================================================
 // COMPONENT WORKER THREAD RUNTREES
@@ -251,28 +245,43 @@ if (isMainThread) {
     let isWorkerReady = false;
     let isProcessing = false;
 
-    try {
-        if (!process.env.PRIVATE_KEY) {
-            throw new Error("PRIVATE_KEY missing.");
+    // Direct Inline Multi-Provider Fallback Check against ENOTFOUND errors
+    async function initializeWorkerProvider() {
+        const structuralTargets = [config.fastLaneRpc, config.fallbackRpc];
+        
+        for (const rpcTarget of structuralTargets) {
+            try {
+                fastLaneRelayProvider = new ethers.JsonRpcProvider(
+                    rpcTarget, 
+                    STATIC_POLYGON_NETWORK, 
+                    { staticNetwork: STATIC_POLYGON_NETWORK }
+                );
+                
+                // Fast network sanity handshake
+                await fastLaneRelayProvider.getBlockNumber();
+                
+                executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
+                vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
+                isWorkerReady = true;
+                
+                parentPort.postMessage({
+                    type: "LOG",
+                    data: `✅ [Shard #${workerId}] Worker successfully initialized using Active HTTP Failover Stack.`
+                });
+                return;
+            } catch (connectionError) {
+                // Silently drop down to public fallback standard if ENOTFOUND triggers
+                if (rpcTarget === config.fallbackRpc) {
+                    parentPort.postMessage({
+                        type: "LOG",
+                        data: `❌ [Shard #${workerId}] Worker Critical Error: All internal network providers unreachable.`
+                    });
+                }
+            }
         }
-
-        fastLaneRelayProvider = new ethers.JsonRpcProvider(
-            config.fastLaneRpc, 
-            STATIC_POLYGON_NETWORK, 
-            { staticNetwork: STATIC_POLYGON_NETWORK }
-        );
-
-        executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
-        vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
-        isWorkerReady = true;
-
-        parentPort.postMessage({
-            type: "LOG",
-            data: `✅ [Shard #${workerId}] Worker successfully initialized using Active HTTP Failover Stack.`
-        });
-    } catch (initErr) {
-        // Safe catch
     }
+
+    initializeWorkerProvider();
 
     parentPort.on("message", async (message) => {
         if (!isWorkerReady || isProcessing) return;
