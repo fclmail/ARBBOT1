@@ -1,8 +1,9 @@
 /**
- * ARBBOT1 - Full Reactive Multi-Threaded 3-Hop Triangular Engine
+ * ARBBOT1 - Full Reactive Multi-Threaded Multi-Hop Engine
  * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
- * Configuration: 3-Hop Multi-Bridge Liquidity Paths ($0.02 USDC Micro-Verification)
+ * Configuration: Deep Multi-Hop Core Liquidity Paths ($0.02 USDC Micro-Verification)
+ * Structure: USDC -> [Full Token Catalog Asset] -> WMATIC -> WETH -> USDT -> DAI -> USDC
  * Trigger Optimization: Gross Revenue Extraction Mode (Bypassing Fee Deductions)
  * Contract: 0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc
  */
@@ -96,7 +97,7 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 FASTLANE EXPANDED TOKENS GROSS ARBITRAGE ENGINE ONLINE\n");  
+    console.log("🚀 FASTLANE CORE MULTI-HOP ENGINE ONLINE\n");  
     console.log(" Honeycomb Engine Running in Zero-Fee Verification Mode\n");  
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);  
     console.log(`🧪 Testing Vector Target Amount: $0.02 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);  
@@ -109,7 +110,7 @@ if (isMainThread) {
     let fallbackTriggered = false;  
     let activeEngineName = "WebSocket Stream Cluster";  
 
-    // Expanded token catalog with strict deduplication and checksum normalization
+    // Full 36-Token scanning catalog with strict checksum validation normalization
     const coreBridges = [  
         { name: "WMATIC",   token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },  
         { name: "USDT",     token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },  
@@ -151,7 +152,6 @@ if (isMainThread) {
 
     const totalWorkers = coreBridges.length;  
 
-    // Dynamic scale initialization spanning across all added target paths
     for (let i = 0; i < totalWorkers; i++) {  
         const engineWorker = new Worker(__filename, {  
             workerData: { workerId: i + 1, config: CONFIG, primaryAsset: coreBridges[i], allBridges: coreBridges }  
@@ -189,16 +189,16 @@ if (isMainThread) {
             activeEngineName = "WebSocket Stream Cluster";  
               
             console.log(`\n═══════════════════════════════════════════════════════════`);  
-            console.log(`  ✅ PIPELINE VERIFICATION: 3-HOP CROSS CYCLES ARMED       `);  
+            console.log(`  ✅ PIPELINE VERIFICATION: FULL HOP ARMED DEEP SCAN      `);  
             console.log(`  ├── WebSocket Stream Cluster        ● LIVE                 `);  
-            console.log(`  ├── ${totalWorkers} Sharded Worker Threads   ● ACTIVE (Wide Scan Path)`);  
-            console.log(`  ├── Topology: USDC ➔ Bridge A ➔ Bridge B ➔ USDC           `);  
+            console.log(`  ├── ${totalWorkers} Sharded Worker Threads   ● ACTIVE (Core Route Injection)`);  
+            console.log(`  ├── Topology: USDC ➔ [Shard] ➔ WMATIC ➔ WETH ➔ USDT ➔ DAI ➔ USDC`);  
             console.log(`  └── Sensitivity Level: Gross Returns > Input + 0.000001   `);  
             console.log(`═══════════════════════════════════════════════════════════\n`);  
 
             isRotating = false;   
             mainProvider.on("block", async (blockNumber) => {  
-                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling 3-hop triangular state changes...`);  
+                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling all multi-hop state changes...`);  
                 workerThreads.forEach((worker) => {  
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
                 });  
@@ -246,7 +246,7 @@ if (isMainThread) {
 // COMPONENT WORKER THREAD RUNTREES
 // ============================================================================
 } else {
-    const { workerId, config, primaryAsset, allBridges } = workerData;
+    const { workerId, config, primaryAsset } = workerData;
     const fastLaneRelayProvider = new ethers.JsonRpcProvider(  
         config.fastLaneRpc,   
         STATIC_POLYGON_NETWORK,   
@@ -258,7 +258,7 @@ if (isMainThread) {
 
     parentPort.postMessage({  
         type: "LOG",  
-        data: `✅ [Shard #${workerId}] 3-Hop Shard Active. Primary Gate: ${primaryAsset.name}`  
+        data: `✅ [Shard #${workerId}] Deep Hop Shard Active. Target Entry Point: ${primaryAsset.name}`  
     });  
 
     parentPort.on("message", async (message) => {  
@@ -272,10 +272,15 @@ if (isMainThread) {
                 const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
                 const calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;  
 
-                // Loop through secondary bridges to complete the 3-hop triangle topology  
-                for (const secondaryAsset of allBridges) {  
-                    if (primaryAsset.token === secondaryAsset.token) continue;  
+                // High-Liquidity Bluechip Tokens for Hop Chain Realignment
+                const wmatic = ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase());
+                const weth   = ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase());
+                const usdt   = ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase());
+                const dai    = ethers.getAddress("0x8f3cf7ad23cd3cadbd9735aff958023239c6a063".toLowerCase());
 
+                // Avoid cyclic self-routing errors if the primary asset is already a core component
+                if (primaryAsset.token !== wmatic && primaryAsset.token !== weth && primaryAsset.token !== usdt && primaryAsset.token !== dai) {
+                    
                     for (let b = 0; b < routerIdentifiers.length; b++) {  
                         for (let s = 0; s < routerIdentifiers.length; s++) {  
                             const buyRouterName = routerIdentifiers[b];  
@@ -284,9 +289,9 @@ if (isMainThread) {
                             const buyRouterAddress = config.routers[buyRouterName];  
                             const sellRouterAddress = config.routers[sellRouterName];  
 
-                            // Dynamic 3-Hop path initialization  
-                            const pathToToken = [config.usdcAddress, primaryAsset.token, secondaryAsset.token];  
-                            const pathToUSDC = [secondaryAsset.token, config.usdcAddress];  
+                            // Structural Multi-Hop Generation using the entire 36 tokens catalog coupled into high volume pools
+                            const pathToToken = [config.usdcAddress, primaryAsset.token, wmatic, weth, usdt];  
+                            const pathToUSDC = [usdt, dai, config.usdcAddress];  
 
                             try {  
                                 const simulation = await vaultInstance.findBestFlashLoanSize(  
@@ -302,20 +307,20 @@ if (isMainThread) {
 
                                 if (amountIn === 0n || estimatedFinalUSDC === 0n) continue;   
 
-                                // TRIGGER CONDITION: Fire if gross returns are strictly greater than input + contract threshold (1 micro-unit)
+                                // TRIGGER CONDITION: Evaluates gross return difference > contract execution base requirement (1 micro-unit)
                                 if (estimatedFinalUSDC >= (amountIn + 1n)) {  
                                     const rawProfitNormalized = Number(estimatedFinalUSDC - amountIn) / 1e6;  
                                       
                                     parentPort.postMessage({  
                                         type: "LOG",  
-                                        data: `\x1b[32m⚡ GROSS PROFIT HIGHER THAN MINIMUM DETECTED [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${primaryAsset.name}➔${secondaryAsset.name}) | Gross variance: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`  
+                                        data: `\x1b[32m⚡ GROSS PROFIT HIGHER THAN MINIMUM DETECTED [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${primaryAsset.name} ➔ MULTI-HOP-CORE) | Gross variance: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`  
                                     });  
 
                                     const txDeadline = Math.floor(Date.now() / 1000) + 30;  
 
                                     parentPort.postMessage({  
                                         type: "LOG",  
-                                        data: `🔥 [Shard #${workerId}] FORCE DISPATCHING LIVE PIPELINE TRANSACTION FOR MINIMUM MARGIN EXTRACTION...`  
+                                        data: `🔥 [Shard #${workerId}] FORCE DISPATCHING LIVE PIPELINE TRANSACTION FOR MULTI-HOP MARGIN EXTRACTION...`  
                                     });  
 
                                     vaultInstance.executeBestFlashLoanArbitrage(  
@@ -333,20 +338,20 @@ if (isMainThread) {
                                     ).then(async (txResponse) => {
                                         parentPort.postMessage({  
                                             type: "LOG",  
-                                            data: `📡 [Shard #${workerId}] Micro-Tx Sent. Hash: ${txResponse.hash}`  
+                                            data: `📡 [Shard #${workerId}] Multi-Hop Tx Sent. Hash: ${txResponse.hash}`  
                                         });  
 
                                         const receipt = await txResponse.wait();  
                                         if (receipt.status === 1) {  
                                             parentPort.postMessage({  
                                                 type: "LOG",  
-                                                data: `✨ SUCCESS! Low margin position captured in block ${currentBlockNum}. Highway pipeline fully verified.`  
+                                                data: `✨ SUCCESS! Deep hop position captured in block ${currentBlockNum}. Highway pipeline fully verified.`  
                                             });  
                                             parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });  
                                         } else {  
                                             parentPort.postMessage({  
                                                 type: "LOG",  
-                                                data: `🔴 [Shard #${workerId}] Micro-Tx reverted on-chain.`  
+                                                data: `🔴 [Shard #${workerId}] Multi-Hop Tx reverted on-chain.`  
                                             });  
                                         }  
                                     }).catch((txError) => {  
@@ -360,7 +365,7 @@ if (isMainThread) {
                                 // Silent fallback context for failing structural paths  
                             }  
                         }  
-                    }  
+                    }
                 }  
             } catch (err) {  
                 // Fee data or polling breakdown metrics fallback  
