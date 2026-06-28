@@ -2,8 +2,8 @@
  * ARBBOT1 - High-Velocity Instant Pipeline Verification Engine
  * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
- * Mode: FORCED TESTING MODE (Triggers on ANY valid simulation output > 0)
- * Structure: USDC -> [Full Token Catalog Asset] -> WMATIC -> USDC
+ * Mode: FORCED LIFELINE MODE (Guaranteed Pool Paths for Immediate Live Broadcast)
+ * Structure: USDC -> WETH -> WMATIC -> USDC
  * Contract: 0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc
  */
 
@@ -185,14 +185,13 @@ if (isMainThread) {
             activeEngineName = "WebSocket Stream Cluster";  
               
             console.log(`\n═══════════════════════════════════════════════════════════`);  
-            console.log(`  🚀 VERIFICATION ACTIVE: HEARTBEAT LOGGING IS LIVE       `);  
+            console.log(`  🚀 VERIFICATION ACTIVE: DEEP LIQUIDITY COMPRESSION LIVE  `);  
             console.log(`  ├── Concurrency Cap         ● ${CONFIG.maxPendingTransactions} Max Flight Tx            `);  
-            console.log(`  └── Engine Loop Optimization● Triggering on ANY Valid Sim Out `);  
+            console.log(`  └── Route Path Guarantee    ● USDC ➔ WETH ➔ WMATIC ➔ USDC`);  
             console.log(`═══════════════════════════════════════════════════════════\n`);  
 
             isRotating = false;   
             mainProvider.on("block", async (blockNumber) => {  
-                // Added continuous heartbeat notification to confirm loop status per block
                 console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber} Across All Shards...`);
                 workerThreads.forEach((worker) => {  
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
@@ -263,100 +262,100 @@ if (isMainThread) {
                 const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
                 const calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;  
 
+                // DEEP BLUECHIP ANCHORS DEFINED FOR POOL LIFELINE
                 const wmatic = ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase());
+                const weth   = ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase());
 
-                if (primaryAsset.token !== wmatic) {
-                    
-                    for (let b = 0; b < routerIdentifiers.length; b++) {  
-                        for (let s = 0; s < routerIdentifiers.length; s++) {  
-                            
-                            if (pendingTransactionsCount >= config.maxPendingTransactions) break;
+                for (let b = 0; b < routerIdentifiers.length; b++) {  
+                    for (let s = 0; s < routerIdentifiers.length; s++) {  
+                        
+                        if (pendingTransactionsCount >= config.maxPendingTransactions) break;
 
-                            const buyRouterName = routerIdentifiers[b];  
-                            const sellRouterName = routerIdentifiers[s];  
-                            const buyRouterAddress = config.routers[buyRouterName];  
-                            const sellRouterAddress = config.routers[sellRouterName];  
+                        const buyRouterName = routerIdentifiers[b];  
+                        const sellRouterName = routerIdentifiers[s];  
+                        const buyRouterAddress = config.routers[buyRouterName];  
+                        const sellRouterAddress = config.routers[sellRouterName];  
 
-                            const pathToToken = [config.usdcAddress, primaryAsset.token, wmatic];  
-                            const pathToUSDC = [wmatic, config.usdcAddress];  
+                        // VERIFICATION RE-ROUTE: Forced through WETH/WMATIC guaranteed pool venues
+                        const pathToToken = [config.usdcAddress, weth, wmatic];  
+                        const pathToUSDC = [wmatic, config.usdcAddress];  
 
-                            try {  
-                                const simulation = await vaultInstance.findBestFlashLoanSize(  
+                        try {  
+                            const simulation = await vaultInstance.findBestFlashLoanSize(  
+                                buyRouterAddress,  
+                                sellRouterAddress,  
+                                config.candidateSizes,  
+                                pathToToken,  
+                                pathToUSDC  
+                            );  
+
+                            const amountIn = simulation.best.amountIn;
+                            const estimatedFinalUSDC = simulation.best.estimatedFinalUSDC; 
+
+                            if (amountIn === 0n || estimatedFinalUSDC === 0n) continue;   
+
+                            // VERIFICATION SETTING: Fires the transaction on ANY valid mathematical output pool response (> 0)
+                            if (estimatedFinalUSDC > 0n) {  
+                                const rawProfitNormalized = Number(estimatedFinalUSDC - amountIn) / 1e6;  
+                                
+                                pendingTransactionsCount++;
+
+                                parentPort.postMessage({  
+                                    type: "LOG",  
+                                    data: `\x1b[35m⚡ Pipeline Instant-Fire [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} | Output verified: ${estimatedFinalUSDC.toString()} micro-units\x1b[0m`  
+                                });  
+
+                                const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
+
+                                vaultInstance.executeBestFlashLoanArbitrage(  
                                     buyRouterAddress,  
                                     sellRouterAddress,  
                                     config.candidateSizes,  
                                     pathToToken,  
-                                    pathToUSDC  
-                                );  
-
-                                const amountIn = simulation.best.amountIn;
-                                const estimatedFinalUSDC = simulation.best.estimatedFinalUSDC; 
-
-                                if (amountIn === 0n || estimatedFinalUSDC === 0n) continue;   
-
-                                // VERIFICATION SETTING: Fires the transaction on ANY valid mathematical output pool response (> 0)
-                                if (estimatedFinalUSDC > 0n) {  
-                                    const rawProfitNormalized = Number(estimatedFinalUSDC - amountIn) / 1e6;  
-                                    
-                                    pendingTransactionsCount++;
-
+                                    pathToUSDC,  
+                                    txDeadline,  
+                                    {  
+                                        gasLimit: config.gasLimitOverride,  
+                                        maxFeePerGas: calculatedMaxFee,  
+                                        maxPriorityFeePerGas: calculatedMaxPriority
+                                    }
+                                ).then(async (txResponse) => {
                                     parentPort.postMessage({  
                                         type: "LOG",  
-                                        data: `\x1b[35m⚡ Pipeline Instant-Fire [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} | Output verified: ${estimatedFinalUSDC.toString()} micro-units\x1b[0m`  
+                                        data: `🚀 Pipeline Flight Sent. Hash: ${txResponse.hash}`  
                                     });  
 
-                                    const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
+                                    const receipt = await txResponse.wait(config.blockConfirmConfirmations);  
+                                    pendingTransactionsCount--; 
 
-                                    vaultInstance.executeBestFlashLoanArbitrage(  
-                                        buyRouterAddress,  
-                                        sellRouterAddress,  
-                                        config.candidateSizes,  
-                                        pathToToken,  
-                                        pathToUSDC,  
-                                        txDeadline,  
-                                        {  
-                                            gasLimit: config.gasLimitOverride,  
-                                            maxFeePerGas: calculatedMaxFee,  
-                                            maxPriorityFeePerGas: calculatedMaxPriority
-                                        }
-                                    ).then(async (txResponse) => {
+                                    if (receipt.status === 1) {  
                                         parentPort.postMessage({  
                                             type: "LOG",  
-                                            data: `🚀 Pipeline Flight Sent. Hash: ${txResponse.hash}`  
+                                            data: `✨ SUCCESS! Pipeline execution confirmed in block ${receipt.blockNumber}.`  
                                         });  
-
-                                        const receipt = await txResponse.wait(config.blockConfirmConfirmations);  
-                                        pendingTransactionsCount--; 
-
-                                        if (receipt.status === 1) {  
-                                            parentPort.postMessage({  
-                                                type: "LOG",  
-                                                data: `✨ SUCCESS! Pipeline execution confirmed in block ${receipt.blockNumber}.`  
-                                            });  
-                                            parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });  
-                                        } else {  
-                                            parentPort.postMessage({  
-                                                type: "LOG",  
-                                                data: `🔴 On-chain Reverted Receipt for transaction: ${txResponse.hash}`  
-                                            });  
-                                        }  
-                                    }).catch((txError) => {  
-                                        pendingTransactionsCount--; 
+                                        parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });  
+                                    } else {  
                                         parentPort.postMessage({  
                                             type: "LOG",  
-                                            data: `⚠️ Dispatch Failure on Network Core: ${txError.message}`  
+                                            data: `🔴 On-chain Reverted Receipt for transaction: ${txResponse.hash}`  
                                         });  
-                                    });
+                                    }  
+                                }).catch((txError) => {  
+                                    pendingTransactionsCount--;  
+                                    parentPort.postMessage({  
+                                        type: "LOG",  
+                                        data: `⚠️ Dispatch Failure on Network Core: ${txError.message}`  
+                                    });  
+                                });
 
-                                    if (config.executeOnFirstProfit) break;
-                                }  
-                            } catch (simError) {  
-                                // Silent fallback context for failing AMM pathways  
+                                if (config.executeOnFirstProfit) break;
                             }  
+                        } catch (simError) {  
+                            // Silent fallback context for failing AMM pathways  
                         }  
-                        if (config.executeOnFirstProfit && pendingTransactionsCount >= config.maxPendingTransactions) break;
-                    }
-                }  
+                    }  
+                    if (config.executeOnFirstProfit && pendingTransactionsCount >= config.maxPendingTransactions) break;
+                }
             } catch (err) {  
                 // Silent catch fallback for gas calculation issues
             }  
