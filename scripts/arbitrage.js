@@ -1,6 +1,6 @@
 /**
  * ARBBOT1 - Full Reactive Multi-Threaded 3-Hop Triangular Engine
- * Architecture: WSS Resilient Stream Pool -> 4 Thread Worker Cluster -> FastLane Bundle Relay
+ * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
  * Configuration: 3-Hop Multi-Bridge Liquidity Paths ($0.02 USDC Micro-Verification)
  * Trigger Optimization: Gross Revenue Extraction Mode (Bypassing Fee Deductions)
@@ -96,7 +96,7 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 FASTLANE ULTRA-SENSITIVE GROSS ARBITRAGE ENGINE ONLINE\n");  
+    console.log("🚀 FASTLANE EXPANDED TOKENS GROSS ARBITRAGE ENGINE ONLINE\n");  
     console.log(" Honeycomb Engine Running in Zero-Fee Verification Mode\n");  
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);  
     console.log(`🧪 Testing Vector Target Amount: $0.02 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);  
@@ -109,15 +109,49 @@ if (isMainThread) {
     let fallbackTriggered = false;  
     let activeEngineName = "WebSocket Stream Cluster";  
 
+    // Expanded token catalog with strict deduplication and checksum normalization
     const coreBridges = [  
-        { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },  
-        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },  
-        { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },  
-        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0".toLowerCase()) }  
+        { name: "WMATIC",   token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },  
+        { name: "USDT",     token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },  
+        { name: "DAI",      token: ethers.getAddress("0x8f3cf7ad23cd3cadbd9735aff958023239c6a063".toLowerCase()) },  
+        { name: "AAVE",     token: ethers.getAddress("0xd6df932a45c0f255f85145f286ea0b292b21c90b".toLowerCase()) },
+        { name: "CRV",      token: ethers.getAddress("0x172370d5cd63279efa6d502dab29171933a610af".toLowerCase()) },
+        { name: "QUICK",    token: ethers.getAddress("0x831753dd7087cac61ab5644b308642cc1c33dc13".toLowerCase()) },
+        { name: "APE",      token: ethers.getAddress("0x4d224452801aced8b2f0aebe155379bb5d594381".toLowerCase()) },
+        { name: "LINK",     token: ethers.getAddress("0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39".toLowerCase()) },
+        { name: "SHIB",     token: ethers.getAddress("0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0".toLowerCase()) },
+        { name: "UNI",      token: ethers.getAddress("0x1f9840a85d5af5bf1d1762f925bdaddc4201f984".toLowerCase()) },
+        { name: "WBTC",     token: ethers.getAddress("0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6".toLowerCase()) },
+        { name: "BAT",      token: ethers.getAddress("0x3cef98bb43d732e2f285ee605a8158cde967d219".toLowerCase()) },
+        { name: "TBTC",     token: ethers.getAddress("0x236aa50979d5f3de3bd1eeb40e81137f22ab794b".toLowerCase()) },
+        { name: "MANA",     token: ethers.getAddress("0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4".toLowerCase()) },
+        { name: "TRB",      token: ethers.getAddress("0xe3322702bedaaed36cddab233360b939775ae5f1".toLowerCase()) },
+        { name: "COMP",     token: ethers.getAddress("0x8505b9d2254a7ae468c0e9dd10ccea3a837aef5c".toLowerCase()) },
+        { name: "INCH",     token: ethers.getAddress("0x9c2c5fd7b07e95ee044ddeba0e97a665f142394f".toLowerCase()) },
+        { name: "THETA",    token: ethers.getAddress("0xb46e0ae620efd98516f49bb00263317096c114b2".toLowerCase()) },
+        { name: "CRO",      token: ethers.getAddress("0xada58df0f643d959c2a47c9d4d4c1a4defe3f11c".toLowerCase()) },
+        { name: "XYO",      token: ethers.getAddress("0xd2507e7b5794179380673870d88b22f94da6abe0".toLowerCase()) },
+        { name: "MASK",     token: ethers.getAddress("0x2b9e7ccdf0f4e5b24757c1e1a80e311e34cb10c7".toLowerCase()) },
+        { name: "EURQ",     token: ethers.getAddress("0xd571edb2ef29df10fcd6200fd6d0ed2389983db3".toLowerCase()) },
+        { name: "APOLUSDT", token: ethers.getAddress("0x6ab707aca953edaefbc4fd23ba73294241490620".toLowerCase()) },
+        { name: "ENJ",      token: ethers.getAddress("0x7ec26842f195c852fa843bb9f6d8b583a274a157".toLowerCase()) },
+        { name: "ZRX",      token: ethers.getAddress("0x5559edb74751a0ede9dea4dc23aee72cca6be3d5".toLowerCase()) },
+        { name: "GMT",      token: ethers.getAddress("0x714db550b574b3e927af3d93e26127d15721d4c2".toLowerCase()) },
+        { name: "SNX",      token: ethers.getAddress("0x50b728d8d964fd00c2d0aad81718b71311fef68a".toLowerCase()) },
+        { name: "ANKR",     token: ethers.getAddress("0x101a023270368c0d50bffb62780f4afd4ea79c35".toLowerCase()) },
+        { name: "GLM",      token: ethers.getAddress("0x0b220b82f3ea3b7f6d9a1d8ab58930c064a2b5bf".toLowerCase()) },
+        { name: "COW",      token: ethers.getAddress("0x2f4efd3aa42e15a1ec6114547151b63ee5d39958".toLowerCase()) },
+        { name: "BAND",     token: ethers.getAddress("0xa8b1e0764f85f53dfe21760e8afe5446d82606ac".toLowerCase()) },
+        { name: "AXL",      token: ethers.getAddress("0x6e4e624106cb12e168e6533f8ec7c82263358940".toLowerCase()) },
+        { name: "UMA",      token: ethers.getAddress("0x3066818837c5e6ed6601bd5a91b0762877a6b731".toLowerCase()) },
+        { name: "YFI",      token: ethers.getAddress("0xda537104d6a5edd53c6fbba9a898708e465260b6".toLowerCase()) },
+        { name: "ELON",     token: ethers.getAddress("0xe0339c80ffde91f3e20494df88d4206d86024cdf".toLowerCase()) },
+        { name: "NEXO",     token: ethers.getAddress("0x41b3966b4ff7b427969ddf5da3627d6aeae9a48e".toLowerCase()) }
     ];  
 
-    const totalWorkers = 4;  
+    const totalWorkers = coreBridges.length;  
 
+    // Dynamic scale initialization spanning across all added target paths
     for (let i = 0; i < totalWorkers; i++) {  
         const engineWorker = new Worker(__filename, {  
             workerData: { workerId: i + 1, config: CONFIG, primaryAsset: coreBridges[i], allBridges: coreBridges }  
@@ -157,7 +191,7 @@ if (isMainThread) {
             console.log(`\n═══════════════════════════════════════════════════════════`);  
             console.log(`  ✅ PIPELINE VERIFICATION: 3-HOP CROSS CYCLES ARMED       `);  
             console.log(`  ├── WebSocket Stream Cluster        ● LIVE                 `);  
-            console.log(`  ├── ${totalWorkers} Worker Threads            ● ACTIVE (Sharded Cross-Paths)`);  
+            console.log(`  ├── ${totalWorkers} Sharded Worker Threads   ● ACTIVE (Wide Scan Path)`);  
             console.log(`  ├── Topology: USDC ➔ Bridge A ➔ Bridge B ➔ USDC           `);  
             console.log(`  └── Sensitivity Level: Gross Returns > Input + 0.000001   `);  
             console.log(`═══════════════════════════════════════════════════════════\n`);  
@@ -264,7 +298,7 @@ if (isMainThread) {
                                 );  
 
                                 const amountIn = simulation.best.amountIn;
-                                const estimatedFinalUSDC = simulation.best.estimatedFinalUSDC; // Focus strictly on gross end asset value
+                                const estimatedFinalUSDC = simulation.best.estimatedFinalUSDC; 
 
                                 if (amountIn === 0n || estimatedFinalUSDC === 0n) continue;   
 
