@@ -152,7 +152,14 @@ if (isMainThread) {
           
         try {  
             if (mainProvider) {  
-                try { mainProvider.removeAllListeners(); await mainProvider.destroy(); } catch (_) {}  
+                try { 
+                    mainProvider.removeAllListeners(); 
+                    if (mainProvider.websocket) {
+                        mainProvider.websocket.close();
+                        mainProvider.websocket.terminate(); // Hard disconnect underlying ws client
+                    }
+                    await mainProvider.destroy(); 
+                } catch (_) {}  
             }  
 
             mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK);
@@ -171,6 +178,7 @@ if (isMainThread) {
             resetBlockWatchdog();
 
             mainProvider.on("block", async (blockNumber) => {  
+                if (fallbackTriggered) return; // Drop signals if engine transitioned
                 resetBlockWatchdog();
                 console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber} Across Shards...`);
                 workerThreads.forEach((worker) => {  
@@ -197,12 +205,14 @@ if (isMainThread) {
 
     function setupHttpFallbackMode() {  
         clearTimeout(blockWatchdogTimeout);
+        if (mainProvider) {
+            try { mainProvider.removeAllListeners(); mainProvider.destroy(); } catch (_) {}
+        }
         activeEngineName = "HTTP Fallback Engine";  
         console.log(`🚨 Switching Cluster to Active HTTPS Polling Fallback via: ${CONFIG.fallbackRpc}`);
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
         fallbackProvider.on("block", (blockNumber) => {  
-            // FIX: Corrected template literal variable spacing interpolation syntax right here
-            console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber}...`);
+            console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber} Across Shards...`);
             workerThreads.forEach((worker) => {  
                 worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
             });  
@@ -336,12 +346,11 @@ if (isMainThread) {
                                 });
                             }
                         } catch (simError) {  
-                            if (simError.message && simError.message.includes("execution reverted")) {
-                                parentPort.postMessage({
-                                    type: "LOG",
-                                    data: `❌ [Shard #${workerId} Revert] ${buyRouterName}➔${sellRouterName} path missing required liquid pool depth.`
-                                });
-                            }
+                            // FIX: Captured all validation variations cleanly across all token iterations
+                            parentPort.postMessage({
+                                type: "LOG",
+                                data: `❌ [Shard #${workerId} Revert] ${buyRouterName}➔${sellRouterName} path missing required liquid pool depth.`
+                            });
                         }  
                     }  
                     if (config.executeOnFirstProfit && pendingTransactionsCount >= config.maxPendingTransactions) break;
