@@ -3,7 +3,7 @@
  * Architecture: WSS Resilient Stream Pool -> 4 Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
  * Configuration: 3-Hop Multi-Bridge Liquidity Paths ($0.02 USDC Micro-Verification)
- * Execution Threshold: Minimum Profit Enforced (>= 0.000001 USDC)
+ * Trigger Optimization: Gross Revenue Extraction Mode (Bypassing Fee Deductions)
  * Contract: 0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc
  */
 
@@ -26,22 +26,20 @@ const CONFIG = {
     ],
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
     fallbackRpc: "https://polygon.drpc.org",
-    // FIXED: Enforced lowercase translation to pass EIP-55 validation automatically
     contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
     gasLimitOverride: 750000n,
     priorityFeeGwei: 45n,
     candidateSizes: [
-        "20000"                // FIX 1: Exact $0.02 USDC trade size alignment to mirror js1
+        "20000"                // $0.02 USDC trade size alignment
     ],
-    // FIX 2: Normalized all router address calculations using .toLowerCase() to bypass manual checksum errors
     routers: {
         QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
         SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
         DFYN:    ethers.getAddress("0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429".toLowerCase()),
         WAULT:   ethers.getAddress("0xa98ea6356a4ff7b427969ddf5da3627d6aeae9a4".toLowerCase()), 
         APESWAP: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607".toLowerCase()),
-        FIREBIRD:ethers.getAddress("0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA".toLowerCase()) // FIXED: Bad checksum resolved
+        FIREBIRD:ethers.getAddress("0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA".toLowerCase())
     }
 };
 
@@ -50,7 +48,7 @@ const CONTRACT_ABI = [
         "inputs": [
             { "internalType": "address", "name": "buyRouter", "type": "address" },
             { "internalType": "address", "name": "sellRouter", "type": "address" },
-            { "internalType": "uint256[]", "name": "candidateSizes", "type": "uint256[]" }, // FIXED: Typo uint2256[] corrected
+            { "internalType": "uint256[]", "name": "candidateSizes", "type": "uint256[]" },
             { "internalType": "address[]", "name": "pathToToken", "type": "address[]" },
             { "internalType": "address[]", "name": "pathToUSDC", "type": "address[]" }
         ],
@@ -79,7 +77,6 @@ const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 1
 // GLOBAL NON-CRASH EXCEPTION SHIELD
 // ============================================================================
 process.on("uncaughtException", (err) => {
-    // Blanket mitigation shield preventing infrastructure crashes from API Drops or Network resets
     if (err.message && (err.message.includes("Unexpected server response") || err.message.includes("detect network") || err.message.includes("ENOTFOUND") || err.message.includes("websocket"))) {
         return;
     }
@@ -99,8 +96,8 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 FASTLANE HIGH-FREQUENCY 3-HOP TRIANGULAR COUPLING ONLINE\n");  
-    console.log(" Honeycomb Engine Mapping Multi-Bridge EVM Cycles [Sharded Cluster]\n");  
+    console.log("🚀 FASTLANE ULTRA-SENSITIVE GROSS ARBITRAGE ENGINE ONLINE\n");  
+    console.log(" Honeycomb Engine Running in Zero-Fee Verification Mode\n");  
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);  
     console.log(`🧪 Testing Vector Target Amount: $0.02 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);  
 
@@ -162,7 +159,7 @@ if (isMainThread) {
             console.log(`  ├── WebSocket Stream Cluster        ● LIVE                 `);  
             console.log(`  ├── ${totalWorkers} Worker Threads            ● ACTIVE (Sharded Cross-Paths)`);  
             console.log(`  ├── Topology: USDC ➔ Bridge A ➔ Bridge B ➔ USDC           `);  
-            console.log(`  └── Monitoring multi-hop triangular anomalies...          `);  
+            console.log(`  └── Sensitivity Level: Gross Returns > Input + 0.000001   `);  
             console.log(`═══════════════════════════════════════════════════════════\n`);  
 
             isRotating = false;   
@@ -266,17 +263,18 @@ if (isMainThread) {
                                     pathToUSDC  
                                 );  
 
-                                const amountIn = simulation.best.amountIn;  
-                                const estimatedProfit = simulation.best.estimatedProfit;  
+                                const amountIn = simulation.best.amountIn;
+                                const estimatedFinalUSDC = simulation.best.estimatedFinalUSDC; // Focus strictly on gross end asset value
 
-                                if (amountIn === 0n || estimatedProfit === 0n) continue;   
+                                if (amountIn === 0n || estimatedFinalUSDC === 0n) continue;   
 
-                                if (estimatedProfit >= 1n) {  
-                                    const rawProfitNormalized = Number(estimatedProfit) / 1e6;  
+                                // TRIGGER CONDITION: Fire if gross returns are strictly greater than input + contract threshold (1 micro-unit)
+                                if (estimatedFinalUSDC >= (amountIn + 1n)) {  
+                                    const rawProfitNormalized = Number(estimatedFinalUSDC - amountIn) / 1e6;  
                                       
                                     parentPort.postMessage({  
                                         type: "LOG",  
-                                        data: `\x1b[32m⚡ RAW MICRO-PROFIT CRITERIA MET [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${primaryAsset.name}➔${secondaryAsset.name}) | Net expected: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`  
+                                        data: `\x1b[32m⚡ GROSS PROFIT HIGHER THAN MINIMUM DETECTED [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${primaryAsset.name}➔${secondaryAsset.name}) | Gross variance: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`  
                                     });  
 
                                     const txDeadline = Math.floor(Date.now() / 1000) + 30;  
@@ -296,9 +294,9 @@ if (isMainThread) {
                                         {  
                                             gasLimit: config.gasLimitOverride,  
                                             maxFeePerGas: calculatedMaxFee,  
-                                            maxPriorityFeePerGas: calculatedMaxPriority  
-                                        }  
-                                    ).then(async (txResponse) => {  
+                                            maxPriorityFeePerGas: calculatedMaxPriority
+                                        }
+                                    ).then(async (txResponse) => {
                                         parentPort.postMessage({  
                                             type: "LOG",  
                                             data: `📡 [Shard #${workerId}] Micro-Tx Sent. Hash: ${txResponse.hash}`  
@@ -320,7 +318,7 @@ if (isMainThread) {
                                     }).catch((txError) => {  
                                         parentPort.postMessage({  
                                             type: "LOG",  
-                                            data: `⚠️ [Shard #${workerId}] Broadcast Exception Droated: ${txError.message}`  
+                                            data: `⚠️ [Shard #${workerId}] Broadcast Exception Dropped: ${txError.message}`  
                                         });  
                                     });  
                                 }  
