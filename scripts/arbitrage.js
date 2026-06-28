@@ -201,7 +201,8 @@ if (isMainThread) {
         console.log(`🚨 Switching Cluster to Active HTTPS Polling Fallback via: ${CONFIG.fallbackRpc}`);
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
         fallbackProvider.on("block", (blockNumber) => {  
-            console.log(`[${active engine names}] 🔍 Scanning Block #${blockNumber}...`);
+            // FIX: Corrected template literal variable spacing interpolation syntax right here
+            console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber}...`);
             workerThreads.forEach((worker) => {  
                 worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
             });  
@@ -286,7 +287,6 @@ if (isMainThread) {
 
                                 const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
 
-                                // FIX: Removed the malformed 'j' from buyRouterAddress parameter reference
                                 vaultInstance.executeBestFlashLoanArbitrage(  
                                     buyRouterAddress,  
                                     sellRouterAddress,  
@@ -347,7 +347,6 @@ if (isMainThread) {
                     if (config.executeOnFirstProfit && pendingTransactionsCount >= config.maxPendingTransactions) break;
                 }
             } catch (err) {  
-                // Output runtime noise transparently if top-level issues occur
                 parentPort.postMessage({  
                     type: "LOG",  
                     data: `⚠️ Critical Thread Exception [Shard #${workerId}]: ${err.message}`  
