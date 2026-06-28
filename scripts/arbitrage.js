@@ -2,7 +2,7 @@
  * ARBBOT1 - Full Reactive Multi-Threaded Arbitrage Engine
  * Architecture: WSS Resilient Stream Pool -> 4 Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
- * Configuration: Micro-Amount Pipeline Verification ($0.10 USDC)
+ * Configuration: High-Frequency Core Liquidity Hop Paths ($0.10 USDC Micro-Verification)
  * Contract: 0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc
  */
 import { ethers } from "ethers";
@@ -99,7 +99,7 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 FASTLANE REAL-TIME MEV MICRO-PIPELINE TEST ONLINE\n");
+    console.log("🚀 FASTLANE HIGH-FREQUENCY CORE LIQUIDITY PIPELINE TEST ONLINE\n");
     console.log(" Honeycomb Engine Routing via EVM state changes [Sharded Configuration]\n");
     console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);
     console.log(`🧪 Testing Vector Target Amount: $0.10 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);
@@ -112,28 +112,20 @@ if (isMainThread) {
     let fallbackTriggered = false;
     let activeEngineName = "WSS Engine Cluster";
 
+    // ============================================================================
+    // HIGH-FREQUENCY LIQUIDITY BRIDGES (CORE VOLUME HOP PATHS)
+    // ============================================================================
     const tokenMatrix = [
-        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },
         { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },
-        { name: "WBTC",   token: ethers.getAddress("0x1BFD67037B42cf73acF2047067bd4F2C47D9BfD6".toLowerCase()) },
-        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0".toLowerCase()) },
+        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },
         { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },
-        { name: "LINK",   token: ethers.getAddress("0x53E0bca35eCE356BD5ddDFebbD1BB0Bc891dC611".toLowerCase()) },
-        { name: "AAVE",   token: ethers.getAddress("0xD6DF932A45C0f255f857453786923655859951f3".toLowerCase()) },
-        { name: "UNI",    token: ethers.getAddress("0xb33EaAd8d922B108342553e35760940176d149c8".toLowerCase()) },
-        { name: "CRV",    token: ethers.getAddress("0x172370d5Cd63229abA15d6547758714e30b6af59".toLowerCase()) },
-        { name: "SUSHI",  token: ethers.getAddress("0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a".toLowerCase()) },
-        { name: "WOO",    token: ethers.getAddress("0x1B565668729ce78b95bCd7c6A701053E77ED573c".toLowerCase()) },
-        { name: "GRT",    token: ethers.getAddress("0x5fe2B58c013d764999778A227074492aB17C38a1".toLowerCase()) },
-        { name: "GHST",   token: ethers.getAddress("0x385AB5439542e6402264584e03c0043896f05221".toLowerCase()) },
-        { name: "BAL",    token: ethers.getAddress("0x9a71012B13CA4d3D0Cdc72b177DF3ef03b0E76A3".toLowerCase()) },
-        { name: "QUICK",  token: ethers.getAddress("0xB5C064F959943346541fC60914b77f985bde3A0A".toLowerCase()) }
+        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0".toLowerCase()) }
     ];
 
     const totalWorkers = 4;
     const chunkAllocation = Math.ceil(tokenMatrix.length / totalWorkers);
 
-    console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
+    console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads mapping 1:1 to Core Liquidity Bridges.\n`);
 
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
@@ -176,17 +168,17 @@ if (isMainThread) {
             console.log(`✅ Connected successfully to WebSocket Stream Cluster.`);
             
             console.log(`\n═══════════════════════════════════════════════════════════`);
-            console.log(`  ✅ PIPELINE VERIFICATION: MICRO-TEST CONFIGURATION ACTIVE `);
+            console.log(`  ✅ PIPELINE VERIFICATION: HIGH-VOLUME HOPS ARMED          `);
             console.log(`  ├── WebSocket Stream Cluster        ● LIVE                 `);
-            console.log(`  ├── ${totalWorkers} Worker Threads            ● ACTIVE               `);
-            console.log(`  ├── Contract: ${CONFIG.contractAddress.slice(0,10)}...    ● DEPLOYED             `);
-            console.log(`  └── Monitoring states for micro-arbitrage adjustments...   `);
+            console.log(`  ├── ${totalWorkers} Worker Threads            ● ACTIVE (1:1 Allocation)`);
+            console.log(`  ├── Targets: WMATIC, WETH, USDT, DAI ● DEEP HOPS LOADED     `);
+            console.log(`  └── Monitoring high-velocity state changes...              `);
             console.log(`═══════════════════════════════════════════════════════════\n`);
 
             isRotating = false; 
 
             mainProvider.on("block", async (blockNumber) => {
-                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling state changes...`);
+                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling high-volume state changes...`);
                 workerThreads.forEach((worker) => {
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });
                 });
@@ -248,7 +240,7 @@ if (isMainThread) {
 
     parentPort.postMessage({
         type: "LOG",
-        data: `✅ [Shard #${workerId}] Micro-Test Worker armed and waiting for raw pool variances.`
+        data: `✅ [Shard #${workerId}] Dedicated liquidity bridge thread active for: ${tokenPaths.map(t => t.name).join(", ")}`
     });
 
     parentPort.on("message", async (message) => {
@@ -256,7 +248,7 @@ if (isMainThread) {
             const routerIdentifiers = Object.keys(config.routers);
 
             try {
-                // Calculate realistic EIP-1559 gas boundaries
+                // Fetch current base fee to configure gas limits cleanly
                 const feeData = await fastLaneRelayProvider.getFeeData();
                 const currentBaseFee = feeData.estimatedBaseFee || 0n;
                 const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");
@@ -288,26 +280,26 @@ if (isMainThread) {
                                 const amountIn = simulation.best.amountIn;
                                 const estimatedProfit = simulation.best.estimatedProfit;
 
-                                if (amountIn === 0n) continue; // Keep console unblocked during matrix rotations
+                                if (amountIn === 0n) continue; // High-velocity silent pass for dead routing matrix options
 
-                                if (estimatedProfit === 0n) continue; // Silent pass for non-profitable cycles
+                                if (estimatedProfit === 0n) continue; // Silent pass for standard flat market state balance
 
                                 if (estimatedProfit > 0n) {
                                     const rawProfitNormalized = Number(estimatedProfit) / 1e6;
                                     
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `\x1b[32m⚡ MICRO-MEV MATCH FOUND [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) | Net expected: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`
+                                        data: `\x1b[32m⚡ HIGH-VOLUME MATCH FOUND [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) | Net expected: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`
                                     });
 
                                     const txDeadline = Math.floor(Date.now() / 1000) + 30;
 
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `🔥 [Shard #${workerId}] DISPATCHING $0.10 ATOMIC TEST ARBITRAGE TRANSACTION...`
+                                        data: `🔥 [Shard #${workerId}] DISPATCHING $0.10 ATOMIC HIGH-VOLUME ARBITRAGE...`
                                     });
 
-                                    // Async fire-and-forget broadway execution
+                                    // Execution logic via non-blocking asynchronous call
                                     vaultInstance.executeBestFlashLoanArbitrage(
                                         buyRouterAddress,
                                         sellRouterAddress,
@@ -330,31 +322,31 @@ if (isMainThread) {
                                         if (receipt.status === 1) {
                                             parentPort.postMessage({
                                                 type: "LOG",
-                                                data: `\x1b[32m✨ MICRO-TEST CONFIRMED IN BLOCK ${receipt.blockNumber}! Pipeline verified.\x1b[0m`
+                                                data: `\x1b[32m✨ MICRO-TEST CONFIRMED IN BLOCK ${receipt.blockNumber}! Highway pipeline fully verified.\x1b[0m`
                                             });
                                             parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });
                                         } else {
                                             parentPort.postMessage({
                                                 type: "LOG",
-                                                data: `🔴 [Shard #${workerId}] Micro-Tx reverted on-chain.`
+                                                data: `🔴 [Shard #${workerId}] Micro-Tx reverted on-chain (Pool moved post-flight).`
                                             });
                                         }
                                     }).catch((txError) => {
                                         parentPort.postMessage({
                                             type: "LOG",
-                                            data: `⚠️ [Shard #${workerId}] Micro-Tx Broadcast Dropped: ${txError.message.slice(0, 85)}`
+                                            data: `⚠️ [Shard #${workerId}] Broadcast Exception Dropped: ${txError.message.slice(0, 85)}`
                                         });
                                     });
                                 }
 
                             } catch (simError) {
-                                // Catch structural revert states safely
+                                // Ignore standard read exceptions during fast multi-router iteration
                             }
                         }
                     }
                 }
             } catch (loopErr) {
-                // Shield Exception Drop
+                // Global iteration block shield
             }
         }
     });
