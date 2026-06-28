@@ -29,7 +29,6 @@ const CONFIG = {
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
     gasLimitOverride: 850000n, 
     priorityFeeGwei: 45n,
-    // EXPANDED CANDIDATE GRID TO LOCATE STRUCTURAL ARBITRAGE SPREADS
     candidateSizes: [
         "1000000",            // $1.00 USDC
         "10000000",           // $10.00 USDC
@@ -81,7 +80,6 @@ const CONTRACT_ABI = [
 
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 137 });
 
-// Global Error Interceptor to catch WebSocket connection noise safely
 process.on("uncaughtException", (err) => {
     if (err.message && (err.message.includes("Unexpected server response") || err.message.includes("detect network") || err.message.includes("websocket"))) return;
     console.error("☠️ System Intercepted Exception:", err);
@@ -106,8 +104,8 @@ if (isMainThread) {
     let isRotating = false;  
     let fallbackTriggered = false;  
     let activeEngineName = "WebSocket Stream Cluster";  
+    let blockWatchdogTimeout;
 
-    // Primary long-tail token vectors
     const coreBridges = [  
         { name: "WMATIC",   token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },  
         { name: "USDT",     token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },  
@@ -139,6 +137,16 @@ if (isMainThread) {
         workerThreads.push(engineWorker);  
     }  
 
+    // Setup a watchdog timer to force rotation if a connection hangs silently without streaming blocks
+    function resetBlockWatchdog() {
+        clearTimeout(blockWatchdogTimeout);
+        if (fallbackTriggered) return;
+        blockWatchdogTimeout = setTimeout(() => {
+            console.log(`⚠️ [Watchdog] Current pipeline stream stalled. Rotating connection target...`);
+            attemptFallbackRotation();
+        }, 6000); 
+    }
+
     async function connectWebSocketStream() {  
         if (fallbackTriggered) return;  
         const targetEndpoint = CONFIG.providerWssEndpoints[currentEndpointIndex];  
@@ -148,8 +156,13 @@ if (isMainThread) {
                 try { mainProvider.removeAllListeners(); await mainProvider.destroy(); } catch (_) {}  
             }  
 
-            mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK);  
-            await mainProvider.ready;  
+            // Instantiated with custom connection timeout handling rather than native unmanaged execution
+            mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK);
+            
+            if (mainProvider.websocket) {
+                mainProvider.websocket.on("error", () => attemptFallbackRotation());
+                mainProvider.websocket.on("close", () => attemptFallbackRotation());
+            }
               
             console.log(`\n═══════════════════════════════════════════════════════════`);  
             console.log(`  🌐 PRODUCTION MATRIX ENGINE OPERATIONAL                   `);  
@@ -157,7 +170,10 @@ if (isMainThread) {
             console.log(`═══════════════════════════════════════════════════════════\n`);  
 
             isRotating = false;   
+            resetBlockWatchdog();
+
             mainProvider.on("block", async (blockNumber) => {  
+                resetBlockWatchdog();
                 console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber} Across Shards...`);
                 workerThreads.forEach((worker) => {  
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
@@ -182,7 +198,9 @@ if (isMainThread) {
     }  
 
     function setupHttpFallbackMode() {  
+        clearTimeout(blockWatchdogTimeout);
         activeEngineName = "HTTP Fallback Engine";  
+        console.log(`🚨 Switching Cluster to Active HTTPS Polling Fallback via: ${CONFIG.fallbackRpc}`);
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
         fallbackProvider.on("block", (blockNumber) => {  
             console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber}...`);
@@ -204,9 +222,8 @@ if (isMainThread) {
     const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
 
     let pendingTransactionsCount = 0;
-    let cachedMinProfit = 1n; // Defaults to 1 micro-unit ($0.000001)
+    let cachedMinProfit = 1n; 
 
-    // Pull the accurate minimum profitability constraint straight from contract state variables
     vaultInstance.minimumProfitUSDC().then(val => { cachedMinProfit = val; }).catch(() => {});
 
     parentPort.postMessage({  
@@ -239,7 +256,6 @@ if (isMainThread) {
                         const buyRouterAddress = config.routers[buyRouterName];  
                         const sellRouterAddress = config.routers[sellRouterName];  
 
-                        // Multi-Hop route tracking arrays matching the structural path layout
                         const pathToToken = [config.usdcAddress, primaryAsset.token];  
                         const pathToUSDC = [primaryAsset.token, config.usdcAddress];  
 
@@ -256,12 +272,10 @@ if (isMainThread) {
                             const estimatedFinalUSDC = simulation.best.estimatedFinalUSDC; 
                             const estimatedProfit = simulation.best.estimatedProfit;
 
-                            // Skip paths where contract returns zeros (either unprofitable or pool does not exist)
                             if (amountIn === 0n || estimatedFinalUSDC === 0n) {
                                 continue;   
                             }
 
-                            // STABLE TARGET PROFIT COMPARISON GATEWAY
                             if (estimatedProfit >= cachedMinProfit && estimatedProfit > 0n) {  
                                 const rawProfitNormalized = Number(estimatedProfit) / 1e6;  
                                 
@@ -308,7 +322,7 @@ if (isMainThread) {
                                         });  
                                     }  
                                 }).catch((txError) => {  
-                                    pendingTransactionsCount--; 
+                                    pendingTransactionsCount--;  
                                     parentPort.postMessage({  
                                         type: "LOG",  
                                         data: `⚠️ Dispatcher Intercepted Error: ${txError.message}`  
@@ -317,14 +331,12 @@ if (isMainThread) {
 
                                 if (config.executeOnFirstProfit) break;
                             } else {
-                                // Logs when routes produce an output, but cannot exceed the initial input amount
                                 parentPort.postMessage({
                                     type: "LOG",
                                     data: `ℹ️ [Shard #${workerId}] Route ${buyRouterName}➔${sellRouterName} liquid but unprofitable (Returned ${estimatedFinalUSDC.toString()} for input ${amountIn.toString()}).`
                                 });
                             }
                         } catch (simError) {  
-                            // Prints explicit details if the contract reverts during simulation
                             if (simError.message && simError.message.includes("execution reverted")) {
                                 parentPort.postMessage({
                                     type: "LOG",
@@ -336,7 +348,7 @@ if (isMainThread) {
                     if (config.executeOnFirstProfit && pendingTransactionsCount >= config.maxPendingTransactions) break;
                 }
             } catch (err) {  
-                // Silent catch fallback for connection/gas estimation anomalies
+                // Safety catch for standard node runtime noise
             }  
         }  
     });  
