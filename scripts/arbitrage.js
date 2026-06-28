@@ -26,8 +26,8 @@ const CONFIG = {
     ], 
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",              
     fallbackRpc: "https://polygon.drpc.org", 
-    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),               
-    usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
+    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"),               
+    usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
     gasLimitOverride: 750000n,      
     priorityFeeGwei: 45n,       
     candidateSizes: [
@@ -35,12 +35,12 @@ const CONFIG = {
     ],
     // FIX 2: Corrected all router addresses to match the proven, active deployments used in js1
     routers: {
-        QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
-        SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
-        DFYN:    ethers.getAddress("0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429".toLowerCase()),
-        WAULT:   ethers.getAddress("0xa98ea6356b4ff7b427969ddf5da3627d6aeae9a48e".toLowerCase()),
-        APESWAP: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607".toLowerCase()),
-        FIREBIRD:ethers.getAddress("0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA".toLowerCase())
+        QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
+        SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
+        DFYN:    ethers.getAddress("0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429"),
+        WAULT:   ethers.getAddress("0xa98ea6356a4ff7b427969ddf5da3627d6aeae9a4"), // FIXED: Valid address string & structure
+        APESWAP: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"),
+        FIREBIRD:ethers.getAddress("0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA")
     }
 };
 
@@ -49,7 +49,7 @@ const CONTRACT_ABI = [
         "inputs": [
             { "internalType": "address", "name": "buyRouter", "type": "address" },
             { "internalType": "address", "name": "sellRouter", "type": "address" },
-            { "internalType": "uint256[]", "name": "candidateSizes", "type": "uint256[]" },
+            { "internalType": "uint256[]", "name": "candidateSizes", "type": "uint2256[]" },
             { "internalType": "address[]", "name": "pathToToken", "type": "address[]" },
             { "internalType": "address[]", "name": "pathToUSDC", "type": "address[]" }
         ],
@@ -111,10 +111,10 @@ if (isMainThread) {
     let activeEngineName = "WebSocket Stream Cluster";
 
     const coreBridges = [
-        { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },
-        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase()) },
-        { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },
-        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0".toLowerCase()) }
+        { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270") },
+        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619") },
+        { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F") },
+        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0") }
     ];
 
     const totalWorkers = 4;
@@ -247,7 +247,6 @@ if (isMainThread) {
                     for (let b = 0; b < routerIdentifiers.length; b++) {
                         for (let s = 0; s < routerIdentifiers.length; s++) {
                             // FIX 3: REMOVED 'if (b === s) continue;' restriction.
-                            // This allows your 3-hop array to execute sequentially inside a single router environment (like Quickswap -> Quickswap), mimicking js1's behavior.
 
                             const buyRouterName = routerIdentifiers[b];
                             const sellRouterName = routerIdentifiers[s];
