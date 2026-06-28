@@ -23,8 +23,9 @@ const CONFIG = {
     ], 
     fastLaneRpc: "https://polygon.fastlane.live/rpc",               
 
-    contractAddress: "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc",                
-    usdcAddress: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+    // Enforce Checksums at the root config level
+    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"),                
+    usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
 
     estimatedGasCost: 0.0,       
     priorityFeeGwei: 50n,       
@@ -34,13 +35,13 @@ const CONFIG = {
     ],
 
     routers: {
-        QUICK:   "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-        SUSHI:   "0x1b02dA8Cb0d097e645729F65733526440d599963",
-        DFYN:    "0xF18056Bbd320E96A48e3Fbf8bC061322531aac99",
-        WAULT:   "0x3a1D873C37abE9244065524bAd7F7a2f35f7999A",
-        JETSWAP: "0x5C6EC38c28eCD03d18a540552a914A8f1b6214A5",
-        APESWAP: "0xC0788A3D1DE900874986012c4feEd447C1be9486",
-        KATA:    "0x1b02dA8Cb0d097e645729F65733526440d599963" 
+        QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
+        SUSHI:   ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963"),
+        DFYN:    ethers.getAddress("0xF18056Bbd320E96A48e3Fbf8bC061322531aac99"),
+        WAULT:   ethers.getAddress("0x3a1D873C37abE9244065524bAd7F7a2f35f7999A"),
+        JETSWAP: ethers.getAddress("0x5C6EC38c28eCD03d18a540552a914A8f1b6214A5"),
+        APESWAP: ethers.getAddress("0xC0788A3D1DE900874986012c4feEd447C1be9486"),
+        KATA:    ethers.getAddress("0x1b02dA8Cb0d097e645729F65733526440d599963") 
     }
 };
 
@@ -110,22 +111,23 @@ if (isMainThread) {
     let fallbackTriggered = false;
     let activeEngineName = "WSS Engine Cluster";
 
+    // ✅ Cleaned and sanity-wrapped token tracking arrays with auto-checksumming
     const tokenMatrix = [
-        { name: "WETH",   token: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" },
-        { name: "WMATIC", token: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" },
-        { name: "WBTC",   token: "0x1BFD67037B42cf73acF2047067bd4F2C47D9BfD6" },
-        { name: "DAI",    token: "0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0" },
-        { name: "USDT",   token: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F" },
-        { name: "LINK",   token: "0x53E0bca35eCE356BD5ddDFebbD1BB0Bc891dC611" },
-        { name: "AAVE",   token: "0xD6DF932A45C0f255f857453786923655859951f3" },
-        { name: "UNI",    token: "0xb33EaAd8d922B108342553e35760940176d149c8" },
-        { name: "CRV",    token: "0x172370d5Cd63229abA15d6547758714e30b6af59" },
-        { name: "SUSHI",  token: "0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a" },
-        { name: "WOO",    token: "0x1B565668729ce78b95bCd7c6A701053E77ED593c" },
-        { name: "GRT",    token: "0x5fe2B58c013d764999778A227074492aB17C38a1" },
-        { name: "GHST",   token: "0x385AB5439542e6402264584e03c0043896f05221" },
-        { name: "BAL",    token: "0x9a71012B13CA4d3D0Cdc72b177DF3ef03b0E76A3" },
-        { name: "QUICK",  token: "0xB5C064F959943346541fC60914b77f985bde3A0A" }
+        { name: "WETH",   token: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619") },
+        { name: "WMATIC", token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270") },
+        { name: "WBTC",   token: ethers.getAddress("0x1BFD67037B42cf73acF2047067bd4F2C47D9BfD6") },
+        { name: "DAI",    token: ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F98119404A55d0") },
+        { name: "USDT",   token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F") },
+        { name: "LINK",   token: ethers.getAddress("0x53E0bca35eCE356BD5ddDFebbD1BB0Bc891dC611") },
+        { name: "AAVE",   token: ethers.getAddress("0xD6DF932A45C0f255f857453786923655859951f3") },
+        { name: "UNI",    token: ethers.getAddress("0xb33EaAd8d922B108342553e35760940176d149c8") },
+        { name: "CRV",    token: ethers.getAddress("0x172370d5Cd63229abA15d6547758714e30b6af59") },
+        { name: "SUSHI",  token: ethers.getAddress("0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a") },
+        { name: "WOO",    token: ethers.getAddress("0x1B565668729ce78b95bCd7c6A701053E77ED593c") },
+        { name: "GRT",    token: ethers.getAddress("0x5fe2B58c013d764999778A227074492aB17C38a1") },
+        { name: "GHST",   token: ethers.getAddress("0x385AB5439542e6402264584e03c0043896f05221") },
+        { name: "BAL",    token: ethers.getAddress("0x9a71012B13CA4d3D0Cdc72b177DF3ef03b0E76A3") },
+        { name: "QUICK",  token: ethers.getAddress("0xB5C064F959943346541fC60914b77f985bde3A0A") }
     ];
 
     const totalWorkers = 4;
@@ -261,7 +263,7 @@ if (isMainThread) {
         );
 
         executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
-        vaultInstance = new ethers.Contract(config.contractAddress.toLowerCase(), CONTRACT_ABI, executionWallet);
+        vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
         isWorkerReady = true;
 
         parentPort.postMessage({
@@ -288,8 +290,8 @@ if (isMainThread) {
                             const buyRouterName = routerIdentifiers[b];
                             const sellRouterName = routerIdentifiers[s];
                             
-                            const buyRouterAddress = config.routers[buyRouterName].toLowerCase();
-                            const sellRouterAddress = config.routers[sellRouterName].toLowerCase();
+                            const buyRouterAddress = config.routers[buyRouterName];
+                            const sellRouterAddress = config.routers[sellRouterName];
 
                             const pathToToken = [config.usdcAddress, asset.token];
                             const pathToUSDC = [asset.token, config.usdcAddress];
@@ -322,7 +324,6 @@ if (isMainThread) {
                                     continue;
                                 }
 
-                                // If execution threshold hit, push production block payload
                                 if (estimatedProfit > 0n) {
                                     const rawProfitNormalized = Number(estimatedProfit) / 1e6;
                                     
@@ -331,7 +332,6 @@ if (isMainThread) {
                                         data: `⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: +$${rawProfitNormalized.toFixed(6)} USDC`
                                     });
 
-                                    // Emit up to top-level balance accumulator
                                     parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });
                                 }
 
@@ -340,15 +340,14 @@ if (isMainThread) {
                                 if (errMsg.includes("Identical addresses")) {
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `
-                       \n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: -$0.412500 USDC`
+                                        data: `🟡 CONTRACT REVERT [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: execution reverted: Identical addresses`
                                     });
                                     continue;
                                 }
 
                                 parentPort.postMessage({
                                     type: "LOG",
-                                    data: `🟡 CONTRACT REVERT [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: ${errMsg.slice(0, 60)}`
+                                    data: `🟡 CONTRACT REVERT [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name}) Exception: ${errMsg.slice(0, 75)}`
                                 });
                             }
                         }
