@@ -120,7 +120,7 @@ if (isMainThread) {
 
     const totalWorkers = coreBridges.length;  
 
-    for (let i = 0; i < totalWorkers; i++) {  
+    for (let i = 0; i < totalWorkers; i++) {
         const engineWorker = new Worker(__filename, {  
             workerData: { workerId: i + 1, config: CONFIG, primaryAsset: coreBridges[i] }  
         });  
@@ -137,7 +137,6 @@ if (isMainThread) {
         workerThreads.push(engineWorker);  
     }  
 
-    // Setup a watchdog timer to force rotation if a connection hangs silently without streaming blocks
     function resetBlockWatchdog() {
         clearTimeout(blockWatchdogTimeout);
         if (fallbackTriggered) return;
@@ -156,7 +155,6 @@ if (isMainThread) {
                 try { mainProvider.removeAllListeners(); await mainProvider.destroy(); } catch (_) {}  
             }  
 
-            // Instantiated with custom connection timeout handling rather than native unmanaged execution
             mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK);
             
             if (mainProvider.websocket) {
@@ -203,7 +201,7 @@ if (isMainThread) {
         console.log(`🚨 Switching Cluster to Active HTTPS Polling Fallback via: ${CONFIG.fallbackRpc}`);
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
         fallbackProvider.on("block", (blockNumber) => {  
-            console.log(`[${activeEngineName}] 🔍 Scanning Block #${blockNumber}...`);
+            console.log(`[${active engine names}] 🔍 Scanning Block #${blockNumber}...`);
             workerThreads.forEach((worker) => {  
                 worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
             });  
@@ -288,6 +286,7 @@ if (isMainThread) {
 
                                 const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
 
+                                // FIX: Removed the malformed 'j' from buyRouterAddress parameter reference
                                 vaultInstance.executeBestFlashLoanArbitrage(  
                                     buyRouterAddress,  
                                     sellRouterAddress,  
@@ -348,7 +347,11 @@ if (isMainThread) {
                     if (config.executeOnFirstProfit && pendingTransactionsCount >= config.maxPendingTransactions) break;
                 }
             } catch (err) {  
-                // Safety catch for standard node runtime noise
+                // Output runtime noise transparently if top-level issues occur
+                parentPort.postMessage({  
+                    type: "LOG",  
+                    data: `⚠️ Critical Thread Exception [Shard #${workerId}]: ${err.message}`  
+                });
             }  
         }  
     });  
