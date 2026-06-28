@@ -1,10 +1,9 @@
 /**
- * ARBBOT1 - Full Reactive Multi-Threaded Multi-Hop Engine
+ * ARBBOT1 - High-Velocity Instant Pipeline Verification Engine
  * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> FastLane Bundle Relay
  * Specification: Ethers v6 Production Build
- * Configuration: Deep Multi-Hop Core Liquidity Paths ($0.02 USDC Micro-Verification)
+ * Mode: Instant Trigger Execution Mode (Zero Re-validation / Maximum Concurrency Ceiling)
  * Structure: USDC -> [Full Token Catalog Asset] -> WMATIC -> WETH -> USDT -> DAI -> USDC
- * Trigger Optimization: Gross Revenue Extraction Mode (Bypassing Fee Deductions)
  * Contract: 0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc
  */
 
@@ -41,7 +40,14 @@ const CONFIG = {
         WAULT:   ethers.getAddress("0xa98ea6356a4ff7b427969ddf5da3627d6aeae9a4".toLowerCase()), 
         APESWAP: ethers.getAddress("0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607".toLowerCase()),
         FIREBIRD:ethers.getAddress("0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA".toLowerCase())
-    }
+    },
+    // HIGH-VELOCITY VERIFICATION PARAMETERS
+    immediateExecution: true,
+    revalidateBeforeSend: false,      // Bypasses extra gas/simulation logic overhead
+    executeOnFirstProfit: true,       // Fires the exact block instant gross condition hits
+    maxPendingTransactions: 1,        // Strictly prevents execution overlap / nonce locking
+    blockConfirmConfirmations: 1,      // Drops thread blocking after the first target receipt
+    deadlineSeconds: 30               // Short window transaction death-drop protection
 };
 
 const CONTRACT_ABI = [
@@ -74,16 +80,11 @@ const CONTRACT_ABI = [
 
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 137 });
 
-// ============================================================================
-// GLOBAL NON-CRASH EXCEPTION SHIELD
-// ============================================================================
+// Global Shield against standard socket disconnection noise
 process.on("uncaughtException", (err) => {
-    if (err.message && (err.message.includes("Unexpected server response") || err.message.includes("detect network") || err.message.includes("ENOTFOUND") || err.message.includes("websocket"))) {
-        return;
-    }
-    console.error("☠️ Uncaught Exception caught by Shield:", err);
+    if (err.message && (err.message.includes("Unexpected server response") || err.message.includes("detect network") || err.message.includes("ENOTFOUND") || err.message.includes("websocket"))) return;
+    console.error("☠️ System Shield intercepted exception:", err);
 });
-
 process.on("unhandledRejection", (reason) => {
     if (reason && reason.message && (reason.message.includes("detect network") || reason.message.includes("ENOTFOUND") || reason.message.includes("websocket"))) return;
 });
@@ -97,10 +98,9 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 FASTLANE CORE MULTI-HOP ENGINE ONLINE\n");  
-    console.log(" Honeycomb Engine Running in Zero-Fee Verification Mode\n");  
-    console.log(`📡 Connected to FastLane Relay: ${CONFIG.fastLaneRpc}`);  
-    console.log(`🧪 Testing Vector Target Amount: $0.02 USDC (${CONFIG.candidateSizes[0]} micro-units)\n`);  
+    console.log("⚡ INSTANT HIGH-VELOCITY REACTION RUNNER ONLINE\n");  
+    console.log(`📡 Target Node Endpoint: ${CONFIG.fastLaneRpc}`);  
+    console.log(`🔧 Concurrency Cap: Exactly ${CONFIG.maxPendingTransactions} Flight Multi-Tx Allowed\n`);
 
     let totalRealizedProfits = 0.0;  
     let workerThreads = [];  
@@ -110,7 +110,6 @@ if (isMainThread) {
     let fallbackTriggered = false;  
     let activeEngineName = "WebSocket Stream Cluster";  
 
-    // Full 36-Token scanning catalog with strict checksum validation normalization
     const coreBridges = [  
         { name: "WMATIC",   token: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()) },  
         { name: "USDT",     token: ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()) },  
@@ -162,7 +161,7 @@ if (isMainThread) {
                 console.log(msg.data);  
             } else if (msg.type === "PROFIT") {  
                 totalRealizedProfits += msg.amount;  
-                console.log(`💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC`);  
+                console.log(`💰 Verified Pipeline Balance Accumulated: ${totalRealizedProfits.toFixed(6)} USDC`);  
             }  
         });  
 
@@ -189,16 +188,14 @@ if (isMainThread) {
             activeEngineName = "WebSocket Stream Cluster";  
               
             console.log(`\n═══════════════════════════════════════════════════════════`);  
-            console.log(`  ✅ PIPELINE VERIFICATION: FULL HOP ARMED DEEP SCAN      `);  
-            console.log(`  ├── WebSocket Stream Cluster        ● LIVE                 `);  
-            console.log(`  ├── ${totalWorkers} Sharded Worker Threads   ● ACTIVE (Core Route Injection)`);  
-            console.log(`  ├── Topology: USDC ➔ [Shard] ➔ WMATIC ➔ WETH ➔ USDT ➔ DAI ➔ USDC`);  
-            console.log(`  └── Sensitivity Level: Gross Returns > Input + 0.000001   `);  
+            console.log(`  🚀 HIGH-VELOCITY MODE ENGAGED: NO REVALIDATION DETOURS   `);  
+            console.log(`  ├── Concurrency Cap         ● ${CONFIG.maxPendingTransactions} Max Flight Tx            `);  
+            console.log(`  ├── Block Confirmation Cap  ● Set to ${CONFIG.blockConfirmConfirmations} Confirmation     `);  
+            console.log(`  └── Engine Loop Optimization● Immediate Gross-Fire Enabled`);  
             console.log(`═══════════════════════════════════════════════════════════\n`);  
 
             isRotating = false;   
             mainProvider.on("block", async (blockNumber) => {  
-                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling all multi-hop state changes...`);  
                 workerThreads.forEach((worker) => {  
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
                 });  
@@ -212,13 +209,11 @@ if (isMainThread) {
         if (isRotating || fallbackTriggered) return;  
         isRotating = true;  
         currentEndpointIndex++;  
-
         if (currentEndpointIndex >= CONFIG.providerWssEndpoints.length) {  
             fallbackTriggered = true;  
             setupHttpFallbackMode();  
             return;  
         }  
-
         await new Promise((resolve) => setTimeout(resolve, 100));  
         isRotating = false;  
         await connectWebSocketStream();  
@@ -228,9 +223,7 @@ if (isMainThread) {
         try {  
             activeEngineName = "HTTP Fallback Engine";  
             const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
-              
             fallbackProvider.on("block", (blockNumber) => {  
-                console.log(`[${activeEngineName} - Block #${blockNumber}] Polling state changes...`);  
                 workerThreads.forEach((worker) => {  
                     worker.postMessage({ type: "BLOCK_TRIGGER", blockNumber });  
                 });  
@@ -238,27 +231,23 @@ if (isMainThread) {
         } catch (err) {}  
     }  
 
-    setTimeout(() => {  
-        connectWebSocketStream();  
-    }, 300);  
+    setTimeout(() => { connectWebSocketStream(); }, 300);  
 
 // ============================================================================
 // COMPONENT WORKER THREAD RUNTREES
 // ============================================================================
 } else {
     const { workerId, config, primaryAsset } = workerData;
-    const fastLaneRelayProvider = new ethers.JsonRpcProvider(  
-        config.fastLaneRpc,   
-        STATIC_POLYGON_NETWORK,   
-        { staticNetwork: STATIC_POLYGON_NETWORK }  
-    );  
-      
+    const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
     const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);  
     const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
 
+    // Stateful flag tracks global active execution instances inside this thread worker
+    let pendingTransactionsCount = 0;
+
     parentPort.postMessage({  
         type: "LOG",  
-        data: `✅ [Shard #${workerId}] Deep Hop Shard Active. Target Entry Point: ${primaryAsset.name}`  
+        data: `✅ [Shard #${workerId}] Instant Scan Path Active. Vector: ${primaryAsset.name}`  
     });  
 
     parentPort.on("message", async (message) => {  
@@ -266,30 +255,35 @@ if (isMainThread) {
             const currentBlockNum = message.blockNumber;  
             const routerIdentifiers = Object.keys(config.routers);  
 
+            // Check if pipeline is currently bottlenecked by active execution tracking
+            if (pendingTransactionsCount >= config.maxPendingTransactions) {
+                return; 
+            }
+
             try {  
                 const feeData = await fastLaneRelayProvider.getFeeData();  
                 const currentBaseFee = feeData.estimatedBaseFee || 0n;  
                 const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
                 const calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;  
 
-                // High-Liquidity Bluechip Tokens for Hop Chain Realignment
                 const wmatic = ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase());
                 const weth   = ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619".toLowerCase());
                 const usdt   = ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase());
                 const dai    = ethers.getAddress("0x8f3cf7ad23cd3cadbd9735aff958023239c6a063".toLowerCase());
 
-                // Avoid cyclic self-routing errors if the primary asset is already a core component
                 if (primaryAsset.token !== wmatic && primaryAsset.token !== weth && primaryAsset.token !== usdt && primaryAsset.token !== dai) {
                     
                     for (let b = 0; b < routerIdentifiers.length; b++) {  
                         for (let s = 0; s < routerIdentifiers.length; s++) {  
+                            
+                            // Exit calculation checks instantly if an adjacent lane fired an active tracking state
+                            if (pendingTransactionsCount >= config.maxPendingTransactions) break;
+
                             const buyRouterName = routerIdentifiers[b];  
                             const sellRouterName = routerIdentifiers[s];  
-                              
                             const buyRouterAddress = config.routers[buyRouterName];  
                             const sellRouterAddress = config.routers[sellRouterName];  
 
-                            // Structural Multi-Hop Generation using the entire 36 tokens catalog coupled into high volume pools
                             const pathToToken = [config.usdcAddress, primaryAsset.token, wmatic, weth, usdt];  
                             const pathToUSDC = [usdt, dai, config.usdcAddress];  
 
@@ -307,22 +301,22 @@ if (isMainThread) {
 
                                 if (amountIn === 0n || estimatedFinalUSDC === 0n) continue;   
 
-                                // TRIGGER CONDITION: Evaluates gross return difference > contract execution base requirement (1 micro-unit)
+                                // Trigger validation condition
                                 if (estimatedFinalUSDC >= (amountIn + 1n)) {  
                                     const rawProfitNormalized = Number(estimatedFinalUSDC - amountIn) / 1e6;  
-                                      
-                                    parentPort.postMessage({  
-                                        type: "LOG",  
-                                        data: `\x1b[32m⚡ GROSS PROFIT HIGHER THAN MINIMUM DETECTED [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${primaryAsset.name} ➔ MULTI-HOP-CORE) | Gross variance: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`  
-                                    });  
-
-                                    const txDeadline = Math.floor(Date.now() / 1000) + 30;  
+                                    
+                                    // Lock thread state immediately before execution processing starts
+                                    pendingTransactionsCount++;
 
                                     parentPort.postMessage({  
                                         type: "LOG",  
-                                        data: `🔥 [Shard #${workerId}] FORCE DISPATCHING LIVE PIPELINE TRANSACTION FOR MULTI-HOP MARGIN EXTRACTION...`  
+                                        data: `\x1b[35m⚡ pipeline instant-fire [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} | Gross variance: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`  
                                     });  
 
+                                    // Dynamic expiry enforcement
+                                    const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
+
+                                    // Direct dispatch mode bypassing second validations or loop delays
                                     vaultInstance.executeBestFlashLoanArbitrage(  
                                         buyRouterAddress,  
                                         sellRouterAddress,  
@@ -338,37 +332,44 @@ if (isMainThread) {
                                     ).then(async (txResponse) => {
                                         parentPort.postMessage({  
                                             type: "LOG",  
-                                            data: `📡 [Shard #${workerId}] Multi-Hop Tx Sent. Hash: ${txResponse.hash}`  
+                                            data: `🚀 Pipeline Flight Sent. Hash: ${txResponse.hash}`  
                                         });  
 
-                                        const receipt = await txResponse.wait();  
+                                        // Wait dynamically based on target configuration block threshold
+                                        const receipt = await txResponse.wait(config.blockConfirmConfirmations);  
+                                        pendingTransactionsCount--; // Reset track block state lock
+
                                         if (receipt.status === 1) {  
                                             parentPort.postMessage({  
                                                 type: "LOG",  
-                                                data: `✨ SUCCESS! Deep hop position captured in block ${currentBlockNum}. Highway pipeline fully verified.`  
+                                                data: `✨ SUCCESS! Pipeline verified in block ${receipt.blockNumber}.`  
                                             });  
                                             parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });  
                                         } else {  
                                             parentPort.postMessage({  
                                                 type: "LOG",  
-                                                data: `🔴 [Shard #${workerId}] Multi-Hop Tx reverted on-chain.`  
+                                                data: `🔴 On-chain Reverted Receipt for transaction: ${txResponse.hash}`  
                                             });  
                                         }  
                                     }).catch((txError) => {  
+                                        pendingTransactionsCount--; // Free tracking state lock on error drops
                                         parentPort.postMessage({  
                                             type: "LOG",  
-                                            data: `⚠️ [Shard #${workerId}] Broadcast Exception Dropped: ${txError.message}`  
+                                            data: `⚠️ Dispatch Failure on Network Core: ${txError.message}`  
                                         });  
-                                    });  
+                                    });
+
+                                    if (config.executeOnFirstProfit) break;
                                 }  
                             } catch (simError) {  
-                                // Silent fallback context for failing structural paths  
+                                // Silent fallback step for failing layout structures
                             }  
                         }  
+                        if (config.executeOnFirstProfit && pendingTransactionsCount >= config.maxPendingTransactions) break;
                     }
                 }  
             } catch (err) {  
-                // Fee data or polling breakdown metrics fallback  
+                // Silent catch fallback for gas calculation issues
             }  
         }  
     });  
