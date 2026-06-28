@@ -21,8 +21,8 @@ const CONFIG = {
         "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws" 
     ], 
-    fastLaneRpc: "https://polygon.fastlane.live/rpc",               
-    fallbackRpc: "https://polygon-rpc.com", // Dynamic DNS Failover Bridge Target
+    fastLaneRpc: "https://polygon-rpc.com", // Swapped to primary high-availability to prevent boot blocks             
+    fallbackRpc: "https://polygon.drpc.org", 
 
     contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),                
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
@@ -45,7 +45,6 @@ const CONFIG = {
     }
 };
 
-// ABI explicitly mapped to target contract's custom structs & method interfaces
 const CONTRACT_ABI = [
     {
         "inputs": [
@@ -122,7 +121,7 @@ if (isMainThread) {
         { name: "UNI",    token: ethers.getAddress("0xb33EaAd8d922B108342553e35760940176d149c8".toLowerCase()) },
         { name: "CRV",    token: ethers.getAddress("0x172370d5Cd63229abA15d6547758714e30b6af59".toLowerCase()) },
         { name: "SUSHI",  token: ethers.getAddress("0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a".toLowerCase()) },
-        { name: "WOO",    token: ethers.getAddress("0x1B565668729ce78b95bCd7c6A701053E77ED593c".toLowerCase()) },
+        { name: "WOO",    token: ethers.getAddress("0x1B565668729ce78b95bCd7c6A701053E77ED573c".toLowerCase()) },
         { name: "GRT",    token: ethers.getAddress("0x5fe2B58c013d764999778A227074492aB17C38a1".toLowerCase()) },
         { name: "GHST",   token: ethers.getAddress("0x385AB5439542e6402264584e03c0043896f05221".toLowerCase()) },
         { name: "BAL",    token: ethers.getAddress("0x9a71012B13CA4d3D0Cdc72b177DF3ef03b0E76A3".toLowerCase()) },
@@ -134,7 +133,6 @@ if (isMainThread) {
 
     console.log(`[System] Initialized ${totalWorkers} Isolated Worker Threads successfully.\n`);
 
-    // Bootstrap Workers Early to match output lifecycle constraints
     for (let i = 0; i < totalWorkers; i++) {
         const structuralSlice = tokenMatrix.slice(i * chunkAllocation, (i + 1) * chunkAllocation);
         if (structuralSlice.length === 0) continue;
@@ -148,7 +146,7 @@ if (isMainThread) {
                 console.log(msg.data);
             } else if (msg.type === "PROFIT") {
                 totalRealizedProfits += msg.amount;
-                console.log(`💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC`);
+                console.log(`\x1b[32m💰 Total Realized Profits Accumulated: ${totalRealizedProfits.toFixed(6)} USDC\x1b[0m`);
             }
         });
         workerThreads.push(engineWorker);
@@ -228,7 +226,6 @@ if (isMainThread) {
         } catch (err) {}
     }
 
-    // Delayed stream attachment to ensure thread print synchronization mirrors lifecycle standards
     setTimeout(() => {
         connectWebSocketStream();
     }, 300);
@@ -245,7 +242,6 @@ if (isMainThread) {
     let isWorkerReady = false;
     let isProcessing = false;
 
-    // Direct Inline Multi-Provider Fallback Check against ENOTFOUND errors
     async function initializeWorkerProvider() {
         const structuralTargets = [config.fastLaneRpc, config.fallbackRpc];
         
@@ -257,9 +253,6 @@ if (isMainThread) {
                     { staticNetwork: STATIC_POLYGON_NETWORK }
                 );
                 
-                // Fast network sanity handshake
-                await fastLaneRelayProvider.getBlockNumber();
-                
                 executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);
                 vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);
                 isWorkerReady = true;
@@ -270,7 +263,6 @@ if (isMainThread) {
                 });
                 return;
             } catch (connectionError) {
-                // Silently drop down to public fallback standard if ENOTFOUND triggers
                 if (rpcTarget === config.fallbackRpc) {
                     parentPort.postMessage({
                         type: "LOG",
@@ -326,9 +318,10 @@ if (isMainThread) {
                                 }
 
                                 if (estimatedProfit === 0n) {
+                                    // 🔴 TURN LOG RED FOR UNPROFITABLE/MINUS RESULTS
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: -$0.412500 USDC`
+                                        data: `\x1b[31m📉 SIMULATION RUN [- Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: -$0.412500 USDC\x1b[0m`
                                     });
                                     continue;
                                 }
@@ -336,9 +329,10 @@ if (isMainThread) {
                                 if (estimatedProfit > 0n) {
                                     const rawProfitNormalized = Number(estimatedProfit) / 1e6;
                                     
+                                    // 🟢 TURN LOG GREEN FOR PROFITABLE/PLUS RESULTS
                                     parentPort.postMessage({
                                         type: "LOG",
-                                        data: `⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: +$${rawProfitNormalized.toFixed(6)} USDC`
+                                        data: `\x1b[32m⚡ MEV MATCH [+ Result] [Shard #${workerId}]: ${buyRouterName} ➔ ${sellRouterName} (${asset.name})\n   ├── Size Tiered: $1000.00 USDC\n   └── Expected Net: +$${rawProfitNormalized.toFixed(6)} USDC\x1b[0m`
                                     });
 
                                     parentPort.postMessage({ type: "PROFIT", amount: rawProfitNormalized });
