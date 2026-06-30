@@ -1,3 +1,4 @@
+
 /**
  * ARBBOT1 - High-Velocity Production Execution Engine
  * Target: VaultArbitrageEnforcer
@@ -14,7 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 // ============================================================================
 const CONFIG = {
     providerWssEndpoints: [
-        "wss://polygon-rpc.com/ws",
+      //  "wss://polygon-rpc.com/ws",
         "wss://polygon-bor-rpc.publicnode.com"
     ],
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
