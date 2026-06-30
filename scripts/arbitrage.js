@@ -1,5 +1,5 @@
-const { ethers } = require("ethers");
-const { Worker, isMainThread, parentPort, workerData } = require("worker_threads");
+import { ethers } from "ethers";
+import { Worker, isMainThread, parentPort, workerData } from "worker_threads";
 
 // ============================================================================
 // CONFIGURATION MATRIX
@@ -176,7 +176,8 @@ if (!isMainThread) {
         console.log("└── Active Shard Subprocesses ● 4 Isolated Cluster Worker Threads");
 
         for (let i = 1; i <= 4; i++) {
-            const worker = new Worker(__filename, { workerData: { shardId: i } });
+            // FIX: Using import.meta.filename for ES Module thread targets
+            const worker = new Worker(import.meta.filename, { workerData: { shardId: i } });
             
             worker.on("message", async (msg) => {
                 if (msg.type === "SCAN_LOG") {
@@ -186,7 +187,6 @@ if (!isMainThread) {
                     console.log(`├── Target Sequence: USDC ➔ QUICK ➔ SUSHI ➔ USDC`);
                     console.log(`├── Optimal Input Allocation: ${CONFIG.targetAllocationUSDC} USDC`);
                     
-                    // Safely slice local monotonic sequence IDs down to payload broadcast
                     const txNonce = await getNextSequentialNonce(wallet.address, mainProvider);
                     console.log(`🚀 Allocating Matrix Pipeline ➔ Nonce Assigned: ${txNonce}`);
                     
