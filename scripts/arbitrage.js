@@ -16,10 +16,10 @@ const __filename = fileURLToPath(import.meta.url);
 // ============================================================================
 const CONFIG = {
     providerWssEndpoints: [
-        "wss://polygon-rpc.com/ws",
+    //    "wss://polygon-rpc.com/ws",
         "wss://polygon-bor-rpc.publicnode.com",
-        "wss://rpc-mainnet.matterlight.xyz/ws",
-        "wss://polygon.gateway.tenderly.co",
+     //   "wss://rpc-mainnet.matterlight.xyz/ws",
+    //    "wss://polygon.gateway.tenderly.co",
         "wss://polygon.rpc.subquery.network/public/ws"
     ],
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
