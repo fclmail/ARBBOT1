@@ -20,7 +20,7 @@ const CONFIG = {
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
     fallbackRpc: "https://polygon.drpc.org",
     // Replace with your freshly deployed VaultArbitrageEnforcer address
-    contractAddress: ethers.getAddress("0xYourActualDeployedContractAddressHere".toLowerCase()),
+    contractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958".toLowerCase()),
     
     // Core Polygon Asset Tokens
     tokens: {
