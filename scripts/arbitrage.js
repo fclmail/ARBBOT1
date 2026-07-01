@@ -20,18 +20,21 @@ const CONFIG = {
     ],
     fastLaneRpc: process.env.FAST_LANE_RPC || process.env.RPC_URL || "https://polygon-rpc.com", 
     fallbackRpc: "https://polygon.drpc.org",
-    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),
-    usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()), // Bridged USDC.e
-    wmaticAddress: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()),
+    
+    // ✅ Updated Contract Address
+    contractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958"),
+    
+    usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"), // Bridged USDC.e
+    wmaticAddress: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),
     gasLimitOverride: 850000n,
     priorityFeeGwei: 45n,
     candidateSizes: [
         "5000000000" // $5,000.00 USDC
     ],
     routers: {
-        QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
-        SUSHI: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
-        DFYN:  ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
+        QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
+        SUSHI: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
+        DFYN:  ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62")
     },
     maxPendingTransactions: 1,        
     deadlineSeconds: 45              
@@ -39,7 +42,8 @@ const CONFIG = {
 
 const CONTRACT_ABI = [
     "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) calldata batch) external",
-    "function minimumProfitUSDC() external view returns (uint256)"
+    "function minimumProfitUSDC() external view returns (uint256)",
+    "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC) external view returns ((uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit) best)"
 ];
 
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ 
@@ -215,11 +219,6 @@ if (isMainThread) {
                     const feeData = await fastLaneRelayProvider.getFeeData();  
                     const currentBaseFee = feeData.estimatedBaseFee || ethers.parseUnits("140", "gwei");  
                     const baseFeeGwei = ethers.formatUnits(currentBaseFee, "gwei").split(".")[0];
-                    
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `🔥 PROFITABLE CROSS-ASSET MATRIX DETECTED [Shard #${workerId}]\n├── Target Sequence: USDC ➔ QUICK [WMATIC] ➔ SUSHI [USDC]\n├── Optimal Input Allocation: 5,000.00 USDC\n├── Gross Estimated Yield: +42.15 USDC\n└── Network Base Fee: ${baseFeeGwei} Gwei | Priority Fee: ${config.priorityFeeGwei} Gwei`  
-                    });  
 
                     const buyRouters = [config.routers.QUICK];
                     const sellRouters = [config.routers.SUSHI];
@@ -227,6 +226,32 @@ if (isMainThread) {
                     const pathsToToken = [[config.usdcAddress, config.wmaticAddress]];
                     const pathsToUSDC = [[config.wmaticAddress, config.usdcAddress]];
                     const deadline = BigInt(Math.floor(Date.now() / 1000) + config.deadlineSeconds);
+
+                    // ========================================================
+                    // ✅ SC-BUILT-IN STATIC CALL PRE-FLIGHT GUARD
+                    // ========================================================
+                    const simulationResult = await vaultInstance.findBestFlashLoanSize(
+                        buyRouters[0],
+                        sellRouters[0],
+                        amountsInUSDC,
+                        pathsToToken[0],
+                        pathsToUSDC[0]
+                    );
+
+                    // 0.000001 USDC target threshold is exactly 1 micro-unit
+                    if (simulationResult.estimatedProfit < 1n) {
+                        parentPort.postMessage({  
+                            type: "LOG",  
+                            data: `🛑 [SC Sandbox Blocked] Built-in simulation reports profit below threshold (0.000001 USDC). Dropping transaction.`  
+                        });
+                        pendingTransactionsCount--;
+                        return; 
+                    }
+
+                    parentPort.postMessage({  
+                        type: "LOG",  
+                        data: `🔥 PROFITABLE CROSS-ASSET MATRIX DETECTED [Shard #${workerId}]\n├── Target Sequence: USDC ➔ QUICK [WMATIC] ➔ SUSHI [USDC]\n├── Optimal Input Allocation: 5,000.00 USDC\n├── Gross Estimated Yield: +42.15 USDC\n└── Network Base Fee: ${baseFeeGwei} Gwei | Priority Fee: ${config.priorityFeeGwei} Gwei`  
+                    });  
 
                     parentPort.postMessage({  
                         type: "LOG",  
@@ -257,7 +282,6 @@ if (isMainThread) {
                         const actualProfitRaw = balanceAfter - balanceBefore;
                         const actualProfitUSD = Number(actualProfitRaw) / 1000000;
 
-                        // Formatting raw BigInt tokens to readable strings matching layout specifications
                         const formattedBefore = (Number(balanceBefore) / 1000000).toFixed(6);
                         const formattedAfter = (Number(balanceAfter) / 1000000).toFixed(6);
 
