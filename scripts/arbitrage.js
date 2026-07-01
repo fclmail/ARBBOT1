@@ -18,9 +18,9 @@ const CONFIG = {
         "wss://polygon-bor-rpc.publicnode.com",
         "wss://rpc-mainnet.matterlight.xyz/ws"
     ],
-fastLaneRpc: process.env.FAST_LANE_RPC || process.env.RPC_URL || "https://polygon-rpc.com",    
+    fastLaneRpc: process.env.FAST_LANE_RPC || process.env.RPC_URL || "https://polygon-rpc.com", 
     fallbackRpc: "https://polygon.drpc.org",
-    contractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958".toLowerCase()),
+    contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc").toLowerCase()),
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()), // Bridged USDC.e
     wmaticAddress: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()),
     gasLimitOverride: 850000n,
@@ -42,7 +42,6 @@ const CONTRACT_ABI = [
     "function minimumProfitUSDC() external view returns (uint256)"
 ];
 
-// Force static network definition to completely skip the background HTTP handshake
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ 
     name: "polygon", 
     chainId: 137,
@@ -127,7 +126,6 @@ if (isMainThread) {
                 } catch (_) {}  
             }  
 
-            // Force staticNetwork configuration here to bypass unauthenticated topology handshakes
             mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });
            
             if (mainProvider.websocket) {
@@ -193,6 +191,8 @@ if (isMainThread) {
     const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);  
     const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
     
+    const tokenContract = new ethers.Contract(config.usdcAddress, ["function balanceOf(address) view returns (uint256)"], fastLaneRelayProvider);
+
     let pendingTransactionsCount = 0;
 
     parentPort.on("message", async (message) => {  
@@ -233,6 +233,8 @@ if (isMainThread) {
                         data: `📦 Dispatched On-Chain Flash Arbitrage Batch...\n├── Tx Hash: Awaiting Broadcast...\n├── Gas Limit Allocated: ${config.gasLimitOverride.toString()}\n└── Awaiting Block Inclusion...`  
                     });
 
+                    const balanceBefore = await tokenContract.balanceOf(config.contractAddress);
+
                     const tx = await vaultInstance.executeFlashBatchArbitrage({
                         buyRouters,
                         sellRouters,
@@ -251,11 +253,26 @@ if (isMainThread) {
                     const receipt = await tx.wait();
                     
                     if (receipt.status === 1) {
-                        parentPort.postMessage({  
-                            type: "LOG",  
-                            data: `✔️ Transaction Confirmed in Block #${receipt.blockNumber}!\n├── Status: SUCCESS ✅\n├── Gas Used: ${receipt.gasUsed.toString()} / ${config.gasLimitOverride.toString()} (${((Number(receipt.gasUsed) / Number(config.gasLimitOverride)) * 100).toFixed(1)}%)\n├── Balancer Flash Loan Repaid: 5,000.00 USDC\n├── Net Profit Extracted: +38.412945 USDC\n└── Polyscan Verification: Contract Balance Increased.`  
-                        });
-                        parentPort.postMessage({ type: "PROFIT", amount: 38.412945 });
+                        const balanceAfter = await tokenContract.balanceOf(config.contractAddress);
+                        const actualProfitRaw = balanceAfter - balanceBefore;
+                        const actualProfitUSD = Number(actualProfitRaw) / 1000000;
+
+                        // Formatting raw BigInt tokens to readable strings matching layout specifications
+                        const formattedBefore = (Number(balanceBefore) / 1000000).toFixed(6);
+                        const formattedAfter = (Number(balanceAfter) / 1000000).toFixed(6);
+
+                        if (actualProfitRaw > 0n) {
+                            parentPort.postMessage({  
+                                type: "LOG",  
+                                data: `✔️ Transaction Confirmed in Block #${receipt.blockNumber}!\n├── Status: SUCCESS ✅\n├── Balance Before: ${formattedBefore} USDC\n├── Balance After: ${formattedAfter} USDC\n├── Net Profit Extracted: +${actualProfitUSD.toFixed(6)} USDC\n└── Polyscan Verification: Contract Balance Increased.`  
+                            });
+                            parentPort.postMessage({ type: "PROFIT", amount: actualProfitUSD });
+                        } else {
+                            parentPort.postMessage({  
+                                type: "LOG",  
+                                data: `⚠️ Transaction Succeeded in Block #${receipt.blockNumber} but generated 0 ZERO profit.\n├── Balance Before: ${formattedBefore} USDC\n├── Balance After: ${formattedAfter} USDC\n└── Gas Spent on Slippage/False Positive: ${receipt.gasUsed.toString()} gas.`  
+                            });
+                        }
                     } else {
                         parentPort.postMessage({ type: "LOG", data: `❌ Transaction reverted on-chain.` });
                     }
