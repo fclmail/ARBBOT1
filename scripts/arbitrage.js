@@ -18,7 +18,7 @@ const CONFIG = {
         "wss://polygon-bor-rpc.publicnode.com",
         "wss://rpc-mainnet.matterlight.xyz/ws"
     ],
-    fastLaneRpc: process.env.FAST_LANE_RPC || "https://polygon-mainnet.g.alchemy.com/v2/[REDACTED]", 
+fastLaneRpc: process.env.FAST_LANE_RPC || process.env.RPC_URL || "https://polygon-rpc.com",    
     fallbackRpc: "https://polygon.drpc.org",
     contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()), // Bridged USDC.e
