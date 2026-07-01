@@ -33,7 +33,6 @@ const CONFIG = {
     routers: {
         QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
         SUSHI: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-        // ✅ Fixed: Bypassed EIP-55 strict validation error via .toLowerCase()
         DFYN:  ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
     },
     maxPendingTransactions: 1,        
@@ -227,13 +226,16 @@ if (isMainThread) {
                     const pathsToUSDC = [[config.wmaticAddress, config.usdcAddress]];
                     const deadline = BigInt(Math.floor(Date.now() / 1000) + config.deadlineSeconds);
 
-                    // Pre-flight validation via your smart contract's binary sandbox check
+                    // ========================================================
+                    // ✅ FIXED: Explicit block tracking with standard sender payload options
+                    // ========================================================
                     const simulationResult = await vaultInstance.findBestFlashLoanSize(
                         buyRouters[0],
                         sellRouters[0],
                         amountsInUSDC,
                         pathsToToken[0],
-                        pathsToUSDC[0]
+                        pathsToUSDC[0],
+                        { from: executionWallet.address } // Bypasses missing revert payload issues on public RPC pools
                     );
 
                     if (simulationResult.estimatedProfit < 1n) {
