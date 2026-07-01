@@ -11,9 +11,6 @@ import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 
-// ============================================================================
-// COMPREHENSIVE GLOBAL CONFIGURATION
-// ============================================================================
 const CONFIG = {
     providerWssEndpoints: [
         "wss://polygon-bor-rpc.publicnode.com",
@@ -23,17 +20,9 @@ const CONFIG = {
     fallbackRpc: "https://polygon.drpc.org",
     contractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
-    wmaticAddress: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()), // Added Intermediary
     gasLimitOverride: 850000n, 
     priorityFeeGwei: 45n,
-    candidateSizes: [
-        "100000",      // $0.10 Min from contract rules
-        "1000000",     // $1.00
-        "10000000",    // $10.00
-        "100000000",   // $100.00
-        "1000000000",  // $1000.00
-        "50000000000"  // $50,000.00 Max from contract rules
-    ],
+    candidateSizes: ["100000", "1000000", "50000000", "100000000", "500000000"],
     routers: {
         QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
         SUSHI: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
@@ -44,6 +33,13 @@ const CONFIG = {
     deadlineSeconds: 45
 };
 
+const CONTRACT_TOKENS = {
+    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    DAI: "0x8f3Cf6ad23Cd3EbbD9E1328f6d0450262751848a"
+};
+
 const CONTRACT_ABI = [
     "function executeRawBatchArbitrage(address[] calldata buyRouters, address[] calldata sellRouters, uint256[] calldata candidateSizes, address[][] calldata pathsToToken, address[][] calldata pathsToUSDC, uint256 deadline) external returns (uint256)",
     "function minimumProfitUSDC() external view returns (uint256)",
@@ -51,11 +47,6 @@ const CONTRACT_ABI = [
 ];
 
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 137 });
-
-process.on("uncaughtException", (err) => {
-    if (err.message && (err.message.includes("websocket"))) return;
-    console.error("☠️ System Intercepted Exception:", err);
-});
 
 if (isMainThread) {
     if (!process.env.PRIVATE_KEY) {
@@ -66,19 +57,20 @@ if (isMainThread) {
     let totalRealizedProfits = 0;
     let workerThreads = [];
 
-    const activeSubMatrices = [
-        { id: 1, routers: ["QUICK", "SUSHI", "DFYN"] },
-        { id: 2, routers: ["QUICK", "SUSHI", "DFYN"] },
-        { id: 3, routers: ["QUICK", "SUSHI", "DFYN"] },
-        { id: 4, routers: ["QUICK", "SUSHI", "DFYN"] }
+    const threadStrategies = [
+        { id: 1, bridge: CONTRACT_TOKENS.WMATIC },
+        { id: 2, bridge: CONTRACT_TOKENS.WETH },
+        { id: 3, bridge: CONTRACT_TOKENS.USDT },
+        { id: 4, bridge: CONTRACT_TOKENS.DAI }
     ];
 
     for (let i = 0; i < 4; i++) {
         const w = new Worker(__filename, {
             workerData: {
-                workerId: activeSubMatrices[i].id,
+                workerId: threadStrategies[i].id,
                 config: CONFIG,
-                matrix: activeSubMatrices[i].routers
+                bridgeToken: threadStrategies[i].bridge,
+                matrix: ["QUICK", "SUSHI", "DFYN"]
             }
         });
 
@@ -86,31 +78,27 @@ if (isMainThread) {
             if (msg.type === "LOG") console.log(msg.data);
             if (msg.type === "PROFIT") {
                 totalRealizedProfits += msg.amount;
-                console.log(`💰 TOTAL REALIZED PROFIT ACCUMULATED: $${totalRealizedProfits.toFixed(6)} USDC`);
+                console.log(`💰 ACCUMULATED WALLET BALANCE INCREMENT: +$${totalRealizedProfits.toFixed(6)} USDC`);
             }
         });
 
         workerThreads.push(w);
     }
 
-    console.log("🌐 MATRIX ENGINE STARTED [PRODUCTION LIVE MODE]");
+    console.log("🌐 ENGINE ONLINE — MINIMUM PROFIT EVALUATION LOWERED TO CODESIZE ATOMIC UNIT");
     console.log("└── 4 Workers Active");
 
     function connectWebSocketStream() {
         const provider = new ethers.WebSocketProvider(CONFIG.providerWssEndpoints[0], STATIC_POLYGON_NETWORK);
-
         provider.on("block", (blockNumber) => {
             console.log(`\n🔍 Block #${blockNumber}`);
-            workerThreads.forEach(w =>
-                w.postMessage({ type: "BLOCK_TRIGGER", blockNumber })
-            );
+            workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber }));
         });
     }
-
     setTimeout(connectWebSocketStream, 300);
 
 } else {
-    const { workerId, config, matrix } = workerData;
+    const { workerId, config, bridgeToken, matrix } = workerData;
 
     const provider = new ethers.JsonRpcProvider(config.fastLaneRpc);
     const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
@@ -131,74 +119,53 @@ if (isMainThread) {
             for (let s = 0; s < matrix.length; s++) {
                 if (b === s) continue;
 
-                const buyRouter = config.routers[matrix[b]];
-                const sellRouter = config.routers[matrix[s]];
+                buyRouters.push(config.routers[matrix[b]]);
+                sellRouters.push(config.routers[matrix[s]]);
 
-                buyRouters.push(buyRouter);
-                sellRouters.push(sellRouter);
-
-                // FIX: Swap USDC -> WMATIC on Buy, then WMATIC -> USDC on Sell
-                pathsToToken.push([config.usdcAddress, config.wmaticAddress]);
-                pathsToUSDC.push([config.wmaticAddress, config.usdcAddress]);
+                pathsToToken.push([config.usdcAddress, bridgeToken]); 
+                pathsToUSDC.push([bridgeToken, config.usdcAddress]);
             }
         }
 
         const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;
         pendingTransactionsCount++;
 
-        vaultInstance.executeRawBatchArbitrage(
-            buyRouters,
-            sellRouters,
-            config.candidateSizes.map(BigInt),
-            pathsToToken,
-            pathsToUSDC,
-            txDeadline,
-            {
-                gasLimit: config.gasLimitOverride,
-                maxFeePerGas: 250n * 1000000000n, // Automated dynamic buffers
-                maxPriorityFeePerGas: config.priorityFeeGwei * 1000000000n
-            }
-        ).then(async (tx) => {
-            parentPort.postMessage({
-                type: "LOG",
-                data: `🛰️ TX BROADCASTED: ${tx.hash}`
-            });
+        try {
+            const feeData = await provider.getFeeData();
+            const tx = await vaultInstance.executeRawBatchArbitrage(
+                buyRouters,
+                sellRouters,
+                config.candidateSizes.map(BigInt),
+                pathsToToken,
+                pathsToUSDC,
+                txDeadline,
+                {
+                    gasLimit: config.gasLimitOverride,
+                    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || ethers.parseUnits("45", "gwei"),
+                    maxFeePerGas: feeData.maxFeePerGas || ethers.parseUnits("250", "gwei")
+                }
+            );
 
+            parentPort.postMessage({ type: "LOG", data: `🛰️ Shard ${workerId} sent: ${tx.hash}` });
             const receipt = await tx.wait(1);
             pendingTransactionsCount--;
 
-            let verifiedProfitOnChain = 0n;
-
-            // FIX: Search event logs to extract actual mathematical profit
+            let verifiedProfit = 0n;
             for (const log of receipt.logs) {
                 try {
                     const parsedLog = vaultInstance.interface.parseLog(log);
                     if (parsedLog && parsedLog.name === "ArbitrageExecuted") {
-                        verifiedProfitOnChain = parsedLog.args.profitUSDC;
+                        verifiedProfit = parsedLog.args.profitUSDC;
                     }
-                } catch (e) {
-                    // Log not matching interface contract structure, skip safely
-                }
+                } catch (e) {}
             }
 
-            const formattedProfit = ethers.formatUnits(verifiedProfitOnChain, 6);
+            parentPort.postMessage({ type: "LOG", data: `✅ LIVE TARGET EXECUTION FILLED` });
+            parentPort.postMessage({ type: "PROFIT", amount: parseFloat(ethers.formatUnits(verifiedProfit, 6)) });
 
-            parentPort.postMessage({
-                type: "LOG",
-                data: `✅ LIVE TRADING TRANSACTION EXECUTION SUCCESSFUL`
-            });
-
-            parentPort.postMessage({
-                type: "PROFIT",
-                amount: parseFloat(formattedProfit)
-            });
-
-        }).catch((err) => {
+        } catch (err) {
             pendingTransactionsCount--;
-            parentPort.postMessage({
-                type: "LOG",
-                data: `⚠️ Real On-Chain Reversion / Opportunity Expired (No loss occurred)`
-            });
-        });
+            parentPort.postMessage({ type: "LOG", data: `⚠️ Block reverted balance checkpoint` });
+        }
     });
 }
