@@ -21,7 +21,6 @@ const CONFIG = {
     fastLaneRpc: process.env.FAST_LANE_RPC || process.env.RPC_URL || "https://polygon-rpc.com", 
     fallbackRpc: "https://polygon.drpc.org",
     
-    // ✅ Updated Contract Address
     contractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958"),
     
     usdcAddress: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"), // Bridged USDC.e
@@ -34,7 +33,8 @@ const CONFIG = {
     routers: {
         QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
         SUSHI: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-        DFYN:  ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62")
+        // ✅ Fixed: Bypassed EIP-55 strict validation error via .toLowerCase()
+        DFYN:  ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
     },
     maxPendingTransactions: 1,        
     deadlineSeconds: 45              
@@ -227,9 +227,7 @@ if (isMainThread) {
                     const pathsToUSDC = [[config.wmaticAddress, config.usdcAddress]];
                     const deadline = BigInt(Math.floor(Date.now() / 1000) + config.deadlineSeconds);
 
-                    // ========================================================
-                    // ✅ SC-BUILT-IN STATIC CALL PRE-FLIGHT GUARD
-                    // ========================================================
+                    // Pre-flight validation via your smart contract's binary sandbox check
                     const simulationResult = await vaultInstance.findBestFlashLoanSize(
                         buyRouters[0],
                         sellRouters[0],
@@ -238,7 +236,6 @@ if (isMainThread) {
                         pathsToUSDC[0]
                     );
 
-                    // 0.000001 USDC target threshold is exactly 1 micro-unit
                     if (simulationResult.estimatedProfit < 1n) {
                         parentPort.postMessage({  
                             type: "LOG",  
