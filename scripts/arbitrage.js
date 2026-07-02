@@ -83,7 +83,8 @@ const DEXES = {
 // Router checksums for approval safety  
 const ROUTER_CHECKSUMS = {};  
 Object.entries(DEXES).forEach(([name, addr]) => {  
-    ROUTER_CHECKSUMS[addr] = ethers.getAddress(addr);  
+    // Lowercase input first to prevent ethers from failing on malformed EIP-55 mixed-case strings
+    ROUTER_CHECKSUMS[addr.toLowerCase()] = ethers.getAddress(addr.toLowerCase());  
 });  
 
 const ROUTERS = Object.values(DEXES).filter(a => a !== "0x0000000000000000000000000000000000000000");  
@@ -101,7 +102,7 @@ const PATHS = {
     // Triple-hop paths (3-hop) — exploit deeper liquidity gaps  
     USDC_WETH_WMATIC:   [TOKENS.USDC, TOKENS.WETH, TOKENS.WMATIC, TOKENS.USDC],  
     USDC_WMATIC_WETH:   [TOKENS.USDC, TOKENS.WMATIC, TOKENS.WETH, TOKENS.USDC],  
-    USDC_USDT_WETH:     [TOKENS.USDC, TOKENS.USDT, TOKETH.WETH, TOKENS.USDC],  
+    USDC_USDT_WETH:     [TOKENS.USDC, TOKENS.USDT, TOKENS.WETH, TOKENS.USDC],  
     USDC_DAI_WETH:      [TOKENS.USDC, TOKENS.DAI, TOKENS.WETH, TOKENS.USDC],  
     USDC_WBTC_WETH:     [TOKENS.USDC, TOKENS.WBTC, TOKENS.WETH, TOKENS.USDC],  
     USDC_WETH_WBTC:     [TOKENS.USDC, TOKENS.WETH, TOKENS.WBTC, TOKENS.USDC],  
@@ -172,7 +173,7 @@ class ArbitrageBot {
           
         // Verify contract  
         const owner = await this.contract.owner();  
-        console.log(`📜 Contract owner: ${owner}`);  
+        console.log(`... Contract owner: ${owner}`);  
         console.log(`🤖 Bot address: ${this.wallet.address}`);  
           
         const isOwner = owner.toLowerCase() === this.wallet.address.toLowerCase();  
@@ -214,91 +215,91 @@ class ArbitrageBot {
                 const buyRouter = ROUTERS[i];  
                 const sellRouter = ROUTERS[j];  
 
-                for (const [pathName, path] of pathEntries) {
-                    const tokenAddr = path[1]; // middle token for event
-                    
-                    routes.push({
-                        name: `${pathName} | ${Object.keys(DEXES).find(k => DEXES[k] === buyRouter)}→${Object.keys(DEXES).find(k => DEXES[k] === sellRouter)}`,
-                        buyRouter,
-                        sellRouter,
-                        pathToToken: path.slice(0, -1),  // USDC → Token (or USDC → Token1 → Token2)
-                        pathToUSDC: path.slice(1).reverse(), // Token → USDC (or Token2 → Token1 → USDC)
-                        tokenAddr,
-                    });
-                }
-            }
-        }
-        
-        return routes;
-    }
+                for (const [pathName, path] of pathEntries) {  
+                    const tokenAddr = path[1]; // middle token for event  
+                      
+                    routes.push({  
+                        name: `${pathName} | ${Object.keys(DEXES).find(k => DEXES[k] === buyRouter)}→${Object.keys(DEXES).find(k => DEXES[k] === sellRouter)}`,  
+                        buyRouter,  
+                        sellRouter,  
+                        pathToToken: path.slice(0, -1),  // USDC → Token (or USDC → Token1 → Token2)  
+                        pathToUSDC: path.slice(1).reverse(), // Token → USDC (or Token2 → Token1 → USDC)  
+                        tokenAddr,  
+                    });  
+                }  
+            }  
+        }  
+          
+        return routes;  
+    }  
 
-    // ===================== BINARY SEARCH WRAPPER =====================
+    // ===================== BINARY SEARCH WRAPPER =====================  
 
-    async findBestFlashLoanSize(route) {
-        const candidates = [
-            ethers.parseUnits("100", 6),
-            ethers.parseUnits("500", 6),
-            ethers.parseUnits("1000", 6),
-            ethers.parseUnits("2500", 6),
-            ethers.parseUnits("5000", 6),
-            ethers.parseUnits("10000", 6),
-            ethers.parseUnits("15000", 6),
-            ethers.parseUnits("25000", 6),
-            ethers.parseUnits("40000", 6),
-            ethers.parseUnits("50000", 6),
-        ];
-        
-        try {
-            const result = await this.contract.findBestFlashLoanSize(
-                route.buyRouter,
-                route.sellRouter,
-                candidates,
-                route.pathToToken,
-                route.pathToUSDC
-            );
-            
-            return {
-                route: route,
-                amountIn: result.amountIn,
-                estimatedFinalUSDC: result.estimatedFinalUSDC,
-                estimatedProfit: result.estimatedProfit,
-            };
-        } catch (e) {
-            return null;
-        }
-    }
+    async findBestFlashLoanSize(route) {  
+        const candidates = [  
+            ethers.parseUnits("100", 6),  
+            ethers.parseUnits("500", 6),  
+            ethers.parseUnits("1000", 6),  
+            ethers.parseUnits("2500", 6),  
+            ethers.parseUnits("5000", 6),  
+            ethers.parseUnits("10000", 6),  
+            ethers.parseUnits("15000", 6),  
+            ethers.parseUnits("25000", 6),  
+            ethers.parseUnits("40000", 6),  
+            ethers.parseUnits("50000", 6),  
+        ];  
+          
+        try {  
+            const result = await this.contract.findBestFlashLoanSize(  
+                route.buyRouter,  
+                route.sellRouter,  
+                candidates,  
+                route.pathToToken,  
+                route.pathToUSDC  
+            );  
+              
+            return {  
+                route: route,  
+                amountIn: result.amountIn,  
+                estimatedFinalUSDC: result.estimatedFinalUSDC,  
+                estimatedProfit: result.estimatedProfit,  
+            };  
+        } catch (e) {  
+            return null;  
+        }  
+    }  
 
-    // ===================== PARALLEL ROUTE SCANNER =====================
+    // ===================== PARALLEL ROUTE SCANNER =====================  
 
-    async scanAllRoutes() {
-        const allRoutes = this.generateAllRoutes();
-        console.log(`\n🔍 Scanning ${allRoutes.length} routes across ${ROUTERS.length} DEXes...`);
-        
-        const BATCH_SIZE = 15;
-        const profitableRoutes = [];
-        
-        for (let i = 0; i < allRoutes.length; i += BATCH_SIZE) {
-            const batch = allRoutes.slice(i, i + BATCH_SIZE);
-            
-            const results = await Promise.all(
-                batch.map(route => this.findBestFlashLoanSize(route))
-            );
-            
-            for (const result of results) {
-                if (result && result.estimatedProfit > CONFIG.minimumProfitUSDC) {
-                    profitableRoutes.push(result);
-                }
-            }
-        }
-        
-        // Sort by profit (descending)
-        profitableRoutes.sort((a, b) => 
-            b.estimatedProfit > a.estimatedProfit ? 1 : 
-            b.estimatedProfit < a.estimatedProfit ? -1 : 0
-        );
-        
-        return profitableRoutes;
-    }
+    async scanAllRoutes() {  
+        const allRoutes = this.generateAllRoutes();  
+        console.log(`\n🔍 Scanning ${allRoutes.length} routes across ${ROUTERS.length} DEXes...`);  
+          
+        const BATCH_SIZE = 15;  
+        const profitableRoutes = [];  
+          
+        for (let i = 0; i < allRoutes.length; i += BATCH_SIZE) {  
+            const batch = allRoutes.slice(i, i + BATCH_SIZE);  
+              
+            const results = await Promise.all(  
+                batch.map(route => this.findBestFlashLoanSize(route))  
+            );  
+              
+            for (const result of results) {  
+                if (result && result.estimatedProfit > CONFIG.minimumProfitUSDC) {  
+                    profitableRoutes.push(result);  
+                }  
+            }  
+        }  
+          
+        // Sort by profit (descending)  
+        profitableRoutes.sort((a, b) =>   
+            b.estimatedProfit > a.estimatedProfit ? 1 :   
+            b.estimatedProfit < a.estimatedProfit ? -1 : 0  
+        );  
+          
+        return profitableRoutes;  
+    }  
 
     // ===================== EXECUTION ENGINE =====================  
 
@@ -442,115 +443,104 @@ class ArbitrageBot {
             console.log("⚠️ Low balance! Fund contract with at least 1000 USDC");  
         }  
 
-        // Main loop
-        let scanCount = 0;
-        
-        while (true) {
-            try {
-                scanCount++;
-                const blockNumber = await this.provider.getBlockNumber();
-                
-                // Only scan new blocks
-                if (blockNumber <= this.lastBlockProcessed) {
-                    await new Promise(r => setTimeout(r, 500));
-                    continue;
-                }
-                
-                this.lastBlockProcessed = blockNumber;
-                console.log(`\n${"─".repeat(60)}`);
-                console.log(`📦 Block #${blockNumber} | Scan #${scanCount}`);
-                console.log(`${"─".repeat(60)}`);
-                
-                // Check pending txs
-                for (const [hash, info] of this.pendingTxs) {
-                    const receipt = await this.provider.getTransactionReceipt(hash);
-                    if (receipt) {
-                        this.pendingTxs.delete(hash);
-                        console.log(`  ✅ Pending tx confirmed: ${hash.slice(0, 10)}...`);
-                    } else if (Date.now() - info.timestamp > 120000) {
-                        this.pendingTxs.delete(hash);
-                        console.log(`  ⏰ Pending tx expired: ${hash.slice(0, 10)}...`);
-                    }
-                }
-                
-                // Skip if too many pending
-                if (this.pendingTxs.size >= CONFIG.maxPendingTxs) {
-                    console.log("  ⏳ Too many pending txs, skipping scan...");
-                    await new Promise(r => setTimeout(r, 1000));
-                    continue;
-                }
-                
-                // Scan all routes
-                const profitableRoutes = await this.scanAllRoutes();
-                
-                if (profitableRoutes.length > 0) {
-                    console.log(`\n💰 Found ${profitableRoutes.length} profitable routes!`);
-                    
-                    for (const r of profitableRoutes.slice(0, 5)) {
-                        const profit = ethers.formatUnits(r.estimatedProfit, 6);
-                        const amount = ethers.formatUnits(r.amountIn, 6);
-                        console.log(`    💵 ${r.route.name} | Amount: ${amount} USDC | Profit: +${profit} USDC`);
-                    }
-                    
-                    // Execute
-                    await this.executeBatchArbitrage(profitableRoutes);
-                } else {
-                    if (scanCount % 5 === 0) {
-                        console.log("  🔍 No profitable routes found in this block");
-                    }
-                }
-                
-                // Adaptive delay
-                if (this.consecutiveFails > 5) {
-                    console.log("  🛑 Too many consecutive failures, cooling down...");
-                    await new Promise(r => setTimeout(r, 5000));
-                    this.consecutiveFails = 0;
-                }
-                
-            } catch (e) {
-                console.error(`\n❌ Loop error: ${e.message}`);
-                await new Promise(r => setTimeout(r, 2000));
-            }
-        }
-    }
+        // Main loop  
+        let scanCount = 0;  
+          
+        while (true) {  
+            try {  
+                scanCount++;  
+                const blockNumber = await this.provider.getBlockNumber();  
+                  
+                // Only scan new blocks  
+                if (blockNumber <= this.lastBlockProcessed) {  
+                    await new Promise(r => setTimeout(r, 500));  
+                    continue;  
+                }  
+                  
+                this.lastBlockProcessed = blockNumber;  
+                console.log(`\n${"─".repeat(60)}`);  
+                console.log(`📦 Block #${blockNumber} | Scan #${scanCount}`);  
+                console.log(`${"─".repeat(60)}`);  
+                  
+                // Check pending txs  
+                for (const [hash, info] of this.pendingTxs) {  
+                    const receipt = await this.provider.getTransactionReceipt(hash);  
+                    if (receipt) {  
+                        this.pendingTxs.delete(hash);  
+                        console.log(`  ✅ Pending tx confirmed: ${hash.slice(0, 10)}...`);  
+                    } else if (Date.now() - info.timestamp > 120000) {  
+                        this.pendingTxs.delete(hash);  
+                        console.log(`  ⏰ Pending tx expired: ${hash.slice(0, 10)}...`);  
+                    }  
+                }  
+                  
+                // Skip if too many pending  
+                if (this.pendingTxs.size >= CONFIG.maxPendingTxs) {  
+                    console.log("  ⏳ Too many pending txs, skipping scan...");  
+                    await new Promise(r => setTimeout(r, 1000));  
+                    continue;  
+                }  
+                  
+                // Scan all routes  
+                const profitableRoutes = await this.scanAllRoutes();  
+                  
+                if (profitableRoutes.length > 0) {  
+                    console.log(`\n💰 Found ${profitableRoutes.length} profitable routes!`);  
+                      
+                    for (const r of profitableRoutes.slice(0, 5)) {  
+                        const profit = ethers.formatUnits(r.estimatedProfit, 6);  
+                        const amount = ethers.formatUnits(r.amountIn, 6);  
+                        console.log(`    💵 ${r.route.name} | Amount: ${amount} USDC | Profit: +${profit} USDC`);  
+                    }  
+                      
+                    // Execute  
+                    await this.executeBatchArbitrage(profitableRoutes);  
+                } else {  
+                    if (scanCount % 5 === 0) {  
+                        console.log("  🔍 No profitable routes found in this block");  
+                    }  
+                }  
+                  
+                // Adaptive delay  
+                if (this.consecutiveFails > 5) {  
+                    console.log("  🛑 Too many consecutive failures, cooling down...");  
+                    await new Promise(r => setTimeout(r, 5000));  
+                    this.consecutiveFails = 0;  
+                }  
+                  
+            } catch (e) {  
+                console.error(`\n❌ Loop error: ${e.message}`);  
+                await new Promise(r => setTimeout(r, 2000));  
+            }  
+        }  
+    }  
+}  
+
+// ===================== WORKER THREAD SUPPORT =====================  
+
+if (isMainThread) {  
+    // Main thread: start bot  
+    const bot = new ArbitrageBot();  
+    bot.start().catch(console.error);  
+      
+    // Graceful shutdown  
+    process.on("SIGINT", async () => {  
+        console.log("\n\n🛑 Shutting down...");  
+        console.log(`📊 Final stats:`);  
+        console.log(`   Total trades: ${bot.stats.totalTrades}`);  
+        console.log(`   Total profit: ${ethers.formatUnits(bot.stats.totalProfit, 6)} USDC`);  
+        console.log(`   Failed trades: ${bot.stats.failedTrades}`);  
+        console.log(`   Gas spent: ${ethers.formatEther(bot.stats.gasSpent)} MATIC`);  
+        process.exit(0);  
+    });  
+} else {  
+    // Worker thread: handle batch scanning  
+    const bot = new ArbitrageBot();  
+      
+    parentPort.on("message", async (msg) => {  
+        if (msg.type === "scan") {  
+            const result = await bot.findBestFlashLoanSize(msg.route);  
+            parentPort.postMessage(result);  
+        }  
+    });  
 }
-
-// ===================== WORKER THREAD SUPPORT =====================
-
-if (isMainThread) {
-    // Main thread: start bot
-    const bot = new ArbitrageBot();
-    bot.start().catch(console.error);
-    
-    // Graceful shutdown
-    process.on("SIGINT", async () => {
-        console.log("\n\n🛑 Shutting down...");
-        console.log(`📊 Final stats:`);
-        console.log(`   Total trades: ${bot.stats.totalTrades}`);
-        console.log(`   Total profit: ${ethers.formatUnits(bot.stats.totalProfit, 6)} USDC`);
-        console.log(`   Failed trades: ${bot.stats.failedTrades}`);
-        console.log(`   Gas spent: ${ethers.formatEther(bot.stats.gasSpent)} MATIC`);
-        process.exit(0);
-    });
-} else {
-    // Worker thread: handle batch scanning
-    const bot = new ArbitrageBot();
-    
-    parentPort.on("message", async (msg) => {
-        if (msg.type === "scan") {
-            const result = await bot.findBestFlashLoanSize(msg.route);
-            parentPort.postMessage(result);
-        }
-    });
-}
-
-// ===================== USAGE =====================
-/*
-ENVIRONMENT VARIABLES:
-  PRIVATE_KEY=your_private_key
-  RPC_URL=https://polygon-rpc.com
-  WS_URL=wss://polygon-rpc.com
-  
-RUN:
-  node arbitrage-bot.js
-*/
