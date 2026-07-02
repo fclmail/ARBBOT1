@@ -7,7 +7,7 @@ import { ethers } from "ethers";
 // ===================== CONFIGURATION =====================  
 const CONFIG = {  
     rpcUrl: process.env.RPC_URL || "https://polygon-rpc.com",  
-    wsUrl: process.env.WS_URL || "wss://polygon-rpc.com",  
+    wsUrl: process.env.WS_URL || "wss://polygon-bor-rpc.publicnode.com",  
       
     contractAddress: "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958",  
     minimumProfitUSDC: ethers.parseUnits("0.10", 6), // $0.10 optimized min profit  
