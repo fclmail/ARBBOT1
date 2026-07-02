@@ -1,5 +1,5 @@
 // ============================================================  
-// arbitrage.js — Multi-Hop Real-Time Routing & Math Engine
+// arbitrage.js — Completely Unblinded Real-Time Math Engine
 // ============================================================  
 
 import { ethers } from "ethers";  
@@ -10,11 +10,11 @@ const CONFIG = {
     wsUrl: process.env.WS_URL || "wss://polygon-bor-rpc.publicnode.com",  
       
     contractAddress: "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958",  
-    // 1 micro-unit = 0.000001 USDC (Matches contract on-chain floor)
+    // 1 micro-unit = 0.000001 USDC
     minimumProfitUSDC: 1n, 
       
     maxPendingTxs: 3,  
-    gasLimit: 4000000, // Allocation bumped to handle 4-hop simulation depth
+    gasLimit: 4000000, 
     priorityFee: ethers.parseUnits("50", "gwei"),  
 };  
 
@@ -58,24 +58,23 @@ class RealTimeArbitrageBot {
     }  
 
     async init() {  
-        console.log("⚡ INITIALIZING MULTI-HOP ENGINE...");  
+        console.log("⚡ INITIALIZING COMPLETELY UNBLINDED MULTI-HOP ENGINE...");  
         try {  
             this.provider = new ethers.WebSocketProvider(CONFIG.wsUrl);  
             await this.provider.getNetwork();   
-            console.log("🚀 WS PIPELINE ACTIVE — STREAMING BLOCKS");  
+            console.log("🚀 WS PIPELINE ACTIVE — STREAMING BLOCKS WITH FULL VERBOSE REPORTING");  
         } catch (err) {  
-            console.log("⚠️ WS Failure. Falling back to HTTP JSON-RPC Head tracking...");  
+            console.log("⚠️ WS Failure. Falling back to HTTP...");  
             this.provider = new ethers.JsonRpcProvider(CONFIG.rpcUrl);  
         }  
         this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);  
         this.contract = new ethers.Contract(CONFIG.contractAddress, CONTRACT_ABI, this.wallet);  
     }  
 
-    // Dynamic permutation framework for multi-hop verification
     generateMultiHopRoutes() {  
         const routes = [];  
 
-        // 1. STANDARD 2-HOP COMBINATIONS
+        // 1. 2-HOP COMBINATIONS
         for (let i = 0; i < ROUTERS.length; i++) {  
             for (let j = 0; j < ROUTERS.length; j++) {  
                 if (i === j) continue;  
@@ -91,7 +90,7 @@ class RealTimeArbitrageBot {
             }  
         }  
 
-        // 2. 3-HOP COMBINATIONS (USDC -> TokenA -> TokenB -> USDC)
+        // 2. 3-HOP COMBINATIONS  
         for (let i = 0; i < ROUTERS.length; i++) {  
             for (let j = 0; j < ROUTERS.length; j++) {  
                 if (i === j) continue;  
@@ -110,7 +109,7 @@ class RealTimeArbitrageBot {
             }  
         }  
 
-        // 3. 4-HOP COMBINATIONS (USDC -> TokenA -> TokenB -> TokenC -> USDC)
+        // 3. 4-HOP COMBINATIONS  
         for (let i = 0; i < ROUTERS.length; i++) {  
             for (let j = 0; j < ROUTERS.length; j++) {  
                 if (i === j) continue;  
@@ -134,34 +133,37 @@ class RealTimeArbitrageBot {
         return routes;  
     }  
 
-    // Numerical logging formatter for strict column-aligned mathematical ledgers
-    logVerifiedMath(amountIn, estimatedFinalUSDC) {
+    // Unblinded inline output tracking matrix
+    logInlineMathTotal(routeName, amountIn, estimatedFinalUSDC) {
         const input = Number(ethers.formatUnits(amountIn, 6));
         const output = Number(ethers.formatUnits(estimatedFinalUSDC, 6));
-        const rawProfit = output - input;
+        const totalVariance = output - input;
         
-        console.log(`   ╔═════════════ VERIFIED EVM MATHEMATICS ═════════════╗`);
-        console.log(`   ║  Initial Entry Capital :   ${input.toFixed(6).padStart(12)} USDC   ║`);
-        console.log(`   ║  Returned Route Value  :   ${output.toFixed(6).padStart(12)} USDC   ║`);
-        console.log(`   ╠────────────────────────────────────────────────────╣`);
-        console.log(`   ║  Gross Yield Deviation :  ${(rawProfit >= 0 ? "+" : "")}${rawProfit.toFixed(6).padStart(12)} USDC   ║`);
-        console.log(`   ╚════════════════════════════════════════════════════╝`);
+        const sign = totalVariance >= 0 ? "+" : "";
+        const formattedVariance = totalVariance.toFixed(6);
+
+        // Highlight positive routes clearly to separate from negative noise
+        if (totalVariance >= 0.000001) {
+            console.log(`🟢 [PROFIT] ${routeName.padEnd(55)} | Size: ${input.toString().padStart(6)} | Total: ${sign}${formattedVariance} USDC`);
+        } else {
+            console.log(`🔴 [LOSS]   ${routeName.padEnd(55)} | Size: ${input.toString().padStart(6)} | Total: ${sign}${formattedVariance} USDC`);
+        }
     }
 
     async scanAndExecute(blockNumber) {  
         const routes = this.generateMultiHopRoutes();  
+        // Evaluating across your target liquidity size thresholds
         const candidates = [  
-            ethers.parseUnits("500", 6),  
             ethers.parseUnits("1000", 6),  
-            ethers.parseUnits("5000", 6),  
-            ethers.parseUnits("10000", 6),  
-            ethers.parseUnits("25000", 6),  
-            ethers.parseUnits("50000", 6)  
+            ethers.parseUnits("10000", 6)  
         ];  
 
-        const BATCH_SIZE = 35;  
+        const BATCH_SIZE = 25;  
         for (let i = 0; i < routes.length; i += BATCH_SIZE) {  
-            if (this.currentBlockNumber > blockNumber) break; 
+            if (this.currentBlockNumber > blockNumber) {
+                console.log(`⚠️ Chain dropped remaining batch sequences: New block head preempted current processing window.`);
+                break; 
+            }
               
             const batch = routes.slice(i, i + BATCH_SIZE);  
             await Promise.all(batch.map(async (route) => {  
@@ -174,17 +176,21 @@ class RealTimeArbitrageBot {
                         route.pathToUSDC  
                     );  
 
+                    // UNBLIND: Every processed path reports metrics instantly
+                    this.logInlineMathTotal(route.name, result.amountIn, result.estimatedFinalUSDC);
+
                     if (result.estimatedProfit >= CONFIG.minimumProfitUSDC) {  
-                        this.triggerExecution(route, result.amountIn, result.estimatedFinalUSDC);  
+                        this.triggerExecution(route, result.amountIn);  
                     }  
                 } catch (err) {  
-                    // Silently drops illiquid configuration variants
+                    // If an EVM query breaks (e.g. pool lacks deep liquidity reserves), flag it visibly
+                    console.log(`💀 [REVERT] ${route.name.padEnd(55)} | Engine message: ${err.message.slice(0, 30)}`);
                 }  
             }));  
         }  
     }  
 
-    async triggerExecution(route, amountIn, estimatedFinalUSDC) {  
+    async triggerExecution(route, amountIn) {  
         if (this.pendingTxs.size >= CONFIG.maxPendingTxs) return;  
         const deadline = Math.floor(Date.now() / 1000) + 60;  
         const txKey = `${route.name}-${amountIn.toString()}`;  
@@ -193,8 +199,7 @@ class RealTimeArbitrageBot {
         this.pendingTxs.set(txKey, Date.now());  
 
         try {  
-            console.log(`🚀 TARGET IDENTIFIED: ${route.name} | Size: ${ethers.formatUnits(amountIn, 6)} USDC`);  
-              
+            console.log(`🚀 EXECUTING ATOMIC TRANSACTION: ${route.name}`);  
             const tx = await this.contract.executeBestFlashLoanArbitrage(  
                 route.buyRouter,  
                 route.sellRouter,  
@@ -208,14 +213,11 @@ class RealTimeArbitrageBot {
                     maxFeePerGas: CONFIG.priorityFee * 2n + (await this.provider.getFeeData()).gasPrice,  
                 }  
             );  
-
-            console.log(`   ⚡ Broadcast Successful! Hash: ${tx.hash}`);  
+            console.log(`   ⚡ Transaction Dispatched! Hash: ${tx.hash}`);  
             await tx.wait();  
-            console.log(`   ✅ Transaction Finalized!`);  
-            this.logVerifiedMath(amountIn, estimatedFinalUSDC);
+            console.log(`   ✅ Confirmed! Balance successfully updated.`);  
         } catch (e) {  
-            console.log(`   ❌ EVM Atomicity Triggered: Reverted to protect wallet balances.`);  
-            this.logVerifiedMath(amountIn, estimatedFinalUSDC);
+            console.log(`   ❌ On-Chain Safety Triggered: Memory sandbox transaction protected from deficit.`);  
         } finally {  
             this.pendingTxs.delete(txKey);  
         }  
@@ -223,27 +225,11 @@ class RealTimeArbitrageBot {
 
     async start() {  
         await this.init();  
-          
-        if (this.provider instanceof ethers.WebSocketProvider) {  
-            this.provider.on("block", (blockNumber) => {  
-                this.currentBlockNumber = blockNumber;  
-                console.log(`📦 Block #${blockNumber} — [LIVE MULTI-HOP SCAN]`);  
-                this.scanAndExecute(blockNumber);  
-            });  
-        } else {  
-            let lastSeenBlock = 0;  
-            setInterval(async () => {  
-                try {  
-                    const blockNumber = await this.provider.getBlockNumber();  
-                    if (blockNumber > lastSeenBlock) {  
-                        lastSeenBlock = blockNumber;  
-                        this.currentBlockNumber = blockNumber;  
-                        console.log(`📦 Block #${blockNumber} — [FAST HTTP SCAN]`);  
-                        this.scanAndExecute(blockNumber);  
-                    }  
-                } catch (err) {}  
-            }, 1000);  
-        }  
+        this.provider.on("block", (blockNumber) => {  
+            this.currentBlockNumber = blockNumber;  
+            console.log(`\n📦 Block #${blockNumber} — [UNBLINDED MULTI-HOP MONITORING INITIALIZED]`);  
+            this.scanAndExecute(blockNumber);  
+        });  
     }  
 }  
 
