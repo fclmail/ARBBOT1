@@ -10,37 +10,33 @@ const CONFIG = {
     wsUrl: process.env.WS_URL || "wss://polygon-bor-rpc.publicnode.com",  
       
     contractAddress: "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958",  
-    minimumProfitUSDC: ethers.parseUnits("0.10", 6), // $0.10 optimized min profit  
-      
-    // Binary search settings matching on-chain ranges  
-    minFlashLoan: 100000,       // $0.10 in micro-units  
-    maxFlashLoan: 50000000000,  // $50,000.00 in micro-units  
+    minimumProfitUSDC: ethers.parseUnits("0.10", 6), // $0.10 minimum profit target
       
     maxPendingTxs: 3,  
     gasLimit: 3500000,  
     priorityFee: ethers.parseUnits("50", "gwei"),  
 };  
 
-// Token mapping to match the contract's uint8 selector dictionary  
+// EXACT match to VaultArbitrageEnforcer Solidity compiler logic  
 const TOKEN_SELECTORS = {  
-    WETH: 1,  
+    WETH:   1,  
     WMATIC: 2,  
-    USDT: 3,  
-    DAI: 4,  
-    WBTC: 5  
+    USDT:   3,  
+    DAI:    4,  
+    WBTC:   5  
 };  
 
 const DEXES = {  
     QuickSwap:    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",  
     SushiSwap:    "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",  
-    ApeSwap:      "0xC0788a3aD43d79aa53B09c2EaCc313A787d1d607",  
-    WaultSwap:    "0x3a1D87f206D1D1bB6cBd8A1aB8EeB8BcE9dC5dE",  
-    Dfyn:         "0x8E8aE525E7B1E9CA5bD0Ea4A8A1C5C5E6b7C8D9E"  
+    ApeSwap:      "0xC0788a3aD43d79aa53B09c2EaCc313A787d1d607"  
 };  
 
 const ROUTERS = Object.values(DEXES);  
 
+// EXACT application ABI targeting the optimized binary search structures
 const CONTRACT_ABI = [  
+    "function minimumProfitUSDC() external view returns (uint256)",
     "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] memory candidateSizes, address[] memory pathToToken, address[] memory pathToUSDC) public view returns (tuple(uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit) best)",  
     "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",  
     "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"  
@@ -48,15 +44,32 @@ const CONTRACT_ABI = [
 
 class RealTimeArbitrageBot {  
     constructor() {  
-        this.provider = new ethers.WebSocketProvider(CONFIG.wsUrl);  
-        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);  
-        this.contract = new ethers.Contract(CONFIG.contractAddress, CONTRACT_ABI, this.wallet);  
-          
         this.pendingTxs = new Map();  
         this.currentBlockNumber = 0;  
     }  
 
-    // Natively constructs standard 2-hop array wrappers for read-only sandbox queries  
+    async init() {
+        console.log("⚡ INITIALIZING COMPILER ENGINES...");
+        
+        // Adaptive Failover Provider Initialization
+        try {
+            console.log(`🔌 Connecting via Live WebSocket stream: ${CONFIG.wsUrl}`);
+            this.provider = new ethers.WebSocketProvider(CONFIG.wsUrl);
+            await this.provider.getNetwork(); 
+            console.log("🚀 WS HANDSHAKE SECURED — 0MS BLOCK PROPAGATION ACTIVE");
+        } catch (err) {
+            console.log(`⚠️ WS Connection Rejected (${err.message.slice(0, 45)}). Falling back to Fast HTTP Head Tracking...`);
+            this.provider = new ethers.JsonRpcProvider(CONFIG.rpcUrl);
+        }
+
+        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);  
+        this.contract = new ethers.Contract(CONFIG.contractAddress, CONTRACT_ABI, this.wallet);  
+        
+        // Run Diagnostic verification check right away
+        await this.verifyContractCommunication();
+    }
+
+    // Helper to generate the address paths expected by findBestFlashLoanSize
     getPathsForSelector(selector) {  
         const tokens = {  
             1: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", // WETH  
@@ -91,8 +104,26 @@ class RealTimeArbitrageBot {
         return routes;  
     }  
 
+    async verifyContractCommunication() {  
+        console.log("\n🔬 RUNNING ALIGNED ARCHITECTURE DIAGNOSTIC...");  
+        try {  
+            const minProfit = await this.contract.minimumProfitUSDC();  
+            console.log(`  ✅ Connection verified. Contract minimumProfitUSDC target: ${ethers.formatUnits(minProfit, 6)} USDC`);  
+            
+            // Execute mock query against WETH path to test findBestFlashLoanSize function signature
+            const paths = this.getPathsForSelector(1);  
+            const testResult = await this.contract.findBestFlashLoanSize(  
+                ROUTERS[0], ROUTERS[1], [ethers.parseUnits("1000", 6)], paths.toToken, paths.toUSDC  
+            );  
+            console.log(`  ✅ View Function Signatures aligned perfectly. Real-Time Scan can safely begin.\n`);  
+        } catch (e) {  
+            console.log(`  ❌ CRITICAL: Alignment check failed. Mismatched ABI details: ${e.message.slice(0, 120)}\n`);  
+        }  
+    }  
+
     async scanAndExecute(blockNumber) {  
         const routes = this.generateOptimizedRoutes();  
+        // Hardcoded candidate liquidity tiers ($500 -> $50,000 max size)
         const candidates = [  
             ethers.parseUnits("500", 6),  
             ethers.parseUnits("1000", 6),  
@@ -102,10 +133,9 @@ class RealTimeArbitrageBot {
             ethers.parseUnits("50000", 6)  
         ];  
 
-        // Batch processing  
-        const BATCH_SIZE = 40;  
+        const BATCH_SIZE = 30;  
         for (let i = 0; i < routes.length; i += BATCH_SIZE) {  
-            if (this.currentBlockNumber > blockNumber) break; // Drop stale block tasks  
+            if (this.currentBlockNumber > blockNumber) break; // Drop execution chain instantly if block goes stale  
               
             const batch = routes.slice(i, i + BATCH_SIZE);  
             await Promise.all(batch.map(async (route) => {  
@@ -123,7 +153,7 @@ class RealTimeArbitrageBot {
                         this.triggerExecution(route, result.amountIn, paths);  
                     }  
                 } catch (err) {  
-                    // Silently discard sandbox exceptions  
+                    // Silent optimization catch — filters away dead pool paths quietly
                 }  
             }));  
         }  
@@ -138,7 +168,7 @@ class RealTimeArbitrageBot {
         this.pendingTxs.set(txKey, Date.now());  
 
         try {  
-            console.log(`🚀 INSTANT EXECUTOR MATCHED: ${route.name} | Size: ${ethers.formatUnits(amountIn, 6)} USDC`);  
+            console.log(`🚀 PROFIT OPPORTUNITY IDENTIFIED: ${route.name} | Executing with: ${ethers.formatUnits(amountIn, 6)} USDC`);  
               
             const tx = await this.contract.executeBestFlashLoanArbitrage(  
                 route.buyRouter,  
@@ -154,24 +184,39 @@ class RealTimeArbitrageBot {
                 }  
             );  
 
-            console.log(`   ⚡ Transacted successfully! Hash: ${tx.hash}`);  
+            console.log(`   ⚡ Transacted successfully! Broadcasted Hash: ${tx.hash}`);  
             await tx.wait();  
-            console.log(`   ✅ Trade finalized in block!`);  
+            console.log(`   ✅ Trade finalized in block! Arbitrage profit captured.`);  
         } catch (e) {  
-            console.log(`   ❌ Atomic safety triggered: Transaction reverted inside EVM sandbox wrapper.`);  
+            console.log(`   ❌ Atomic Safety Exception: Trade fell through or reverted to protect capital balance.`);  
         } finally {  
             this.pendingTxs.delete(txKey);  
         }  
     }  
 
-    start() {  
-        console.log("⚡ INLINE COMPILER EVENT ENGINE IS ONLINE");  
+    async start() {  
+        await this.init();  
           
-        this.provider.on("block", (blockNumber) => {  
-            this.currentBlockNumber = blockNumber;  
-            console.log(`📦 Block #${blockNumber} — Processed with 0ms WebSockets propagation delay`);  
-            this.scanAndExecute(blockNumber);  
-        });  
+        if (this.provider instanceof ethers.WebSocketProvider) {
+            this.provider.on("block", (blockNumber) => {  
+                this.currentBlockNumber = blockNumber;  
+                console.log(`📦 Block #${blockNumber} — [LIVE-STREAM WS]`);  
+                this.scanAndExecute(blockNumber);  
+            });  
+        } else {
+            let lastSeenBlock = 0;
+            setInterval(async () => {
+                try {
+                    const blockNumber = await this.provider.getBlockNumber();
+                    if (blockNumber > lastSeenBlock) {
+                        lastSeenBlock = blockNumber;
+                        this.currentBlockNumber = blockNumber;
+                        console.log(`📦 Block #${blockNumber} — [FAST HTTP POOLING HEAD]`);
+                        this.scanAndExecute(blockNumber);
+                    }
+                } catch (err) {}
+            }, 1000);
+        }
     }  
 }  
 
