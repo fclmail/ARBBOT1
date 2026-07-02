@@ -1,7 +1,7 @@
 /**
- * ARBBOT1 - Dynamic Vault-Fund High-Velocity Execution Engine
- * Target: VaultArbitrageEnforcer (Capital-Adaptive Zero-Flash Architecture)
- * Edits: Dynamic Dry-Runs matching available on-chain contract liquidity
+ * ARBBOT1 - Micro-Allocation Execution Engine
+ * Target: VaultArbitrageEnforcer (Capital-Constrained Zero-Flash Architecture)
+ * Edits: Lowered JavaScript Allocation Target to fit 0.066433 USDC Available Balance
  */
 import { ethers } from "ethers";
 import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
@@ -37,7 +37,8 @@ const CONFIG = {
         SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
         DFYN:    ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
     },
-    minSaneAllocation: 10000n,    // Absolute baseline to evaluate ($0.01 USDC) to filter empty dust pools
+    // OPTION B: Lowered to $0.05 USDC to run dry runs inside your 0.066433 USDC pool baseline
+    allocationAmount: 50000n, 
     gasLimitOverride: 850000n,    
     priorityFeeGwei: 45n,
     deadlineSeconds: 45               
@@ -61,7 +62,7 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 PRODUCTION RUNNER STARTING: DYNAMIC LIQUIDITY ADAPTIVE MODEL");  
+    console.log("🚀 PRODUCTION RUNNER STARTING: MICRO-ALLOCATION TESTING MODEL");  
     console.log(`📡 Target RPC Endpoint: ${CONFIG.fastLaneRpc}`);  
     
     let totalRawProfits = 0.0;  
@@ -115,17 +116,17 @@ if (isMainThread) {
         try {  
             mainProvider = new ethers.WebSocketProvider(CONFIG.providerWssEndpoints[0], STATIC_POLYGON_NETWORK);
             mainProvider.on("block", async (blockNumber) => {  
-                let vaultBalance = 0n;
                 try {
-                    // Pull real-time available pool liquidity dynamically per block 
-                    vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
+                    const vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
+                    if (vaultBalance < CONFIG.allocationAmount) {
+                        console.log(`⚠️  [Capital Floor Alert] Vault allocation requirement not met. Available: ${ethers.formatUnits(vaultBalance, 6)} USDC`);
+                        return;
+                    }
                     currentLocalNonce = await tempProvider.getTransactionCount(mainWallet.address, "pending");
                 } catch (_) {}
                 
-                console.log(`\n[WebSocket Stream] 🔍 Block #${blockNumber} | Active Vault Capital Allocation: ${ethers.formatUnits(vaultBalance, 6)} USDC`);
-                
-                // Pass dynamic block allocation directly down to shards for execution dry-runs
-                workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber, currentBalance: vaultBalance.toString() }));  
+                console.log(`\n[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} Across Shards...`);
+                workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber }));  
             });  
         } catch (_) {
             setupHttpFallbackMode();
@@ -135,14 +136,14 @@ if (isMainThread) {
     function setupHttpFallbackMode() {  
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK);  
         fallbackProvider.on("block", async (blockNumber) => {  
-            let vaultBalance = 0n;
             try {
-                vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
+                const vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
+                if (vaultBalance < CONFIG.allocationAmount) return;
                 currentLocalNonce = await fallbackProvider.getTransactionCount(mainWallet.address, "pending");
             } catch (_) {}
             
-            console.log(`\n[HTTP Fallback Engine] 🔍 Block #${blockNumber} | Active Vault Capital Allocation: ${ethers.formatUnits(vaultBalance, 6)} USDC`);
-            workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber, currentBalance: vaultBalance.toString() }));  
+            console.log(`\n[HTTP Fallback Engine] 🔍 Scanning Block #${blockNumber} Across Shards...`);
+            workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber }));  
         });  
     }  
 
@@ -166,16 +167,10 @@ if (isMainThread) {
         }
 
         if (message.type === "BLOCK_TRIGGER") {  
-            const currentBalance = BigInt(message.currentBalance || "0");
-
-            // Filter out tracking updates if contract has completely zero assets
-            if (currentBalance < config.minSaneAllocation) {
-                parentPort.postMessage({  
-                    type: "LOG",  
-                    data: `⚠️  [Shard #${workerId} Skip] Vault funds too low for dry-run calculations (${ethers.formatUnits(currentBalance, 6)} USDC)`  
-                });  
-                return;
-            }
+            parentPort.postMessage({  
+                type: "LOG",  
+                data: `✅ [Shard #${workerId}] Scanning Matrix Array: [${matrix.join(", ")}]`  
+            });  
 
             try {
                 const routerA = config.routers[matrix[0]];
@@ -191,11 +186,10 @@ if (isMainThread) {
                 const path4ToToken = [tokenUSDC, tokenInt1, tokenInt2];
                 const path4ToUSDC  = [tokenInt2, config.tokens.USDCE, tokenUSDC];
 
-                // --- ADJUSTED LIVE LIQUIDITY DRY RUN ---
-                // Simulating with exact variable dynamic vault balance parameter
+                // --- OFFLINE STATIC SANDBOX DRY RUN ---
                 const [result3Hop, result4Hop, minProfitUSDC] = await Promise.all([
-                    contractInstance.simulateArbitrageProfit(routerA, routerB, currentBalance, path3ToToken, path3ToUSDC).catch(() => [0n, 0n]),
-                    contractInstance.simulateArbitrageProfit(routerA, routerB, currentBalance, path4ToToken, path4ToUSDC).catch(() => [0n, 0n]),
+                    contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path3ToToken, path3ToUSDC).catch(() => [0n, 0n]),
+                    contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path4ToToken, path4ToUSDC).catch(() => [0n, 0n]),
                     contractInstance.minimumProfitUSDC()
                 ]);
 
@@ -213,13 +207,12 @@ if (isMainThread) {
                     finalSellPath = path4ToUSDC;
                 }
 
-                // If dry run confirms a valid arbitrage gap matching on-chain balance targets
                 if (selectedProfit >= minProfitUSDC) {
                     const rawProfitStr = ethers.formatUnits(selectedProfit, 6);
                     
                     parentPort.postMessage({  
                         type: "LOG",  
-                        data: `🔥 DYNAMIC DRY RUN HIT [Shard #${workerId}]: Size: ${ethers.formatUnits(currentBalance, 6)} USDC | Raw Profit Delta: +${rawProfitStr} USDC`  
+                        data: `🔥 OFFLINE DRY RUN HIT [Shard #${workerId}]: Raw Profit Delta Detected: +${rawProfitStr} USDC`  
                     });  
 
                     const assignedNonce = await new Promise((resolve) => {
@@ -235,7 +228,7 @@ if (isMainThread) {
                     const batchPayload = { 
                         buyRouters: [routerA], 
                         sellRouters: [routerB], 
-                        amountsInUSDC: [currentBalance], 
+                        amountsInUSDC: [config.allocationAmount], 
                         pathsToToken: [finalBuyPath], 
                         pathsToUSDC: [finalSellPath], 
                         deadline: txDeadline 
@@ -250,19 +243,19 @@ if (isMainThread) {
 
                     parentPort.postMessage({  
                         type: "LOG",  
-                        data: `📡 DISPATCHING LIVE VAULT TX: ${txResponse.hash}`  
+                        data: `📡 ONLINE VAULT EXECUTION DISPATCHED: ${txResponse.hash}`  
                     });  
 
                     const receipt = await txResponse.wait(1);  
 
                     if (receipt.status === 1) {
-                        parentPort.postMessage({ type: "LOG", data: `✨ TRANSACTION SETTLED` });
+                        parentPort.postMessage({ type: "LOG", data: `✨ TRANSACTION SETTLED: Profit captured on-chain.` });
                         parentPort.postMessage({ type: "PROFIT", amount: parseFloat(rawProfitStr) });
                     } else {
-                        parentPort.postMessage({ type: "LOG", data: `❌ Execution Dropped Post-Mempool (Slippage Safe Mode Protected Vault Balance)` });
+                        parentPort.postMessage({ type: "LOG", data: `❌ Transaction Execution Blocked or Nullified (Zero State Revert Protection)` });
                     }
                 } else {
-                    parentPort.postMessage({ type: "LOG", data: `📡 Shard #${workerId} Dry-Run Check: Route monitored, no raw yield discovered this block.` });
+                    parentPort.postMessage({ type: "LOG", data: `📡 Scan Completed: No valid raw arbitrage open this block.` });
                 }
             } catch (err) {  
                 parentPort.postMessage({  
