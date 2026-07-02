@@ -20,7 +20,7 @@ const CONFIG = {
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
     fallbackRpc: "https://polygon.drpc.org",
     contractAddress: ethers.getAddress("0x7EAf60672b8C0A2399187bCA1bB916F14Ac7A958".toLowerCase()),
-    vaultContractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),
+    vaultContractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958".toLowerCase()),
     
     // Core Token Asset Matrix Cache
     tokens: {
