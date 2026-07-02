@@ -35,7 +35,7 @@ const CONFIG = {
     routers: {
         QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
         SUSHI: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-        DFYN:  ethers.getAddress("0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429") // Checksum Solved via Manual Auto-Format Conversion
+        DFYN:  ethers.getAddress("0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429") // Checksum Solved via Lowercase Auto-Format
     },
     maxPendingTransactions: 1,        
     deadlineSeconds: 45              
@@ -106,7 +106,7 @@ if (isMainThread) {
                 console.log(msg.data);  
             } else if (msg.type === "PROFIT") {  
                 totalRealizedProfits += msg.amount;  
-                console.log(`💰 Combined Metric Realized Capture: +${totalRealizedProfits.toFixed(6)} USDC`);  
+                console.log(`💰 Combined Metric Realized Capture: ${totalRealizedProfits >= 0 ? '+' : ''}${totalRealizedProfits.toFixed(6)} USDC`);  
             }  
         });  
         workerThreads.push(engineWorker);  
@@ -233,29 +233,24 @@ if (isMainThread) {
 
             switch(strategy) {
                 case "TRIPLE_HOP_A":
-                    // USDC -> WETH -> WMATIC
                     pathToToken = [TOKENS.USDC, TOKENS.WETH, TOKENS.WMATIC];
                     pathToUSDC  = [TOKENS.WMATIC, TOKENS.USDC];
                     break;
                 case "TRIPLE_HOP_B":
-                    // USDC -> WBTC -> WETH
                     pathToToken = [TOKENS.USDC, TOKENS.WBTC, TOKENS.WETH];
                     pathToUSDC  = [TOKENS.WETH, TOKENS.USDC];
                     break;
                 case "QUAD_HOP_A":
-                    // USDC -> WBTC -> WETH -> DAI
                     pathToToken = [TOKENS.USDC, TOKENS.WBTC, TOKENS.WETH, TOKENS.DAI];
                     pathToUSDC  = [TOKENS.DAI, TOKENS.USDC];
                     break;
                 case "STANDARD_CYCLIC":
                 default:
-                    // USDC -> WMATIC
                     pathToToken = [TOKENS.USDC, TOKENS.WMATIC];
                     pathToUSDC  = [TOKENS.WMATIC, TOKENS.USDC];
                     break;
             }
 
-            // Alternating Router Directions across matrix endpoints
             const buyRouter = matrix[workerId % matrix.length];
             const sellRouter = matrix[(workerId + 1) % matrix.length];
 
@@ -268,13 +263,13 @@ if (isMainThread) {
                 const candidateSizesRaw = [ethers.parseUnits(config.candidateSizes[0], 0)]; 
                 const deadline = BigInt(Math.floor(Date.now() / 1000) + config.deadlineSeconds);
 
-                // Off-chain EVM Simulation Execution Sandbox Hook
+                // Off-chain Quadratic/Ternary Optimization Probe
                 let simulationResult;
                 try {
                     simulationResult = await vaultInstance.findBestFlashLoanSize(
                         buyRouter,
                         sellRouter,
-                        candidateSizesRaw,
+                        candidateSizesRaw, 
                         pathToToken,
                         pathToUSDC,
                         { from: executionWallet.address }
@@ -282,7 +277,7 @@ if (isMainThread) {
                 } catch (simError) {
                     parentPort.postMessage({  
                         type: "LOG",  
-                        data: `ℹ️ [Shard #${workerId}] Sandbox execution reverted (No trade structural liquidity available).`  
+                        data: `ℹ️ [Shard #${workerId}] Sandbox execution reverted (Structural liquidity curve sub-optimal).`  
                     });
                     pendingTransactionsCount--;
                     return;
@@ -299,7 +294,7 @@ if (isMainThread) {
 
                 parentPort.postMessage({  
                     type: "LOG",  
-                    data: `🔥 PROFITABLE MULTI-HOP ASSET MATRIX DETECTED [Shard #${workerId}]\n├── Route Strategy Profile: ${strategy}\n├── Target Input Matrix: ${config.candidateSizes[0]} Micro-Units\n├── Gross Estimated Yield: +${ethers.formatUnits(simulationResult.estimatedProfit, 6)} USDC\n└── Network Base Fee: ${baseFeeGwei} Gwei | Priority Fee: ${config.priorityFeeGwei} Gwei`  
+                    data: `🔥 PROFITABLE MULTI-HOP ASSET MATRIX DETECTED [Shard #${workerId}]\n├── Route Strategy Profile: ${strategy}\n├── Peak Input Size Target: ${config.candidateSizes[0]} Micro-Units\n├── Gross Estimated Yield: +${ethers.formatUnits(simulationResult.estimatedProfit, 6)} USDC\n└── Network Base Fee: ${baseFeeGwei} Gwei | Priority Fee: ${config.priorityFeeGwei} Gwei`  
                 });  
 
                 parentPort.postMessage({  
@@ -330,22 +325,36 @@ if (isMainThread) {
                 if (receipt.status === 1) {
                     const balanceAfter = await tokenContract.balanceOf(config.contractAddress);
                     const actualProfitRaw = balanceAfter - balanceBefore;
-                    const actualProfitUSD = Number(actualProfitRaw) / 1000000;
+                    
+                    // Numerical Calculation Engine for Net +/- Total Parsing
+                    const gasUsed = BigInt(receipt.gasUsed);
+                    const effectiveGasPrice = BigInt(receipt.effectiveGasPrice);
+                    const totalGasCostWei = gasUsed * effectiveGasPrice;
+                    const estimatedGasCostUSDC = Number(totalGasCostWei) / 1e12; // Scaled to token decimal offset
 
-                    const formattedBefore = (Number(balanceBefore) / 1000000).toFixed(6);
-                    const formattedAfter = (Number(balanceAfter) / 1000000).toFixed(6);
+                    const grossProfitUSD = Number(actualProfitRaw) / 1000000;
+                    const netProfitUSD = grossProfitUSD - estimatedGasCostUSDC;
+                    const signPrefix = netProfitUSD >= 0 ? "+" : "";
 
                     if (actualProfitRaw > 0n) {
                         parentPort.postMessage({  
                             type: "LOG",  
-                            data: `✔️ Transaction Confirmed in Block #${receipt.blockNumber}!\n├── Status: SUCCESS ✅\n├── Balance Before: ${formattedBefore} USDC\n├── Balance After: ${formattedAfter} USDC\n├── Net Profit Extracted: +${actualProfitUSD.toFixed(6)} USDC\n└── Polyscan Verification: Contract Balance Increased.`  
+                            data: `✔️ Transaction Confirmed in Block #${receipt.blockNumber}!\n` +
+                                  `├── Status: SUCCESS ✅\n` +
+                                  `├── Gross Captured:  +${grossProfitUSD.toFixed(6)} USDC\n` +
+                                  `├── Network Gas Fees: -${estimatedGasCostUSDC.toFixed(6)} USDC\n` +
+                                  `└── Net Realized PnL: [${signPrefix}${netProfitUSD.toFixed(6)} USDC] 📊`
                         });
-                        parentPort.postMessage({ type: "PROFIT", amount: actualProfitUSD });
+                        parentPort.postMessage({ type: "PROFIT", amount: netProfitUSD });
                     } else {
                         parentPort.postMessage({  
                             type: "LOG",  
-                            data: `⚠️ Transaction Succeeded in Block #${receipt.blockNumber} but generated 0 ZERO profit.\n├── Balance Before: ${formattedBefore} USDC\n├── Balance After: ${formattedAfter} USDC\n└── Gas Spent on Slippage/False Positive: ${receipt.gasUsed.toString()} gas.`  
+                            data: `⚠️ Transaction Executed Flat (Slippage Reverted)\n` +
+                                  `├── Gross Captured:   0.000000 USDC\n` +
+                                  `├── Network Gas Fees: -${estimatedGasCostUSDC.toFixed(6)} USDC\n` +
+                                  `└── Net Realized PnL: [-${estimatedGasCostUSDC.toFixed(6)} USDC] 🔻`
                         });
+                        parentPort.postMessage({ type: "PROFIT", amount: -estimatedGasCostUSDC });
                     }
                 } else {
                     parentPort.postMessage({ type: "LOG", data: `❌ Transaction reverted on-chain.` });
