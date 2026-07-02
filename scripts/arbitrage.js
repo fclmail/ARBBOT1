@@ -40,7 +40,9 @@ const CONFIG = {
 };
 
 const CONTRACT_ABI = [
-    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) calldata batch) external",
+    "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
+    "function executeBalancerFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
+    "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
     "function minimumProfitUSDC() external view returns (uint256)",
     "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC) external view returns ((uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit) best)"
 ];
@@ -221,24 +223,34 @@ if (isMainThread) {
 
                     const buyRouters = [config.routers.QUICK];
                     const sellRouters = [config.routers.SUSHI];
-                    const amountsInUSDC = [ethers.parseUnits(config.candidateSizes[0], 0)]; 
+                    const candidateSizesRaw = [ethers.parseUnits(config.candidateSizes[0], 0)]; 
                     const pathsToToken = [[config.usdcAddress, config.wmaticAddress]];
                     const pathsToUSDC = [[config.wmaticAddress, config.usdcAddress]];
                     const deadline = BigInt(Math.floor(Date.now() / 1000) + config.deadlineSeconds);
 
                     // ========================================================
-                    // ✅ FIXED: Explicit block tracking with standard sender payload options
+                    // ✅ ISOLATED EXCEPTION GUARD FOR SANDBOX SIMULATION
                     // ========================================================
-                    const simulationResult = await vaultInstance.findBestFlashLoanSize(
-                        buyRouters[0],
-                        sellRouters[0],
-                        amountsInUSDC,
-                        pathsToToken[0],
-                        pathsToUSDC[0],
-                        { from: executionWallet.address } // Bypasses missing revert payload issues on public RPC pools
-                    );
+                    let simulationResult;
+                    try {
+                        simulationResult = await vaultInstance.findBestFlashLoanSize(
+                            buyRouters[0],
+                            sellRouters[0],
+                            candidateSizesRaw,
+                            pathsToToken[0],
+                            pathsToUSDC[0],
+                            { from: executionWallet.address }
+                        );
+                    } catch (simError) {
+                        parentPort.postMessage({  
+                            type: "LOG",  
+                            data: `ℹ️ [Shard #${workerId}] Sandbox execution reverted (No trade structural liquidity available).`  
+                        });
+                        pendingTransactionsCount--;
+                        return;
+                    }
 
-                    if (simulationResult.estimatedProfit < 1n) {
+                    if (!simulationResult || simulationResult.estimatedProfit < 1n) {
                         parentPort.postMessage({  
                             type: "LOG",  
                             data: `🛑 [SC Sandbox Blocked] Built-in simulation reports profit below threshold (0.000001 USDC). Dropping transaction.`  
@@ -259,18 +271,20 @@ if (isMainThread) {
 
                     const balanceBefore = await tokenContract.balanceOf(config.contractAddress);
 
-                    const tx = await vaultInstance.executeFlashBatchArbitrage({
-                        buyRouters,
-                        sellRouters,
-                        amountsInUSDC,
-                        pathsToToken,
-                        pathsToUSDC,
-                        deadline
-                    }, {
-                        gasLimit: config.gasLimitOverride,
-                        maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
-                        maxFeePerGas: (currentBaseFee * 2n) + ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei")
-                    });
+                    // FIXED: Replaced non-existent executeFlashBatchArbitrage with real smart contract method
+                    const tx = await vaultInstance.executeBestFlashLoanArbitrage(
+                        buyRouters[0],
+                        sellRouters[0],
+                        candidateSizesRaw,
+                        pathsToToken[0],
+                        pathsToUSDC[0],
+                        deadline,
+                        {
+                            gasLimit: config.gasLimitOverride,
+                            maxPriorityFeePerGas: ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei"),
+                            maxFeePerGas: (currentBaseFee * 2n) + ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei")
+                        }
+                    );
 
                     parentPort.postMessage({ type: "LOG", data: `📡 Broadcasted! Tx Hash: ${tx.hash}` });
 
