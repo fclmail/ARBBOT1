@@ -1,5 +1,5 @@
 // ============================================================  
-// arbitrage.js — Completely Unblinded Comprehensive Size Engine
+// arbitrage.js — Completely Unblinded Iterative Size Sweep Engine
 // ============================================================  
 
 import { ethers } from "ethers";  
@@ -25,7 +25,7 @@ const TOKEN_SELECTORS = {
     WBTC:   5  
 };  
 
-// CRITICAL FIX: All address components forced to lowercase to bypass Ethers checksum validation rules
+// FORCE LOWERCASE: Bypass all Ethers checkSum validation exceptions completely
 const TOKENS = {
     USDC:   "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
@@ -133,26 +133,26 @@ class RealTimeArbitrageBot {
         return routes;  
     }  
 
-    logInlineMathTotal(routeName, amountIn, estimatedFinalUSDC) {
-        const input = Number(ethers.formatUnits(amountIn, 6));
+    logInlineMathTotal(routeName, size, estimatedFinalUSDC) {
+        const input = Number(ethers.formatUnits(size, 6));
         const output = Number(ethers.formatUnits(estimatedFinalUSDC, 6));
         const totalVariance = output - input;
         
         const sign = totalVariance >= 0 ? "+" : "";
         const formattedVariance = totalVariance.toFixed(6);
 
-        // Explicit unblind tracking output logic
-        if (totalVariance >= 0.000001 && input > 0) {
-            console.log(`🟢 [PROFIT] ${routeName.padEnd(55)} | Size: ${input.toFixed(2).padStart(8)} | Total: ${sign}${formattedVariance} USDC`);
+        // Formatted to exactly target your explicit layout specifications
+        if (totalVariance >= 0.000001) {
+            console.log(`🟢 [PROFIT] ${routeName.padEnd(55)} | Size: ${input.toFixed(2).padStart(9)} | Total: ${sign}${formattedVariance} USDC`);
         } else {
-            console.log(`🔴 [LOSS]   ${routeName.padEnd(55)} | Size: ${input.toFixed(2).padStart(8)} | Total: ${sign}${formattedVariance} USDC`);
+            console.log(`🔴 [LOSS]   ${routeName.padEnd(55)} | Size: ${input.toFixed(2).padStart(9)} | Total: ${sign}${formattedVariance} USDC`);
         }
     }
 
     async scanAndExecute(blockNumber) {  
         const routes = this.generateMultiHopRoutes();  
         
-        // Full continuous step coverage checking all liquidity depth points from $0.10 to $50,000.00
+        // Comprehensive tier matrix matching config requirements
         const candidates = [  
             ethers.parseUnits("0.10", 6),  
             ethers.parseUnits("1.00", 6),  
@@ -166,29 +166,35 @@ class RealTimeArbitrageBot {
             ethers.parseUnits("50000.00", 6)  
         ];  
 
-        const BATCH_SIZE = 20;  
+        // Reduced pipeline batch thickness to eliminate gas exhaustion on node calls
+        const BATCH_SIZE = 8;  
         for (let i = 0; i < routes.length; i += BATCH_SIZE) {  
             if (this.currentBlockNumber > blockNumber) break; 
               
             const batch = routes.slice(i, i + BATCH_SIZE);  
             await Promise.all(batch.map(async (route) => {  
-                try {  
-                    const result = await this.contract.findBestFlashLoanSize(  
-                        route.buyRouter,  
-                        route.sellRouter,  
-                        candidates,  
-                        route.pathToToken,  
-                        route.pathToUSDC  
-                    );  
+                // Iterative evaluation prevents EVM call framework gas faults
+                for (const size of candidates) {
+                    try {  
+                        const result = await this.contract.findBestFlashLoanSize(  
+                            route.buyRouter,  
+                            route.sellRouter,  
+                            [size], // Evaluates singular size to unload call boundaries
+                            route.pathToToken,  
+                            route.pathToUSDC  
+                        );  
 
-                    this.logInlineMathTotal(route.name, result.amountIn, result.estimatedFinalUSDC);  
+                        this.logInlineMathTotal(route.name, size, result.estimatedFinalUSDC);  
 
-                    if (result.estimatedProfit >= CONFIG.minimumProfitUSDC && result.amountIn > 0n) {  
-                        this.triggerExecution(route, result.amountIn);  
+                        if (result.estimatedProfit >= CONFIG.minimumProfitUSDC) {  
+                            await this.triggerExecution(route, size);  
+                            break; // Sequence broken for this specific path once executed
+                        }  
+                    } catch (err) {  
+                        // Logs routing structural discrepancies explicitly without crashing thread iterations
+                        console.log(`💀 [REVERT] ${route.name.padEnd(55)} | Engine status: ${err.message.slice(0, 35)}`);  
                     }  
-                } catch (err) {  
-                    console.log(`💀 [REVERT] ${route.name.padEnd(55)} | Engine status: ${err.message.slice(0, 35)}`);  
-                }  
+                }
             }));  
         }  
     }  
@@ -202,7 +208,7 @@ class RealTimeArbitrageBot {
         this.pendingTxs.set(txKey, Date.now());  
 
         try {  
-            console.log(`🚀 EXECUTING ATOMIC ROUTE TRIGGER: ${route.name}`);  
+            console.log(`\n🚀 EXECUTING ATOMIC ROUTE TRIGGER: ${route.name}`);  
             const tx = await this.contract.executeBestFlashLoanArbitrage(  
                 route.buyRouter,  
                 route.sellRouter,  
@@ -218,9 +224,9 @@ class RealTimeArbitrageBot {
             );  
             console.log(`   ⚡ Dispatch Complete! Hash: ${tx.hash}`);  
             await tx.wait();  
-            console.log(`   ✅ Target Block Settlement Complete.`);  
+            console.log(`   ✅ Target Block Settlement Complete.\n`);  
         } catch (e) {  
-            console.log(`   ❌ Deficit Protection Engine: On-chain simulation protected core balances.`);  
+            console.log(`   ❌ Deficit Protection Engine: On-chain simulation protected core balances.\n`);  
         } finally {  
             this.pendingTxs.delete(txKey);  
         }  
