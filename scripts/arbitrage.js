@@ -1,7 +1,7 @@
 /**
  * ARBBOT1 - High-Velocity Multi-Hop Production Execution Engine
  * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster
- * Specification: Ethers v6 Production Build with Option 2 Variable-Step Boundaries
+ * Specification: Ethers v6 Production Build with Strict Hex Checksum Formatting
  */
 import { ethers } from "ethers";
 import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
@@ -44,7 +44,6 @@ const CONTRACT_ABI = [
     "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC) external view returns ((uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit) best)"
 ];
 
-// Minimal interface to pull dynamic pool factory/pair data for dynamic boundaries
 const UNISWAP_V2_PAIR_ABI = [
     "function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)",
     "function token0() external view returns (address)"
@@ -72,7 +71,7 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 PRODUCTION RUNNER STARTING: OPTION 2 VARIABLE-STEP SAMPLING OPERATIONAL");  
+    console.log("🚀 PRODUCTION RUNNER STARTING: ENS ADDR REFACTOR VALIDATED");  
     
     let totalRealizedProfits = 0.0;  
     let workerThreads = [];  
@@ -187,9 +186,10 @@ if (isMainThread) {
     const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
     const tokenContract = new ethers.Contract(config.usdcAddress, ["function balanceOf(address) view returns (uint256)"], fastLaneRelayProvider);
 
+    // CRITICAL FIX: Wrapped inside explicit checksum formatting to prevent network ENS resolution calls
     const TOKENS = {
-        USDC: config.usdcAddress,
-        WMATIC: config.wmaticAddress,
+        USDC: ethers.getAddress(config.usdcAddress),
+        WMATIC: ethers.getAddress(config.wmaticAddress),
         WETH: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),
         WBTC: ethers.getAddress("0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6"),
         DAI: ethers.getAddress("0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"),
@@ -225,20 +225,18 @@ if (isMainThread) {
                     break;
             }
 
-            const buyRouter = matrix[workerId % matrix.length];
-            const sellRouter = matrix[(workerId + 1) % matrix.length];
+            // CRITICAL FIX: Wrap router lookups securely inside getAddress calls
+            const buyRouter = ethers.getAddress(config.routers[matrix[workerId % matrix.length]]);
+            const sellRouter = ethers.getAddress(config.routers[matrix[(workerId + 1) % matrix.length]]);
 
             pendingTransactionsCount++;
             try {  
-                // ====================================================
-                // OPTION 2: VARIABLE-STEP PRE-FLIGHT RESERVE SAMPLING
-                // ====================================================
                 let nativeRouterContract = new ethers.Contract(buyRouter, UNISWAP_V2_ROUTER_ABI, fastLaneRelayProvider);
-                let factoryAddress = await nativeRouterContract.factory();
+                let factoryAddress = ethers.getAddress(await nativeRouterContract.factory());
                 let factoryContract = new ethers.Contract(factoryAddress, UNISWAP_V2_FACTORY_ABI, fastLaneRelayProvider);
                 
-                let targetPairAddress = await factoryContract.getPair(pathToToken[0], pathToToken[1]);
-                let calculatedHighBoundUSDC = 50000000000n; // $50,000 baseline default
+                let targetPairAddress = ethers.getAddress(await factoryContract.getPair(pathToToken[0], pathToToken[1]));
+                let calculatedHighBoundUSDC = 50000000000n; 
 
                 if (targetPairAddress !== ethers.ZeroAddress) {
                     let pairContract = new ethers.Contract(targetPairAddress, UNISWAP_V2_PAIR_ABI, fastLaneRelayProvider);
@@ -247,16 +245,19 @@ if (isMainThread) {
                     
                     let usdcReserves = (token0Address.toLowerCase() === TOKENS.USDC.toLowerCase()) ? BigInt(reserve0) : BigInt(reserve1);
                     if (usdcReserves > 0n) {
-                        // Dynamically lock the Upper search boundary to exactly 5% of this specific pool's depth
                         calculatedHighBoundUSDC = (usdcReserves * 5n) / 100n;
-                        if (calculatedHighBoundUSDC < 500000n) calculatedHighBoundUSDC = 500000n; // Safety min floor of $0.50
+                        if (calculatedHighBoundUSDC < 500000n) calculatedHighBoundUSDC = 500000n; 
                     }
                 }
+
+                parentPort.postMessage({  
+                    type: "LOG",  
+                    data: `✅ [Shard #${workerId}] Scanning Matrix Array: [${matrix.join(", ")}] Strategy: [${strategy}]`  
+                });  
 
                 const feeData = await fastLaneRelayProvider.getFeeData();  
                 const currentBaseFee = feeData.estimatedBaseFee || ethers.parseUnits("140", "gwei");  
 
-                // Format calculations safely to input arrays for contract fallback execution mapping
                 const dynamicCandidateSizes = [calculatedHighBoundUSDC];
                 const deadline = BigInt(Math.floor(Date.now() / 1000) + config.deadlineSeconds);
 
@@ -266,7 +267,7 @@ if (isMainThread) {
                         buyRouter, sellRouter, dynamicCandidateSizes, pathToToken, pathToUSDC, { from: executionWallet.address }
                     );
                 } catch (simError) {
-                    parentPort.postMessage({ type: "LOG", data: `ℹ️ [Shard #${workerId}] Sandbox execution reverted (Pool depths too shallow for target paths).` });
+                    parentPort.postMessage({ type: "LOG", data: `ℹ️ [Shard #${workerId}] Sandbox execution reverted (No trade structural liquidity available).` });
                     pendingTransactionsCount--;
                     return;
                 }
