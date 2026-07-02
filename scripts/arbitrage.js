@@ -69,7 +69,8 @@ const DEXES = {
     // High-yield DEXes  
     ApeSwap:      "0xC0788a3aD43d79aa53B09c2EaCc313A787d1d607",  
     // FIXED: Corrected valid EIP-55 checksum alignment to satisfy strict Ethers v6 validation  
-    WaultSwap:    "0x3a1d87f206D1D1bb6CBd8A1aB8eeb8bce9dC5dE",  
+    WaultSwap:    "0x3a1D87f206D1D1bB6cBd8A1aB8EeB8BcE9dC5dE
+",  
     Balancer:     "0xBA12222222228d8Ba445958a75a0000000000000",  
       
     // More DEXes  
