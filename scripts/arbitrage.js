@@ -17,8 +17,8 @@ const CONFIG = {
     wsUrl: process.env.WS_URL || "wss://polygon-rpc.com",  
       
     // Contract  
-    contractAddress: "0xYourDeployedContractAddress",  
-    vaultAddress: "0xYourVaultAddress", // EOA that calls execute  
+    contractAddress: "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958",  
+    vaultAddress: "0x6D83D832d1553FE7a3A210ed2ED2eb1668DD3046", // EOA that calls execute  
       
     // Minimum profit in USDC (wei)  
     minimumProfitUSDC: ethers.parseUnits("0.50", 6), // $0.50  
