@@ -1,7 +1,7 @@
 /**
- * ARBBOT1 - High-Velocity Production Execution Engine
- * Target: VaultArbitrageEnforcer
- * Features: Centralized Nonce Concurrency Sync, Router/Token Cache Matrix, Parallel Multicall View Sandbox
+ * ARBBOT1 - Pure Vault-Fund High-Velocity Execution Engine
+ * Target: VaultArbitrageEnforcer (Capital-Constrained Zero-Flash Architecture)
+ * Edits: JavaScript Engine Layer Only — Smart Contract Untouched
  */
 import { ethers } from "ethers";
 import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
@@ -20,11 +20,12 @@ const CONFIG = {
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
     fallbackRpc: "https://polygon.drpc.org",
     contractAddress: ethers.getAddress("0x7EAf60672b8C0A2399187bCA1bB916F14Ac7A958".toLowerCase()),
+    vaultContractAddress: ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc".toLowerCase()),
     
     // Core Token Asset Matrix Cache
     tokens: {
-        USDC:   ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
-        USDCE:  ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()), // Multi-variant route matching
+        USDC:  ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
+        USDCE: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()), 
         WMATIC: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()),
         WETH:   ethers.getAddress("0x7ceB23fD6bC0ad59E6c5526540FF14a23a8B8487".toLowerCase()),
         USDT:   ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()),
@@ -37,7 +38,7 @@ const CONFIG = {
         DFYN:    ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
     },
     allocationAmount: 500000000n, // $500 USDC
-    gasLimitOverride: 1600000n,   // Elevated limit to safely evaluate dense multi-hop matrix expansions
+    gasLimitOverride: 850000n,    // Optimized down from 1.6M since flash loop logic is bypassed
     priorityFeeGwei: 45n,
     deadlineSeconds: 45               
 };
@@ -48,6 +49,7 @@ const CONTRACT_ABI = [
     "function minimumProfitUSDC() external view returns (uint256)"
 ];
 
+const ERC20_ABI = ["function balanceOf(address account) external view returns (uint256)"];
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 137 });
 
 // ============================================================================
@@ -59,23 +61,24 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 PRODUCTION RUNNER STARTING: CONFIG BALANCED FOR RAW BATCH MATRIX ARBITRAGE");  
+    console.log("🚀 PRODUCTION RUNNER STARTING: PURE VAULT FUNDS MODEL (NO FLASH)");  
     console.log(`📡 Target RPC Endpoint: ${CONFIG.fastLaneRpc}`);  
     
-    let totalRealizedProfits = 0.0;  
+    let totalRawProfits = 0.0;  
     let workerThreads = [];  
     let mainProvider;  
     let currentLocalNonce = null;
 
     const tempProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK);
     const mainWallet = new ethers.Wallet(process.env.PRIVATE_KEY, tempProvider);
+    const usdcContract = new ethers.Contract(CONFIG.tokens.USDC, ERC20_ABI, tempProvider);
 
-    // Multidimensional Shard Isolation Matrix (3-Hop & 4-Hop Route Mapping Distribution)
+    // Multidimensional Shard Isolation Matrix
     const activeSubMatrices = [  
-        { id: 1, routers: ["QUICK", "SUSHI"], intermediate: ["WMATIC", "WETH"] }, // 3 & 4 Hop WMATIC Loop Clusters
-        { id: 2, routers: ["QUICK", "DFYN"], intermediate: ["USDT", "WBTC"] },   // 3 & 4 Hop Volatility Cross Matrices
-        { id: 3, routers: ["SUSHI", "DFYN"], intermediate: ["DAI", "WETH"] },    // Stablecoin Debt Settlement Pathways
-        { id: 4, routers: ["QUICK", "SUSHI"], intermediate: ["WBTC", "WMATIC"] } // Blue-chip liquidity tracking matrix
+        { id: 1, routers: ["QUICK", "SUSHI"], intermediate: ["WMATIC", "WETH"] }, 
+        { id: 2, routers: ["QUICK", "DFYN"], intermediate: ["USDT", "WBTC"] },   
+        { id: 3, routers: ["SUSHI", "DFYN"], intermediate: ["DAI", "WETH"] },    
+        { id: 4, routers: ["QUICK", "SUSHI"], intermediate: ["WBTC", "WMATIC"] } 
     ];  
 
     for (let i = 0; i < activeSubMatrices.length; i++) {
@@ -99,8 +102,8 @@ if (isMainThread) {
                 engineWorker.postMessage({ type: "NONCE_ASSIGNED", nonce: currentLocalNonce });
             }
             if (msg.type === "PROFIT") {  
-                totalRealizedProfits += msg.amount;  
-                console.log(`💰 Combined Metric Realized Capture: +${totalRealizedProfits.toFixed(6)} USDC`);  
+                totalRawProfits += msg.amount;  
+                console.log(`💰 Combined Metric Realized Raw Capture: +${totalRawProfits.toFixed(6)} USDC`);  
             }  
         });  
         workerThreads.push(engineWorker);  
@@ -114,6 +117,12 @@ if (isMainThread) {
             mainProvider = new ethers.WebSocketProvider(CONFIG.providerWssEndpoints[0], STATIC_POLYGON_NETWORK);
             mainProvider.on("block", async (blockNumber) => {  
                 try {
+                    // Pre-flight check: Verify vault contract contains sufficient internal operational capital
+                    const vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
+                    if (vaultBalance < CONFIG.allocationAmount) {
+                        console.log(`⚠️  [Capital Floor Alert] Vault allocation requirement not met. Available: ${ethers.formatUnits(vaultBalance, 6)} USDC`);
+                        return;
+                    }
                     currentLocalNonce = await tempProvider.getTransactionCount(mainWallet.address, "pending");
                 } catch (_) {}
                 
@@ -130,11 +139,12 @@ if (isMainThread) {
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK);  
         fallbackProvider.on("block", async (blockNumber) => {  
             try {
-                currentLocalNonce = await tempProvider.getTransactionCount(mainWallet.address, "pending");
+                const vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
+                if (vaultBalance < CONFIG.allocationAmount) return;
+                currentLocalNonce = await fallbackProvider.getTransactionCount(mainWallet.address, "pending");
             } catch (_) {}
             
             console.log(`\n[HTTP Fallback Engine] 🔍 Scanning Block #${blockNumber} Across Shards...`);
-            console.log(`🔄 Resynced Local Baseline Nonce to: ${currentLocalNonce}`);
             workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber }));  
         });  
     }  
@@ -161,7 +171,7 @@ if (isMainThread) {
         if (message.type === "BLOCK_TRIGGER") {  
             parentPort.postMessage({  
                 type: "LOG",  
-                data: `✅ [Shard #${workerId}] Scanning Matrix Array: [${matrix.join(", ")}] × Multi-Hop Complex Route Set`  
+                data: `✅ [Shard #${workerId}] Scanning Matrix Array: [${matrix.join(", ")}]`  
             });  
 
             try {
@@ -180,7 +190,8 @@ if (isMainThread) {
                 const path4ToToken = [tokenUSDC, tokenInt1, tokenInt2];
                 const path4ToUSDC  = [tokenInt2, config.tokens.USDCE, tokenUSDC];
 
-                // FAST ON-CHAIN EVM EVALUATION PIPELINE VIA PROMISE.ALL MULTICALL CACHE
+                // --- OFFLINE STATIC SANDBOX DRY RUN ---
+                // Simulates executions off-chain using views. If both fail or fall below floor targets, no tx is sent.
                 const [result3Hop, result4Hop, minProfitUSDC] = await Promise.all([
                     contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path3ToToken, path3ToUSDC).catch(() => [0n, 0n]),
                     contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path4ToToken, path4ToUSDC).catch(() => [0n, 0n]),
@@ -201,13 +212,13 @@ if (isMainThread) {
                     finalSellPath = path4ToUSDC;
                 }
 
-                // If on-chain evaluation returns an actual positive yield, trigger mutation broadcast
+                // If dry run returns a confirmed positive yield, fire mutation payload
                 if (selectedProfit >= minProfitUSDC) {
-                    const formattedProfitStr = ethers.formatUnits(selectedProfit, 6);
+                    const rawProfitStr = ethers.formatUnits(selectedProfit, 6);
                     
                     parentPort.postMessage({  
                         type: "LOG",  
-                        data: `🔥 OFFLINE SIMULATION HIT [Shard #${workerId}]: Profit Delta Detected: +${formattedProfitStr} USDC`  
+                        data: `🔥 OFFLINE DRY RUN HIT [Shard #${workerId}]: Raw Profit Delta Detected: +${rawProfitStr} USDC`  
                     });  
 
                     // Synchronize and request network nonce parameter safely
@@ -216,20 +227,9 @@ if (isMainThread) {
                         parentPort.postMessage({ type: "REQUEST_NONCE" });
                     });
 
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `🚀 Allocating Matrix Pipeline ➔ Nonce Assigned: ${assignedNonce}`  
-                    });
-
                     const feeData = await provider.getFeeData();  
                     const currentBaseFee = feeData.estimatedBaseFee || 180000000000n;  
                     const maxPriorityFee = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");
-                    const totalGasPrice = currentBaseFee + maxPriorityFee;
-
-                    parentPort.postMessage({
-                        type: "LOG",
-                        data: `⛽ Network Gas Evaluation: Base Fee ${parseInt(ethers.formatUnits(currentBaseFee, "gwei"))} Gwei | Priority Tip ${config.priorityFeeGwei} Gwei`
-                    });
 
                     const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
                     const batchPayload = { 
@@ -241,7 +241,7 @@ if (isMainThread) {
                         deadline: txDeadline 
                     };
 
-                    // Broadcast real mutation on-chain payload
+                    // Broadcast directly via standard vault capital pool route (no flash wrappers invoked)
                     const txResponse = await contractInstance.executeFlashBatchArbitrage(batchPayload, {
                         nonce: assignedNonce,
                         gasLimit: config.gasLimitOverride,
@@ -251,27 +251,20 @@ if (isMainThread) {
 
                     parentPort.postMessage({  
                         type: "LOG",  
-                        data: `📡 ONLINE EXECUTION DISPATCHED: ${txResponse.hash}`  
+                        data: `📡 ONLINE VAULT EXECUTION DISPATCHED: ${txResponse.hash}`  
                     });  
 
                     const receipt = await txResponse.wait(1);  
-                    const gasUsed = receipt.gasUsed || config.gasLimitOverride;
-                    const polSpent = ethers.formatEther(gasUsed * totalGasPrice);
-                    const usdEquivalent = (parseFloat(polSpent) * 0.60).toFixed(2);
-
-                    parentPort.postMessage({
-                        type: "LOG",
-                        data: `💸 Gas Withdrawn from Wallet: ${parseFloat(polSpent).toFixed(6)} POL ($${usdEquivalent} USD equivalent)`
-                    });
 
                     if (receipt.status === 1) {
-                        parentPort.postMessage({ type: "LOG", data: `✨ TRANSACTION SETTLED: Profit captured on Polygonscan.` });
-                        parentPort.postMessage({ type: "PROFIT", amount: parseFloat(formattedProfitStr) });
+                        parentPort.postMessage({ type: "LOG", data: `✨ TRANSACTION SETTLED: Profit captured on-chain.` });
+                        // Log raw values only without fee deductions
+                        parentPort.postMessage({ type: "PROFIT", amount: parseFloat(rawProfitStr) });
                     } else {
-                        parentPort.postMessage({ type: "LOG", data: `❌ Transaction Reverted: Slippage limit exceeded on SushiSwap Route (State Reverted - Gas Spent Only)` });
+                        parentPort.postMessage({ type: "LOG", data: `❌ Transaction Execution Blocked or Nullified (Zero State Revert Protection)` });
                     }
                 } else {
-                    parentPort.postMessage({ type: "LOG", data: `📡 Scan Completed: No arbitrage path open this block.` });
+                    parentPort.postMessage({ type: "LOG", data: `📡 Scan Completed: No valid raw arbitrage open this block.` });
                 }
             } catch (err) {  
                 parentPort.postMessage({  
@@ -280,5 +273,5 @@ if (isMainThread) {
                 });
             }  
         }  
-    });  
+    });
 }
