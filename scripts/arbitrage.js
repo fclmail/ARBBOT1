@@ -38,7 +38,7 @@ const CONFIG = {
         DFYN:    ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
     },
     // OPTION B: Lowered to $0.05 USDC to run dry runs inside your 0.066433 USDC pool baseline
-    allocationAmount: 50000n, 
+    allocationAmount: 5000000n, 
     gasLimitOverride: 850000n,    
     priorityFeeGwei: 45n,
     deadlineSeconds: 45               
