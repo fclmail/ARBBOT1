@@ -1,19 +1,25 @@
-// ============================================================  
-// arbitrage.js — Pure JS-Side Multi-Size Sweep Engine (No SC Change)
-// ============================================================  
+// ============================================================================  
+// arbitrage.js — Hyper-Optimized Dynamic Optimization Matrix
+// ============================================================================  
 
 import { ethers } from "ethers";  
 
 // ===================== CONFIGURATION =====================  
 const CONFIG = {  
-    rpcUrl: process.env.RPC_URL || "https://polygon-rpc.com",  
+    // STRATEGY 7: Multi-RPC Architecture Array
+    rpcUrls: [
+        process.env.RPC_URL || "https://polygon-rpc.com",
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://1rpc.io/matic"
+    ],
     wsUrl: process.env.WS_URL || "wss://polygon-bor-rpc.publicnode.com",  
       
     contractAddress: "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958",  
-    minimumProfitUSDC: 1n, // 1 micro-unit ($0.000001 USDC)
+    minimumNetProfitUSDC: 100000n, // $0.10 minimum net profit required to trigger execution
+    polPriceUSDC: 0.55,           // Mocked asset dollar price for gas translation matrices
       
     maxPendingTxs: 3,  
-    gasLimit: 4000000, 
+    gasLimit: 4000000n, 
     priorityFee: ethers.parseUnits("50", "gwei"),  
 };  
 
@@ -25,58 +31,9 @@ const TOKEN_SELECTORS = {
     WBTC:   5  
 };  
 
-// FORCE LOWERCASE: Bypass all Ethers checkSum validation exceptions completely
 const TOKENS = {
     USDC:   "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
     WETH:   "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-      AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-    LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    SHIB: "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
-    UNI: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-    WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-    BAT: "0x3cef98bb43d732e2f285ee605a8158cde967d219",
-    TBTC: "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
-    MANA: "0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4",
-    TRB: "0xe3322702bedaaed36cddab233360b939775ae5f1",
-    COMP: "0x8505b9d2254a7ae468c0e9dd10ccea3a837aef5c",
-    INCH: "0x9c2c5fd7b07e95ee044ddeba0e97a665f142394f",
-    THETA: "0xb46e0ae620efd98516f49bb00263317096c114b2",
-    CRO: "0xada58df0f643d959c2a47c9d4d4c1a4defe3f11c",
-    XYO: "0xd2507e7b5794179380673870d88b22f94da6abe0",
-    MASK: "0x2b9e7ccdf0f4e5b24757c1e1a80e311e34cb10c7",
-    EURQ: "0xd571edb2ef29df10fcd6200fd6d0ed2389983db3",
-    APOLUSDT: "0x6ab707aca953edaefbc4fd23ba73294241490620",
-    ENJ: "0x7ec26842f195c852fa843bb9f6d8b583a274a157",
-    ZRX: "0x5559edb74751a0ede9dea4dc23aee72cca6be3d5",
-    GMT: "0x714db550b574b3e927af3d93e26127d15721d4c2",
-    SNX: "0x50b728d8d964fd00c2d0aad81718b71311fef68a",
-    ANKR: "0x101a023270368c0d50bffb62780f4afd4ea79c35",
-    GLM: "0x0b220b82f3ea3b7f6d9a1d8ab58930c064a2b5bf",
-    COW: "0x2f4efd3aa42e15a1ec6114547151b63ee5d39958",
-    BAND: "0xa8b1e0764f85f53dfe21760e8afe5446d82606ac",
-    AXL: "0x6e4e624106cb12e168e6533f8ec7c82263358940",
-    UMA: "0x3066818837c5e6ed6601bd5a91b0762877a6b731",
-    YFI: "0xda537104d6a5edd53c6fbba9a898708e465260b6",
-    ELON: "0xe0339c80ffde91f3e20494df88d4206d86024cdf",
-    NEXO: "0x41b3966b4ff7b427969ddf5da3627d6aeae9a48e",
     WMATIC: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
     USDT:   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     DAI:    "0x8f3cf7ad23cdcadbd9735aff958023239c6a063",
@@ -93,40 +50,63 @@ const ROUTERS = Object.values(DEXES);
 const DEX_NAMES = Object.keys(DEXES);
 const TOKEN_NAMES = Object.keys(TOKEN_SELECTORS);
 
+// STRATEGY 1: Bridge Asset Declarations
+const BRIDGES = [TOKENS.WETH, TOKENS.WMATIC, TOKENS.USDT, TOKENS.DAI];
+
 const CONTRACT_ABI = [  
     "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
-    "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",  
-    "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"  
+    "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external"
 ];  
 
 class RealTimeArbitrageBot {  
     constructor() {  
         this.pendingTxs = new Map();  
         this.currentBlockNumber = 0;  
+        this.providers = [];
+        this.activeProviderIndex = 0;
+        this.quoteCache = new Map(); // STRATEGY 6: Memory Cache Ledger
     }  
 
     async init() {  
         console.log("⚡ INITIALIZING ALL-SIZE UNBLINDED STRUCTURAL MATRIX...");  
+        
+        // STRATEGY 7: Multi-Provider Hydration and Failover Initialization
+        for (const url of CONFIG.rpcUrls) {
+            this.providers.push(new ethers.JsonRpcProvider(url));
+        }
+        
         try {  
-            this.provider = new ethers.WebSocketProvider(CONFIG.wsUrl);  
-            await this.provider.getNetwork();   
-            console.log("🚀 STREAMING RAW BLOCK HEADS");  
+            this.wsProvider = new ethers.WebSocketProvider(CONFIG.wsUrl);  
+            await this.wsProvider.getNetwork();   
+            console.log("🚀 STREAMING RAW BLOCK HEADS VIA WEBSOCKET");  
         } catch (err) {  
-            console.log("⚠️ WS Lost. Routing execution via Standard HTTP Node...");  
-            this.provider = new ethers.JsonRpcProvider(CONFIG.rpcUrl);  
+            console.log("⚠️ WS Primary Unavailable. Operating strictly on Fallback RPC Array...");  
+            this.wsProvider = null;
         }  
-        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);  
+        
+        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.getProvider());  
         this.contract = new ethers.Contract(CONFIG.contractAddress, CONTRACT_ABI, this.wallet);  
     }  
+
+    getProvider() {
+        return this.providers[this.activeProviderIndex];
+    }
+
+    handleRpcFailover() {
+        this.activeProviderIndex = (this.activeProviderIndex + 1) % this.providers.length;
+        console.log(`🔄 [FAILOVER] Shifting execution engine to Provider Endpoint #${this.activeProviderIndex}`);
+        this.wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.getProvider());  
+        this.contract = new ethers.Contract(CONFIG.contractAddress, CONTRACT_ABI, this.wallet); 
+    }
 
     generateMultiHopRoutes() {  
         const routes = [];  
 
-        // 1. 2-HOP CONFIGURATIONS
         for (let i = 0; i < ROUTERS.length; i++) {  
             for (let j = 0; j < ROUTERS.length; j++) {  
                 if (i === j) continue;  
                 for (const name of TOKEN_NAMES) {  
+                    // Standard Paths
                     routes.push({  
                         name: `2-Hop [${name}] via ${DEX_NAMES[i]}→${DEX_NAMES[j]}`,  
                         buyRouter: ROUTERS[i],  
@@ -134,72 +114,48 @@ class RealTimeArbitrageBot {
                         pathToToken: [TOKENS.USDC, TOKENS[name]],  
                         pathToUSDC: [TOKENS[name], TOKENS.USDC]  
                     });  
-                }  
-            }  
-        }  
 
-        // 2. 3-HOP CONFIGURATIONS  
-        for (let i = 0; i < ROUTERS.length; i++) {  
-            for (let j = 0; j < ROUTERS.length; j++) {  
-                if (i === j) continue;  
-                for (const t1 of TOKEN_NAMES) {  
-                    for (const t2 of TOKEN_NAMES) {  
-                        if (t1 === t2) continue;  
-                        routes.push({  
-                            name: `3-Hop [${t1}→${t2}] via ${DEX_NAMES[i]}→${DEX_NAMES[j]}`,  
-                            buyRouter: ROUTERS[i],  
-                            sellRouter: ROUTERS[j],  
-                            pathToToken: [TOKENS.USDC, TOKENS[t1], TOKENS[t2]],  
-                            pathToUSDC: [TOKENS[t2], TOKENS.USDC]  
-                        });  
-                    }  
-                }  
-            }  
-        }  
-
-        // 3. 4-HOP CONFIGURATIONS  
-        for (let i = 0; i < ROUTERS.length; i++) {  
-            for (let j = 0; j < ROUTERS.length; j++) {  
-                if (i === j) continue;  
-                const executionTokens = ["WETH", "WMATIC", "USDT"];
-                for (const t1 of executionTokens) {  
-                    for (const t2 of executionTokens) {  
-                        for (const t3 of executionTokens) {  
-                            if (t1 === t2 || t2 === t3) continue;  
-                            routes.push({  
-                                name: `4-Hop [${t1}→${t2}→${t3}] via ${DEX_NAMES[i]}→${DEX_NAMES[j]}`,  
-                                buyRouter: ROUTERS[i],  
-                                sellRouter: ROUTERS[j],  
-                                pathToToken: [TOKENS.USDC, TOKENS[t1], TOKENS[t2], TOKENS[t3]],  
-                                pathToUSDC: [TOKENS[t3], TOKENS.USDC]  
-                            });  
-                        }  
-                    }  
+                    // STRATEGY 1: Bridge Asset Route Injection Array Matrix
+                    for (const bridge of BRIDGES) {
+                        if (TOKENS[name] === bridge) continue;
+                        routes.push({
+                            name: `Bridge [${name}➔${Object.keys(TOKENS).find(k => TOKENS[k] === bridge)}] via ${DEX_NAMES[i]}→${DEX_NAMES[j]}`,
+                            buyRouter: ROUTERS[i],
+                            sellRouter: ROUTERS[j],
+                            pathToToken: [TOKENS.USDC, bridge, TOKENS[name]],
+                            pathToUSDC: [TOKENS[name], bridge, TOKENS.USDC]
+                        });
+                    }
                 }  
             }  
         }  
         return routes;  
     }  
 
-    logInlineMathTotal(routeName, size, estimatedFinalUSDC) {
-        const input = Number(ethers.formatUnits(size, 6));
-        const output = Number(ethers.formatUnits(estimatedFinalUSDC, 6));
-        const totalVariance = output - input;
+    // STRATEGY 3 & 8 & 9: Complete Gas-Aware Multi-Stage Matrix Logging Layout
+    logBreakdownMetrics(routeName, size, grossOut, gasCostUSDC, flashFeeUSDC, slippageUSDC, netProfitUSDC) {
+        const sizeFormatted = Number(ethers.formatUnits(size, 6)).toFixed(2);
+        const netFormatted = Number(ethers.formatUnits(netProfitUSDC, 6)).toFixed(6);
         
-        const sign = totalVariance >= 0 ? "+" : "";
-        const formattedVariance = totalVariance.toFixed(6);
-
-        if (totalVariance >= 0.000001) {
-            console.log(`🟢 [PROFIT] ${routeName.padEnd(55)} | Size: ${input.toFixed(2).padStart(9)} | Total: ${sign}${formattedVariance} USDC`);
+        if (netProfitUSDC > 0n) {
+            console.log(`🟢 [PROFIT FOUND] — ${routeName} | Size: ${sizeFormatted}`);
+            console.log(`   Gross:    +${Number(ethers.formatUnits(grossOut, 6)).toFixed(6)} USDC`);
+            console.log(`   Gas:      -${Number(ethers.formatUnits(gasCostUSDC, 6)).toFixed(6)} USDC`);
+            console.log(`   Flash:    -${Number(ethers.formatUnits(flashFeeUSDC, 6)).toFixed(6)} USDC`);
+            console.log(`   Slip:     -${Number(ethers.formatUnits(slippageUSDC, 6)).toFixed(6)} USDC`);
+            console.log(`   --------------------------`);
+            console.log(`   Net:      +${netFormatted} USDC\n`);
         } else {
-            console.log(`🔴 [LOSS]   ${routeName.padEnd(55)} | Size: ${input.toFixed(2).padStart(9)} | Total: ${sign}${formattedVariance} USDC`);
+            console.log(`默默 [LOSS] ${routeName.padEnd(50)} | Size: ${sizeFormatted.padStart(9)} | Net: ${netFormatted} USDC`);
         }
     }
 
     async scanAndExecute(blockNumber) {  
         const routes = this.generateMultiHopRoutes();  
+        this.quoteCache.clear(); // Clear memory buffer keys on every block tick boundary
         
-        const candidates = [  
+        // STRATEGY 2: Adaptive Refinement Layer Matrices
+        let candidates = [  
             ethers.parseUnits("0.10", 6),  
             ethers.parseUnits("1.00", 6),  
             ethers.parseUnits("10.00", 6),  
@@ -212,32 +168,102 @@ class RealTimeArbitrageBot {
             ethers.parseUnits("50000.00", 6)  
         ];  
 
-        const BATCH_SIZE = 15;  
+        const baseFeeData = await this.getProvider().getFeeData();
+        const currentGasPrice = baseFeeData.gasPrice || ethers.parseUnits("100", "gwei");
+
+        // STRATEGY 5: Parallel Pipeline Batching Splice Array
+        const BATCH_SIZE = 12;  
         for (let i = 0; i < routes.length; i += BATCH_SIZE) {  
             if (this.currentBlockNumber > blockNumber) break; 
               
             const batch = routes.slice(i, i + BATCH_SIZE);  
+            
+            // Execute simulations concurrently
             await Promise.all(batch.map(async (route) => {  
-                for (const size of candidates) {
-                    try {  
-                        // FIX: Call simulateArbitrageProfit directly instead of the broken array finder
-                        const result = await this.contract.simulateArbitrageProfit(  
-                            route.buyRouter,  
-                            route.sellRouter,  
-                            size, 
-                            route.pathToToken,  
-                            route.pathToUSDC  
-                        );  
+                let activeSizes = [...candidates];
+                let bestSizeForRoute = null;
+                let maxObservedNetProfit = -10000000000n;
 
-                        this.logInlineMathTotal(route.name, size, result.estimatedFinalUSDC);  
+                // Step 1: Scan Candidate Space Iteratively
+                for (const size of activeSizes) {
+                    // STRATEGY 6: Cache Key Lookup Logic Execution
+                    const cacheKey = `${route.buyRouter}-${route.sellRouter}-${size.toString()}-${route.pathToToken.join("-")}`;
+                    let result;
 
-                        if (result.estimatedProfit >= CONFIG.minimumProfitUSDC) {  
-                            await this.triggerExecution(route, size);  
-                            break; 
-                        }  
-                    } catch (err) {  
-                        // Filters out completely empty pool paths silently to match clean log profile
-                    }  
+                    if (this.quoteCache.has(cacheKey)) {
+                        result = this.quoteCache.get(cacheKey);
+                    } else {
+                        try {
+                            result = await this.contract.simulateArbitrageProfit(  
+                                route.buyRouter,  
+                                route.sellRouter,  
+                                size, 
+                                route.pathToToken,  
+                                route.pathToUSDC  
+                            );  
+                            this.quoteCache.set(cacheKey, result);
+                        } catch (err) {
+                            if (err.message.includes("bounds") || err.message.includes("code=SERVER_ERROR")) {
+                                this.handleRpcFailover();
+                            }
+                            continue; 
+                        }
+                    }
+
+                    // STRATEGY 3 & 9: Gas-Aware Fee Allocation Processing Engine
+                    const nativeGasCostWei = CONFIG.gasLimit * currentGasPrice;
+                    const gasCostUSDC = (nativeGasCostWei * BigInt(Math.floor(CONFIG.polPriceUSDC * 1000))) / (1000n * 10n**12n);
+                    
+                    // Aave V3 Flash Loan Premium structural deduction ($amount * 0.05%)
+                    const flashFeeUSDC = (size * 5n) / 10000n; 
+                    
+                    // STRATEGY 4 & 10: Size-Dependent Dynamic Slippage Reserve Allocation Calculation
+                    const slipBasisPoints = size > ethers.parseUnits("10000", 6) ? 50n : 20n; // 0.5% vs 0.2%
+                    const slippageReserve = (size * slipBasisPoints) / 10000n;
+
+                    const grossProfit = result.estimatedProfit;
+                    const netProfit = grossProfit - gasCostUSDC - flashFeeUSDC - slippageReserve;
+
+                    if (netProfit > maxObservedNetProfit) {
+                        maxObservedNetProfit = netProfit;
+                        if (netProfit > 0n) bestSizeForRoute = size;
+                    }
+
+                    this.logBreakdownMetrics(route.name, size, grossProfit, gasCostUSDC, flashFeeUSDC, slippageReserve, netProfit);
+                }
+
+                // STRATEGY 2: Local Search Precision Adjustment Step Loop
+                if (bestSizeForRoute && bestSizeForRoute === ethers.parseUnits("5000", 6)) {
+                    const localRefinementSizes = [
+                        ethers.parseUnits("4000", 6),
+                        ethers.parseUnits("4500", 6),
+                        ethers.parseUnits("5500", 6),
+                        ethers.parseUnits("6000", 6)
+                    ];
+                    
+                    for (const size of localRefinementSizes) {
+                        try {
+                            const result = await this.contract.simulateArbitrageProfit(route.buyRouter, route.sellRouter, size, route.pathToToken, route.pathToUSDC);
+                            const nativeGasCostWei = CONFIG.gasLimit * currentGasPrice;
+                            const gasCostUSDC = (nativeGasCostWei * BigInt(Math.floor(CONFIG.polPriceUSDC * 1000))) / (1000n * 10n**12n);
+                            const flashFeeUSDC = (size * 5n) / 10000n;
+                            const slipBasisPoints = size > ethers.parseUnits("10000", 6) ? 50n : 20n;
+                            const slippageReserve = (size * slipBasisPoints) / 10000n;
+                            
+                            const netProfit = result.estimatedProfit - gasCostUSDC - flashFeeUSDC - slippageReserve;
+                            
+                            if (netProfit > maxObservedNetProfit) {
+                                maxObservedNetProfit = netProfit;
+                                bestSizeForRoute = size;
+                            }
+                            this.logBreakdownMetrics(route.name, size, result.estimatedProfit, gasCostUSDC, flashFeeUSDC, slippageReserve, netProfit);
+                        } catch (e) {}
+                    }
+                }
+
+                // STRATEGY 9: Execution Trigger Gated Final Net Evaluation Block
+                if (maxObservedNetProfit >= CONFIG.minimumNetProfitUSDC && bestSizeForRoute) {
+                    await this.triggerExecution(route, bestSizeForRoute);
                 }
             }));  
         }  
@@ -252,7 +278,7 @@ class RealTimeArbitrageBot {
         this.pendingTxs.set(txKey, Date.now());  
 
         try {  
-            console.log(`\n🚀 EXECUTING ATOMIC ROUTE TRIGGER: ${route.name}`);  
+            console.log(`\n🚀 MET BREAKDOWN REQUIREMENT — DISPATCHING TARGET MATRIX ATOMIC EXECUTION: ${route.name}`);  
             const tx = await this.contract.executeBestFlashLoanArbitrage(  
                 route.buyRouter,  
                 route.sellRouter,  
@@ -263,7 +289,7 @@ class RealTimeArbitrageBot {
                 {  
                     gasLimit: CONFIG.gasLimit,  
                     maxPriorityFeePerGas: CONFIG.priorityFee,  
-                    maxFeePerGas: CONFIG.priorityFee * 2n + (await this.provider.getFeeData()).gasPrice,  
+                    maxFeePerGas: CONFIG.priorityFee * 2n + (await this.getProvider().getFeeData()).gasPrice,  
                 }  
             );  
             console.log(`   ⚡ Dispatch Complete! Hash: ${tx.hash}`);  
@@ -278,11 +304,23 @@ class RealTimeArbitrageBot {
 
     async start() {  
         await this.init();  
-        this.provider.on("block", (blockNumber) => {  
-            this.currentBlockNumber = blockNumber;  
-            console.log(`\n📦 Block #${blockNumber} — [SWEEPING TIER SIZE ARRAYS]`);  
-            this.scanAndExecute(blockNumber);  
-        });  
+        if (this.wsProvider) {
+            this.wsProvider.on("block", (blockNumber) => {  
+                this.currentBlockNumber = blockNumber;  
+                console.log(`\n📦 Block #${blockNumber} — [CONCURRENT DYNAMIC VECTOR SCAN]`);  
+                this.scanAndExecute(blockNumber);  
+            });  
+        } else {
+            // Fallback interval polling method if WebSocket layer breaks
+            setInterval(async () => {
+                const blockNumber = await this.getProvider().getBlockNumber();
+                if (blockNumber > this.currentBlockNumber) {
+                    this.currentBlockNumber = blockNumber;
+                    console.log(`\n📦 Block #${blockNumber} — [POLLING DYNAMIC VECTOR SCAN]`);
+                    this.scanAndExecute(blockNumber);
+                }
+            }, 1000);
+        }
     }  
 }  
 
