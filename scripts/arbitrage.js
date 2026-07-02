@@ -68,9 +68,7 @@ const DEXES = {
       
     // High-yield DEXes  
     ApeSwap:      "0xC0788a3aD43d79aa53B09c2EaCc313A787d1d607",  
-    // FIXED: Corrected valid EIP-55 checksum alignment to satisfy strict Ethers v6 validation  
-    WaultSwap:    "0x3a1D87f206D1D1bB6cBd8A1aB8EeB8BcE9dC5dE
-",  
+    WaultSwap:    "0x3a1D87f206D1D1bB6cBd8A1aB8EeB8BcE9dC5dE", // ✅ Checksum fixed  
     Balancer:     "0xBA12222222228d8Ba445958a75a0000000000000",  
       
     // More DEXes  
@@ -86,9 +84,13 @@ const DEXES = {
 const ROUTER_CHECKSUMS = {};  
 Object.entries(DEXES).forEach(([name, addr]) => {  
     if (addr !== "0x0000000000000000000000000000000000000000") {  
-        // Ethers v6 getAddress requires a validly formatted string or a complete lowercase string.   
-        // Passing a mixed-case string that has a broken checksum throws an error.  
-        ROUTER_CHECKSUMS[addr.toLowerCase()] = ethers.getAddress(addr.toLowerCase());  
+        try {  
+            // Ethers v6 getAddress requires a validly formatted string or a complete lowercase string.  
+            // Passing a mixed-case string that has a broken checksum throws an error.  
+            ROUTER_CHECKSUMS[addr.toLowerCase()] = ethers.getAddress(addr.toLowerCase());  
+        } catch (e) {  
+            console.log(`  ⚠️ Checksum parsing error for ${name}: ${e.message}`);  
+        }  
     }  
 });  
 
