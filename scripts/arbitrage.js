@@ -83,8 +83,11 @@ const DEXES = {
 // Router checksums for approval safety  
 const ROUTER_CHECKSUMS = {};  
 Object.entries(DEXES).forEach(([name, addr]) => {  
-    // Lowercase input first to prevent ethers from failing on malformed EIP-55 mixed-case strings
-    ROUTER_CHECKSUMS[addr.toLowerCase()] = ethers.getAddress(addr.toLowerCase());  
+    if (addr !== "0x0000000000000000000000000000000000000000") {
+        // Ethers v6 getAddress requires a validly formatted string or a complete lowercase string. 
+        // Passing a mixed-case string that has a broken checksum throws an error.
+        ROUTER_CHECKSUMS[addr.toLowerCase()] = ethers.getAddress(addr.toLowerCase());  
+    }
 });  
 
 const ROUTERS = Object.values(DEXES).filter(a => a !== "0x0000000000000000000000000000000000000000");  
@@ -101,7 +104,7 @@ const PATHS = {
       
     // Triple-hop paths (3-hop) — exploit deeper liquidity gaps  
     USDC_WETH_WMATIC:   [TOKENS.USDC, TOKENS.WETH, TOKENS.WMATIC, TOKENS.USDC],  
-    USDC_WMATIC_WETH:   [TOKENS.USDC, TOKENS.WMATIC, TOKENS.WETH, TOKENS.USDC],  
+    USDC_WMATIC_WETH:   [TOKENS.USDC, TOKENS.WMATIC, TOKETH.WETH, TOKENS.USDC],  
     USDC_USDT_WETH:     [TOKENS.USDC, TOKENS.USDT, TOKENS.WETH, TOKENS.USDC],  
     USDC_DAI_WETH:      [TOKENS.USDC, TOKENS.DAI, TOKENS.WETH, TOKENS.USDC],  
     USDC_WBTC_WETH:     [TOKENS.USDC, TOKENS.WBTC, TOKENS.WETH, TOKENS.USDC],  
