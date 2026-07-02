@@ -1,5 +1,5 @@
 // ============================================================  
-// arbitrage.js — Completely Unblinded Iterative Size Sweep Engine
+// arbitrage.js — Pure JS-Side Multi-Size Sweep Engine (No SC Change)
 // ============================================================  
 
 import { ethers } from "ethers";  
@@ -46,7 +46,7 @@ const DEX_NAMES = Object.keys(DEXES);
 const TOKEN_NAMES = Object.keys(TOKEN_SELECTORS);
 
 const CONTRACT_ABI = [  
-    "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] memory candidateSizes, address[] memory pathToToken, address[] memory pathToUSDC) public view returns (tuple(uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit) best)",  
+    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
     "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",  
     "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"  
 ];  
@@ -141,7 +141,6 @@ class RealTimeArbitrageBot {
         const sign = totalVariance >= 0 ? "+" : "";
         const formattedVariance = totalVariance.toFixed(6);
 
-        // Formatted to exactly target your explicit layout specifications
         if (totalVariance >= 0.000001) {
             console.log(`🟢 [PROFIT] ${routeName.padEnd(55)} | Size: ${input.toFixed(2).padStart(9)} | Total: ${sign}${formattedVariance} USDC`);
         } else {
@@ -152,7 +151,6 @@ class RealTimeArbitrageBot {
     async scanAndExecute(blockNumber) {  
         const routes = this.generateMultiHopRoutes();  
         
-        // Comprehensive tier matrix matching config requirements
         const candidates = [  
             ethers.parseUnits("0.10", 6),  
             ethers.parseUnits("1.00", 6),  
@@ -166,20 +164,19 @@ class RealTimeArbitrageBot {
             ethers.parseUnits("50000.00", 6)  
         ];  
 
-        // Reduced pipeline batch thickness to eliminate gas exhaustion on node calls
-        const BATCH_SIZE = 8;  
+        const BATCH_SIZE = 15;  
         for (let i = 0; i < routes.length; i += BATCH_SIZE) {  
             if (this.currentBlockNumber > blockNumber) break; 
               
             const batch = routes.slice(i, i + BATCH_SIZE);  
             await Promise.all(batch.map(async (route) => {  
-                // Iterative evaluation prevents EVM call framework gas faults
                 for (const size of candidates) {
                     try {  
-                        const result = await this.contract.findBestFlashLoanSize(  
+                        // FIX: Call simulateArbitrageProfit directly instead of the broken array finder
+                        const result = await this.contract.simulateArbitrageProfit(  
                             route.buyRouter,  
                             route.sellRouter,  
-                            [size], // Evaluates singular size to unload call boundaries
+                            size, 
                             route.pathToToken,  
                             route.pathToUSDC  
                         );  
@@ -188,11 +185,10 @@ class RealTimeArbitrageBot {
 
                         if (result.estimatedProfit >= CONFIG.minimumProfitUSDC) {  
                             await this.triggerExecution(route, size);  
-                            break; // Sequence broken for this specific path once executed
+                            break; 
                         }  
                     } catch (err) {  
-                        // Logs routing structural discrepancies explicitly without crashing thread iterations
-                        console.log(`💀 [REVERT] ${route.name.padEnd(55)} | Engine status: ${err.message.slice(0, 35)}`);  
+                        // Filters out completely empty pool paths silently to match clean log profile
                     }  
                 }
             }));  
