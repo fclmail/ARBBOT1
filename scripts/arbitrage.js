@@ -5,9 +5,9 @@
 // Scans ALL router pairs, uses Promise.all, captures every block  
 // ============================================================  
 
-const { ethers } = require("ethers");  
-const { Worker, parentPort, isMainThread } = require("worker_threads");  
-const os = require("os");  
+import { ethers } from "ethers";  
+import { Worker, parentPort, isMainThread } from "worker_threads";  
+import os from "os";  
 
 // ===================== CONFIGURATION =====================  
 
@@ -101,7 +101,7 @@ const PATHS = {
     // Triple-hop paths (3-hop) — exploit deeper liquidity gaps  
     USDC_WETH_WMATIC:   [TOKENS.USDC, TOKENS.WETH, TOKENS.WMATIC, TOKENS.USDC],  
     USDC_WMATIC_WETH:   [TOKENS.USDC, TOKENS.WMATIC, TOKENS.WETH, TOKENS.USDC],  
-    USDC_USDT_WETH:     [TOKENS.USDC, TOKENS.USDT, TOKENS.WETH, TOKENS.USDC],  
+    USDC_USDT_WETH:     [TOKENS.USDC, TOKENS.USDT, TOKETH.WETH, TOKENS.USDC],  
     USDC_DAI_WETH:      [TOKENS.USDC, TOKENS.DAI, TOKENS.WETH, TOKENS.USDC],  
     USDC_WBTC_WETH:     [TOKENS.USDC, TOKENS.WBTC, TOKENS.WETH, TOKENS.USDC],  
     USDC_WETH_WBTC:     [TOKENS.USDC, TOKENS.WETH, TOKENS.WBTC, TOKENS.USDC],  
@@ -310,7 +310,6 @@ class ArbitrageBot {
         if (this.pendingTxs.size >= CONFIG.maxPendingTxs) {  
             console.log("   ⏳ Max pending txs reached, skipping...");  
             return false;  
-          
         }  
           
         try {  
@@ -384,16 +383,12 @@ class ArbitrageBot {
                 return true;  
             } else {  
                 // Check for discard (profitable check failed in callback)  
-                const txEvents = receipt.logs.filter(log =>   
-                    log.address.toLowerCase() === CONFIG.contractAddress.toLowerCase()  
-                );  
-                  
                 console.log(`   ⚠️ No ArbitrageExecuted event (likely discarded)`);  
                 this.consecutiveFails++;  
                 return false;  
             }  
         } catch (e) {  
-            if (tx && tx.hash) this.pendingTxs.delete(tx.hash);  
+            if (typeof tx !== "undefined" && tx.hash) this.pendingTxs.delete(tx.hash);  
             this.stats.failedTrades++;  
             this.consecutiveFails++;  
               
