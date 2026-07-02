@@ -35,7 +35,7 @@ const CONFIG = {
     routers: {
         QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
         SUSHI: ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
-        DFYN:  ethers.getAddress("0xA102072A4C07F06eC3B4900Fdc4C7B80b6c57429") // Checksum Error Fully Resolved via Official Router
+        DFYN:  ethers.getAddress("0xA102072A4C07F06eC3B4900Fdc4C7B80b6c57429") // Checksum Error Resolved via Official Router Address
     },
     maxPendingTransactions: 1,        
     deadlineSeconds: 45              
