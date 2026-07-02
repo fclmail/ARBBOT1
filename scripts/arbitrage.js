@@ -85,8 +85,6 @@ const ROUTER_CHECKSUMS = {};
 Object.entries(DEXES).forEach(([name, addr]) => {  
     if (addr !== "0x0000000000000000000000000000000000000000") {  
         try {  
-            // Ethers v6 getAddress requires a validly formatted string or a complete lowercase string.  
-            // Passing a mixed-case string that has a broken checksum throws an error.  
             ROUTER_CHECKSUMS[addr.toLowerCase()] = ethers.getAddress(addr.toLowerCase());  
         } catch (e) {  
             console.log(`  ⚠️ Checksum parsing error for ${name}: ${e.message}`);  
@@ -95,32 +93,6 @@ Object.entries(DEXES).forEach(([name, addr]) => {
 });  
 
 const ROUTERS = Object.values(DEXES).filter(a => a !== "0x0000000000000000000000000000000000000000");  
-
-// ===================== PATH BUILDER =====================  
-
-const PATHS = {  
-    // Direct pairs (2-hop)  
-    USDC_WETH:      [TOKENS.USDC, TOKENS.WETH, TOKENS.USDC],  
-    USDC_WMATIC:    [TOKENS.USDC, TOKENS.WMATIC, TOKENS.USDC],  
-    USDC_USDT:      [TOKENS.USDC, TOKENS.USDT, TOKENS.USDC],  
-    USDC_DAI:       [TOKENS.USDC, TOKENS.DAI, TOKENS.USDC],  
-    USDC_WBTC:      [TOKENS.USDC, TOKENS.WBTC, TOKENS.USDC],  
-      
-    // Triple-hop paths (3-hop) — exploit deeper liquidity gaps  
-    USDC_WETH_WMATIC:   [TOKENS.USDC, TOKENS.WETH, TOKENS.WMATIC, TOKENS.USDC],  
-    USDC_WMATIC_WETH:   [TOKENS.USDC, TOKENS.WMATIC, TOKENS.WETH, TOKENS.USDC],  
-    USDC_USDT_WETH:     [TOKENS.USDC, TOKENS.USDT, TOKENS.WETH, TOKENS.USDC],  
-    USDC_DAI_WETH:      [TOKENS.USDC, TOKENS.DAI, TOKENS.WETH, TOKENS.USDC],  
-    USDC_WBTC_WETH:     [TOKENS.USDC, TOKENS.WBTC, TOKENS.WETH, TOKENS.USDC],  
-    USDC_WETH_WBTC:     [TOKENS.USDC, TOKENS.WETH, TOKENS.WBTC, TOKENS.USDC],  
-    USDC_USDT_WMATIC:   [TOKENS.USDC, TOKENS.USDT, TOKENS.WMATIC, TOKENS.USDC],  
-    USDC_DAI_WMATIC:    [TOKENS.USDC, TOKENS.DAI, TOKENS.WMATIC, TOKENS.USDC],  
-      
-    // Quadruple-hop paths (4-hop) — rare but profitable  
-    USDC_WETH_WMATIC_USDT:   [TOKENS.USDC, TOKENS.WETH, TOKENS.WMATIC, TOKENS.USDT, TOKENS.USDC],  
-    USDC_USDT_WETH_WMATIC:   [TOKENS.USDC, TOKENS.USDT, TOKENS.WETH, TOKENS.WMATIC, TOKENS.USDC],  
-    USDC_DAI_WETH_WBTC:      [TOKENS.USDC, TOKENS.DAI, TOKENS.WETH, TOKENS.WBTC, TOKENS.USDC],  
-};  
 
 // ===================== CONTRACT ABI =====================  
 
@@ -209,11 +181,52 @@ class ArbitrageBot {
         console.log("\n✅ Initialization complete!");  
     }  
 
-    // ===================== ROUTE GENERATOR =====================  
+    // ===================== DIAGNOSTIC DEBUG SCAN =====================  
+
+    async debugScan() {  
+        console.log("\n🔬 DEBUG: Testing route profitability pipeline...");  
+        try {  
+            const minProfit = await this.contract.minimumProfitUSDC();  
+            console.log(`  Min profit setting on-chain: ${ethers.formatUnits(minProfit, 6)} USDC`);  
+              
+            const testRoute = {  
+                buyRouter: DEXES.QuickSwap,  
+                sellRouter: DEXES.SushiSwap,  
+                pathToToken: [TOKENS.USDC, TOKENS.WETH],  
+                pathToUSDC: [TOKENS.WETH, TOKENS.USDC],  
+            };  
+              
+            const testAmount = ethers.parseUnits("1000", 6);  
+            const [profit, finalAmount] = await this.contract.simulateArbitrageProfit(  
+                testRoute.buyRouter,  
+                testRoute.sellRouter,  
+                testAmount,  
+                testRoute.pathToToken,  
+                testRoute.pathToUSDC  
+            );  
+              
+            console.log(`  Test simulation (QuickSwap→SushiSwap, WETH, $1000):`);  
+            console.log(`    Profit returned: ${ethers.formatUnits(profit, 6)} USDC`);  
+            console.log(`    Final out: ${ethers.formatUnits(finalAmount, 6)} USDC`);  
+            console.log(`    Meets on-chain limit: ${profit > minProfit ? "✅ YES" : "❌ NO"}`);  
+        } catch (e) {  
+            console.log(`  ❌ Diagnostic simulation check failed: ${e.message.slice(0, 120)}`);  
+        }  
+    }  
+
+    // ===================== HIGH-LIQUIDITY ROUTE GENERATOR =====================  
 
     generateAllRoutes() {  
         const routes = [];  
-        const pathEntries = Object.entries(PATHS);  
+          
+        // Optimized to highly-liquid, verified 2-hop baseline combinations  
+        const BASE_PATHS = [  
+            { name: "USDC_WETH", token: TOKENS.WETH, toToken: [TOKENS.USDC, TOKENS.WETH], toUSDC: [TOKENS.WETH, TOKENS.USDC] },  
+            { name: "USDC_WMATIC", token: TOKENS.WMATIC, toToken: [TOKENS.USDC, TOKENS.WMATIC], toUSDC: [TOKENS.WMATIC, TOKENS.USDC] },  
+            { name: "USDC_USDT", token: TOKENS.USDT, toToken: [TOKENS.USDC, TOKENS.USDT], toUSDC: [TOKENS.USDT, TOKENS.USDC] },  
+            { name: "USDC_DAI", token: TOKENS.DAI, toToken: [TOKENS.USDC, TOKENS.DAI], toUSDC: [TOKENS.DAI, TOKENS.USDC] },  
+            { name: "USDC_WBTC", token: TOKENS.WBTC, toToken: [TOKENS.USDC, TOKENS.WBTC], toUSDC: [TOKENS.WBTC, TOKENS.USDC] }  
+        ];  
           
         for (let i = 0; i < ROUTERS.length; i++) {  
             for (let j = 0; j < ROUTERS.length; j++) {  
@@ -222,16 +235,14 @@ class ArbitrageBot {
                 const buyRouter = ROUTERS[i];  
                 const sellRouter = ROUTERS[j];  
 
-                for (const [pathName, path] of pathEntries) {  
-                    const tokenAddr = path[1]; // middle token for event  
-                      
+                for (const pathObj of BASE_PATHS) {  
                     routes.push({  
-                        name: `${pathName} | ${Object.keys(DEXES).find(k => DEXES[k] === buyRouter)}→${Object.keys(DEXES).find(k => DEXES[k] === sellRouter)}`,  
+                        name: `${pathObj.name} | ${Object.keys(DEXES).find(k => DEXES[k] === buyRouter)}→${Object.keys(DEXES).find(k => DEXES[k] === sellRouter)}`,  
                         buyRouter,  
                         sellRouter,  
-                        pathToToken: path.slice(0, -1),  // USDC → Token (or USDC → Token1 → Token2)  
-                        pathToUSDC: path.slice(1).reverse(), // Token → USDC (or Token2 → Token1 → USDC)  
-                        tokenAddr,  
+                        pathToToken: pathObj.toToken,  
+                        pathToUSDC: pathObj.toUSDC,  
+                        tokenAddr: pathObj.token,  
                     });  
                 }  
             }  
@@ -299,7 +310,6 @@ class ArbitrageBot {
             }  
         }  
           
-        // Sort by profit (descending)  
         profitableRoutes.sort((a, b) =>   
             b.estimatedProfit > a.estimatedProfit ? 1 :   
             b.estimatedProfit < a.estimatedProfit ? -1 : 0  
@@ -314,14 +324,12 @@ class ArbitrageBot {
         const { route, amountIn } = routeResult;  
         const deadline = Math.floor(Date.now() / 1000) + 120;  
           
-        // Check pending tx count  
         if (this.pendingTxs.size >= CONFIG.maxPendingTxs) {  
             console.log("   ⏳ Max pending txs reached, skipping...");  
             return false;  
         }  
           
         try {  
-            // Use executeBestFlashLoanArbitrage (runs binary search + flash loan in one tx)  
             const tx = await this.contract.executeBestFlashLoanArbitrage(  
                 route.buyRouter,  
                 route.sellRouter,  
@@ -358,11 +366,9 @@ class ArbitrageBot {
             console.log(`      Route: ${route.name}`);  
             console.log(`      Amount: ${ethers.formatUnits(amountIn, 6)} USDC`);  
               
-            // Wait for receipt  
             const receipt = await tx.wait();  
             this.pendingTxs.delete(txHash);  
               
-            // Parse events  
             const arbitrageEvents = receipt.logs  
                 .filter(log => log.address.toLowerCase() === CONFIG.contractAddress.toLowerCase())  
                 .map(log => {  
@@ -390,7 +396,6 @@ class ArbitrageBot {
                   
                 return true;  
             } else {  
-                // Check for discard (profitable check failed in callback)  
                 console.log(`   ⚠️ No ArbitrageExecuted event (likely discarded)`);  
                 this.consecutiveFails++;  
                 return false;  
@@ -413,7 +418,6 @@ class ArbitrageBot {
             return;  
         }  
           
-        // Take top N routes  
         const batch = profitableRoutes.slice(0, CONFIG.maxPendingTxs);  
         console.log(`\n🎯 Executing batch of ${batch.length} arbitrages...`);  
           
@@ -437,6 +441,9 @@ class ArbitrageBot {
         // Initialization  
         await this.initialize();  
           
+        // Run diagnostic check to ensure smart contract configuration visibility  
+        await this.debugScan();  
+          
         // Check contract balance  
         const usdcContract = new ethers.Contract(  
             TOKENS.USDC,  
@@ -458,7 +465,6 @@ class ArbitrageBot {
                 scanCount++;  
                 const blockNumber = await this.provider.getBlockNumber();  
                   
-                // Only scan new blocks  
                 if (blockNumber <= this.lastBlockProcessed) {  
                     await new Promise(r => setTimeout(r, 500));  
                     continue;  
@@ -469,7 +475,6 @@ class ArbitrageBot {
                 console.log(`📦 Block #${blockNumber} | Scan #${scanCount}`);  
                 console.log(`${"─".repeat(60)}`);  
                   
-                // Check pending txs  
                 for (const [hash, info] of this.pendingTxs) {  
                     const receipt = await this.provider.getTransactionReceipt(hash);  
                     if (receipt) {  
@@ -481,14 +486,12 @@ class ArbitrageBot {
                     }  
                 }  
                   
-                // Skip if too many pending  
                 if (this.pendingTxs.size >= CONFIG.maxPendingTxs) {  
                     console.log("  ⏳ Too many pending txs, skipping scan...");  
                     await new Promise(r => setTimeout(r, 1000));  
                     continue;  
                 }  
                   
-                // Scan all routes  
                 const profitableRoutes = await this.scanAllRoutes();  
                   
                 if (profitableRoutes.length > 0) {  
@@ -500,7 +503,6 @@ class ArbitrageBot {
                         console.log(`    💵 ${r.route.name} | Amount: ${amount} USDC | Profit: +${profit} USDC`);  
                     }  
                       
-                    // Execute  
                     await this.executeBatchArbitrage(profitableRoutes);  
                 } else {  
                     if (scanCount % 5 === 0) {  
@@ -508,7 +510,6 @@ class ArbitrageBot {
                     }  
                 }  
                   
-                // Adaptive delay  
                 if (this.consecutiveFails > 5) {  
                     console.log("  🛑 Too many consecutive failures, cooling down...");  
                     await new Promise(r => setTimeout(r, 5000));  
@@ -526,11 +527,9 @@ class ArbitrageBot {
 // ===================== WORKER THREAD SUPPORT =====================  
 
 if (isMainThread) {  
-    // Main thread: start bot  
     const bot = new ArbitrageBot();  
     bot.start().catch(console.error);  
       
-    // Graceful shutdown  
     process.on("SIGINT", async () => {  
         console.log("\n\n🛑 Shutting down...");  
         console.log(`📊 Final stats:`);  
@@ -541,7 +540,6 @@ if (isMainThread) {
         process.exit(0);  
     });  
 } else {  
-    // Worker thread: handle batch scanning  
     const bot = new ArbitrageBot();  
       
     parentPort.on("message", async (msg) => {  
