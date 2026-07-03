@@ -36,7 +36,7 @@ const CONFIG = {
         SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
         DFYN:    ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
     },
-    allocationAmount: 5000000n, // $5.00 USDC micro-allocation baseline
+    allocationAmount: 30000n, // $5.00 USDC micro-allocation baseline
     bidProfitPercentage: 40n,   // Give 40% of captured profit to validators as sealed bid
     gasLimitOverride: 850000n,  
     deadlineSeconds: 30               
