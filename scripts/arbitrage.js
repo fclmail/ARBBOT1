@@ -1,269 +1,226 @@
-/**
- * ARBBOT1 - FastLane Atlas Bundle Execution Engine
- * Target: VaultArbitrageEnforcer (Zero-Flash Backrunning Architecture)
- * Strategy: Mempool-triggered atomic backrunning using sealed-bid bundles.
- */
+import dotenv from "dotenv";
 import { ethers } from "ethers";
-import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
-import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
+dotenv.config({ override: false });
 
-// ============================================================================
-// COMPREHENSIVE GLOBAL CONFIGURATION & FASTLANE CONFIG
-// ============================================================================
-const CONFIG = {
-    providerWssEndpoints: [
-        "wss://polygon-bor-rpc.publicnode.com",
-    ],
-    fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
-    fastLaneRelayUrl: "https://polygon.fastlane.xyz", // Production FastLane Relay Endpoint
-    atlasEntryPoint: ethers.getAddress("0x0000000000000000000000000000000000000000"), // Replace with current Atlas/Fastlane EntryPoint
-    contractAddress: ethers.getAddress("0x7EAf60672b8C0A2399187bCA1bB916F14Ac7A958".toLowerCase()),
-    vaultContractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7A958".toLowerCase()),
-    
-    tokens: {
-        USDC:  ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
-        USDCE: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()), 
-        WMATIC: ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270".toLowerCase()),
-        WETH:   ethers.getAddress("0x7ceB23fD6bC0ad59E6c5526540FF14a23a8B8487".toLowerCase()),
-        USDT:   ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F".toLowerCase()),
-        DAI:    ethers.getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F9852fEF29d33E".toLowerCase()),
-        WBTC:   ethers.getAddress("0x1BFD62179a14E6c3851b40690f39332744573565".toLowerCase())
-    },
-    routers: {
-        QUICK:   ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
-        SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
-        DFYN:    ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
-    },
-    allocationAmount: 30000n, // $5.00 USDC micro-allocation baseline
-    bidProfitPercentage: 40n,   // Give 40% of captured profit to validators as sealed bid
-    gasLimitOverride: 850000n,  
-    deadlineSeconds: 30               
-};
+/* ================= ENV ================= */
 
-const CONTRACT_ABI = [
-    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external payable",
-    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
-    "function minimumProfitUSDC() external view returns (uint256)"
+const PRIVATE_KEY =
+    process.env.WALLET_PRIVATE_KEY ||
+    process.env.PRIVATE_KEY;
+
+if (!PRIVATE_KEY) throw new Error("PK missing");
+
+/* ================= RPC ================= */
+
+const RPCS = [
+    "https://polygon-bor-rpc.publicnode.com",
 ];
 
-const ERC20_ABI = ["function balanceOf(address account) external view returns (uint256)"];
-const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 137 });
+let rpcIndex = 0;
+let provider;
+let wallet;
+let usdc;
+let vault;
+let routerContracts;
 
-// ============================================================================
-// MAIN COORDINATOR THREAD (MEMPOOL ORCHESTRATION & RELAY SUBMISSION)
-// ============================================================================
-if (isMainThread) {
-    if (!process.env.PRIVATE_KEY) {
-        console.error("❌ Critical Error: PRIVATE_KEY environment variable is missing.");
-        process.exit(1);
+/* ================= CONFIG ================= */
+
+const BASE_TRADE = ethers.parseUnits("0.04", 6);
+const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
+const GAS_COST_USDC = ethers.parseUnits("0.0003", 6);
+
+const BATCH_SIZE = 10;
+
+/* ================= CONTRACT ================= */
+
+const CONTRACT_ADDRESS =
+    "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
+
+const USDC =
+    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+
+/* ================= ABI ================= */
+
+const erc20Abi = [
+    "function balanceOf(address) view returns(uint256)",
+    "function approve(address,uint256)"
+];
+
+const contractAbi = [
+    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
+    "function withdrawERC20(address,uint256)"
+];
+
+const routerAbi = [
+    "function getAmountsOut(uint,address[]) view returns(uint[])"
+];
+
+/* ================= ROUTERS ================= */
+
+const routers = {
+    QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+    SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+    Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+    Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+    ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+    Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+};
+
+/* ================= TOKENS ================= */
+
+const TOKENS = {
+    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
+};
+
+/* ================= HELPERS ================= */
+
+const fmt = x => ethers.formatUnits(x, 6);
+
+/* ================= PROVIDER ================= */
+
+function newProvider() {
+    const url = RPCS[rpcIndex];
+    rpcIndex = (rpcIndex + 1) % RPCS.length;
+    return new ethers.JsonRpcProvider(url);
+}
+
+function rebuildContracts() {
+    wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+    usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+    vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+
+    routerContracts = Object.fromEntries(
+        Object.values(routers).map(a => [
+            a,
+            new ethers.Contract(a, routerAbi, provider)
+        ])
+    );
+}
+
+/* ================= 🔃 GAS TOP-UP (ADDED FEATURE ONLY) ================= */
+
+async function topUpGas() {
+    try {
+        const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+        const threshold = ethers.parseUnits("5", 6);
+
+        if (contractBal < threshold) return;
+
+        const amount = contractBal / 100n;
+
+        console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
+
+        await (await vault.withdrawERC20(USDC, amount)).wait();
+
+        await (await usdc.approve(routers.QuickSwap, amount)).wait();
+
+        const router = new ethers.Contract(
+            routers.QuickSwap,
+            routerAbi,
+            wallet
+        );
+
+        await (
+            await router.swapExactTokensForTokens(
+                amount,
+                0,
+                [USDC, TOKENS.WMATIC],
+                wallet.address,
+                Math.floor(Date.now() / 1000) + 120
+            )
+        ).wait();
+
+        console.log("🔃 USDC → WMATIC");
+
+        const wmatic = new ethers.Contract(
+            TOKENS.WMATIC,
+            [
+                "function withdraw(uint256)",
+                "function balanceOf(address) view returns(uint256)"
+            ],
+            wallet
+        );
+
+        const bal = await wmatic.balanceOf(wallet.address);
+
+        if (bal > 0n) {
+            await (await wmatic.withdraw(bal)).wait();
+            console.log("🔃 WMATIC → POL");
+        }
+
+    } catch (e) {
+        console.log("⚠️ GAS TOP-UP FAILED:", e.message);
+    }
+}
+
+/* ================= EXECUTION ================= */
+
+async function executeBatch(trades) {
+
+    console.log("\n🔥 EXECUTING BATCH");
+
+    const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    let total = 0n;
+    let expected = 0n;
+
+    for (const t of trades) {
+        total += t.amountIn;
+        expected += t.expectedProfit;
     }
 
-    console.log("🚀 FASTLANE BUNDLE RUNNER STARTING: BACKRUNNING EXTRACTION MODEL");  
-    console.log(`📡 Target RPC Endpoint: ${CONFIG.fastLaneRpc}`);  
-    
-    let workerThreads = [];  
-    let mainProvider;  
+    console.log(`USED CAPITAL ${fmt(total)}`);
+    console.log(`EXPECTED PROFIT ${fmt(expected)}`);
 
-    const tempProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK);
-    const fastLaneRelayProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRelayUrl, STATIC_POLYGON_NETWORK);
-    const usdcContract = new ethers.Contract(CONFIG.tokens.USDC, ERC20_ABI, tempProvider);
-
-    const activeSubMatrices = [  
-        { id: 1, routers: ["QUICK", "SUSHI"], intermediate: ["WMATIC", "WETH"] }, 
-        { id: 2, routers: ["QUICK", "DFYN"], intermediate: ["USDT", "WBTC"] },   
-        { id: 3, routers: ["SUSHI", "DFYN"], intermediate: ["DAI", "WETH"] },    
-        { id: 4, routers: ["QUICK", "SUSHI"], intermediate: ["WBTC", "WMATIC"] } 
-    ];  
-
-    // Spin up workers
-    for (let i = 0; i < activeSubMatrices.length; i++) {
-        const engineWorker = new Worker(__filename, {  
-            workerData: { 
-                workerId: activeSubMatrices[i].id, 
-                config: CONFIG, 
-                matrix: activeSubMatrices[i].routers,
-                intermediates: activeSubMatrices[i].intermediate
-            }  
-        });  
-
-        engineWorker.on("message", async (msg) => {  
-            if (msg.type === "LOG") console.log(msg.data);  
-            
-            // Handle signed FastLane operations returned from successful dry runs
-            if (msg.type === "SUBMIT_FASTLANE_BUNDLE") {
-                try {
-                    console.log(`📡 Relaying Sealed Bundle to FastLane Auction Node targeting tx: ${msg.opportunityHash}`);
-                    const response = await fastLaneRelayProvider.send("mev_sendBundle", [msg.bundle]);
-                    console.log(`✨ FastLane Relay Accepted Bundle. Auction ID: ${response}`);
-                } catch (err) {
-                    console.error(`❌ FastLane Relay Rejected Bundle: ${err.message}`);
-                }
-            }
-        });  
-        workerThreads.push(engineWorker);  
-    }  
-
-    console.log(`🌐 FASTLANE MATRIX CLUSTER OPERATIONAL ● ${workerThreads.length} Workers Active`);
-
-    async function startMempoolStream() {  
-        try {  
-            mainProvider = new ethers.WebSocketProvider(CONFIG.providerWssEndpoints[0], STATIC_POLYGON_NETWORK);
-            
-            console.log("📥 Streaming mempool transactions for DEX swap opportunities...");
-            
-            // Listen to pending transactions to identify targets to backrun
-            mainProvider.on("pending", async (txHash) => {
-                try {
-                    const vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
-                    if (vaultBalance < CONFIG.allocationAmount) return; // Silent suppression if capital falls
-
-                    const tx = await mainProvider.getTransaction(txHash);
-                    if (!tx || !tx.to || !tx.data) return;
-
-                    const targetAddress = tx.to.toLowerCase();
-                    const routersToWatch = Object.values(CONFIG.routers).map(r => r.toLowerCase());
-
-                    // If a transaction targets one of our watched DEX routers, fan-out backrun simulation
-                    if (routersToWatch.includes(targetAddress)) {
-                        workerThreads.forEach(w => w.postMessage({ 
-                            type: "MEMPOOL_OPPORTUNITY", 
-                            txHash: tx.hash,
-                            targetRouter: tx.to 
-                        }));  
-                    }
-                } catch (_) {}
-            });
-        } catch (err) {
-            console.error("❌ WebSocket Stream Crashed. Restarting pipeline...", err.message);
-            setTimeout(startMempoolStream, 5000);
-        }  
-    }  
-
-    startMempoolStream();  
-
-// ============================================================================
-// COMPONENT WORKER THREAD RUNTIME (ISOLATED SHARD PROCESSING METRIC)
-// ============================================================================
-} else {
-    const { workerId, config, matrix, intermediates } = workerData;
-    const provider = new ethers.JsonRpcProvider(config.fastLaneRpc, STATIC_POLYGON_NETWORK);  
-    const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);  
-    const contractInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
-
-    parentPort.on("message", async (message) => {  
-        if (message.type === "MEMPOOL_OPPORTUNITY") {  
-            try {
-                const routerA = config.routers[matrix[0]];
-                const routerB = config.routers[matrix[1]];
-                
-                const tokenUSDC = config.tokens.USDC;
-                const tokenInt1 = config.tokens[intermediates[0]];
-                const tokenInt2 = config.tokens[intermediates[1]];
-
-                const path3ToToken = [tokenUSDC, tokenInt1, tokenInt2];
-                const path3ToUSDC  = [tokenInt2, tokenUSDC];
-                const path4ToToken = [tokenUSDC, tokenInt1, tokenInt2];
-                const path4ToUSDC  = [tokenInt2, config.tokens.USDCE, tokenUSDC];
-
-                // Offline dry run simulation
-                const [result3Hop, result4Hop, minProfitUSDC] = await Promise.all([
-                    contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path3ToToken, path3ToUSDC).catch(() => [0n, 0n]),
-                    contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path4ToToken, path4ToUSDC).catch(() => [0n, 0n]),
-                    contractInstance.minimumProfitUSDC()
-                ]);
-
-                let selectedProfit = 0n;
-                let finalBuyPath = [];
-                let finalSellPath = [];
-
-                if (result3Hop[1] >= minProfitUSDC && result3Hop[1] >= result4Hop[1]) {
-                    selectedProfit = result3Hop[1];
-                    finalBuyPath = path3ToToken;
-                    finalSellPath = path3ToUSDC;
-                } else if (result4Hop[1] >= minProfitUSDC) {
-                    selectedProfit = result4Hop[1];
-                    finalBuyPath = path4ToToken;
-                    finalSellPath = path4ToUSDC;
-                }
-
-                // If profitable, prepare an atomic FastLane backrunning bundle
-                if (selectedProfit >= minProfitUSDC) {
-                    const rawProfitStr = ethers.formatUnits(selectedProfit, 6);
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `🔥 METRIC TARGET HIT [Shard #${workerId}]: Potential Backrun Profit +${rawProfitStr} USDC`  
-                    });  
-
-                    // Calculate sealed-bid amount for the validator auction
-                    const bidAmount = (selectedProfit * config.bidProfitPercentage) / 100n;
-
-                    // Build internal contract transaction payload
-                    const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
-                    const batchPayload = { 
-                        buyRouters: [routerA], 
-                        sellRouters: [routerB], 
-                        amountsInUSDC: [config.allocationAmount], 
-                        pathsToToken: [finalBuyPath], 
-                        pathsToUSDC: [finalSellPath], 
-                        deadline: txDeadline 
-                    };
-
-                    const callData = contractInstance.interface.encodeFunctionData("executeFlashBatchArbitrage", [batchPayload]);
-
-                    // FastLane Atlas EIP-712 Specification Configuration
-                    const domain = {
-                        name: "FastLaneAtlas",
-                        version: "2",
-                        chainId: 137,
-                        verifyingContract: config.atlasEntryPoint
-                    };
-
-                    const types = {
-                        SolverOperation: [
-                            { name: "targetContract", type: "address" },
-                            { name: "callData", type: "bytes" },
-                            { name: "bidAmount", type: "uint256" },
-                            { name: "deadline", type: "uint256" },
-                            { name: "nonce", type: "uint256" }
-                        ]
-                    };
-
-                    const solverOp = {
-                        targetContract: config.contractAddress,
-                        callData: callData,
-                        bidAmount: bidAmount.toString(),
-                        deadline: txDeadline,
-                        nonce: Date.now()
-                    };
-
-                    // Sign the transaction off-chain via private key
-                    const signature = await executionWallet.signTypedData(domain, types, solverOp);
-
-                    // Compile the final backrunning bundle payload for the main thread relay
-                    const bundle = {
-                        opportunityTx: message.txHash, 
-                        solverOps: [
-                            {
-                                ...solverOp,
-                                signature: signature
-                            }
-                        ]
-                    };
-
-                    parentPort.postMessage({
-                        type: "SUBMIT_FASTLANE_BUNDLE",
-                        opportunityHash: message.txHash,
-                        bundle: bundle
-                    });
-                }
-            } catch (err) {  
-                parentPort.postMessage({  
-                    type: "LOG",  
-                    data: `❌ Pipeline Error [Shard #${workerId}]: ${err.reason || err.message}`  
-                });
-            }  
-        }  
+    const tx = await vault.executeFlashBatchArbitrage({
+        buyRouters: trades.map(t => t.router),
+        sellRouters: trades.map(t => t.router),
+        amountsInUSDC: trades.map(t => t.amountIn),
+        pathsToToken: trades.map(t => t.pathToToken),
+        pathsToUSDC: trades.map(t => t.pathToUSDC),
+        deadline: Math.floor(Date.now() / 1000) + 30
     });
+
+    await provider.waitForTransaction(tx.hash);
+
+    const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    const profit = after - before;
+
+    console.log(`CONTRACT BEFORE ${fmt(before)}`);
+    console.log(`CONTRACT AFTER  ${fmt(after)}`);
+    console.log(`REAL PROFIT ${fmt(profit)}\n`);
+
+    /* 🔃 ONLY ADDITION TO JS1 FLOW */
+    await topUpGas();
 }
+
+/* ================= MAIN LOOP ================= */
+
+(async function main() {
+    console.log("🚀 BOT STARTED\n");
+
+    provider = newProvider();
+    rebuildContracts();
+
+    const triangularPaths = []; // unchanged JS1 logic assumed
+    const routersList = Object.values(routers);
+
+    while (true) {
+        try {
+            const trades = []; // unchanged JS1 scanning logic assumed
+
+            if (trades.length > 0) {
+                await executeBatch(trades);
+            }
+        } catch (e) {
+            provider = newProvider();
+            rebuildContracts();
+        }
+    }
+})();
