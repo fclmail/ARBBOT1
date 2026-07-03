@@ -1,7 +1,7 @@
 /**
- * ARBBOT1 - Micro-Allocation Execution Engine
- * Target: VaultArbitrageEnforcer (Capital-Constrained Zero-Flash Architecture)
- * Edits: Lowered JavaScript Allocation Target to fit 0.066433 USDC Available Balance
+ * ARBBOT1 - FastLane Atlas Bundle Execution Engine
+ * Target: VaultArbitrageEnforcer (Zero-Flash Backrunning Architecture)
+ * Strategy: Mempool-triggered atomic backrunning using sealed-bid bundles.
  */
 import { ethers } from "ethers";
 import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
@@ -10,19 +10,18 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 
 // ============================================================================
-// COMPREHENSIVE GLOBAL CONFIGURATION & ADDRESS CACHE
+// COMPREHENSIVE GLOBAL CONFIGURATION & FASTLANE CONFIG
 // ============================================================================
 const CONFIG = {
     providerWssEndpoints: [
         "wss://polygon-bor-rpc.publicnode.com",
-        "wss://rpc-mainnet.matterlight.xyz/ws"
     ],
     fastLaneRpc: "https://polygon-bor-rpc.publicnode.com",
-    fallbackRpc: "https://polygon.drpc.org",
+    fastLaneRelayUrl: "https://polygon.fastlane.xyz", // Production FastLane Relay Endpoint
+    atlasEntryPoint: ethers.getAddress("0x0000000000000000000000000000000000000000"), // Replace with current Atlas/Fastlane EntryPoint
     contractAddress: ethers.getAddress("0x7EAf60672b8C0A2399187bCA1bB916F14Ac7A958".toLowerCase()),
-    vaultContractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958".toLowerCase()),
+    vaultContractAddress: ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7A958".toLowerCase()),
     
-    // Core Token Asset Matrix Cache
     tokens: {
         USDC:  ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()),
         USDCE: ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".toLowerCase()), 
@@ -37,15 +36,14 @@ const CONFIG = {
         SUSHI:   ethers.getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506".toLowerCase()),
         DFYN:    ethers.getAddress("0xF15361A03Eca00a63A23e1bd165157Cb02434a62".toLowerCase())
     },
-    // OPTION B: Lowered to $0.05 USDC to run dry runs inside your 0.066433 USDC pool baseline
-    allocationAmount: 5000000n, 
-    gasLimitOverride: 850000n,    
-    priorityFeeGwei: 45n,
-    deadlineSeconds: 45               
+    allocationAmount: 5000000n, // $5.00 USDC micro-allocation baseline
+    bidProfitPercentage: 40n,   // Give 40% of captured profit to validators as sealed bid
+    gasLimitOverride: 850000n,  
+    deadlineSeconds: 30               
 };
 
 const CONTRACT_ABI = [
-    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",
+    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external payable",
     "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
     "function minimumProfitUSDC() external view returns (uint256)"
 ];
@@ -54,7 +52,7 @@ const ERC20_ABI = ["function balanceOf(address account) external view returns (u
 const STATIC_POLYGON_NETWORK = ethers.Network.from({ name: "polygon", chainId: 137 });
 
 // ============================================================================
-// MAIN ORCHESTRATION ENGINE (COORDINATOR THREAD)
+// MAIN COORDINATOR THREAD (MEMPOOL ORCHESTRATION & RELAY SUBMISSION)
 // ============================================================================
 if (isMainThread) {
     if (!process.env.PRIVATE_KEY) {
@@ -62,16 +60,14 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 PRODUCTION RUNNER STARTING: MICRO-ALLOCATION TESTING MODEL");  
+    console.log("🚀 FASTLANE BUNDLE RUNNER STARTING: BACKRUNNING EXTRACTION MODEL");  
     console.log(`📡 Target RPC Endpoint: ${CONFIG.fastLaneRpc}`);  
     
-    let totalRawProfits = 0.0;  
     let workerThreads = [];  
     let mainProvider;  
-    let currentLocalNonce = null;
 
     const tempProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK);
-    const mainWallet = new ethers.Wallet(process.env.PRIVATE_KEY, tempProvider);
+    const fastLaneRelayProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRelayUrl, STATIC_POLYGON_NETWORK);
     const usdcContract = new ethers.Contract(CONFIG.tokens.USDC, ERC20_ABI, tempProvider);
 
     const activeSubMatrices = [  
@@ -81,6 +77,7 @@ if (isMainThread) {
         { id: 4, routers: ["QUICK", "SUSHI"], intermediate: ["WBTC", "WMATIC"] } 
     ];  
 
+    // Spin up workers
     for (let i = 0; i < activeSubMatrices.length; i++) {
         const engineWorker = new Worker(__filename, {  
             workerData: { 
@@ -93,61 +90,58 @@ if (isMainThread) {
 
         engineWorker.on("message", async (msg) => {  
             if (msg.type === "LOG") console.log(msg.data);  
-            if (msg.type === "REQUEST_NONCE") {
-                if (currentLocalNonce === null) {
-                    currentLocalNonce = await tempProvider.getTransactionCount(mainWallet.address, "pending");
-                } else {
-                    currentLocalNonce++;
+            
+            // Handle signed FastLane operations returned from successful dry runs
+            if (msg.type === "SUBMIT_FASTLANE_BUNDLE") {
+                try {
+                    console.log(`📡 Relaying Sealed Bundle to FastLane Auction Node targeting tx: ${msg.opportunityHash}`);
+                    const response = await fastLaneRelayProvider.send("mev_sendBundle", [msg.bundle]);
+                    console.log(`✨ FastLane Relay Accepted Bundle. Auction ID: ${response}`);
+                } catch (err) {
+                    console.error(`❌ FastLane Relay Rejected Bundle: ${err.message}`);
                 }
-                engineWorker.postMessage({ type: "NONCE_ASSIGNED", nonce: currentLocalNonce });
             }
-            if (msg.type === "PROFIT") {  
-                totalRawProfits += msg.amount;  
-                console.log(`💰 Combined Metric Realized Raw Capture: +${totalRawProfits.toFixed(6)} USDC`);  
-            }  
         });  
         workerThreads.push(engineWorker);  
     }  
 
-    console.log(`🌐 PRODUCTION MATRIX ENGINE OPERATIONAL`);
-    console.log(`└── Active Shard Subprocesses ● ${workerThreads.length} Isolated Cluster Worker Threads\n`);
+    console.log(`🌐 FASTLANE MATRIX CLUSTER OPERATIONAL ● ${workerThreads.length} Workers Active`);
 
-    async function connectWebSocketStream() {  
+    async function startMempoolStream() {  
         try {  
             mainProvider = new ethers.WebSocketProvider(CONFIG.providerWssEndpoints[0], STATIC_POLYGON_NETWORK);
-            mainProvider.on("block", async (blockNumber) => {  
+            
+            console.log("📥 Streaming mempool transactions for DEX swap opportunities...");
+            
+            // Listen to pending transactions to identify targets to backrun
+            mainProvider.on("pending", async (txHash) => {
                 try {
                     const vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
-                    if (vaultBalance < CONFIG.allocationAmount) {
-                        console.log(`⚠️  [Capital Floor Alert] Vault allocation requirement not met. Available: ${ethers.formatUnits(vaultBalance, 6)} USDC`);
-                        return;
+                    if (vaultBalance < CONFIG.allocationAmount) return; // Silent suppression if capital falls
+
+                    const tx = await mainProvider.getTransaction(txHash);
+                    if (!tx || !tx.to || !tx.data) return;
+
+                    const targetAddress = tx.to.toLowerCase();
+                    const routersToWatch = Object.values(CONFIG.routers).map(r => r.toLowerCase());
+
+                    // If a transaction targets one of our watched DEX routers, fan-out backrun simulation
+                    if (routersToWatch.includes(targetAddress)) {
+                        workerThreads.forEach(w => w.postMessage({ 
+                            type: "MEMPOOL_OPPORTUNITY", 
+                            txHash: tx.hash,
+                            targetRouter: tx.to 
+                        }));  
                     }
-                    currentLocalNonce = await tempProvider.getTransactionCount(mainWallet.address, "pending");
                 } catch (_) {}
-                
-                console.log(`\n[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} Across Shards...`);
-                workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber }));  
-            });  
-        } catch (_) {
-            setupHttpFallbackMode();
+            });
+        } catch (err) {
+            console.error("❌ WebSocket Stream Crashed. Restarting pipeline...", err.message);
+            setTimeout(startMempoolStream, 5000);
         }  
     }  
 
-    function setupHttpFallbackMode() {  
-        const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK);  
-        fallbackProvider.on("block", async (blockNumber) => {  
-            try {
-                const vaultBalance = await usdcContract.balanceOf(CONFIG.vaultContractAddress);
-                if (vaultBalance < CONFIG.allocationAmount) return;
-                currentLocalNonce = await fallbackProvider.getTransactionCount(mainWallet.address, "pending");
-            } catch (_) {}
-            
-            console.log(`\n[HTTP Fallback Engine] 🔍 Scanning Block #${blockNumber} Across Shards...`);
-            workerThreads.forEach(w => w.postMessage({ type: "BLOCK_TRIGGER", blockNumber }));  
-        });  
-    }  
-
-    connectWebSocketStream();  
+    startMempoolStream();  
 
 // ============================================================================
 // COMPONENT WORKER THREAD RUNTIME (ISOLATED SHARD PROCESSING METRIC)
@@ -158,20 +152,8 @@ if (isMainThread) {
     const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);  
     const contractInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
 
-    let pendingTxPromiseResolver = null;
-
     parentPort.on("message", async (message) => {  
-        if (message.type === "NONCE_ASSIGNED" && pendingTxPromiseResolver) {
-            pendingTxPromiseResolver(message.nonce);
-            return;
-        }
-
-        if (message.type === "BLOCK_TRIGGER") {  
-            parentPort.postMessage({  
-                type: "LOG",  
-                data: `✅ [Shard #${workerId}] Scanning Matrix Array: [${matrix.join(", ")}]`  
-            });  
-
+        if (message.type === "MEMPOOL_OPPORTUNITY") {  
             try {
                 const routerA = config.routers[matrix[0]];
                 const routerB = config.routers[matrix[1]];
@@ -182,11 +164,10 @@ if (isMainThread) {
 
                 const path3ToToken = [tokenUSDC, tokenInt1, tokenInt2];
                 const path3ToUSDC  = [tokenInt2, tokenUSDC];
-
                 const path4ToToken = [tokenUSDC, tokenInt1, tokenInt2];
                 const path4ToUSDC  = [tokenInt2, config.tokens.USDCE, tokenUSDC];
 
-                // --- OFFLINE STATIC SANDBOX DRY RUN ---
+                // Offline dry run simulation
                 const [result3Hop, result4Hop, minProfitUSDC] = await Promise.all([
                     contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path3ToToken, path3ToUSDC).catch(() => [0n, 0n]),
                     contractInstance.simulateArbitrageProfit(routerA, routerB, config.allocationAmount, path4ToToken, path4ToUSDC).catch(() => [0n, 0n]),
@@ -207,23 +188,18 @@ if (isMainThread) {
                     finalSellPath = path4ToUSDC;
                 }
 
+                // If profitable, prepare an atomic FastLane backrunning bundle
                 if (selectedProfit >= minProfitUSDC) {
                     const rawProfitStr = ethers.formatUnits(selectedProfit, 6);
-                    
                     parentPort.postMessage({  
                         type: "LOG",  
-                        data: `🔥 OFFLINE DRY RUN HIT [Shard #${workerId}]: Raw Profit Delta Detected: +${rawProfitStr} USDC`  
+                        data: `🔥 METRIC TARGET HIT [Shard #${workerId}]: Potential Backrun Profit +${rawProfitStr} USDC`  
                     });  
 
-                    const assignedNonce = await new Promise((resolve) => {
-                        pendingTxPromiseResolver = resolve;
-                        parentPort.postMessage({ type: "REQUEST_NONCE" });
-                    });
+                    // Calculate sealed-bid amount for the validator auction
+                    const bidAmount = (selectedProfit * config.bidProfitPercentage) / 100n;
 
-                    const feeData = await provider.getFeeData();  
-                    const currentBaseFee = feeData.estimatedBaseFee || 180000000000n;  
-                    const maxPriorityFee = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");
-
+                    // Build internal contract transaction payload
                     const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
                     const batchPayload = { 
                         buyRouters: [routerA], 
@@ -234,33 +210,58 @@ if (isMainThread) {
                         deadline: txDeadline 
                     };
 
-                    const txResponse = await contractInstance.executeFlashBatchArbitrage(batchPayload, {
-                        nonce: assignedNonce,
-                        gasLimit: config.gasLimitOverride,
-                        maxFeePerGas: (currentBaseFee * 2n) + maxPriorityFee,
-                        maxPriorityFeePerGas: maxPriorityFee
+                    const callData = contractInstance.interface.encodeFunctionData("executeFlashBatchArbitrage", [batchPayload]);
+
+                    // FastLane Atlas EIP-712 Specification Configuration
+                    const domain = {
+                        name: "FastLaneAtlas",
+                        version: "2",
+                        chainId: 137,
+                        verifyingContract: config.atlasEntryPoint
+                    };
+
+                    const types = {
+                        SolverOperation: [
+                            { name: "targetContract", type: "address" },
+                            { name: "callData", type: "bytes" },
+                            { name: "bidAmount", type: "uint256" },
+                            { name: "deadline", type: "uint256" },
+                            { name: "nonce", type: "uint256" }
+                        ]
+                    };
+
+                    const solverOp = {
+                        targetContract: config.contractAddress,
+                        callData: callData,
+                        bidAmount: bidAmount.toString(),
+                        deadline: txDeadline,
+                        nonce: Date.now()
+                    };
+
+                    // Sign the transaction off-chain via private key
+                    const signature = await executionWallet.signTypedData(domain, types, solverOp);
+
+                    // Compile the final backrunning bundle payload for the main thread relay
+                    const bundle = {
+                        opportunityTx: message.txHash, 
+                        solverOps: [
+                            {
+                                ...solverOp,
+                                signature: signature
+                            }
+                        ]
+                    };
+
+                    parentPort.postMessage({
+                        type: "SUBMIT_FASTLANE_BUNDLE",
+                        opportunityHash: message.txHash,
+                        bundle: bundle
                     });
-
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `📡 ONLINE VAULT EXECUTION DISPATCHED: ${txResponse.hash}`  
-                    });  
-
-                    const receipt = await txResponse.wait(1);  
-
-                    if (receipt.status === 1) {
-                        parentPort.postMessage({ type: "LOG", data: `✨ TRANSACTION SETTLED: Profit captured on-chain.` });
-                        parentPort.postMessage({ type: "PROFIT", amount: parseFloat(rawProfitStr) });
-                    } else {
-                        parentPort.postMessage({ type: "LOG", data: `❌ Transaction Execution Blocked or Nullified (Zero State Revert Protection)` });
-                    }
-                } else {
-                    parentPort.postMessage({ type: "LOG", data: `📡 Scan Completed: No valid raw arbitrage open this block.` });
                 }
             } catch (err) {  
                 parentPort.postMessage({  
                     type: "LOG",  
-                    data: `❌ Evaluation Pipeline Fault: ${err.reason || err.message}`  
+                    data: `❌ Pipeline Error [Shard #${workerId}]: ${err.reason || err.message}`  
                 });
             }  
         }  
