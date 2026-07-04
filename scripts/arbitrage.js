@@ -1,5 +1,3 @@
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -16,8 +14,7 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 /* ================= RPC ================= */
 
 const RPCS = [
-   "https://polygon-bor-rpc.publicnode.com",
-//   "https://polygon-mainnet.core.chainstack.com/46058733cb4d6319063e68f8673791a8",
+    "https://polygon-bor-rpc.publicnode.com",
     // Add more RPCs for redundancy
 ];
 
@@ -70,13 +67,6 @@ const routerAbi = [
 
 const routers = {
     QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
     SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
     Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
     Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
@@ -89,22 +79,10 @@ const routers = {
 const TOKENS = {
     AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
     CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
     QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
     APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
     DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
     LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
     SHIB: "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
     UNI: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
     USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
@@ -150,7 +128,7 @@ const fmt = x => ethers.formatUnits(x, 6);
 
 /* ================= CACHE ================= */
 const quoteCache = new Map();
-const CACHE_TTL = 1000; // 1 second cache TTL
+const CACHE_TTL = 1000; 
 
 function getCachedQuote(router, path) {
     const key = `${router}-${path.join('-')}`;
@@ -164,7 +142,6 @@ function getCachedQuote(router, path) {
 function setCachedQuote(router, path, value) {
     const key = `${router}-${path.join('-')}`;
     quoteCache.set(key, { value, timestamp: Date.now() });
-    // Clean up old cache entries if map gets too large
     if (quoteCache.size > 100000) {
         const now = Date.now();
         for (const [key, entry] of quoteCache) {
@@ -198,7 +175,6 @@ function rebuildContracts() {
 /* ================= QUOTE (with caching) ================= */
 
 async function quote(router, amount, path) {
-    // Check cache first
     const cached = getCachedQuote(router, path);
     if (cached !== undefined) return cached;
 
@@ -208,7 +184,6 @@ async function quote(router, amount, path) {
         setCachedQuote(router, path, result);
         return result;
     } catch {
-        // Cache null results too to avoid repeated failures
         setCachedQuote(router, path, null);
         return null;
     }
@@ -264,7 +239,6 @@ async function findTriangular(router, path) {
 async function parallelScan(paths, routersList) {
     const batchResults = [];
 
-    // Create chunks for parallel scanning
     for (let i = 0; i < paths.length; i += BATCH_SIZE) {
         const pathChunk = paths.slice(i, i + BATCH_SIZE);
         const scanPromises = [];
@@ -277,11 +251,9 @@ async function parallelScan(paths, routersList) {
             }
         }
 
-        // Execute parallel scans with concurrency control
         const results = await Promise.all(scanPromises);
         batchResults.push(...results.filter(r => r !== null));
 
-        // If we have enough trades, break early
         if (batchResults.length >= BATCH_SIZE) {
             break;
         }
@@ -290,7 +262,7 @@ async function parallelScan(paths, routersList) {
     return batchResults.slice(0, BATCH_SIZE);
 }
 
-/* ================= EXECUTE ================= */
+/* ================= EXECUTE (FASTLANE INTEGRATION) ================= */
 
 async function executeBatch(trades) {
     console.log("\n🔥 EXECUTING BATCH");
@@ -313,148 +285,97 @@ async function executeBatch(trades) {
         return;
     }
 
-    const tx = await vault.executeFlashBatchArbitrage({
+    // Encoded contract data block
+    const targetCalldata = vault.interface.encodeFunctionData("executeFlashBatchArbitrage", [{
         buyRouters: trades.map(t => t.router),
         sellRouters: trades.map(t => t.router),
         amountsInUSDC: trades.map(t => t.amountIn),
         pathsToToken: trades.map(t => t.pathToToken),
         pathsToUSDC: trades.map(t => t.pathToUSDC),
         deadline: Math.floor(Date.now() / 1000) + 30
-    });
+    }]);
 
-    await provider.waitForTransaction(tx.hash);
+    const nonce = await provider.getTransactionCount(wallet.address, "latest");
+    const feeData = await provider.getFeeData();
+
+    const txObject = {
+        to: CONTRACT_ADDRESS,
+        data: targetCalldata,
+        nonce: nonce,
+        gasLimit: 800000n, 
+        maxFeePerGas: feeData.maxFeePerGas ?? feeData.gasPrice,
+        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? feeData.gasPrice,
+        chainId: 137, 
+        type: 2
+    };
+
+    const signedTx = await wallet.signTransaction(txObject);
+
+    console.log("📡 Sending Bundle Payload directly to Fastlane Engine...");
+    try {
+        const response = await fetch("https://polygon.fastlane.alpha.validator-cloud.com", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "fastlane_sendBundle",
+                params: [[signedTx], "0"]
+            })
+        });
+
+        const resData = await response.json();
+        if (resData.error) {
+            console.log(`❌ Fastlane Engine Rejected Bundle: ${resData.error.message}`);
+            return;
+        }
+
+        const bundleHash = resData.result;
+        console.log(`🟩 Fastlane Bundle Accepted! Identification Hash: ${bundleHash}`);
+
+        const txHash = ethers.keccak256(signedTx);
+        console.log(`⏳ Monitoring execution confirmation for Tx Hash: ${txHash}`);
+        await provider.waitForTransaction(txHash);
+
+    } catch (err) {
+        console.log(`⚠️ Fastlane Bundle transmission failure: ${err.message}`);
+        return;
+    }
 
     const after = await usdc.balanceOf(CONTRACT_ADDRESS);
-
     const real = after > before ? after - before : 0n;
 
     console.log(`CONTRACT BEFORE ${fmt(before)}`);
     console.log(`CONTRACT AFTER  ${fmt(after)}`);
     console.log(`REAL PROFIT     ${fmt(real)}\n`);
 
-    await topUpGas();}
+    await topUpGas();
+}
 
 /* ================= GAS TOP-UP ================= */
 
 async function topUpGas() {
-
     try {
+        const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+        if (contractBal < WITHDRAW_THRESHOLD) return;
 
-        const contractBal =
-            await usdc.balanceOf(CONTRACT_ADDRESS);
+        const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
+        console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
 
-        if (contractBal < WITHDRAW_THRESHOLD)
-            return;
+        await (await vault.withdraw(amount)).wait();
+        await (await usdc.approve(routers.QuickSwap, amount)).wait();
 
-        const amount =
-            (contractBal * WITHDRAW_PERCENT) / 100n;
+        const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
 
-        console.log(
-            `⚡ GAS TOP-UP ${fmt(amount)} USDC`
-        );
+        await (await router.swapExactTokensForTokens(
+            amount,
+            0,
+            [USDC, TOKENS.WMATIC],
+            wallet.address,
+            Math.floor(Date.now() / 1000) + 120
+        )).wait();
 
-        await (
-    await vault.withdraw(
-        amount
-    )
-       ).wait();
+        console.log("✅ USDC → WMATIC");
 
-        await (
-            await usdc.approve(
-                routers.QuickSwap,
-                amount
-            )
-        ).wait();
-
-        const router =
-            new ethers.Contract(
-                routers.QuickSwap,
-                routerAbi,
-                wallet
-            );
-
-        await (
-            await router.swapExactTokensForTokens(
-                amount,
-                0,
-                [USDC, TOKENS.WMATIC],
-                wallet.address,
-                Math.floor(Date.now() / 1000) + 120
-            )
-        ).wait();
-
-        console.log(
-            "✅ USDC → WMATIC"
-        );
-
-        const wmatic =
-            new ethers.Contract(
-                TOKENS.WMATIC,
-                [
-                    "function withdraw(uint256)",
-                    "function balanceOf(address) view returns(uint256)"
-                ],
-                wallet
-            );
-
-        const bal =
-            await wmatic.balanceOf(
-                wallet.address
-            );
-
-        if (bal > 0n) {
-
-            await (
-                await wmatic.withdraw(bal)
-            ).wait();
-
-            console.log(
-                "🔥 WMATIC → POL"
-            );
-        }
-
-    } catch (e) {
-
-        console.log(
-            `⚠️ GAS TOP-UP FAILED: ${e.message}`
-        );
-    }
-}
-
-
-
-
-
-/* ================= MAIN ================= */
-
-(async function main() {
-    console.log("🚀 BOT STARTED\n");
-
-    provider = newProvider();
-    rebuildContracts();
-
-    const triangularPaths = buildTriangularPaths();
-    const routersList = Object.values(routers);
-
-    let batch = [];
-
-    while (true) {
-        try {
-            // Parallel scanning with caching
-            const trades = await parallelScan(triangularPaths, routersList);
-
-            if (trades.length > 0) {
-                await executeBatch(trades);
-            } else {
-                // Small delay if no profitable trades found
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
-        } catch (error) {
-            console.error("❌ Error in main loop:", error.message);
-            // Reconnect on error
-            provider = newProvider();
-            rebuildContracts();
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-    }
-})();
+        const wmatic = new ethers.Contract(
+            TOKENS.WMATIC,
