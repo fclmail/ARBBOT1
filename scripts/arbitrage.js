@@ -102,4 +102,378 @@ const TOKENS = {
     EURQ: "0xd571edb2ef29df10fcd6200fd6d0ed2389983db3",
     APOLUSDT: "0x6ab707aca953edaefbc4fd23ba73294241490620",
     ENJ: "0x7ec26842f195c852fa843bb9f6d8b583a274a157",
-    ZRX: "0x5559edb74751a0ede9dea4dc23aee72
+    ZRX: "0x5559edb74751a0ede9dea4dc23aee72cca6be3d5",
+    GMT: "0x714db550b574b3e927af3d93e26127d15721d4c2",
+    SNX: "0x50b728d8d964fd00c2d0aad81718b71311fef68a",
+    ANKR: "0x101a023270368c0d50bffb62780f4afd4ea79c35",
+    GLM: "0x0b220b82f3ea3b7f6d9a1d8ab58930c064a2b5bf",
+    COW: "0x2f4efd3aa42e15a1ec6114547151b63ee5d39958",
+    BAND: "0xa8b1e0764f85f53dfe21760e8afe5446d82606ac",
+    AXL: "0x6e4e624106cb12e168e6533f8ec7c82263358940",
+    UMA: "0x3066818837c5e6ed6601bd5a91b0762877a6b731",
+    YFI: "0xda537104d6a5edd53c6fbba9a898708e465260b6",
+    ELON: "0xe0339c80ffde91f3e20494df88d4206d86024cdf",
+    NEXO: "0x41b3966b4ff7b427969ddf5da3627d6aeae9a48e",
+    EURAU: "0x4933A85b5b5466Fbaf179F72D3DE273c287EC2c2",
+    ORDER: "0x4e200fe2f3efb977d5fd9c430a41531fb04d97b8",
+    IOTX: "0xf6372cdb9c1d3674e83842e3800f2a62ac9f3c66",
+    AMP: "0x0621d647cecbfb64b79e44302c1933cb4f27054d",
+    CBK: "0x4EC203dD0699Fac6adAF483CDd2519BC05D2c573",
+    ACX: "0xf328b73b6c685831f238c30a23fc19140cb4d8fc",
+    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
+};
+
+/* ================= HELPERS ================= */
+
+const fmt = x => ethers.formatUnits(x, 6);
+
+/* ================= CACHE ================= */
+const quoteCache = new Map();
+const CACHE_TTL = 1000; // 1 second cache TTL
+
+function getCachedQuote(router, path) {
+    const key = `${router}-${path.join('-')}`;
+    const cached = quoteCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.value;
+    }
+    return undefined;
+}
+
+function setCachedQuote(router, path, value) {
+    const key = `${router}-${path.join('-')}`;
+    quoteCache.set(key, { value, timestamp: Date.now() });
+    if (quoteCache.size > 100000) {
+        const now = Date.now();
+        for (const [key, entry] of quoteCache) {
+            if (now - entry.timestamp > CACHE_TTL) {
+                quoteCache.delete(key);
+            }
+        }
+    }
+}
+
+/* ================= PROVIDER ================= */
+
+function newProvider() {
+    const url = RPCS[rpcIndex];
+    rpcIndex = (rpcIndex + 1) % RPCS.length;
+    return new ethers.JsonRpcProvider(url);
+}
+
+function rebuildContracts() {
+    wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+    vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+    routerContracts = Object.fromEntries(
+        Object.values(routers).map(a => [
+            a,
+            new ethers.Contract(a, routerAbi, provider)
+        ])
+    );
+}
+
+/* ================= QUOTE (with caching) ================= */
+
+async function quote(router, amount, path) {
+    const cached = getCachedQuote(router, path);
+    if (cached !== undefined) return cached;
+
+    try {
+        const out = await routerContracts[router].getAmountsOut(amount, path);
+        const result = out.at(-1);
+        setCachedQuote(router, path, result);
+        return result;
+    } catch {
+        setCachedQuote(router, path, null);
+        return null;
+    }
+}
+
+/* ================= TRIANGULAR PATH BUILDER ================= */
+
+function buildTriangularPaths() {
+    const tokens = Object.values(TOKENS);
+    let paths = [];
+
+    for (const a of tokens) {
+        for (const b of tokens) {
+            if (a === b) continue;
+            paths.push([USDC, a, b, USDC]);
+        }
+    }
+
+    return paths;
+}
+
+/* ================= TRIANGULAR FINDER (parallel) ================= */
+
+async function findTriangular(router, path) {
+    const baseOut1 = await quote(router, BASE_TRADE, [path[0], path[1]]);
+    if (!baseOut1) return null;
+
+    const baseOut2 = await quote(router, baseOut1, [path[1], path[2]]);
+    if (!baseOut2) return null;
+
+    const baseOut3 = await quote(router, baseOut2, [path[2], path[3]]);
+    if (!baseOut3) return null;
+
+    const profit = baseOut3 - BASE_TRADE;
+
+    if (profit <= 0n || profit < MIN_PROFIT) return null;
+
+    console.log(
+        `TRI FOUND ${fmt(BASE_TRADE)} → ${fmt(baseOut3)} PROFIT ${fmt(profit)}`
+    );
+
+    return {
+        router,
+        amountIn: BASE_TRADE,
+        pathToToken: path.slice(0, 3),
+        pathToUSDC: [path[2], USDC],
+        expectedProfit: profit
+    };
+}
+
+/* ================= PARALLEL SCANNER ================= */
+
+async function parallelScan(paths, routersList) {
+    const batchResults = [];
+
+    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+        const pathChunk = paths.slice(i, i + BATCH_SIZE);
+        const scanPromises = [];
+
+        for (const router of routersList) {
+            for (const path of pathChunk) {
+                scanPromises.push(
+                    findTriangular(router, path).catch(() => null)
+                );
+            }
+        }
+
+        const results = await Promise.all(scanPromises);
+        batchResults.push(...results.filter(r => r !== null));
+
+        if (batchResults.length >= BATCH_SIZE) {
+            break;
+        }
+    }
+
+    return batchResults.slice(0, BATCH_SIZE);
+}
+
+/* ================= EXECUTE ================= */
+
+async function executeBatch(trades) {
+    console.log("\n🔥 EXECUTING BATCH");
+
+    const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    let total = 0n;
+    let expected = 0n;
+
+    for (const t of trades) {
+        total += t.amountIn;
+        expected += t.expectedProfit;
+    }
+
+    console.log(`USED CAPITAL ${fmt(total)}`);
+    console.log(`EXPECTED PROFIT ${fmt(expected)}`);
+
+    if (expected < GAS_COST_USDC) {
+        console.log("❌ SKIPPED: BELOW GAS\n");
+        return;
+    }
+
+    const targetCalldata = vault.interface.encodeFunctionData("executeFlashBatchArbitrage", [{
+        buyRouters: trades.map(t => t.router),
+        sellRouters: trades.map(t => t.router),
+        amountsInUSDC: trades.map(t => t.amountIn),
+        pathsToToken: trades.map(t => t.pathToToken),
+        pathsToUSDC: trades.map(t => t.pathToUSDC),
+        deadline: Math.floor(Date.now() / 1000) + 30
+    }]);
+
+    const nonce = await provider.getTransactionCount(wallet.address, "latest");
+    const feeData = await provider.getFeeData();
+
+    const txObject = {
+        to: CONTRACT_ADDRESS,
+        data: targetCalldata,
+        nonce: nonce,
+        gasLimit: 800000n,
+        maxFeePerGas: feeData.maxFeePerGas ?? feeData.gasPrice,
+        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? feeData.gasPrice,
+        chainId: 137,
+        type: 2
+    };
+
+    const signedTx = await wallet.signTransaction(txObject);
+
+    console.log("📡 Sending Bundle Payload directly to Fastlane Engine...");
+    
+    // Set up a native request timeout abort controller (5 seconds)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    try {
+        const response = await fetch("https://polygon.fastlane.live/rpc", {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "fastlane_sendBundle",
+                params: [[signedTx], "0"]
+            })
+        });
+        
+        clearTimeout(timeoutId);
+
+        const resData = await response.json();
+        if (resData.error) {
+            console.log(`❌ Fastlane Engine Rejected Bundle: ${resData.error.message}`);
+            return;
+        }
+
+        const bundleHash = resData.result;
+        console.log(`🟩 Fastlane Bundle Accepted! Identification Hash: ${bundleHash}`);
+
+        const txHash = ethers.keccak256(signedTx);
+        console.log(`⏳ Monitoring execution confirmation for Tx Hash: ${txHash}`);
+        await provider.waitForTransaction(txHash);
+
+    } catch (err) {
+        clearTimeout(timeoutId);
+        console.log(`⚠️ Fastlane Bundle transmission failure: ${err.message}`);
+        return;
+    }
+
+    const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+    const real = after > before ? after - before : 0n;
+
+    console.log(`CONTRACT BEFORE ${fmt(before)}`);
+    console.log(`CONTRACT AFTER  ${fmt(after)}`);
+    console.log(`REAL PROFIT     ${fmt(real)}\n`);
+
+    await topUpGas();
+}
+
+/* ================= GAS TOP-UP ================= */
+
+async function topUpGas() {
+
+    try {
+
+        const contractBal =
+            await usdc.balanceOf(CONTRACT_ADDRESS);
+
+        if (contractBal < WITHDRAW_THRESHOLD)
+            return;
+
+        const amount =
+            (contractBal * WITHDRAW_PERCENT) / 100n;
+
+        console.log(
+            `⚡ GAS TOP-UP ${fmt(amount)} USDC`
+        );
+
+        await (
+    await vault.withdraw(
+        amount
+    )
+       ).wait();
+
+        await (
+            await usdc.approve(
+                routers.QuickSwap,
+                amount
+            )
+        ).wait();
+
+        const router =
+            new ethers.Contract(
+                routers.QuickSwap,
+                routerAbi,
+                wallet
+            );
+
+        await (
+            await router.swapExactTokensForTokens(
+                amount,
+                0,
+                [USDC, TOKENS.WMATIC],
+                wallet.address,
+                Math.floor(Date.now() / 1000) + 120
+            )
+        ).wait();
+
+        console.log(
+            "✅ USDC → WMATIC"
+        );
+
+        const wmatic =
+            new ethers.Contract(
+                TOKENS.WMATIC,
+                [
+                    "function withdraw(uint256)",
+                    "function balanceOf(address) view returns(uint256)"
+                ],
+                wallet
+            );
+
+        const bal =
+            await wmatic.balanceOf(
+                wallet.address
+            );
+
+        if (bal > 0n) {
+
+            await (
+                await wmatic.withdraw(bal)
+            ).wait();
+
+            console.log(
+                "🔥 WMATIC → POL"
+            );
+        }
+
+    } catch (e) {
+
+        console.log(
+            `⚠️ GAS TOP-UP FAILED: ${e.message}`
+        );
+    }
+}
+
+/* ================= MAIN ================= */
+
+(async function main() {
+    console.log("🚀 BOT STARTED\n");
+
+    provider = newProvider();
+    rebuildContracts();
+
+    const triangularPaths = buildTriangularPaths();
+    const routersList = Object.values(routers);
+
+    while (true) {
+        try {
+            const trades = await parallelScan(triangularPaths, routersList);
+
+            if (trades.length > 0) {
+                await executeBatch(trades);
+            } else {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        } catch (error) {
+            console.error("❌ Error in main loop:", error.message);
+            provider = newProvider();
+            rebuildContracts();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+})();
