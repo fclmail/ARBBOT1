@@ -63,7 +63,7 @@ const routerAbi = [
     "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
 ];
 
-/* ================= ROUTERS (Cleaned Duplicates) ================= */
+/* ================= ROUTERS ================= */
 
 const routers = {
     QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -75,7 +75,7 @@ const routers = {
     Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS (Cleaned Duplicates) ================= */
+/* ================= TOKENS ================= */
 
 const TOKENS = {
     AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
@@ -313,12 +313,12 @@ async function executeBatch(trades) {
 
     console.log("📡 Sending Bundle Payload directly to Fastlane Engine...");
     
-    // Set up a native request timeout abort controller (5 seconds)
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
-        const response = await fetch("https://polygon.fastlane.live/rpc", {
+        // Updated to official live mainnet bundle endpoint
+        const response = await fetch("https://polygon-rpc.fastlane.xyz/", {
             method: "POST",
             signal: controller.signal,
             headers: { "Content-Type": "application/json" },
