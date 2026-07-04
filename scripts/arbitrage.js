@@ -129,7 +129,7 @@ const fmt = x => ethers.formatUnits(x, 6);
 
 /* ================= CACHE ================= */
 const quoteCache = new Map();
-const CACHE_TTL = 1000; // 1 second cache TTL
+const CACHE_TTL = 1000;
 
 function getCachedQuote(router, path) {
     const key = `${router}-${path.join('-')}`;
@@ -161,6 +161,7 @@ function newProvider() {
     return new ethers.JsonRpcProvider(url);
 }
 
+// Rebuilds the contract instances when shifting providers or on loop error recovery
 function rebuildContracts() {
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     usdc = new ethers.Contract(USDC, erc20Abi, wallet);
@@ -316,21 +317,32 @@ async function executeBatch(trades) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
+    const jsonBody = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "fastlane_sendBundle",
+        params: [[signedTx], "0"]
+    });
+
     try {
-        // Updated to official live mainnet bundle endpoint
         const response = await fetch("https://polygon-rpc.fastlane.xyz/", {
             method: "POST",
             signal: controller.signal,
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                jsonrpc: "2.0",
-                id: 1,
-                method: "fastlane_sendBundle",
-                params: [[signedTx], "0"]
-            })
+            headers: { 
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (compatible; FastlaneBot/1.0)",
+                "Accept": "application/json",
+                "Content-Length": String(Buffer.byteLength(jsonBody))
+            },
+            body: jsonBody
         });
         
         clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            console.log(`❌ Fastlane Server HTTP Status Error: ${response.status}`);
+            return;
+        }
 
         const resData = await response.json();
         if (resData.error) {
@@ -352,7 +364,6 @@ async function executeBatch(trades) {
     }
 
     const after = await usdc.balanceOf(CONTRACT_ADDRESS);
-
     const real = after > before ? after - before : 0n;
 
     console.log(`CONTRACT BEFORE ${fmt(before)}`);
@@ -365,41 +376,18 @@ async function executeBatch(trades) {
 /* ================= GAS TOP-UP ================= */
 
 async function topUpGas() {
-
     try {
+        const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-        const contractBal =
-            await usdc.balanceOf(CONTRACT_ADDRESS);
+        if (contractBal < WITHDRAW_THRESHOLD) return;
 
-        if (contractBal < WITHDRAW_THRESHOLD)
-            return;
+        const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
+        console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
 
-        const amount =
-            (contractBal * WITHDRAW_PERCENT) / 100n;
+        await (await vault.withdraw(amount)).wait();
+        await (await usdc.approve(routers.QuickSwap, amount)).wait();
 
-        console.log(
-            `⚡ GAS TOP-UP ${fmt(amount)} USDC`
-        );
-
-        await (
-    await vault.withdraw(
-        amount
-    )
-       ).wait();
-
-        await (
-            await usdc.approve(
-                routers.QuickSwap,
-                amount
-            )
-        ).wait();
-
-        const router =
-            new ethers.Contract(
-                routers.QuickSwap,
-                routerAbi,
-                wallet
-            );
+        const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
 
         await (
             await router.swapExactTokensForTokens(
@@ -411,41 +399,26 @@ async function topUpGas() {
             )
         ).wait();
 
-        console.log(
-            "✅ USDC → WMATIC"
+        console.log("✅ USDC → WMATIC");
+
+        const wmatic = new ethers.Contract(
+            TOKENS.WMATIC,
+            [
+                "function withdraw(uint256)",
+                "function balanceOf(address) view returns(uint256)"
+            ],
+            wallet
         );
 
-        const wmatic =
-            new ethers.Contract(
-                TOKENS.WMATIC,
-                [
-                    "function withdraw(uint256)",
-                    "function balanceOf(address) view returns(uint256)"
-                ],
-                wallet
-            );
-
-        const bal =
-            await wmatic.balanceOf(
-                wallet.address
-            );
+        const bal = await wmatic.balanceOf(wallet.address);
 
         if (bal > 0n) {
-
-            await (
-                await wmatic.withdraw(bal)
-            ).wait();
-
-            console.log(
-                "🔥 WMATIC → POL"
-            );
+            await (await wmatic.withdraw(bal)).wait();
+            console.log("🔥 WMATIC → POL");
         }
 
     } catch (e) {
-
-        console.log(
-            `⚠️ GAS TOP-UP FAILED: ${e.message}`
-        );
+        console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
     }
 }
 
