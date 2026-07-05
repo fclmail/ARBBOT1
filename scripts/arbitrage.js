@@ -117,7 +117,6 @@ if (isMainThread) {
         
         provider.on("block", (blockNumber) => {
             resetWatchdog();
-            // Broadcast new block triggering condition to shards if needed
         });
     }
 
@@ -181,7 +180,7 @@ if (isMainThread) {
             const currentNonce = nextAssignedNonce;
             nextAssignedNonce++;
             
-            // Release mutex early now that the structural critical section variables are updated safely
+            // Release mutex early now that structural critical variables are updated safely
             releaseMutex();
 
             // 💰 Profit Validation Check
@@ -189,17 +188,17 @@ if (isMainThread) {
             try {
                 minProfit = await executionContract.minimumProfitUSDC({ timeout: CONFIG.rpcTimeout });
             } catch {
-                minProfit = ethers.utils.parseUnits(CONFIG.fallbackProfitUSDC, 6); // Fallback to 0.01 USDC
+                minProfit = ethers.utils ? ethers.utils.parseUnits(CONFIG.fallbackProfitUSDC, 6) : ethers.parseUnits(CONFIG.fallbackProfitUSDC, 6);
             }
 
-            console.log(`🚀 Dispatching Tx | Nonce: ${currentNonce} | Routes: [${payload.paths.join(" -> ")}] | MinProfit req: ${ethers.utils.formatUnits(minProfit, 6)} USDC`);
+            console.log(`🚀 Dispatching Tx | Nonce: ${currentNonce} | Routes: [${payload.paths.join(" -> ")}]`);
 
             // Gas price Strategy configuration
             const feeData = await provider.getFeeData();
             
             const tx = await executionContract.executeArbitrage(
                 payload.paths,
-                payload.amountIn,
+                payload.amountIn, // Passed cleanly as a plain token value payload string
                 minProfit,
                 {
                     nonce: currentNonce,
@@ -212,12 +211,13 @@ if (isMainThread) {
             const receipt = await tx.wait();
             
             // Parse event log for exact profit tracking
-            const iface = new ethers.utils.Interface(CONTRACT_ABI);
+            const iface = ethers.utils ? new ethers.utils.Interface(CONTRACT_ABI) : new ethers.Interface(CONTRACT_ABI);
             receipt.logs.forEach((log) => {
                 try {
                     const parsedLog = iface.parseLog(log);
                     if (parsedLog.name === "ArbitrageExecuted") {
-                        const profit = parseFloat(ethers.utils.formatUnits(parsedLog.args.profitInUSDC, 6));
+                        const profitRaw = parsedLog.args.profitInUSDC;
+                        const profit = parseFloat(ethers.utils ? ethers.utils.formatUnits(profitRaw, 6) : ethers.formatUnits(profitRaw, 6));
                         totalRealizedProfits += profit;
                         console.log(`✨ Success! Realized Profit: +${profit} USDC | Cumulative: ${totalRealizedProfits.toFixed(6)} USDC`);
                     }
@@ -230,7 +230,6 @@ if (isMainThread) {
             nextAssignedNonce = -1;
         } finally {
             activeInFlightPayloads--;
-            // If the execution failed before entering async yield or after, clean lock loop
             if (mutexLock) releaseMutex();
         }
     }
@@ -260,6 +259,9 @@ if (isMainThread) {
         worker.on("error", (err) => console.error(`🚨 Worker Shard ${index + 1} Error:`, err));
     });
 
+    // Run connection engine
+    initConnection();
+
     process.on("SIGINT", () => {
         console.log("\n🛑 Gracefully shutting down Engine. Cleaning RPC pools...");
         if (provider && provider.destroy) provider.destroy();
@@ -279,13 +281,13 @@ if (isMainThread) {
 
     // High frequency memory scanning imitation loop
     setInterval(() => {
-        // Simulated structural path evaluation derived from its assigned un-duplicated matrix
         const opportunityDetected = Math.random() > 0.98; 
 
         if (opportunityDetected) {
             const executionPayload = {
                 paths: matrix,
-                amountIn: ethers.utils.parseEther("1000") // 1000 MATIC base size
+                // 🔥 FIXED: Direct explicit wei balance declaration string to completely eliminate Worker side library scope calls
+                amountIn: "1000000000000000000000" // 1000 MATIC base size explicitly typed
             };
 
             parentPort.postMessage({
@@ -293,7 +295,7 @@ if (isMainThread) {
                 payload: executionPayload
             });
         }
-    }, 200); // 200ms quick-scan interval ticks
+    }, 200);
 }
 
 export { CONFIG, CONTRACT_ABI, STATIC_POLYGON_NETWORK };
