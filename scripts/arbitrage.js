@@ -1,9 +1,8 @@
 /**
  * ARBBOT1 - High-Velocity Production Execution & Diagnostic Engine
- * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> FastLane Bundle Relay
- * Specification: Ethers v6 Production Build
+ * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> Centralized Broadcast Queue
+ * Specification: Ethers v6 Production Build with Serialized Nonce Tracking
  * Mode: ZERO-REVALIDATION RAW BATCH MATRIX EXECUTION
- * Target: Smart Contract #2 (Hardcoded High-Liquidity Tokens Optimization)
  */
 import { ethers } from "ethers";
 import { Worker, isMainThread, workerData, parentPort } from "worker_threads";
@@ -46,7 +45,6 @@ const CONFIG = {
     deadlineSeconds: 45              
 };
 
-// Smart Contract #2 Updated Complete Minimal Application Binary Interface (ABI)
 const CONTRACT_ABI = [
     "function executeRawBatchArbitrage(address[] calldata buyRouters, address[] calldata sellRouters, uint256[] calldata candidateSizes, address[][] calldata pathsToToken, address[][] calldata pathsToUSDC, uint256 deadline) external returns (uint256)",
     "function minimumProfitUSDC() external view returns (uint256)"
@@ -60,7 +58,7 @@ process.on("uncaughtException", (err) => {
 });
 
 // ============================================================================
-// MAIN ORCHESTRATION THREAD
+// MAIN ORCHESTRATION THREAD (Handles Broadcast Queue & Nonces)
 // ============================================================================
 if (isMainThread) {
     if (!process.env.PRIVATE_KEY) {
@@ -68,9 +66,12 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    console.log("🚀 PRODUCTION RUNNER STARTING: CONFIG BALANCED FOR RAW BATCH MATRIX ARBITRAGE");  
-    console.log(`📡 Target RPC Endpoint: ${CONFIG.fastLaneRpc}`);  
-     
+    console.log("🚀 PRODUCTION RUNNER STARTING: CONCURRENCY BOTTLE-NECK MITIGATION ENGINE");  
+    
+    const fastLaneRelayProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
+    const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);  
+    const vaultInstance = new ethers.Contract(CONFIG.contractAddress, CONTRACT_ABI, executionWallet);
+
     let totalRealizedProfits = 0.0;  
     let workerThreads = [];  
     let mainProvider;  
@@ -80,7 +81,10 @@ if (isMainThread) {
     let activeEngineName = "WebSocket Stream Cluster";  
     let blockWatchdogTimeout;
 
-    // Streamlined allocation across 4 specialized sub-processing matrices
+    // Synchronous execution sequence track parameters
+    let nextAssignedNonce = -1;
+    let activeInFlightPayloads = 0;
+
     const activeSubMatrices = [  
         { id: 1, routers: ["QUICK", "SUSHI", "DFYN"] },
         { id: 2, routers: ["QUICK", "SUSHI", "DFYN"] },
@@ -88,8 +92,62 @@ if (isMainThread) {
         { id: 4, routers: ["QUICK", "SUSHI", "DFYN"] }
     ];  
 
+    // Centralized Single-Signer Execution Controller
+    async function processPayloadBroadcast(payload) {
+        if (activeInFlightPayloads >= CONFIG.maxPendingTransactions) {
+            return; // Drop packet to respect global in-flight limit rules
+        }
+
+        activeInFlightPayloads++;
+        try {
+            if (nextAssignedNonce === -1) {
+                nextAssignedNonce = await executionWallet.getNonce("pending");
+            }
+
+            const currentNonce = nextAssignedNonce;
+            nextAssignedNonce++;
+
+            const txDeadline = Math.floor(Date.now() / 1000) + CONFIG.deadlineSeconds;  
+            
+            const txResponse = await vaultInstance.executeRawBatchArbitrage(  
+                payload.buyRouters,  
+                payload.sellRouters,  
+                CONFIG.candidateSizes.map(size => BigInt(size)),  
+                payload.pathsToToken,  
+                payload.pathsToUSDC,  
+                txDeadline,  
+                {  
+                    gasLimit: CONFIG.gasLimitOverride,  
+                    maxFeePerGas: payload.calculatedMaxFee,  
+                    maxPriorityFeePerGas: payload.calculatedMaxPriority,
+                    nonce: currentNonce
+                }
+            );
+
+            console.log(`🚀 Bundle Broadcast Sent to Fastlane Relay [Nonce #${currentNonce}]: ${txResponse.hash}`);  
+
+            const receipt = await txResponse.wait(CONFIG.blockConfirmConfirmations);  
+            activeInFlightPayloads--;
+
+            if (receipt.status === 1) {  
+                console.log(`✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`);  
+                totalRealizedProfits += 0.0;  
+                console.log(`💰 Combined Metric Realized Capture: +${totalRealizedProfits.toFixed(6)} USDC`);  
+            } else {  
+                console.log(`🔴 On-chain Transaction Reverted: ${txResponse.hash}`);  
+            }  
+
+        } catch (err) {  
+            activeInFlightPayloads--;
+            // If the error implies a bad sequence configuration, force sync on the next cycle
+            if (err.message.includes("nonce") || err.message.includes("limit")) {
+                nextAssignedNonce = -1; 
+            }
+            console.log(`⚠️ Broadcast Exception or Skip [Main Broadcast Engine]: ${err.message}`);  
+        }
+    }
+
     const totalWorkers = activeSubMatrices.length;  
-     
     for (let i = 0; i < totalWorkers; i++) {
         const engineWorker = new Worker(__filename, {  
             workerData: { workerId: activeSubMatrices[i].id, config: CONFIG, matrix: activeSubMatrices[i].routers }  
@@ -98,9 +156,8 @@ if (isMainThread) {
         engineWorker.on("message", (msg) => {  
             if (msg.type === "LOG") {  
                 console.log(msg.data);  
-            } else if (msg.type === "PROFIT") {  
-                totalRealizedProfits += msg.amount;  
-                console.log(`💰 Combined Metric Realized Capture: +${totalRealizedProfits.toFixed(6)} USDC`);  
+            } else if (msg.type === "EXECUTE_BATCH") {  
+                processPayloadBroadcast(msg.payload);
             }  
         });  
         workerThreads.push(engineWorker);  
@@ -189,21 +246,14 @@ if (isMainThread) {
     setTimeout(() => { connectWebSocketStream(); }, 300);  
 
 // ============================================================================
-// COMPONENT WORKER THREAD RUNTREES
+// COMPONENT WORKER THREAD RUNTREES (Calculates parameters asynchronously)
 // ============================================================================
 } else {
     const { workerId, config, matrix } = workerData;
     const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
-    const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);  
-    const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
-     
-    let pendingTransactionsCount = 0;
 
     parentPort.on("message", async (message) => {  
         if (message.type === "BLOCK_TRIGGER") {  
-            if (pendingTransactionsCount >= config.maxPendingTransactions) return;
-
-            // Diagnostic trace tracking local matrix targeting array parameters
             parentPort.postMessage({  
                 type: "LOG",  
                 data: `✅ [Shard #${workerId}] Scanning Matrix Array: [${matrix.join(", ")}] × Hardcoded Liquidity Assets`  
@@ -220,7 +270,6 @@ if (isMainThread) {
                 const pathsToToken = [];
                 const pathsToUSDC = [];
 
-                // FIXED: Fully wrap all cross-asset tokens with getAddress to preserve EIP-55 compliance across shards
                 const coreAssets = [
                     ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"), // WMATIC
                     ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F"), // USDT
@@ -228,7 +277,6 @@ if (isMainThread) {
                     ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619")  // WETH
                 ];
 
-                // Generate real cross-asset combinatorial matrix pipelines
                 for (let b = 0; b < matrix.length; b++) {
                     for (let s = 0; s < matrix.length; s++) {
                         if (b === s) continue;
@@ -237,16 +285,12 @@ if (isMainThread) {
                         const sellRouterAddress = config.routers[matrix[s]];
                         if (!buyRouterAddress || !sellRouterAddress) continue;
 
-                        // Create specific paths across all available liquidity hubs
                         for (const intermediateAsset of coreAssets) {
                             if (intermediateAsset.toLowerCase() === config.usdcAddress.toLowerCase()) continue;
 
                             buyRouters.push(buyRouterAddress);
                             sellRouters.push(sellRouterAddress);
-
-                            // Path A: From USDC to Target Bridge Token
                             pathsToToken.push([config.usdcAddress, intermediateAsset]);
-                            // Path B: From Target Bridge Token back to USDC
                             pathsToUSDC.push([intermediateAsset, config.usdcAddress]);
                         }
                     }
@@ -254,51 +298,23 @@ if (isMainThread) {
 
                 if (buyRouters.length === 0) return;
 
-                const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
-                pendingTransactionsCount++;
-
-                // Zero-Revalidation Raw Batch Pipeline Call sent directly on-chain
-                const txResponse = await vaultInstance.executeRawBatchArbitrage(  
-                    buyRouters,  
-                    sellRouters,  
-                    config.candidateSizes.map(size => BigInt(size)),  
-                    pathsToToken,  
-                    pathsToUSDC,  
-                    txDeadline,  
-                    {  
-                        gasLimit: config.gasLimitOverride,  
-                        maxFeePerGas: calculatedMaxFee,  
-                        maxPriorityFeePerGas: calculatedMaxPriority
+                // Offload compiled payload data to Main Orchestrator Execution Pipeline
+                parentPort.postMessage({
+                    type: "EXECUTE_BATCH",
+                    payload: {
+                        buyRouters,
+                        sellRouters,
+                        pathsToToken,
+                        pathsToUSDC,
+                        calculatedMaxFee,
+                        calculatedMaxPriority
                     }
-                );
-
-                parentPort.postMessage({  
-                    type: "LOG",  
-                    data: `🚀 Bundle Broadcast Sent to Fastlane Relay: ${txResponse.hash}`  
-                });  
-
-                const receipt = await txResponse.wait(config.blockConfirmConfirmations);  
-                pendingTransactionsCount--;
-
-                if (receipt.status === 1) {  
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`  
-                    });  
-                    
-                    parentPort.postMessage({ type: "PROFIT", amount: 0.0 });  
-                } else {  
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `🔴 On-chain Transaction Reverted: ${txResponse.hash}`  
-                    });  
-                }  
+                });
 
             } catch (err) {  
-                pendingTransactionsCount--;  
                 parentPort.postMessage({  
                     type: "LOG",  
-                    data: `⚠️ Broadcast Exception or Skip [Shard #${workerId}]: ${err.message}`  
+                    data: `⚠️ Processing Matrix Assembly Failure [Shard #${workerId}]: ${err.message}`  
                 });  
             }  
         }  
