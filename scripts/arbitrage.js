@@ -12,11 +12,6 @@ const CONFIG = {
     fallbackProfitUSDC: "0.01",
 };
 
-const STATIC_POLYGON_NETWORK = {
-    name: "polygon",
-    chainId: 137,
-};
-
 const CONTRACT_ABI = [
     "function executeArbitrage(address[] paths, uint256 amountIn, uint256 minProfit) external returns (uint256 profit)",
     "function minimumProfitUSDC() external view returns (uint256)",
@@ -93,10 +88,11 @@ if (isMainThread) {
             const wsUrl = WS_ENDPOINTS[currentWsIndex];
             console.log(`📡 Connecting to WS Pool Endpoint [${currentWsIndex}]: ${wsUrl}`);
             try {
-                provider = new ethers.providers.WebSocketProvider(wsUrl, STATIC_POLYGON_NETWORK);
-                await provider.getBlockNumber(); // Test connection
+                // v6 Optimization: Direct instantiation with staticNetwork configuration flag
+                provider = new ethers.WebSocketProvider(wsUrl, undefined, { staticNetwork: true });
+                await provider.getBlockNumber(); 
                 setupWsListeners();
-                initializeExecutionStack();
+                await initializeExecutionStack();
             } catch (err) {
                 console.warn(`⚠️ WS Endpoint [${currentWsIndex}] failed initialization. Rotating...`);
                 currentWsIndex++;
@@ -109,11 +105,13 @@ if (isMainThread) {
     }
 
     function setupWsListeners() {
-        provider._websocket.on("close", () => {
-            console.warn("⚠️ WebSocket disconnected. Triggering failover rotation...");
-            currentWsIndex++;
-            initConnection();
-        });
+        if (provider.websocket) {
+            provider.websocket.onclose = () => {
+                console.warn("⚠️ WebSocket disconnected. Triggering failover rotation...");
+                currentWsIndex++;
+                initConnection();
+            };
+        }
         
         provider.on("block", (blockNumber) => {
             resetWatchdog();
@@ -130,7 +128,8 @@ if (isMainThread) {
     }
 
     function initHttpFallback() {
-        provider = new ethers.providers.JsonRpcProvider(HTTP_ENDPOINT, STATIC_POLYGON_NETWORK);
+        // 🔥 FIXED: Eradicated v5 ethers.providers namespace entirely
+        provider = new ethers.JsonRpcProvider(HTTP_ENDPOINT, undefined, { staticNetwork: true });
         initializeExecutionStack();
         
         // Interval block checking loop
@@ -152,6 +151,7 @@ if (isMainThread) {
         wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
         executionContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
         try {
+            // v6: Wallet/Signer uses getNonce() natively instead of getTransactionCount()
             nextAssignedNonce = await wallet.getNonce("pending");
             console.log(`🟩 Execution Stack live. Base Nonce Tracked: [${nextAssignedNonce}]`);
         } catch (err) {
@@ -180,44 +180,46 @@ if (isMainThread) {
             const currentNonce = nextAssignedNonce;
             nextAssignedNonce++;
             
-            // Release mutex early now that structural critical variables are updated safely
             releaseMutex();
 
-            // 💰 Profit Validation Check
+            // Profit Validation Check
             let minProfit;
             try {
                 minProfit = await executionContract.minimumProfitUSDC({ timeout: CONFIG.rpcTimeout });
             } catch {
-                minProfit = ethers.utils ? ethers.utils.parseUnits(CONFIG.fallbackProfitUSDC, 6) : ethers.parseUnits(CONFIG.fallbackProfitUSDC, 6);
+                minProfit = ethers.parseUnits(CONFIG.fallbackProfitUSDC, 6);
             }
 
             console.log(`🚀 Dispatching Tx | Nonce: ${currentNonce} | Routes: [${payload.paths.join(" -> ")}]`);
 
-            // Gas price Strategy configuration
             const feeData = await provider.getFeeData();
             
+            // v6: Use standard BigInt operators (n suffix) for multipliers
+            const premiumMaxFeePerGas = feeData.maxFeePerGas ? (feeData.maxFeePerGas * 110n) / 100n : undefined;
+            const premiumMaxPriorityFeePerGas = feeData.maxPriorityFeePerGas ? (feeData.maxPriorityFeePerGas * 110n) / 100n : undefined;
+
             const tx = await executionContract.executeArbitrage(
                 payload.paths,
-                payload.amountIn, // Passed cleanly as a plain token value payload string
+                payload.amountIn, 
                 minProfit,
                 {
                     nonce: currentNonce,
-                    maxFeePerGas: feeData.maxFeePerGas?.mul(110).div(100), // 10% premium buffer
-                    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas?.mul(110).div(100),
+                    maxFeePerGas: premiumMaxFeePerGas,
+                    maxPriorityFeePerGas: premiumMaxPriorityFeePerGas,
                     gasLimit: 350000 
                 }
             );
 
             const receipt = await tx.wait();
             
-            // Parse event log for exact profit tracking
-            const iface = ethers.utils ? new ethers.utils.Interface(CONTRACT_ABI) : new ethers.Interface(CONTRACT_ABI);
+            // Parse event log via flat v6 structure
+            const iface = new ethers.Interface(CONTRACT_ABI);
             receipt.logs.forEach((log) => {
                 try {
                     const parsedLog = iface.parseLog(log);
                     if (parsedLog.name === "ArbitrageExecuted") {
                         const profitRaw = parsedLog.args.profitInUSDC;
-                        const profit = parseFloat(ethers.utils ? ethers.utils.formatUnits(profitRaw, 6) : ethers.formatUnits(profitRaw, 6));
+                        const profit = parseFloat(ethers.formatUnits(profitRaw, 6));
                         totalRealizedProfits += profit;
                         console.log(`✨ Success! Realized Profit: +${profit} USDC | Cumulative: ${totalRealizedProfits.toFixed(6)} USDC`);
                     }
@@ -226,7 +228,6 @@ if (isMainThread) {
 
         } catch (err) {
             console.error(`❌ Execution Failed for Nonce ${nextAssignedNonce - 1}:`, err.message);
-            // Re-sync nonce state on failure
             nextAssignedNonce = -1;
         } finally {
             activeInFlightPayloads--;
@@ -236,10 +237,10 @@ if (isMainThread) {
 
     // Shard Matrix Allocator Configuration
     const SHARD_MATRICES = [
-        [ROUTERS.QUICK, ROUTERS.SUSHI],                  // Shard 1: Direct AMM Matrix
-        [ROUTERS.QUICK, ROUTERS.DFYN],                   // Shard 2: Cross AMM Matrix A
-        [ROUTERS.SUSHI, ROUTERS.DFYN],                   // Shard 3: Cross AMM Matrix B
-        [ROUTERS.QUICK, ROUTERS.SUSHI, ROUTERS.DFYN]     // Shard 4: Triangular Route Ring
+        [ROUTERS.QUICK, ROUTERS.SUSHI],                  
+        [ROUTERS.QUICK, ROUTERS.DFYN],                   
+        [ROUTERS.SUSHI, ROUTERS.DFYN],                   
+        [ROUTERS.QUICK, ROUTERS.SUSHI, ROUTERS.DFYN]     
     ];
 
     // Spawn Matrix Shard Workers
@@ -279,15 +280,13 @@ if (isMainThread) {
         data: `🧵 [Shard #${workerId}] Worker initialized and ready | Matrix Allocation Count: [${matrix.length} Node Pairs]`
     });
 
-    // High frequency memory scanning imitation loop
     setInterval(() => {
         const opportunityDetected = Math.random() > 0.98; 
 
         if (opportunityDetected) {
             const executionPayload = {
                 paths: matrix,
-                // 🔥 FIXED: Direct explicit wei balance declaration string to completely eliminate Worker side library scope calls
-                amountIn: "1000000000000000000000" // 1000 MATIC base size explicitly typed
+                amountIn: "1000000000000000000000" // 1000 MATIC explicitly typed string
             };
 
             parentPort.postMessage({
@@ -298,4 +297,4 @@ if (isMainThread) {
     }, 200);
 }
 
-export { CONFIG, CONTRACT_ABI, STATIC_POLYGON_NETWORK };
+export { CONFIG, CONTRACT_ABI };
