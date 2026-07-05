@@ -1,4 +1,3 @@
-
 /**
  * ARBBOT1 - High-Velocity Production Execution & Diagnostic Engine
  * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> FastLane Bundle Relay
@@ -47,7 +46,7 @@ const CONFIG = {
     deadlineSeconds: 45              
 };
 
-// Smart Contract #2 Updated Minimal Application Binary Interface (ABI)
+// Smart Contract #2 Updated Complete Minimal Application Binary Interface (ABI)
 const CONTRACT_ABI = [
     "function executeRawBatchArbitrage(address[] calldata buyRouters, address[] calldata sellRouters, uint256[] calldata candidateSizes, address[][] calldata pathsToToken, address[][] calldata pathsToUSDC, uint256 deadline) external returns (uint256)",
     "function minimumProfitUSDC() external view returns (uint256)"
@@ -71,7 +70,7 @@ if (isMainThread) {
 
     console.log("🚀 PRODUCTION RUNNER STARTING: CONFIG BALANCED FOR RAW BATCH MATRIX ARBITRAGE");  
     console.log(`📡 Target RPC Endpoint: ${CONFIG.fastLaneRpc}`);  
-   
+     
     let totalRealizedProfits = 0.0;  
     let workerThreads = [];  
     let mainProvider;  
@@ -90,7 +89,7 @@ if (isMainThread) {
     ];  
 
     const totalWorkers = activeSubMatrices.length;  
-   
+     
     for (let i = 0; i < totalWorkers; i++) {
         const engineWorker = new Worker(__filename, {  
             workerData: { workerId: activeSubMatrices[i].id, config: CONFIG, matrix: activeSubMatrices[i].routers }  
@@ -121,7 +120,7 @@ if (isMainThread) {
     async function connectWebSocketStream() {  
         if (fallbackTriggered) return;  
         const targetEndpoint = CONFIG.providerWssEndpoints[currentEndpointIndex];  
-         
+           
         try {  
             if (mainProvider) {  
                 try {
@@ -135,12 +134,12 @@ if (isMainThread) {
             }  
 
             mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK);
-           
+             
             if (mainProvider.websocket) {
                 mainProvider.websocket.on("error", () => attemptFallbackRotation());
                 mainProvider.websocket.on("close", () => attemptFallbackRotation());
             }
-             
+               
             isRotating = false;  
             resetBlockWatchdog();
 
@@ -178,7 +177,7 @@ if (isMainThread) {
         }
         activeEngineName = "HTTP Fallback Engine";  
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
-       
+         
         fallbackProvider.on("block", (blockNumber) => {  
             console.log(`\n[${activeEngineName}] 🔍 Scanning Block #${blockNumber} Across Shards...`);
             workerThreads.forEach((worker) => {  
@@ -197,7 +196,7 @@ if (isMainThread) {
     const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
     const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);  
     const vaultInstance = new ethers.Contract(config.contractAddress, CONTRACT_ABI, executionWallet);  
-   
+     
     let pendingTransactionsCount = 0;
 
     parentPort.on("message", async (message) => {  
@@ -210,17 +209,6 @@ if (isMainThread) {
                 data: `✅ [Shard #${workerId}] Scanning Matrix Array: [${matrix.join(", ")}] × Hardcoded Liquidity Assets`  
             });  
 
-            // Simulated logs pattern matching to duplicate structural mock trace variables
-            if (workerId === 1 && message.blockNumber % 2 === 1) {
-                parentPort.postMessage({ type: "LOG", data: `ℹ️ [Shard #1] Matrix Path WMATIC➔USDT liquid but unprofitable.` });
-                parentPort.postMessage({ type: "LOG", data: `ℹ️ [Shard #1] Matrix Path WBTC➔DAI liquid but unprofitable.` });
-                return;
-            }
-            if (workerId === 2 && message.blockNumber % 2 === 1) {
-                parentPort.postMessage({ type: "LOG", data: `❌ [Shard #2 Revert] CRV➔UNI path missing required liquid pool depth.` });
-                return;
-            }
-
             try {  
                 const feeData = await fastLaneRelayProvider.getFeeData();  
                 const currentBaseFee = feeData.estimatedBaseFee || 0n;  
@@ -232,45 +220,45 @@ if (isMainThread) {
                 const pathsToToken = [];
                 const pathsToUSDC = [];
 
-                // Structuring multi-hop linear combinatorial batches
+                // Hardcoded high-liquidity cross-assets target pools matching ecosystem assets
+                const coreAssets = [
+                    ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"), // WMATIC
+                    ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F"), // USDT
+                    ethers.getAddress("0x8f3Cf6ad23Cd3EAD9147012c493ceA23a8919657"), // DAI
+                    ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619")  // WETH
+                ];
+
+                // Generate real cross-asset combinatorial matrix pipelines
                 for (let b = 0; b < matrix.length; b++) {
                     for (let s = 0; s < matrix.length; s++) {
                         if (b === s) continue;
-                       
+
                         const buyRouterAddress = config.routers[matrix[b]];
                         const sellRouterAddress = config.routers[matrix[s]];
-                       
                         if (!buyRouterAddress || !sellRouterAddress) continue;
 
-                        buyRouters.push(buyRouterAddress);
-                        sellRouters.push(sellRouterAddress);
-                       
-                        // Internal targets dynamically wrapped across structural placeholders
-                        pathsToToken.push([config.usdcAddress, config.usdcAddress]);
-                        pathsToUSDC.push([config.usdcAddress, config.usdcAddress]);
+                        // Create specific paths across all available liquidity hubs
+                        for (const intermediateAsset of coreAssets) {
+                            if (intermediateAsset.toLowerCase() === config.usdcAddress.toLowerCase()) continue;
+
+                            buyRouters.push(buyRouterAddress);
+                            sellRouters.push(sellRouterAddress);
+
+                            // Path A: From USDC to Target Bridge Token
+                            pathsToToken.push([config.usdcAddress, intermediateAsset]);
+                            // Path B: From Target Bridge Token back to USDC
+                            pathsToUSDC.push([intermediateAsset, config.usdcAddress]);
+                        }
                     }
                 }
 
                 if (buyRouters.length === 0) return;
 
-                // Explicit programmatic trigger logic targeting trace criteria
-                let trackingAllocation = 500.00;
-                let trackingYield = 14.285104;
-                if (message.blockNumber % 2 === 0 && workerId === 3) {
-                    trackingAllocation = 1000.00;
-                    trackingYield = 38.102945;
-                }
-
-                parentPort.postMessage({  
-                    type: "LOG",  
-                    data: `🔥 PROFITABLE CROSS-ASSET MATRIX DETECTED [Shard #${workerId}]\n├── Target Sequence: USDC ➔ QUICK [WMATIC] ➔ SUSHI [USDT] ➔ DFYN [USDC]\n├── Optimal Input Allocation: ${trackingAllocation.toFixed(6)} USDC\n└── Expected Raw Profit Capture: +${trackingYield.toFixed(6)} USDC`  
-                });  
-
                 const txDeadline = Math.floor(Date.now() / 1000) + config.deadlineSeconds;  
                 pendingTransactionsCount++;
 
                 // Zero-Revalidation Raw Batch Pipeline Call sent directly on-chain
-                vaultInstance.executeRawBatchArbitrage(  
+                const txResponse = await vaultInstance.executeRawBatchArbitrage(  
                     buyRouters,  
                     sellRouters,  
                     config.candidateSizes.map(size => BigInt(size)),  
@@ -282,54 +270,39 @@ if (isMainThread) {
                         maxFeePerGas: calculatedMaxFee,  
                         maxPriorityFeePerGas: calculatedMaxPriority
                     }
-                ).then(async (txResponse) => {
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `🚀 Bundle Broadcast Sent to Fastlane Relay: ${txResponse.hash}`  
-                    });  
+                );
 
-                    const receipt = await txResponse.wait(config.blockConfirmConfirmations);  
-                    pendingTransactionsCount--;
-
-                    if (receipt.status === 1) {  
-                        parentPort.postMessage({  
-                            type: "LOG",  
-                            data: `✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`  
-                        });  
-                        parentPort.postMessage({ type: "PROFIT", amount: trackingYield });  
-                    } else {  
-                        parentPort.postMessage({  
-                            type: "LOG",  
-                            data: `🔴 On-chain Transaction Reverted: ${txResponse.hash}`  
-                        });  
-                    }  
-                }).catch((txError) => {  
-                    pendingTransactionsCount--;  
-                    // Mock fallback logic to populate layout output accurately for testing environments
-                    const dummyHash = workerId === 1 ? "0x4f7ba82c19c533ee18a7b3c27e8d195bb29e8c465a391e63a1094034ef81a562" : "0x9a32c1b4ef653daefcde81a4b523f219198ec4312ab1253a55106723ef45bb12";
-                    parentPort.postMessage({ type: "LOG", data: `🚀 Bundle Broadcast Sent to Fastlane Relay: ${dummyHash}` });  
-                    parentPort.postMessage({ type: "LOG", data: `✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.` });  
-                    parentPort.postMessage({ type: "PROFIT", amount: trackingYield });  
-                });
-
-            } catch (err) {  
                 parentPort.postMessage({  
                     type: "LOG",  
-                    data: `⚠️ Critical Thread Exception [Shard #${workerId}]: ${err.message}`  
-                });
+                    data: `🚀 Bundle Broadcast Sent to Fastlane Relay: ${txResponse.hash}`  
+                });  
+
+                const receipt = await txResponse.wait(config.blockConfirmConfirmations);  
+                pendingTransactionsCount--;
+
+                if (receipt.status === 1) {  
+                    // Parse out custom event if present or read raw static logs
+                    parentPort.postMessage({  
+                        type: "LOG",  
+                        data: `✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`  
+                    });  
+                    
+                    // Simple programmatic profit check: read return parameter from transaction summary or assume success tracking
+                    parentPort.postMessage({ type: "PROFIT", amount: 0.0 });  
+                } else {  
+                    parentPort.postMessage({  
+                        type: "LOG",  
+                        data: `🔴 On-chain Transaction Reverted: ${txResponse.hash}`  
+                    });  
+                }  
+
+            } catch (err) {  
+                pendingTransactionsCount--;  
+                parentPort.postMessage({  
+                    type: "LOG",  
+                    data: `⚠️ Broadcast Exception or Skip [Shard #${workerId}]: ${err.message}`  
+                });  
             }  
         }  
     });  
 }
-
-
-
-
-
-
-
-
-
-
-
-
