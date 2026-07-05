@@ -58,7 +58,7 @@ process.on("uncaughtException", (err) => {
 });
 
 // ============================================================================
-// MAIN ORCHESTRATION THREAD (Handles Broadcast Queue & Nonces)
+// MAIN ORCHESTRATION THREAD (Handles Synchronous Broadcast Queue & Nonces)
 // ============================================================================
 if (isMainThread) {
     if (!process.env.PRIVATE_KEY) {
@@ -94,11 +94,13 @@ if (isMainThread) {
 
     // Centralized Single-Signer Execution Controller
     async function processPayloadBroadcast(payload) {
+        // FIXED: Checked synchronously up front before any async yielding occurs
         if (activeInFlightPayloads >= CONFIG.maxPendingTransactions) {
-            return; // Drop packet to respect global in-flight limit rules
+            return; 
         }
 
         activeInFlightPayloads++;
+        
         try {
             if (nextAssignedNonce === -1) {
                 nextAssignedNonce = await executionWallet.getNonce("pending");
@@ -127,7 +129,6 @@ if (isMainThread) {
             console.log(`🚀 Bundle Broadcast Sent to Fastlane Relay [Nonce #${currentNonce}]: ${txResponse.hash}`);  
 
             const receipt = await txResponse.wait(CONFIG.blockConfirmConfirmations);  
-            activeInFlightPayloads--;
 
             if (receipt.status === 1) {  
                 console.log(`✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`);  
@@ -138,12 +139,14 @@ if (isMainThread) {
             }  
 
         } catch (err) {  
-            activeInFlightPayloads--;
             // If the error implies a bad sequence configuration, force sync on the next cycle
-            if (err.message.includes("nonce") || err.message.includes("limit")) {
+            if (err.message.includes("nonce") || err.message.includes("limit") || err.message.includes("already known")) {
                 nextAssignedNonce = -1; 
             }
             console.log(`⚠️ Broadcast Exception or Skip [Main Broadcast Engine]: ${err.message}`);  
+        } finally {
+            // FIXED: Ensured lock degradation happens immediately inside finally block
+            activeInFlightPayloads--;
         }
     }
 
