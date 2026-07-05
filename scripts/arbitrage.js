@@ -1,12 +1,4 @@
-
-
-
-
-
-
-
-/**  
- * ARBBOT1 - High-Velocity Production Execution & Diagnostic Engine  
+/** * ARBBOT1 - High-Velocity Production Execution & Diagnostic Engine  
  * Architecture: WSS Resilient Stream Pool -> Multi-Thread Worker Cluster -> Centralized Broadcast Queue  
  * Specification: Ethers v6 Production Build with Serialized Nonce Tracking & Mutex Lock  
  * Mode: ZERO-REVALIDATION RAW BATCH MATRIX EXECUTION  
@@ -76,7 +68,7 @@ if (isMainThread) {
 
     console.log("🚀 PRODUCTION RUNNER STARTING: CONCURRENCY BOTTLE-NECK MITIGATION ENGINE");  
     
-    const fastLaneRelayProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
+    const fastLaneRelayProvider = new ethers.JsonRpcProvider(CONFIG.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: true });  
     const executionWallet = new ethers.Wallet(process.env.PRIVATE_KEY, fastLaneRelayProvider);  
     const vaultInstance = new ethers.Contract(CONFIG.contractAddress, CONTRACT_ABI, executionWallet);  
 
@@ -89,13 +81,9 @@ if (isMainThread) {
     let activeEngineName = "WebSocket Stream Cluster";  
     let blockWatchdogTimeout;  
 
-    // Synchronous execution sequence track parameters  
     let nextAssignedNonce = -1;  
     let activeInFlightPayloads = 0;  
 
-    // ========================================================================  
-    // FIX: Mutex Lock for Nonce Serialization  
-    // ========================================================================  
     let mutexLock = false;  
     const txQueue = [];  
     let isProcessingQueue = false;  
@@ -109,16 +97,12 @@ if (isMainThread) {
 
     function releaseMutex() {  
         mutexLock = false;  
-        // Process next in queue if any  
         if (txQueue.length > 0 && !isProcessingQueue) {  
             const nextPayload = txQueue.shift();  
             processPayloadBroadcast(nextPayload);  
         }  
     }  
 
-    // ========================================================================  
-    // FIX: Optimized Shard Matrices with Unique Router Combinations  
-    // ========================================================================  
     const activeSubMatrices = [  
         { id: 1, routers: ["QUICK", "SUSHI"] },  
         { id: 2, routers: ["QUICK", "DFYN"] },  
@@ -126,9 +110,6 @@ if (isMainThread) {
         { id: 4, routers: ["QUICK", "SUSHI", "DFYN"] }  
     ];  
 
-    // ========================================================================  
-    // FIX: Pre-execution Profit Validation  
-    // ========================================================================  
     async function validateProfitThreshold() {  
         try {  
             const onchainMinimum = await vaultInstance.minimumProfitUSDC();  
@@ -142,13 +123,11 @@ if (isMainThread) {
         return CONFIG.minimumProfitThreshold;  
     }  
 
-    // Centralized Single-Signer Execution Controller  
     async function processPayloadBroadcast(payload) {  
-        await acquireMutex(); // FIX: Serialize all entry points  
+        await acquireMutex();  
         
-        // FIX: Queue overflow protection  
         if (activeInFlightPayloads >= CONFIG.maxPendingTransactions) {  
-            if (txQueue.length < 10) { // Limit queue depth  
+            if (txQueue.length < 10) {  
                 txQueue.push(payload);  
                 console.log(`📥 Transaction queued (${txQueue.length} in queue)`);  
             }  
@@ -160,7 +139,6 @@ if (isMainThread) {
         isProcessingQueue = true;  
         
         try {  
-            // FIX: Validate profit threshold before execution  
             const minimumProfit = await validateProfitThreshold();  
             
             if (nextAssignedNonce === -1) {  
@@ -197,7 +175,6 @@ if (isMainThread) {
             if (receipt.status === 1) {  
                 console.log(`✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`);  
                 
-                // FIX: Parse actual profit from event logs  
                 try {  
                     const profitLog = receipt.logs.find(log =>   
                         log.topics[0] === ethers.id("ArbitrageExecuted(uint256,uint256)")  
@@ -220,13 +197,11 @@ if (isMainThread) {
             }  
 
         } catch (err) {  
-            // If the error implies a bad sequence configuration, force sync on the next cycle  
             if (err.message.includes("nonce") || err.message.includes("limit") || err.message.includes("already known")) {  
                 console.log(`🔄 Nonce synchronization issue detected, resetting nonce tracker`);  
                 nextAssignedNonce = -1;   
             }  
             
-            // FIX: Handle specific error codes  
             if (err.code === -32000) {  
                 console.log(`⏳ RPC rate limit hit, backing off...`);  
                 await new Promise(resolve => setTimeout(resolve, 1000));  
@@ -234,7 +209,6 @@ if (isMainThread) {
             
             console.log(`⚠️ Broadcast Exception or Skip [Main Broadcast Engine]: ${err.message.substring(0, 100)}...`);  
         } finally {  
-            // FIX: Ensured lock degradation happens immediately inside finally block  
             activeInFlightPayloads--;  
             isProcessingQueue = false;  
             releaseMutex();  
@@ -285,7 +259,7 @@ if (isMainThread) {
                 } catch (_) {}  
             }  
 
-            mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK);  
+            mainProvider = new ethers.WebSocketProvider(targetEndpoint, STATIC_POLYGON_NETWORK, { staticNetwork: true });  
              
             if (mainProvider.websocket) {  
                 mainProvider.websocket.on("error", () => attemptFallbackRotation());  
@@ -332,10 +306,9 @@ if (isMainThread) {
         }  
         activeEngineName = "HTTP Fallback Engine";  
         console.log(`🔧 Switching to HTTP Polling Fallback Mode`);  
-        const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
+        const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: true });  
         let lastBlockChecked = 0;  
         
-        // Poll every 1.5 seconds for new blocks  
         setInterval(async () => {  
             try {  
                 const currentBlock = await fallbackProvider.getBlockNumber();  
@@ -354,15 +327,13 @@ if (isMainThread) {
         }, 1500);  
     }  
 
-    // Startup sequence  
     setTimeout(() => {   
         console.log(`📡 Initializing WebSocket connection...`);  
         connectWebSocketStream();   
     }, 300);  
 
-    // Graceful shutdown handler  
     process.on('SIGINT', async () => {  
-        console.log('\n🛑 Graceful shutdown initiated...');  
+        console.log('\n🛑 Gracefully shutdown initiated...');  
         clearTimeout(blockWatchdogTimeout);  
         workerThreads.forEach(worker => worker.terminate());  
         if (mainProvider) {  
@@ -379,9 +350,8 @@ if (isMainThread) {
 // ============================================================================  
 } else {  
     const { workerId, config, matrix } = workerData;  
-    const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: STATIC_POLYGON_NETWORK });  
+    const fastLaneRelayProvider = new ethers.JsonRpcProvider(config.fastLaneRpc, STATIC_POLYGON_NETWORK, { staticNetwork: true });  
     
-    // Cache frequently used addresses  
     const cachedAddresses = {  
         usdcAddress: ethers.getAddress(config.usdcAddress.toLowerCase()),  
         coreAssets: [  
@@ -402,7 +372,6 @@ if (isMainThread) {
             });  
 
             try {  
-                // FIX: Add timeout to prevent hanging on fee data fetch  
                 const feeDataPromise = fastLaneRelayProvider.getFeeData();  
                 const timeoutPromise = new Promise((_, reject) =>   
                     setTimeout(() => reject(new Error("Fee data fetch timeout")), 5000)  
@@ -413,7 +382,6 @@ if (isMainThread) {
                 const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
                 const calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;  
 
-                // FIX: Use Set for deduplication of route pairs  
                 const routeSet = new Set();  
                 const buyRouters = [];  
                 const sellRouters = [];  
@@ -431,7 +399,6 @@ if (isMainThread) {
                         for (const intermediateAsset of cachedAddresses.coreAssets) {  
                             if (intermediateAsset.toLowerCase() === cachedAddresses.usdcAddress.toLowerCase()) continue;  
 
-                            // FIX: Create unique route key to prevent duplicates  
                             const routeKey = `${buyRouterAddress}-${sellRouterAddress}-${intermediateAsset}`;  
                             if (routeSet.has(routeKey)) continue;  
                             routeSet.add(routeKey);  
@@ -457,7 +424,6 @@ if (isMainThread) {
                     data: `📊 [Shard #${workerId}] Calculated ${buyRouters.length} route pairs | MaxFee: ${ethers.formatUnits(calculatedMaxFee, "gwei")} Gwei | Priority: ${config.priorityFeeGwei} Gwei`  
                 });  
 
-                // Offload compiled payload data to Main Orchestrator Execution Pipeline  
                 parentPort.postMessage({  
                     type: "EXECUTE_BATCH",  
                     payload: {  
@@ -479,9 +445,7 @@ if (isMainThread) {
                     data: `⚠️ [Shard #${workerId}] Processing Error: ${err.message.substring(0, 150)}`  
                 });  
 
-                // FIX: Re-throw fatal errors to main thread for handling  
                 if (err.message.includes("timeout") || err.message.includes("connection")) {  
-                    // Non-fatal network error, worker will retry on next block  
                     parentPort.postMessage({  
                         type: "LOG",  
                         data: `🔄 [Shard #${workerId}] Network error detected, will retry on next block`  
@@ -491,23 +455,10 @@ if (isMainThread) {
         }  
     });  
 
-    // FIX: Signal worker is ready  
     parentPort.postMessage({  
         type: "LOG",  
-        data: `🧵 [
-
-
-
-
-
-
-
-
         data: `🧵 [Shard #${workerId}] Worker initialized and ready | Matrix: [${matrix.join(", ")}]`  
-    });
-}
+    });  
+}  
 
-// ============================================================================
-// MODULE EXPORTS (For testing/importing purposes)
-// ============================================================================
 export { CONFIG, CONTRACT_ABI, STATIC_POLYGON_NETWORK };
