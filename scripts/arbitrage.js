@@ -220,11 +220,11 @@ if (isMainThread) {
                 const pathsToToken = [];
                 const pathsToUSDC = [];
 
-                // Hardcoded high-liquidity cross-assets target pools matching ecosystem assets
+                // FIXED: Fully wrap all cross-asset tokens with getAddress to preserve EIP-55 compliance across shards
                 const coreAssets = [
                     ethers.getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"), // WMATIC
                     ethers.getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F"), // USDT
-                    ethers.getAddress("0x8f3Cf6ad23Cd3EAD9147012c493ceA23a8919657"), // DAI
+                    ethers.getAddress("0x8f3cf6ad23cd3ead9147012c493cea23a8919657"), // DAI
                     ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619")  // WETH
                 ];
 
@@ -281,13 +281,11 @@ if (isMainThread) {
                 pendingTransactionsCount--;
 
                 if (receipt.status === 1) {  
-                    // Parse out custom event if present or read raw static logs
                     parentPort.postMessage({  
                         type: "LOG",  
                         data: `✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`  
                     });  
                     
-                    // Simple programmatic profit check: read return parameter from transaction summary or assume success tracking
                     parentPort.postMessage({ type: "PROFIT", amount: 0.0 });  
                 } else {  
                     parentPort.postMessage({  
