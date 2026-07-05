@@ -307,11 +307,14 @@ if (isMainThread) {
         activeEngineName = "HTTP Fallback Engine";  
         console.log(`🔧 Switching to HTTP Polling Fallback Mode`);  
         const fallbackProvider = new ethers.JsonRpcProvider(CONFIG.fallbackRpc, STATIC_POLYGON_NETWORK, { staticNetwork: true });  
-        let lastBlockChecked = 0;  
+        let lastBlockChecked = -1;  
         
         setInterval(async () => {  
             try {  
                 const currentBlock = await fallbackProvider.getBlockNumber();  
+                if (lastBlockChecked === -1) {  
+                    lastBlockChecked = currentBlock - 1;  
+                }  
                 if (currentBlock > lastBlockChecked) {  
                     for (let i = lastBlockChecked + 1; i <= currentBlock; i++) {  
                         console.log(`\n[${activeEngineName}] 🔍 Scanning Block #${i} Across Shards...`);  
@@ -333,7 +336,7 @@ if (isMainThread) {
     }, 300);  
 
     process.on('SIGINT', async () => {  
-        console.log('\n🛑 Gracefully shutdown initiated...');  
+        console.log('\n🛑 Graceful shutdown initiated...');  
         clearTimeout(blockWatchdogTimeout);  
         workerThreads.forEach(worker => worker.terminate());  
         if (mainProvider) {  
@@ -368,90 +371,88 @@ if (isMainThread) {
             
             parentPort.postMessage({  
                 type: "LOG",  
-                data: `✅ [Shard #${workerId}] Scanning Block #${blockNumber} | Matrix: [${matrix.join(", ")}] × ${cachedAddresses.coreAssets.length} Liquidity Assets`  
+                data: `✅ [Shard #${workerId}] Scanning Block #${blockNumber} | Matrix: [${matrix.join(", ")}]`  
             });  
+
+            let calculatedMaxFee;  
+            let calculatedMaxPriority;  
 
             try {  
                 const feeDataPromise = fastLaneRelayProvider.getFeeData();  
                 const timeoutPromise = new Promise((_, reject) =>   
-                    setTimeout(() => reject(new Error("Fee data fetch timeout")), 5000)  
+                    setTimeout(() => reject(new Error("Fee data fetch timeout")), 4000)  
                 );  
                 
                 const feeData = await Promise.race([feeDataPromise, timeoutPromise]);  
                 const currentBaseFee = feeData.estimatedBaseFee || 0n;  
-                const calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
-                const calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;  
-
-                const routeSet = new Set();  
-                const buyRouters = [];  
-                const sellRouters = [];  
-                const pathsToToken = [];  
-                const pathsToUSDC = [];  
-
-                for (let b = 0; b < matrix.length; b++) {  
-                    for (let s = 0; s < matrix.length; s++) {  
-                        if (b === s) continue;  
-
-                        const buyRouterAddress = config.routers[matrix[b]];  
-                        const sellRouterAddress = config.routers[matrix[s]];  
-                        if (!buyRouterAddress || !sellRouterAddress) continue;  
-
-                        for (const intermediateAsset of cachedAddresses.coreAssets) {  
-                            if (intermediateAsset.toLowerCase() === cachedAddresses.usdcAddress.toLowerCase()) continue;  
-
-                            const routeKey = `${buyRouterAddress}-${sellRouterAddress}-${intermediateAsset}`;  
-                            if (routeSet.has(routeKey)) continue;  
-                            routeSet.add(routeKey);  
-
-                            buyRouters.push(buyRouterAddress);  
-                            sellRouters.push(sellRouterAddress);  
-                            pathsToToken.push([cachedAddresses.usdcAddress, intermediateAsset]);  
-                            pathsToUSDC.push([intermediateAsset, cachedAddresses.usdcAddress]);  
-                        }  
-                    }  
-                }  
-
-                if (buyRouters.length === 0) {  
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `⚠️ [Shard #${workerId}] No valid route pairs found for current matrix`  
-                    });  
-                    return;  
-                }  
-
-                parentPort.postMessage({  
-                    type: "LOG",  
-                    data: `📊 [Shard #${workerId}] Calculated ${buyRouters.length} route pairs | MaxFee: ${ethers.formatUnits(calculatedMaxFee, "gwei")} Gwei | Priority: ${config.priorityFeeGwei} Gwei`  
-                });  
-
-                parentPort.postMessage({  
-                    type: "EXECUTE_BATCH",  
-                    payload: {  
-                        buyRouters,  
-                        sellRouters,  
-                        pathsToToken,  
-                        pathsToUSDC,  
-                        calculatedMaxFee,  
-                        calculatedMaxPriority,  
-                        workerId,  
-                        blockNumber,  
-                        routesCount: buyRouters.length  
-                    }  
-                });  
+                calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
+                calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;  
 
             } catch (err) {  
+                // RPC congestion fallback logic: Ensure shard keeps emitting batches even if gas endpoints drop  
+                const fallbackBaseFee = ethers.parseUnits("180", "gwei");  
+                calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
+                calculatedMaxFee = (fallbackBaseFee * 2n) + calculatedMaxPriority;  
+
                 parentPort.postMessage({  
                     type: "LOG",  
-                    data: `⚠️ [Shard #${workerId}] Processing Error: ${err.message.substring(0, 150)}`  
+                    data: `🚨 [Shard #${workerId}] Gas Fetch Stalled. Activating Hardcoded Safe-Limits (${ethers.formatUnits(calculatedMaxFee, "gwei")} Gwei)`  
                 });  
+            }  
 
-                if (err.message.includes("timeout") || err.message.includes("connection")) {  
-                    parentPort.postMessage({  
-                        type: "LOG",  
-                        data: `🔄 [Shard #${workerId}] Network error detected, will retry on next block`  
-                    });  
+            // Build structural multi-hop cross matrix routes  
+            const routeSet = new Set();  
+            const buyRouters = [];  
+            const sellRouters = [];  
+            const pathsToToken = [];  
+            const pathsToUSDC = [];  
+
+            for (let b = 0; b < matrix.length; b++) {  
+                for (let s = 0; s < matrix.length; s++) {  
+                    if (b === s) continue;  
+
+                    const buyRouterAddress = config.routers[matrix[b]];  
+                    const sellRouterAddress = config.routers[matrix[s]];  
+                    if (!buyRouterAddress || !sellRouterAddress) continue;  
+
+                    for (const intermediateAsset of cachedAddresses.coreAssets) {  
+                        if (intermediateAsset.toLowerCase() === cachedAddresses.usdcAddress.toLowerCase()) continue;  
+
+                        const routeKey = `${buyRouterAddress}-${sellRouterAddress}-${intermediateAsset}`;  
+                        if (routeSet.has(routeKey)) continue;  
+                        routeSet.add(routeKey);  
+
+                        buyRouters.push(buyRouterAddress);  
+                        sellRouters.push(sellRouterAddress);  
+                        pathsToToken.push([cachedAddresses.usdcAddress, intermediateAsset]);  
+                        pathsToUSDC.push([intermediateAsset, cachedAddresses.usdcAddress]);  
+                    }  
                 }  
             }  
+
+            if (buyRouters.length === 0) {  
+                parentPort.postMessage({  
+                    type: "LOG",  
+                    data: `⚠️ [Shard #${workerId}] No operational routes discovered.`  
+                });  
+                return;  
+            }  
+
+            // Ship compiled atomic block payloads straight to primary orchestrator broadcast queue  
+            parentPort.postMessage({  
+                type: "EXECUTE_BATCH",  
+                payload: {  
+                    buyRouters,  
+                    sellRouters,  
+                    pathsToToken,  
+                    pathsToUSDC,  
+                    calculatedMaxFee,  
+                    calculatedMaxPriority,  
+                    workerId,  
+                    blockNumber,  
+                    routesCount: buyRouters.length  
+                }  
+            });  
         }  
     });  
 
