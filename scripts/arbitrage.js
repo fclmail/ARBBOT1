@@ -85,7 +85,7 @@ if (isMainThread) {
     let activeInFlightPayloads = 0;  
 
     let mutexLock = false;  
-    const txQueue = [];  
+    let txQueue = [];  
     let isProcessingQueue = false;  
 
     async function acquireMutex() {  
@@ -127,9 +127,8 @@ if (isMainThread) {
         await acquireMutex();  
         
         if (activeInFlightPayloads >= CONFIG.maxPendingTransactions) {  
-            if (txQueue.length < 10) {  
+            if (txQueue.length < 5) {  
                 txQueue.push(payload);  
-                console.log(`📥 Transaction queued (${txQueue.length} in queue)`);  
             }  
             releaseMutex();  
             return;   
@@ -139,7 +138,7 @@ if (isMainThread) {
         isProcessingQueue = true;  
         
         try {  
-            const minimumProfit = await validateProfitThreshold();  
+            await validateProfitThreshold();  
             
             if (nextAssignedNonce === -1) {  
                 nextAssignedNonce = await executionWallet.getNonce("pending");  
@@ -174,40 +173,39 @@ if (isMainThread) {
 
             if (receipt.status === 1) {  
                 console.log(`✨ BATCH EXECUTION SUCCESS! On-chain matrix execution finalized.`);  
-                
                 try {  
                     const profitLog = receipt.logs.find(log =>   
                         log.topics[0] === ethers.id("ArbitrageExecuted(uint256,uint256)")  
                     );  
                     if (profitLog) {  
-                        const decodedProfit = ethers.AbiCoder.defaultAbiCoder().decode(  
-                            ["uint256"],  
-                            profitLog.data  
-                        )[0];  
+                        const decodedProfit = ethers.AbiCoder.defaultAbiCoder().decode(["uint256"], profitLog.data)[0];  
                         totalRealizedProfits += decodedProfit;  
                         console.log(`💰 Realized Profit: +${ethers.formatUnits(decodedProfit, 6)} USDC`);  
                     }  
                 } catch (logErr) {  
                     console.log(`⚠️ Could not parse profit from logs: ${logErr.message}`);  
                 }  
-                
                 console.log(`💰 Cumulative Realized Capture: +${ethers.formatUnits(totalRealizedProfits, 6)} USDC`);  
             } else {  
                 console.log(`🔴 On-chain Transaction Reverted: ${txResponse.hash}`);  
             }  
 
         } catch (err) {  
-            if (err.message.includes("nonce") || err.message.includes("limit") || err.message.includes("already known")) {  
-                console.log(`🔄 Nonce synchronization issue detected, resetting nonce tracker`);  
+            const errMsg = err.message || "";  
+            
+            // Critical Fix: Only clear nonce if it is explicitly an underpricing or explicit expiration mismatch
+            if (errMsg.includes("nonce too low") || errMsg.includes("already known")) {  
+                console.log(`🔄 Nonce synchronization alignment triggered, clearing tracker cache`);  
                 nextAssignedNonce = -1;   
+            } else if (errMsg.includes("in-flight transaction limit") || err.code === -32000) {  
+                // Dynamic strategy: If mempool queue limit hit, preserve current tracking nonce state but drop the structural subqueue to break loop congestion
+                console.log(`⏳ Mempool full / Node limit reached. Purging queue backlog (${txQueue.length} dropped) to prioritize next upcoming blocks.`);  
+                txQueue = [];  
+                // Rollback local tracker index by 1 so the next block takes over the exact execution slot cleanly
+                if (nextAssignedNonce > 0) nextAssignedNonce--;  
             }  
             
-            if (err.code === -32000) {  
-                console.log(`⏳ RPC rate limit hit, backing off...`);  
-                await new Promise(resolve => setTimeout(resolve, 1000));  
-            }  
-            
-            console.log(`⚠️ Broadcast Exception or Skip [Main Broadcast Engine]: ${err.message.substring(0, 100)}...`);  
+            console.log(`⚠️ Broadcast Exception or Skip [Main Broadcast Engine]: ${errMsg.substring(0, 120)}...`);  
         } finally {  
             activeInFlightPayloads--;  
             isProcessingQueue = false;  
@@ -389,7 +387,6 @@ if (isMainThread) {
                 calculatedMaxFee = (currentBaseFee * 2n) + calculatedMaxPriority;  
 
             } catch (err) {  
-                // RPC congestion fallback logic: Ensure shard keeps emitting batches even if gas endpoints drop  
                 const fallbackBaseFee = ethers.parseUnits("180", "gwei");  
                 calculatedMaxPriority = ethers.parseUnits(config.priorityFeeGwei.toString(), "gwei");  
                 calculatedMaxFee = (fallbackBaseFee * 2n) + calculatedMaxPriority;  
@@ -400,7 +397,6 @@ if (isMainThread) {
                 });  
             }  
 
-            // Build structural multi-hop cross matrix routes  
             const routeSet = new Set();  
             const buyRouters = [];  
             const sellRouters = [];  
@@ -431,14 +427,9 @@ if (isMainThread) {
             }  
 
             if (buyRouters.length === 0) {  
-                parentPort.postMessage({  
-                    type: "LOG",  
-                    data: `⚠️ [Shard #${workerId}] No operational routes discovered.`  
-                });  
                 return;  
             }  
 
-            // Ship compiled atomic block payloads straight to primary orchestrator broadcast queue  
             parentPort.postMessage({  
                 type: "EXECUTE_BATCH",  
                 payload: {  
