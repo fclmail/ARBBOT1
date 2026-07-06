@@ -32,12 +32,12 @@ if (isMainThread) {
         process.exit(1);
     }
 
+    // 🔄 FIX: Swapped broken endpoint with active, public WebSocket routers for Bor
     const WS_ENDPOINTS = [
-        "wss://polygon-mainnet.g.allifca.com/v3/rpc",
+        "wss://polygon-bor-rpc.publicnode.com",
         "wss://polygon.gateway.tenderly.co",
         "wss://rpc-mainnet.maticvigil.com/ws/v1/rpc",
-        "wss://ws-mainnet.polygon.network",
-        "wss://polygon.rpc.blxrbdn.com"
+        "wss://ws-mainnet.polygon.network"
     ];
     const HTTP_ENDPOINT = "https://polygon-rpc.com";
 
@@ -118,6 +118,15 @@ if (isMainThread) {
             console.log(`📡 Connecting to WS Pool Endpoint [${currentWsIndex}]: ${wsUrl}`);
             try {
                 provider = new ethers.WebSocketProvider(wsUrl, undefined, { staticNetwork: true });
+                
+                // 🛡️ CRITICAL FIX: Explicitly handle immediate socket connection errors 
+                // to prevent unhandled asynchronous events from crashing Node.js
+                if (provider.websocket) {
+                    provider.websocket.onerror = (err) => {
+                        console.warn(`⚠️ WebSocket socket-level error captured: ${err.message || 'Connection refused'}`);
+                    };
+                }
+
                 currentBlockNumber = await provider.getBlockNumber();
                 setupWsListeners();
                 await initializeExecutionStack();
@@ -182,11 +191,9 @@ if (isMainThread) {
         console.log(`🟩 Execution Stack live via Dedicated RPC. Base Nonce Tracked: [${nextAssignedNonce}]`);
     }
 
-    // Robust Send Transaction Wrapper with Mempool Auto-Purge Loop
     async function robustSendTransaction(txOptions, retries = CONFIG.maxStuckNonceRetries) {
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                // Populate structural contract call transaction properties manually 
                 const txData = await executionContract.executeArbitrage.populateTransaction(
                     txOptions.paths,
                     txOptions.amountIn,
@@ -223,27 +230,22 @@ if (isMainThread) {
                         txOptions.nonce = newNonce;
                         nextAssignedNonce = newNonce + 1;
                         
-                        // Recalculate fees for the last-ditch effort
                         const freshFeeData = await provider.getFeeData();
                         txOptions.maxFeePerGas = freshFeeData.maxFeePerGas ? (freshFeeData.maxFeePerGas * 130n) / 100n : undefined;
                         txOptions.maxPriorityFeePerGas = freshFeeData.maxPriorityFeePerGas ? (freshFeeData.maxPriorityFeePerGas * 130n) / 100n : undefined;
 
-                        // Final explicit pass
                         return await robustSendTransaction(txOptions, 1);
                     } else {
-                        // Incremental strategic backoff delay before executing immediate internal loop retry
                         await new Promise(resolve => setTimeout(resolve, 1000));
                     }
                 } else {
-                    throw err; // Escalate non-mempool related operational failures immediately
+                    throw err;
                 }
             }
         }
     }
 
-    // High-Velocity Serialized Execution Router
     async function processPayloadBroadcast(payload) {
-        // Gating Check: Force structural tracking alignment over configured block spacing limits
         if (currentBlockNumber % CONFIG.executionInterval !== 0) {
             return; 
         }
@@ -279,7 +281,7 @@ if (isMainThread) {
             console.log(`🚀 Dispatching Tx Engine Matrix | Nonce: ${currentNonce} | Routes: [${payload.paths.join(" -> ")}]`);
 
             const feeData = await provider.getFeeData();
-            const premiumMaxFeePerGas = feeData.maxFeePerGas ? (feeData.maxFeePerGas * 125n) / 100n : undefined; // Upgraded 25% premium buffer
+            const premiumMaxFeePerGas = feeData.maxFeePerGas ? (feeData.maxFeePerGas * 125n) / 100n : undefined;
             const premiumMaxPriorityFeePerGas = feeData.maxPriorityFeePerGas ? (feeData.maxPriorityFeePerGas * 125n) / 100n : undefined;
 
             const txOptions = {
@@ -319,8 +321,8 @@ if (isMainThread) {
 
     const SHARD_MATRICES = [
         [ROUTERS.QUICK, ROUTERS.SUSHI],                  
-        [ROUTERS.QUICK, ROUTERS.DFYN],                   
-        [ROUTERS.SUSHI, ROUTERS.DFYN],                   
+        [ROUTERS.QUICK, ROUTERS.DFYN],                    
+        [ROUTERS.SUSHI, ROUTERS.DFYN],                    
         [ROUTERS.QUICK, ROUTERS.SUSHI, ROUTERS.DFYN]     
     ];
 
