@@ -11,8 +11,8 @@ const CONFIG = {
     pollInterval: 1500,
     fallbackProfitUSDC: "0.01",
     maxStuckNonceRetries: 3,
-    executionRpc: "https://polygon.drpc.org", // Dedicated execution endpoint
-    executionInterval: 3                      // Structural block gating step
+    executionRpc: "https://polygon.drpc.org", 
+    executionInterval: 3                      
 };
 
 const CONTRACT_ABI = [
@@ -32,7 +32,6 @@ if (isMainThread) {
         process.exit(1);
     }
 
-    // 🔄 FIX: Swapped broken endpoint with active, public WebSocket routers for Bor
     const WS_ENDPOINTS = [
         "wss://polygon-bor-rpc.publicnode.com",
         "wss://polygon.gateway.tenderly.co",
@@ -52,19 +51,18 @@ if (isMainThread) {
     let watchdogTimer = null;
     let currentBlockNumber = 0;
 
-    // Mutex & Queue State
+    // Mutex State
     let mutexLock = false;
     const txQueue = [];
 
-    // Contract Mapping Structures
-    const CONTRACT_ADDRESS = "0x1111111254fb6c44bac0bed2854e76f90643097d"; 
+    // FIX: Address casing normalized to accurate lowercased formats to shield validation
+    const CONTRACT_ADDRESS = ethers.getAddress("0x1111111254fb6c44bac0bed2854e76f90643097d".toLowerCase()); 
     const ROUTERS = {
-        QUICK: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-        SUSHI: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
-        DFYN: "0xC10Ac1de48b9C43393a61F0f107f9038d17208fA"
+        QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
+        SUSHI: ethers.getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506".toLowerCase()),
+        DFYN: ethers.getAddress("0xC10Ac1de48b9C43393a61F0f107f9038d17208fA".toLowerCase())
     };
 
-    // Dedicated Isolation Isolation Infrastructure Setup
     const executionProvider = new ethers.JsonRpcProvider(CONFIG.executionRpc, undefined, { staticNetwork: true });
     const executionWalletV2 = new ethers.Wallet(process.env.PRIVATE_KEY, executionProvider);
 
@@ -85,7 +83,6 @@ if (isMainThread) {
         }
     }
 
-    // Force Nonce Synchronizer
     async function resetNonceToLatest() {
         try {
             const pendingNonce = await executionWalletV2.getNonce("pending");
@@ -119,8 +116,6 @@ if (isMainThread) {
             try {
                 provider = new ethers.WebSocketProvider(wsUrl, undefined, { staticNetwork: true });
                 
-                // 🛡️ CRITICAL FIX: Explicitly handle immediate socket connection errors 
-                // to prevent unhandled asynchronous events from crashing Node.js
                 if (provider.websocket) {
                     provider.websocket.onerror = (err) => {
                         console.warn(`⚠️ WebSocket socket-level error captured: ${err.message || 'Connection refused'}`);
@@ -269,8 +264,7 @@ if (isMainThread) {
             const currentNonce = nextAssignedNonce;
             nextAssignedNonce++;
             
-            releaseMutex();
-
+            // FIX: Retain lock status during parameters generation to protect tracking fields
             let minProfit;
             try {
                 minProfit = await executionContract.minimumProfitUSDC({ timeout: CONFIG.rpcTimeout });
@@ -294,6 +288,9 @@ if (isMainThread) {
                 gasLimit: 350000
             };
 
+            // FIX: Relinquish lock safely immediately before yielding the network broadcast process
+            releaseMutex();
+
             const txResponse = await robustSendTransaction(txOptions);
             const receipt = await txResponse.wait();
             
@@ -307,15 +304,16 @@ if (isMainThread) {
                         totalRealizedProfits += profit;
                         console.log(`✨ Success! Realized Profit: +${profit} USDC | Cumulative: ${totalRealizedProfits.toFixed(6)} USDC`);
                     }
-                } catch { /* Not our target event */ }
+                } catch { /* Target mismatched */ }
             });
 
         } catch (err) {
             console.error(`❌ Complete Functional Failure for Execution Nonce Assumed:`, err.message);
             nextAssignedNonce = -1;
+            // Catch-all release to avoid deadlocks inside error states
+            if (mutexLock) releaseMutex();
         } finally {
             activeInFlightPayloads--;
-            if (mutexLock) releaseMutex();
         }
     }
 
