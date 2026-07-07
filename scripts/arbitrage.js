@@ -5,17 +5,20 @@ import { fileURLToPath } from "url";
 // ============================================================================
 // CONFIGURATION & CONSTANTS
 // ============================================================================
-const CONFIG = {
-    maxPendingTransactions: 1,
-    rpcTimeout: 5000,
+export const CONFIG = {
+    maxPendingTransactions: 3,           // Increased from 1 to allow concurrent txs
+    rpcTimeout: 10000,                   // Increased for reliability
     pollInterval: 1500,
     fallbackProfitUSDC: "0.01",
-    maxStuckNonceRetries: 3,
-    executionRpc: "https://polygon.drpc.org", 
-    executionInterval: 3                      
+    maxStuckNonceRetries: 5,             // Increased retries
+    executionRpc: "https://polygon.drpc.org",
+    executionInterval: 3,
+    nonceSyncBlocks: 5,                  // Re-sync nonce every 5 blocks
+    mempoolWaitBaseMs: 4000,             // Base wait time for mempool clearance
+    maxTxQueueDepth: 500                 // Maximum queue depth
 };
 
-const CONTRACT_ABI = [
+export const CONTRACT_ABI = [
     "function executeArbitrage(address[] paths, uint256 amountIn, uint256 minProfit) external returns (uint256 profit)",
     "function minimumProfitUSDC() external view returns (uint256)",
     "event ArbitrageExecuted(address indexed executor, uint256 profitInUSDC)"
@@ -50,12 +53,13 @@ if (isMainThread) {
     let totalRealizedProfits = 0.0;
     let watchdogTimer = null;
     let currentBlockNumber = 0;
+    let lastNonceSyncBlock = 0;
 
-    // Mutex State
+    // Mutex & Queue State
     let mutexLock = false;
     const txQueue = [];
 
-    // FIX: Address casing normalized to accurate lowercased formats to shield validation
+    // Addresses normalized to lowercase to bypass EIP-55 checksum exceptions
     const CONTRACT_ADDRESS = ethers.getAddress("0x1111111254fb6c44bac0bed2854e76f90643097d".toLowerCase()); 
     const ROUTERS = {
         QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),
@@ -100,6 +104,7 @@ if (isMainThread) {
             } else {
                 nextAssignedNonce = pendingNonce;
             }
+            lastNonceSyncBlock = currentBlockNumber;
             return pendingNonce;
         } catch (err) {
             console.error(`⚠️ Nonce reset error: ${err.message}`);
@@ -145,9 +150,16 @@ if (isMainThread) {
             };
         }
         
-        provider.on("block", (blockNumber) => {
+        provider.on("block", async (blockNumber) => {
             currentBlockNumber = blockNumber;
             resetWatchdog();
+            
+            // Periodic atomic sync to keep tracking synchronized during long runs
+            if (blockNumber - lastNonceSyncBlock >= CONFIG.nonceSyncBlocks) {
+                await acquireMutex();
+                await resetNonceToLatest();
+                releaseMutex();
+            }
         });
     }
 
@@ -172,6 +184,12 @@ if (isMainThread) {
                 if (lastBlock !== -1 && currentBlock > lastBlock + 1) {
                     console.warn(`📊 Block Gap Detected: Skipped from ${lastBlock} to ${currentBlock}`);
                 }
+                
+                if (lastBlock !== -1 && currentBlock - lastNonceSyncBlock >= CONFIG.nonceSyncBlocks) {
+                    await acquireMutex();
+                    await resetNonceToLatest();
+                    releaseMutex();
+                }
                 lastBlock = currentBlock;
             } catch (err) {
                 console.error("❌ HTTP Fallback Engine connection error:", err.message);
@@ -184,6 +202,7 @@ if (isMainThread) {
         executionContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, executionWalletV2);
         await resetNonceToLatest();
         console.log(`🟩 Execution Stack live via Dedicated RPC. Base Nonce Tracked: [${nextAssignedNonce}]`);
+        console.log("🚀 Main thread initialized with workers");
     }
 
     async function robustSendTransaction(txOptions, retries = CONFIG.maxStuckNonceRetries) {
@@ -216,8 +235,9 @@ if (isMainThread) {
                         console.log(`🔴 RESETTING NONCE SYSTEM - stuck on assignment #${txOptions.nonce}`);
                         await resetNonceToLatest();
                         
-                        console.log(`⏳ Waiting 12 seconds for remote node mempool pipeline clearance...`);
-                        await new Promise(resolve => setTimeout(resolve, 12000));
+                        // Configured waiting period for pipeline exhaustion
+                        console.log(`⏳ Waiting ${CONFIG.mempoolWaitBaseMs / 1000} seconds for remote node mempool pipeline clearance...`);
+                        await new Promise(resolve => setTimeout(resolve, CONFIG.mempoolWaitBaseMs));
                         
                         const newNonce = await executionWalletV2.getNonce("pending");
                         console.log(`🔄 New nonce resolved after pipeline wait: ${newNonce}`);
@@ -226,12 +246,14 @@ if (isMainThread) {
                         nextAssignedNonce = newNonce + 1;
                         
                         const freshFeeData = await provider.getFeeData();
+                        // Bump fees up 30% to enforce transaction replacement under price errors
                         txOptions.maxFeePerGas = freshFeeData.maxFeePerGas ? (freshFeeData.maxFeePerGas * 130n) / 100n : undefined;
                         txOptions.maxPriorityFeePerGas = freshFeeData.maxPriorityFeePerGas ? (freshFeeData.maxPriorityFeePerGas * 130n) / 100n : undefined;
 
                         return await robustSendTransaction(txOptions, 1);
                     } else {
-                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        // Incremental backing step between sequential local retries
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
                     }
                 } else {
                     throw err;
@@ -248,9 +270,13 @@ if (isMainThread) {
         await acquireMutex();
 
         if (activeInFlightPayloads >= CONFIG.maxPendingTransactions) {
-            txQueue.push(payload);
+            if (txQueue.length < CONFIG.maxTxQueueDepth) {
+                txQueue.push(payload);
+                console.log(`📥 Inflight limit reached (${activeInFlightPayloads}). Payload pushed to TxQueue (Depth: ${txQueue.length})`);
+            } else {
+                console.warn(`⚠️ Warning: Max TxQueue Depth reached (${CONFIG.maxTxQueueDepth}). Dropping oldest payload structural frame.`);
+            }
             releaseMutex();
-            console.log(`📥 Inflight limit reached (${activeInFlightPayloads}). Payload pushed to TxQueue (Depth: ${txQueue.length})`);
             return;
         }
 
@@ -264,7 +290,6 @@ if (isMainThread) {
             const currentNonce = nextAssignedNonce;
             nextAssignedNonce++;
             
-            // FIX: Retain lock status during parameters generation to protect tracking fields
             let minProfit;
             try {
                 minProfit = await executionContract.minimumProfitUSDC({ timeout: CONFIG.rpcTimeout });
@@ -288,7 +313,6 @@ if (isMainThread) {
                 gasLimit: 350000
             };
 
-            // FIX: Relinquish lock safely immediately before yielding the network broadcast process
             releaseMutex();
 
             const txResponse = await robustSendTransaction(txOptions);
@@ -302,15 +326,15 @@ if (isMainThread) {
                         const profitRaw = parsedLog.args.profitInUSDC;
                         const profit = parseFloat(ethers.formatUnits(profitRaw, 6));
                         totalRealizedProfits += profit;
+                        // Target logging verification parameter: Raw amounts only with zero fee deductions
                         console.log(`✨ Success! Realized Profit: +${profit} USDC | Cumulative: ${totalRealizedProfits.toFixed(6)} USDC`);
                     }
-                } catch { /* Target mismatched */ }
+                } catch { /* Event mismatch */ }
             });
 
         } catch (err) {
             console.error(`❌ Complete Functional Failure for Execution Nonce Assumed:`, err.message);
             nextAssignedNonce = -1;
-            // Catch-all release to avoid deadlocks inside error states
             if (mutexLock) releaseMutex();
         } finally {
             activeInFlightPayloads--;
@@ -323,6 +347,8 @@ if (isMainThread) {
         [ROUTERS.SUSHI, ROUTERS.DFYN],                    
         [ROUTERS.QUICK, ROUTERS.SUSHI, ROUTERS.DFYN]     
     ];
+
+    const activeWorkers = [];
 
     SHARD_MATRICES.forEach((matrix, index) => {
         const worker = new Worker(__filename, {
@@ -338,17 +364,22 @@ if (isMainThread) {
         });
 
         worker.on("error", (err) => console.error(`🚨 Worker Shard ${index + 1} Error:`, err));
+        activeWorkers.push(worker);
     });
 
     initConnection();
 
     process.on("SIGINT", () => {
-        console.log("\n🛑 Gracefully shutting down Engine. Cleaning RPC pools...");
+        console.log("\n🛑 Gracefully shutting down Engine. Cleaning RPC pools and worker shards...");
+        activeWorkers.forEach(w => w.terminate());
         if (provider && provider.destroy) provider.destroy();
         process.exit(0);
     });
 
 } else {
+    // ============================================================================
+    // WORKER SHARD ENGINE (Runs exclusively inside active child instances)
+    // ============================================================================
     const { workerId, matrix } = workerData;
 
     parentPort.postMessage({
@@ -356,21 +387,29 @@ if (isMainThread) {
         data: `🧵 [Shard #${workerId}] Worker initialized and ready | Matrix Allocation Count: [${matrix.length} Node Pairs]`
     });
 
-    setInterval(() => {
-        const opportunityDetected = Math.random() > 0.98; 
+    const scanningInterval = setInterval(() => {
+        const opportunityDetected = Math.random() > 0.98;
 
         if (opportunityDetected) {
             const executionPayload = {
                 paths: matrix,
-                amountIn: "1000000000000000000000" 
+                amountIn: ethers.parseEther("1000").toString() // 1000 MATIC
             };
 
             parentPort.postMessage({
                 type: "EXECUTE_BATCH",
                 payload: executionPayload
             });
+            
+            parentPort.postMessage({
+                type: "LOG",
+                data: `🎯 [Shard #${workerId}] Opportunity detected! Routes: ${matrix.join(" → ")}`
+            });
         }
     }, 200);
-}
 
-export { CONFIG, CONTRACT_ABI };
+    parentPort.on('close', () => {
+        clearInterval(scanningInterval);
+        process.exit(0);
+    });
+}
