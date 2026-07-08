@@ -11,7 +11,7 @@ export const CONFIG = {
     pollInterval: 1500,
     fallbackProfitUSDC: "0.01",
     maxStuckNonceRetries: 5,             // Increased retries
-    executionRpc: "https://polygon-bor-rpc.publicnode.com",
+    executionRpc: "https://polygon.drpc.org",
     executionInterval: 3,
     nonceSyncBlocks: 5,                  // Re-sync nonce every 5 blocks
     mempoolWaitBaseMs: 4000,             // Base wait time for mempool clearance
@@ -112,6 +112,83 @@ if (isMainThread) {
         }
     }
 
+    // ============================================================================
+    // CRITICAL FIX: Force nonce past stuck transactions
+    // ============================================================================
+    async function forceNoncePastMempool() {
+        console.log("🔧 FORCING nonce advancement past mempool blockage...");
+        
+        const pendingNonce = await executionWalletV2.getNonce("pending");
+        const latestNonce = await executionWalletV2.getNonce("latest");
+        
+        console.log(`📊 Chain State - Pending: ${pendingNonce}, Latest: ${latestNonce}`);
+        
+        if (pendingNonce === latestNonce) {
+            console.log("✅ No stuck transactions detected");
+            nextAssignedNonce = pendingNonce;
+            return pendingNonce;
+        }
+        
+        console.log(`⚠️ Stuck tx detected at nonce ${latestNonce}`);
+        console.log(`🔄 First available nonce: ${pendingNonce}`);
+        
+        try {
+            const stuckTx = await executionProvider.getTransaction({
+                from: wallet.address,
+                nonce: latestNonce
+            });
+            
+            if (stuckTx && stuckTx.blockNumber === null) {
+                const txTime = stuckTx.timestamp ? stuckTx.timestamp * 1000 : Date.now();
+                const ageSeconds = Math.floor((Date.now() - txTime) / 1000);
+                console.log(`⏳ Transaction at nonce ${latestNonce} is still pending (${ageSeconds}s old)`);
+                
+                if (Date.now() - txTime > 30000) {
+                    console.log("🔴 Transaction stuck > 30s, attempting cancel...");
+                    await cancelStuckTransaction(latestNonce);
+                    return nextAssignedNonce;
+                }
+            }
+        } catch (err) {
+            console.log(`ℹ️ Cannot fetch stuck tx details: ${err.message}`);
+        }
+        
+        nextAssignedNonce = pendingNonce;
+        return pendingNonce;
+    }
+
+    async function cancelStuckTransaction(stuckNonce) {
+        try {
+            const feeData = await executionProvider.getFeeData();
+            
+            const cancelTx = {
+                to: wallet.address, 
+                value: 0,
+                nonce: stuckNonce,
+                maxFeePerGas: feeData.maxFeePerGas ? (feeData.maxFeePerGas * 200n) / 100n : undefined, 
+                maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ? (feeData.maxPriorityFeePerGas * 200n) / 100n : undefined,
+                gasLimit: 21000
+            };
+            
+            console.log(`📤 Sending cancel tx for nonce ${stuckNonce}...`);
+            const response = await executionWalletV2.sendTransaction(cancelTx);
+            console.log(`✅ Cancel tx sent: ${response.hash}`);
+            
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            
+            const newPending = await executionWalletV2.getNonce("pending");
+            console.log(`📊 After cancel - Pending: ${newPending}`);
+            
+            nextAssignedNonce = newPending;
+            return newPending;
+            
+        } catch (err) {
+            console.error(`❌ Cancel failed: ${err.message}`);
+            nextAssignedNonce = stuckNonce + 1;
+            return stuckNonce + 1;
+        }
+    }
+
     async function initConnection() {
         if (watchdogTimer) clearTimeout(watchdogTimer);
         
@@ -154,7 +231,6 @@ if (isMainThread) {
             currentBlockNumber = blockNumber;
             resetWatchdog();
             
-            // Periodic atomic sync to keep tracking synchronized during long runs
             if (blockNumber - lastNonceSyncBlock >= CONFIG.nonceSyncBlocks) {
                 await acquireMutex();
                 await resetNonceToLatest();
@@ -233,26 +309,23 @@ if (isMainThread) {
                     
                     if (attempt === retries) {
                         console.log(`🔴 RESETTING NONCE SYSTEM - stuck on assignment #${txOptions.nonce}`);
-                        await resetNonceToLatest();
+                        await forceNoncePastMempool();
                         
-                        // Configured waiting period for pipeline exhaustion
                         console.log(`⏳ Waiting ${CONFIG.mempoolWaitBaseMs / 1000} seconds for remote node mempool pipeline clearance...`);
                         await new Promise(resolve => setTimeout(resolve, CONFIG.mempoolWaitBaseMs));
                         
-                        const newNonce = await executionWalletV2.getNonce("pending");
+                        const newNonce = nextAssignedNonce;
                         console.log(`🔄 New nonce resolved after pipeline wait: ${newNonce}`);
                         
                         txOptions.nonce = newNonce;
                         nextAssignedNonce = newNonce + 1;
                         
                         const freshFeeData = await provider.getFeeData();
-                        // Bump fees up 30% to enforce transaction replacement under price errors
                         txOptions.maxFeePerGas = freshFeeData.maxFeePerGas ? (freshFeeData.maxFeePerGas * 130n) / 100n : undefined;
                         txOptions.maxPriorityFeePerGas = freshFeeData.maxPriorityFeePerGas ? (freshFeeData.maxPriorityFeePerGas * 130n) / 100n : undefined;
 
                         return await robustSendTransaction(txOptions, 1);
                     } else {
-                        // Incremental backing step between sequential local retries
                         await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
                     }
                 } else {
@@ -326,10 +399,9 @@ if (isMainThread) {
                         const profitRaw = parsedLog.args.profitInUSDC;
                         const profit = parseFloat(ethers.formatUnits(profitRaw, 6));
                         totalRealizedProfits += profit;
-                        // Target logging verification parameter: Raw amounts only with zero fee deductions
                         console.log(`✨ Success! Realized Profit: +${profit} USDC | Cumulative: ${totalRealizedProfits.toFixed(6)} USDC`);
                     }
-                } catch { /* Event mismatch */ }
+                } catch { /* Mismatch log entry */ }
             });
 
         } catch (err) {
@@ -378,7 +450,7 @@ if (isMainThread) {
 
 } else {
     // ============================================================================
-    // WORKER SHARD ENGINE (Runs exclusively inside active child instances)
+    // WORKER CODE - Only runs in worker threads
     // ============================================================================
     const { workerId, matrix } = workerData;
 
