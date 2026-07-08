@@ -11,7 +11,7 @@ export const CONFIG = {
     pollInterval: 1500,  
     fallbackProfitUSDC: "0.01",  
     maxStuckNonceRetries: 5,             // Increased retries  
-    executionRpc: "wss://polygon-bor-rpc.publicnode.com",  
+    executionRpc: "https://polygon-bor-rpc.publicnode.com",  
      // ✅ FIXED: Changed from polygon.drpc.org  
     executionInterval: 3,  
     nonceSyncBlocks: 5,                  // Re-sync nonce every 5 blocks  
