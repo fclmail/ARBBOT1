@@ -11,7 +11,7 @@ export const CONFIG = {
     pollInterval: 1500,
     fallbackProfitUSDC: "0.01",
     maxStuckNonceRetries: 5,             // Increased retries
-    executionRpc: "https://polygon.drpc.org",
+    executionRpc: "https://polygon-bor-rpc.publicnode.com",
     executionInterval: 3,
     nonceSyncBlocks: 5,                  // Re-sync nonce every 5 blocks
     mempoolWaitBaseMs: 4000,             // Base wait time for mempool clearance
