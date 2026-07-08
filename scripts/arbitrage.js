@@ -490,7 +490,7 @@ if (isMainThread) {
 
 
 
-
+/*
 // fix-nonce.js
 import { ethers } from "ethers";
 
@@ -584,3 +584,4 @@ fix().catch((err) => {
     console.error("❌ Error:", err.message);
     process.exit(1);
 });
+*/
