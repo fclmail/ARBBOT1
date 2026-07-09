@@ -23,7 +23,7 @@ const CONFIG = {
         USDC: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),  
         WETH: getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),  
         WMATIC: getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),  
-        DAI: getAddress("0x8f3Cf7aD23Cd3CaDeA96143C01F6f155802654e5a"),  
+        DAI: "0x8f3Cf7aD23Cd3CaDeA96143C01F6f155802654e5a9",  
         USDT: getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")  
     },  
 
