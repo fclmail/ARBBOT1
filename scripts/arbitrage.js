@@ -2,9 +2,10 @@
  * ARBBOT1 - Production Node.js Engine
  * Network: Polygon (POSIX)
  * Architecture: Zero-Revalidation Matrix Flash Batch Executor
+ * Version: Ethers v6 Direct Modules + ES Modules Compatible
  */
 
-import { ethers } from "ethers";
+import { Wallet, Contract, JsonRpcProvider, WebSocketProvider, parseUnits, formatUnits } from "ethers";
 
 // ==========================================
 // 1. CONFIGURATION & ENVIRONMENT SETUP
@@ -64,12 +65,14 @@ let txTimeoutTracker = null;
 
 async function initialize() {
     console.log("📡 Connecting Matrix Engine via WebSockets...");
-    providerWss = new ethers.providers.WebSocketProvider(CONFIG.WSS_RPC);
-    providerHttp = new ethers.providers.JsonRpcProvider(CONFIG.HTTP_RPC);
     
-    wallet = new ethers.Wallet(CONFIG.PRIVATE_KEY, providerHttp);
-    enforcerContract = new ethers.Contract(CONFIG.CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
-    usdcContract = new ethers.Contract(CONFIG.USDC_ADDRESS, ERC20_ABI, wallet);
+    // Direct modular instantiation avoiding any namespaces property lookup collisions
+    providerWss = new WebSocketProvider(CONFIG.WSS_RPC);
+    providerHttp = new JsonRpcProvider(CONFIG.HTTP_RPC);
+    
+    wallet = new Wallet(CONFIG.PRIVATE_KEY, providerHttp);
+    enforcerContract = new Contract(CONFIG.CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
+    usdcContract = new Contract(CONFIG.USDC_ADDRESS, ERC20_ABI, wallet);
 
     // Sync baseline nonce directly from node transaction pool
     currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
@@ -96,7 +99,7 @@ async function initialize() {
     });
 
     // WSS Health check / Keep-Alive reconnection pattern
-    providerWss._websocket.on("close", () => {
+    providerWss.websocket.on("close", () => {
         console.error("🔴 WebSocket disconnected! Re-establishing interface immediately...");
         setTimeout(initialize, 3000);
     });
@@ -113,15 +116,14 @@ function generateMatrixPayloads() {
     const pathsToUSDC = [];
 
     const routersList = Object.values(CONFIG.ROUTERS);
-    // Expand core routes across multi-hop assets restored: USDT, WETH, WMATIC, DAI
     const targetIntermediateTokens = [CONFIG.TOKENS.WETH, CONFIG.TOKENS.WMATIC, CONFIG.TOKENS.DAI, CONFIG.TOKENS.USDT].filter(Boolean);
 
-    // Common inputs for this optimization (e.g. 500 USDC or 1000 USDC allocations)
-    const testAmounts = [ethers.utils.parseUnits("500", 6)]; 
+    // Named modular parser hook
+    const testAmounts = [parseUnits("500", 6)]; 
 
     for (const buyRouter of routersList) {
         for (const sellRouter of routersList) {
-            if (buyRouter === sellRouter) continue; // Must be a cross-dex discrepancy
+            if (buyRouter === sellRouter) continue;
 
             for (const intermediateToken of targetIntermediateTokens) {
                 for (const amount of testAmounts) {
@@ -130,16 +132,13 @@ function generateMatrixPayloads() {
                     sellRouters.push(sellRouter);
                     amountsInUSDC.push(amount);
                     
-                    // Route 1: Base USDC -> Target Volatile Asset
                     pathsToToken.push([CONFIG.TOKENS.USDC, intermediateToken]);
-                    // Route 2: Target Volatile Asset -> Base USDC
                     pathsToUSDC.push([intermediateToken, CONFIG.TOKENS.USDC]);
                 }
             }
         }
     }
 
-    // Chunk size limiting implementation to prevent Gas Limit Rejections on Polygon
     const chunks = [];
     for (let i = 0; i < buyRouters.length; i += CONFIG.BATCH_SIZE_LIMIT) {
         chunks.push({
@@ -148,7 +147,7 @@ function generateMatrixPayloads() {
             amountsInUSDC: amountsInUSDC.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
             pathsToToken: pathsToToken.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
             pathsToUSDC: pathsToUSDC.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
-            deadline: Math.floor(Date.now() / 1000) + 120
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 120)
         });
     }
 
@@ -164,12 +163,10 @@ async function processBlockMatrix(blockNumber) {
     const batches = generateMatrixPayloads();
     if (batches.length === 0) return;
 
-    // Fetch optimal gas conditions dynamically to compete with public mempool frontrunners
     const feeData = await providerHttp.getFeeData();
-    const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ? feeData.maxPriorityFeePerGas.mul(2) : ethers.utils.parseUnits("40", "gwei");
-    const maxFeePerGas = feeData.maxFeePerGas ? feeData.maxFeePerGas.add(maxPriorityFeePerGas) : ethers.utils.parseUnits("200", "gwei");
+    const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ? feeData.maxPriorityFeePerGas * 2n : parseUnits("40", "gwei");
+    const maxFeePerGas = feeData.maxFeePerGas ? feeData.maxFeePerGas + maxPriorityFeePerGas : parseUnits("200", "gwei");
 
-    // Zero-Revalidation Pattern: Directly dispatch top execution batches to the network without off-chain simulation
     for (let i = 0; i < Math.min(batches.length, 2); i++) {
         const currentBatch = batches[i];
         const targetNonce = currentNonce;
@@ -177,32 +174,27 @@ async function processBlockMatrix(blockNumber) {
         console.log(`🚀 Sending Batch Structure #${i+1} to Fastlane Engine via Nonce #${targetNonce}`);
 
         try {
-            // Build the transaction options payload
             const txOptions = {
                 nonce: targetNonce,
                 maxPriorityFeePerGas,
                 maxFeePerGas,
-                gasLimit: 3000000 // Fixed structural cap for batch transactions
+                gasLimit: 3000000n
             };
 
-            // Call structural array payload inside smart contract execution interface
             const txPromise = enforcerContract.executeFlashBatchArbitrage(currentBatch, txOptions);
-            
-            currentNonce++; // Proactively step the local variable ahead to prevent immediate collisions
+            currentNonce++; 
 
-            // Start the stale transaction watchdog timer to prevent system freeze at this nonce number
             startWatchdog(targetNonce, txOptions);
 
             const tx = await txPromise;
             console.log(`✨ Transaction Dispatched! Hash: ${tx.hash}`);
 
-            // Wait for receipt in background thread
             tx.wait().then((receipt) => {
                 clearWatchdog();
                 if (receipt.status === 1) {
                     console.log(`✅ Transaction Confirmed inside block ${receipt.blockNumber}`);
                 } else {
-                    console.log(`🔴 On-chain Transaction Reverted: ${receipt.transactionHash}`);
+                    console.log(`🔴 On-chain Transaction Reverted: ${receipt.hash}`);
                 }
             }).catch((err) => {
                 clearWatchdog();
@@ -211,7 +203,6 @@ async function processBlockMatrix(blockNumber) {
 
         } catch (txError) {
             console.error(`❌ Batch pipeline transmission failed at runtime:`, txError.message);
-            // Sync up nonce state accurately on unrecoverable failures
             currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
             clearWatchdog();
             break;
@@ -229,24 +220,22 @@ function startWatchdog(stuckNonce, originalTxOptions) {
         console.warn(`🚨 [CRITICAL ALERT] Nonce #${stuckNonce} stuck for more than ${CONFIG.STUCK_TX_TIMEOUT_MS / 1000}s! FORCING nonce advancement past mempool blockage...`);
         
         try {
-            // Construct aggressive speed replacement options package (50% bump minimum)
-            const rescueGasPrice = originalTxOptions.maxFeePerGas.mul(15).div(10);
-            const rescuePriorityPrice = originalTxOptions.maxPriorityFeePerGas.mul(15).div(10);
+            const rescueGasPrice = (originalTxOptions.maxFeePerGas * 15n) / 10n;
+            const rescuePriorityPrice = (originalTxOptions.maxPriorityFeePerGas * 15n) / 10n;
 
             console.log(`⚡ Sending Empty Speed-Up Cancel Transaction for Nonce #${stuckNonce}...`);
             const cancelTx = await wallet.sendTransaction({
                 to: wallet.address,
-                value: 0,
+                value: 0n,
                 nonce: stuckNonce,
                 maxFeePerGas: rescueGasPrice,
                 maxPriorityFeePerGas: rescuePriorityPrice,
-                gasLimit: 21000
+                gasLimit: 21000n
             });
 
             await cancelTx.wait();
             console.log(`♻️ Successfully cleared roadblock at Nonce #${stuckNonce}. Mempool cleared.`);
             
-            // Re-sync authoritative nonces from ledger indexers
             currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
         } catch (rescueError) {
             console.error(`❌ Nonce force advancement failed:`, rescueError.message);
@@ -255,6 +244,7 @@ function startWatchdog(stuckNonce, originalTxOptions) {
     }, CONFIG.STUCK_TX_TIMEOUT_MS);
 }
 
+// Helper reset loop
 function clearWatchdog() {
     if (txTimeoutTracker) {
         clearTimeout(txTimeoutTracker);
@@ -266,12 +256,8 @@ function clearWatchdog() {
 // 7. EVENT DECODER & RAW PROFIT LOGGER
 // ==========================================
 function setupLogListeners() {
-    // Subscribes directly to logs emitted from the deployed target enforcer contract instance
     enforcerContract.on("ArbitrageExecuted", (buyRouter, sellRouter, token, amountInUSDC, beforeBal, afterBal, profitUSDC) => {
-        // Formats the metric out into readable raw parameters directly matching standard token layout
-        const formattedProfit = ethers.utils.formatUnits(profitUSDC, 6);
-        
-        // Command Mandate Check: Raw amounts only - no deductions for gas or other fees displayed.
+        const formattedProfit = formatUnits(profitUSDC, 6);
         console.log(`💰 Combined Metric Realized Capture: +${formattedProfit} USDC`);
     });
 }
