@@ -11,14 +11,16 @@ import { Wallet, Contract, JsonRpcProvider, WebSocketProvider, parseUnits, forma
 // 1. CONFIGURATION & ENVIRONMENT SETUP
 // ==========================================
 const CONFIG = {
-    WSS_RPC: "wss://polygon-bor-rpc.publicnode.com", // Replace with your private low-latency WSS provider if available
+    WSS_RPC: "wss://polygon-bor-rpc.publicnode.com", 
     HTTP_RPC: "https://polygon-bor-rpc.publicnode.com",
-    FASTLANE_RELAY: "https://bor.fastlane.xyz", // FastLane MEV bundle validator endpoint
-    PRIVATE_KEY: "0x0000000000000000000000000000000000000000000000000000000000000000", // Your deployer/owner private key
-    CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000000", // VaultArbitrageEnforcer address
-    USDC_ADDRESS: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",     // Polygon Bridged USDC
+    FASTLANE_RELAY: "https://bor.fastlane.xyz", 
     
-    // Core Matrix Target Assets (Restored Multi-Hop Paths)
+    // Fallback placeholder string check - checks process.env first for secure production pipeline usage
+    PRIVATE_KEY: process.env.PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000000", 
+    
+    CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000000", // VaultArbitrageEnforcer address
+    USDC_ADDRESS: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",     
+    
     TOKENS: {
         USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
         WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
@@ -27,15 +29,14 @@ const CONFIG = {
         USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
     },
 
-    // Dex Routers for Matrix Generation
     ROUTERS: {
         QUICK_SWAP: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
         SUSHI_SWAP: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
         DFYN: "0xF184565860993a467c745cc7d04e17849B3bc04A"
     },
 
-    BATCH_SIZE_LIMIT: 25, // Split massive matrices into small safe payloads to stay within block gas limits
-    STUCK_TX_TIMEOUT_MS: 4000 // 4 seconds before triggering force-advancement nonce logic
+    BATCH_SIZE_LIMIT: 25, 
+    STUCK_TX_TIMEOUT_MS: 4000 
 };
 
 // ==========================================
@@ -66,7 +67,11 @@ let txTimeoutTracker = null;
 async function initialize() {
     console.log("📡 Connecting Matrix Engine via WebSockets...");
     
-    // Direct modular instantiation avoiding any namespaces property lookup collisions
+    // Explicit Guard against zero-key crashes inside deployment routines
+    if (CONFIG.PRIVATE_KEY.replace("0x", "").replace(/0/g, "") === "") {
+        throw new Error("❌ Fatal: Valid PRIVATE_KEY must be supplied via configuration string or GitHub Action Secrets environment variable.");
+    }
+
     providerWss = new WebSocketProvider(CONFIG.WSS_RPC);
     providerHttp = new JsonRpcProvider(CONFIG.HTTP_RPC);
     
@@ -74,14 +79,11 @@ async function initialize() {
     enforcerContract = new Contract(CONFIG.CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new Contract(CONFIG.USDC_ADDRESS, ERC20_ABI, wallet);
 
-    // Sync baseline nonce directly from node transaction pool
     currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
     console.log(`🌐 PRODUCTION MATRIX ENGINE OPERATIONAL. Initial Wallet Nonce: [${currentNonce}]`);
 
-    // Monitor for successful trade completions to look for logs
     setupLogListeners();
 
-    // Begin Block Pipeline Subscription Loop
     providerWss.on("block", async (blockNumber) => {
         if (isProcessingBlock) {
             console.log(`⏳ Block #${blockNumber} arrived but previous transaction batch is still in-flight. Skipping scan...`);
@@ -98,7 +100,6 @@ async function initialize() {
         }
     });
 
-    // WSS Health check / Keep-Alive reconnection pattern
     providerWss.websocket.on("close", () => {
         console.error("🔴 WebSocket disconnected! Re-establishing interface immediately...");
         setTimeout(initialize, 3000);
@@ -118,7 +119,6 @@ function generateMatrixPayloads() {
     const routersList = Object.values(CONFIG.ROUTERS);
     const targetIntermediateTokens = [CONFIG.TOKENS.WETH, CONFIG.TOKENS.WMATIC, CONFIG.TOKENS.DAI, CONFIG.TOKENS.USDT].filter(Boolean);
 
-    // Named modular parser hook
     const testAmounts = [parseUnits("500", 6)]; 
 
     for (const buyRouter of routersList) {
@@ -244,7 +244,6 @@ function startWatchdog(stuckNonce, originalTxOptions) {
     }, CONFIG.STUCK_TX_TIMEOUT_MS);
 }
 
-// Helper reset loop
 function clearWatchdog() {
     if (txTimeoutTracker) {
         clearTimeout(txTimeoutTracker);
