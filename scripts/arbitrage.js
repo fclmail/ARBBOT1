@@ -1,7 +1,7 @@
 /**  
  * ARBBOT1 - Production Node.js Engine (FLASH LOAN MODE)
- * Network: Polygon (POSIX)  
- * Architecture: Aave Flash Loan Arbitrage
+ * Network: Polygon
+ * Architecture: Aave Flash Loan Arbitrage with Pre-Trade Simulation
  */ 
 
 import { Wallet, Contract, JsonRpcProvider, WebSocketProvider, parseUnits, formatUnits, getAddress } from "ethers";  
@@ -12,18 +12,18 @@ const CONFIG = {
     PRIVATE_KEY: process.env.PRIVATE_KEY || "", 
     CONTRACT_ADDRESS: getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"),  
     USDC_ADDRESS: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),  
-    TOKENS: { 
-        WETH: getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619")
-    },
+    TOKENS: { WETH: getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619") },
     ROUTERS: {  
         QUICK_SWAP: getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),  
         SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506")
     },
-    CANDIDATE_SIZES: [parseUnits("100", 6), parseUnits("500", 6), parseUnits("1000", 6)]  
+    CANDIDATE_SIZES: [parseUnits("100", 6), parseUnits("500", 6), parseUnits("1000", 6)],
+    GAS_THRESHOLD: parseUnits("0.5", 6) // Minimum profit required to cover gas/fees
 };  
 
 const ENFORCER_ABI = [  
     "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",
+    "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC) external view returns (uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
     "function owner() external view returns (address)"
 ];  
 
@@ -50,32 +50,51 @@ async function initialize() {
 }
 
 async function processBlockMatrix(blockNumber) {
-    console.log(`[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} Across Shards...`);
+    console.log(`[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber}...`);
 
     try {
-        console.log(`🚀 Flash Loan detected: Executing arbitrage with borrowed liquidity...`);
-        
-        // Execute the flash loan arbitrage on-chain
-        const tx = await enforcerContract.executeBestFlashLoanArbitrage(
+        const best = await enforcerContract.findBestFlashLoanSize(
             CONFIG.ROUTERS.QUICK_SWAP, 
             CONFIG.ROUTERS.SUSHI_SWAP, 
             CONFIG.CANDIDATE_SIZES, 
             [CONFIG.USDC_ADDRESS, CONFIG.TOKENS.WETH], 
-            [CONFIG.TOKENS.WETH, CONFIG.USDC_ADDRESS], 
-            Math.floor(Date.now() / 1000) + 60,
-            { gasLimit: 800000 }
+            [CONFIG.TOKENS.WETH, CONFIG.USDC_ADDRESS]
         );
 
-        console.log(`✅ Tx sent: ${tx.hash.slice(0, 10)}...${tx.hash.slice(-4)}`);
-        
-        const receipt = await tx.wait();
-        console.log(`✅ Flash Loan Arbitrage #1 confirmed in block ${receipt.blockNumber}`);
-        
-        const profit = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);
-        console.log(`💰 Profit captured: ${formatUnits(profit, 6)} USDC`);
+        const profitUSDC = formatUnits(best.estimatedProfit, 6);
+
+        if (best.estimatedProfit === 0n) {
+            console.log(`⏳ Block #${blockNumber}: No profitable path found.`);
+            return;
+        }
+
+        console.log(`📊 Simulation: Found opportunity! Expected Profit: ${profitUSDC} USDC`);
+
+        if (best.estimatedProfit > CONFIG.GAS_THRESHOLD) {
+            console.log(`🚀 Executing Flash Loan...`);
+            
+            const tx = await enforcerContract.executeBestFlashLoanArbitrage(
+                CONFIG.ROUTERS.QUICK_SWAP, 
+                CONFIG.ROUTERS.SUSHI_SWAP, 
+                CONFIG.CANDIDATE_SIZES, 
+                [CONFIG.USDC_ADDRESS, CONFIG.TOKENS.WETH], 
+                [CONFIG.TOKENS.WETH, CONFIG.USDC_ADDRESS], 
+                Math.floor(Date.now() / 1000) + 60,
+                { gasLimit: 800000 }
+            );
+
+            console.log(`✅ Tx sent: ${tx.hash.slice(0, 10)}...${tx.hash.slice(-4)}`);
+            const receipt = await tx.wait();
+            console.log(`✅ Arbitrage confirmed in block ${receipt.blockNumber}`);
+            
+            const newBalance = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);
+            console.log(`💰 Total Contract Balance: ${formatUnits(newBalance, 6)} USDC`);
+        } else {
+            console.log(`⚠️ Expected profit (${profitUSDC}) too low to cover gas. Skipping.`);
+        }
         
     } catch (err) {
-        // Contract will revert if no profitable path is found, which is expected behavior for arbitrage
+        // Silently catch expected reverts during dry runs
     }
 }
 
