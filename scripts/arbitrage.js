@@ -35,10 +35,10 @@ const CONFIG = {
 
     BATCH_SIZE_LIMIT: 25,  
     STUCK_TX_TIMEOUT_MS: 8000,  
-    MIN_PROFIT_USDC: parseUnits("0.01", 6), // Minimum profit threshold  
-    BASE_ARBITRAGE_AMOUNT: parseUnits("500", 6), // Amount per arbitrage leg  
+    MIN_PROFIT_USDC: parseUnits("0.0000001", 6), // Minimum profit threshold  
+    BASE_ARBITRAGE_AMOUNT: parseUnits(".04", 6), // Amount per arbitrage leg  
     CANDIDATE_SIZES: [  
-        parseUnits("100", 6),  
+        parseUnits(".05", 6),  
         parseUnits("250", 6),  
         parseUnits("500", 6),  
         parseUnits("1000", 6),  
