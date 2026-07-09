@@ -5,7 +5,7 @@
  * Version: Ethers v6 Direct Modules + ES Modules Compatible
  */
 
-import { Wallet, Contract, JsonRpcProvider, WebSocketProvider, parseUnits, formatUnits } from "ethers";
+import { Wallet, Contract, JsonRpcProvider, WebSocketProvider, parseUnits, formatUnits, getAddress } from "ethers";
 
 // ==========================================
 // 1. CONFIGURATION & ENVIRONMENT SETUP
@@ -15,24 +15,23 @@ const CONFIG = {
     HTTP_RPC: "https://polygon-bor-rpc.publicnode.com",
     FASTLANE_RELAY: "https://bor.fastlane.xyz", 
     
-    // Fallback placeholder string check - checks process.env first for secure production pipeline usage
     PRIVATE_KEY: process.env.PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000000", 
     
-    CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000000", // VaultArbitrageEnforcer address
-    USDC_ADDRESS: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",     
+    CONTRACT_ADDRESS: getAddress("0x0000000000000000000000000000000000000000"), // Validated checksum format
+    USDC_ADDRESS: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),     
     
     TOKENS: {
-        USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-        WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
-        WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-        DAI: "0x8f3Cf6ad23Cd3EAd96143c01f6F155802654e5a9",
-        USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+        USDC: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
+        WETH: getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),
+        WMATIC: getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),
+        DAI: getAddress("0x8f3Cf6ad23Cd3EAd96143c01f6F155802654e5a9"),
+        USDT: getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")
     },
 
     ROUTERS: {
-        QUICK_SWAP: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-        SUSHI_SWAP: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
-        DFYN: "0xF184565860993a467C745cc7d04e17849B3bc04A"
+        QUICK_SWAP: getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),
+        SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"),
+        DFYN: getAddress("0xF184565860993a467c745cc7d04e17849B3bc04A") // Safe conversion to valid checksum variant
     },
 
     BATCH_SIZE_LIMIT: 25, 
@@ -67,7 +66,6 @@ let txTimeoutTracker = null;
 async function initialize() {
     console.log("📡 Connecting Matrix Engine via WebSockets...");
     
-    // Explicit Guard against zero-key crashes inside deployment routines
     if (CONFIG.PRIVATE_KEY.replace("0x", "").replace(/0/g, "") === "") {
         throw new Error("❌ Fatal: Valid PRIVATE_KEY must be supplied via configuration string or GitHub Action Secrets environment variable.");
     }
@@ -255,9 +253,19 @@ function clearWatchdog() {
 // 7. EVENT DECODER & RAW PROFIT LOGGER
 // ==========================================
 function setupLogListeners() {
-    enforcerContract.on("ArbitrageExecuted", (buyRouter, sellRouter, token, amountInUSDC, beforeBal, afterBal, profitUSDC) => {
-        const formattedProfit = formatUnits(profitUSDC, 6);
-        console.log(`💰 Combined Metric Realized Capture: +${formattedProfit} USDC`);
+    // Construct manual event query filtering to bypass buggy node state tracking
+    const topic0 = enforcerContract.interface.getEvent("ArbitrageExecuted").topicHash;
+    
+    providerHttp.on({ address: CONFIG.CONTRACT_ADDRESS, topics: [topic0] }, (log) => {
+        try {
+            const parsedLog = enforcerContract.interface.parseLog(log);
+            const profitUSDC = parsedLog.args.profitUSDC;
+            
+            const formattedProfit = formatUnits(profitUSDC, 6);
+            console.log(`💰 Combined Metric Realized Capture: +${formattedProfit} USDC`);
+        } catch (err) {
+            // Silently absorb unparseable topic mismatches
+        }
     });
 }
 
