@@ -17,8 +17,8 @@ const CONFIG = {
         QUICK_SWAP: getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),  
         SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506")
     },
-    CANDIDATE_SIZES: [parseUnits("100", 6), parseUnits("500", 6), parseUnits("1000", 6)],
-    GAS_THRESHOLD: parseUnits("0.5", 6) // Minimum profit required to cover gas/fees
+    CANDIDATE_SIZES: [parseUnits("1", 6), parseUnits("10", 6), parseUnits("10000", 6)],
+    GAS_THRESHOLD: parseUnits("0.0005", 6) // Minimum profit required to cover gas/fees
 };  
 
 const ENFORCER_ABI = [  
