@@ -1,588 +1,280 @@
-import { ethers } from "ethers";  
-import { Worker, isMainThread, parentPort, workerData } from "worker_threads";  
-import { fileURLToPath } from "url";  
+/**
+ * ARBBOT1 - Production Node.js Engine
+ * Network: Polygon (POSIX)
+ * Architecture: Zero-Revalidation Matrix Flash Batch Executor
+ */
 
-// ============================================================================  
-// CONFIGURATION & CONSTANTS  
-// ============================================================================  
-export const CONFIG = {  
-    maxPendingTransactions: 3,           // Increased from 1 to allow concurrent txs  
-    rpcTimeout: 10000,                   // Increased for reliability  
-    pollInterval: 1500,  
-    fallbackProfitUSDC: "0.01",  
-    maxStuckNonceRetries: 5,             // Increased retries  
-    executionRpc: "https://polygon-bor-rpc.publicnode.com",  
-     // ✅ FIXED: Changed from polygon.drpc.org  
-    executionInterval: 3,  
-    nonceSyncBlocks: 5,                  // Re-sync nonce every 5 blocks  
-    mempoolWaitBaseMs: 4000,             // Base wait time for mempool clearance  
-    maxTxQueueDepth: 500                 // Maximum queue depth  
-};  
+const { ethers } = require("ethers");
 
-export const CONTRACT_ABI = [  
-    "function executeArbitrage(address[] paths, uint256 amountIn, uint256 minProfit) external returns (uint256 profit)",  
-    "function minimumProfitUSDC() external view returns (uint256)",  
-    "event ArbitrageExecuted(address indexed executor, uint256 profitInUSDC)"  
-];  
-
-// ============================================================================  
-// MAIN THREAD EXECUTION ENGINE  
-// ============================================================================  
-if (isMainThread) {  
-    const __filename = fileURLToPath(import.meta.url);  
+// ==========================================
+// 1. CONFIGURATION & ENVIRONMENT SETUP
+// ==========================================
+const CONFIG = {
+    WSS_RPC: "wss://polygon-bor-rpc.publicnode.com", // Replace with your private low-latency WSS provider if available
+    HTTP_RPC: "https://polygon-bor-rpc.publicnode.com",
+    FASTLANE_RELAY: "https://bor.fastlane.xyz", // FastLane MEV bundle validator endpoint
+    PRIVATE_KEY: "0x0000000000000000000000000000000000000000000000000000000000000000", // Your deployer/owner private key
+    CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000000", // VaultArbitrageEnforcer address
+    USDC_ADDRESS: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",     // Polygon Bridged USDC
     
-    if (!process.env.PRIVATE_KEY) {  
-        console.error("❌ CRITICAL: PRIVATE_KEY environment variable is missing!");  
-        process.exit(1);  
-    }  
+    // Core Matrix Target Assets (Restored Multi-Hop Paths)
+    TOKENS: {
+        USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+        WETH: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+        WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+        DAI: "0x8f3Cf6ad23Cd3EAd96143c01f6F155802654e5a9",
+        USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+    },
 
-    const WS_ENDPOINTS = [  
-        "wss://polygon-bor-rpc.publicnode.com",  
-        "wss://polygon.gateway.tenderly.co",  
-        "wss://rpc-mainnet.maticvigil.com/ws/v1/rpc",  
-        "wss://ws-mainnet.polygon.network"  
-    ];  
-    const HTTP_ENDPOINT = "https://polygon-rpc.com";  
+    // Dex Routers for Matrix Generation
+    ROUTERS: {
+        QUICK_SWAP: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+        SUSHI_SWAP: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
+        DFYN: "0xF184565860993a467c745cc7d04e17849B3bc04A"
+    },
 
-    // Engine State  
-    let currentWsIndex = 0;  
-    let provider = null;  
-    let wallet = null;  
-    let executionContract = null;  
-    let activeInFlightPayloads = 0;  
-    let nextAssignedNonce = -1;  
-    let totalRealizedProfits = 0.0;  
-    let watchdogTimer = null;  
-    let currentBlockNumber = 0;  
-    let lastNonceSyncBlock = 0;  
+    BATCH_SIZE_LIMIT: 25, // Split massive matrices into small safe payloads to stay within block gas limits
+    STUCK_TX_TIMEOUT_MS: 4000 // 4 seconds before triggering force-advancement nonce logic
+};
 
-    // Mutex & Queue State  
-    let mutexLock = false;  
-    const txQueue = [];  
+// ==========================================
+// 2. CONTRACT ABI DEFINTIONS
+// ==========================================
+const ENFORCER_ABI = [
+    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",
+    "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"
+];
 
-    // Addresses normalized to lowercase to bypass EIP-55 checksum exceptions  
-    const CONTRACT_ADDRESS = ethers.getAddress("0x1111111254fb6c44bac0bed2854e76f90643097d".toLowerCase());   
-    const ROUTERS = {  
-        QUICK: ethers.getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff".toLowerCase()),  
-        SUSHI: ethers.getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506".toLowerCase()),  
-        DFYN: ethers.getAddress("0xC10Ac1de48b9C43393a61F0f107f9038d17208fA".toLowerCase())  
-    };  
+const ERC20_ABI = [
+    "function balanceOf(address account) external view returns (uint256)"
+];
 
-    const executionProvider = new ethers.JsonRpcProvider(CONFIG.executionRpc, undefined, { staticNetwork: true });  
-    const executionWalletV2 = new ethers.Wallet(process.env.PRIVATE_KEY, executionProvider);  
+// ==========================================
+// 3. GLOBAL STATE & NONCE MANAGEMENT ENGINE
+// ==========================================
+let providerWss;
+let providerHttp;
+let wallet;
+let enforcerContract;
+let usdcContract;
 
-    console.log("⚙️ ARBBOT1 Engine Initializing...");  
+let currentNonce = -1;
+let isProcessingBlock = false;
+let txTimeoutTracker = null;
 
-    async function acquireMutex() {  
-        while (mutexLock) {  
-            await new Promise(resolve => setTimeout(resolve, 1));  
-        }  
-        mutexLock = true;  
-    }  
+async function initialize() {
+    console.log("📡 Connecting Matrix Engine via WebSockets...");
+    providerWss = new ethers.providers.WebSocketProvider(CONFIG.WSS_RPC);
+    providerHttp = new ethers.providers.JsonRpcProvider(CONFIG.HTTP_RPC);
+    
+    wallet = new ethers.Wallet(CONFIG.PRIVATE_KEY, providerHttp);
+    enforcerContract = new ethers.Contract(CONFIG.CONTRACT_ADDRESS, ENFORCER_ABI, wallet);
+    usdcContract = new ethers.Contract(CONFIG.USDC_ADDRESS, ERC20_ABI, wallet);
 
-    function releaseMutex() {  
-        mutexLock = false;  
-        if (txQueue.length > 0 && activeInFlightPayloads < CONFIG.maxPendingTransactions) {  
-            const nextPayload = txQueue.shift();  
-            processPayloadBroadcast(nextPayload);  
-        }  
-    }  
+    // Sync baseline nonce directly from node transaction pool
+    currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
+    console.log(`🌐 PRODUCTION MATRIX ENGINE OPERATIONAL. Initial Wallet Nonce: [${currentNonce}]`);
 
-    async function resetNonceToLatest() {  
-        try {  
-            const pendingNonce = await executionWalletV2.getNonce("pending");  
-            const latestNonce = await executionWalletV2.getNonce("latest");  
-            
-            console.log(`📊 Nonce Status - Pending: ${pendingNonce}, Latest: ${latestNonce}`);  
-            
-            if (pendingNonce !== latestNonce) {  
-                console.log(`⚠️ ${pendingNonce - latestNonce} pending transaction(s) detected in the mempool`);  
-            }  
-            
-            if (nextAssignedNonce < pendingNonce) {  
-                console.log(`🔄 FORCE ADVANCING nonce: ${nextAssignedNonce} → ${pendingNonce}`);  
-                nextAssignedNonce = pendingNonce;  
-            } else {  
-                nextAssignedNonce = pendingNonce;  
-            }  
-            lastNonceSyncBlock = currentBlockNumber;  
-            return pendingNonce;  
-        } catch (err) {  
-            console.error(`⚠️ Nonce reset error: ${err.message}`);  
-            return -1;  
-        }  
-    }  
+    // Monitor for successful trade completions to look for logs
+    setupLogListeners();
 
-    // ============================================================================  
-    // CRITICAL FIX: Force nonce past stuck transactions  
-    // ============================================================================  
-    async function forceNoncePastMempool() {  
-        console.log("🔧 FORCING nonce advancement past mempool blockage...");  
+    // Begin Block Pipeline Subscription Loop
+    providerWss.on("block", async (blockNumber) => {
+        if (isProcessingBlock) {
+            console.log(`⏳ Block #${blockNumber} arrived but previous transaction batch is still in-flight. Skipping scan...`);
+            return;
+        }
         
-        const pendingNonce = await executionWalletV2.getNonce("pending");  
-        const latestNonce = await executionWalletV2.getNonce("latest");  
-        
-        console.log(`📊 Chain State - Pending: ${pendingNonce}, Latest: ${latestNonce}`);  
-        
-        if (pendingNonce === latestNonce) {  
-            console.log("✅ No stuck transactions detected");  
-            nextAssignedNonce = pendingNonce;  
-            return pendingNonce;  
-        }  
-        
-        console.log(`⚠️ Stuck tx detected at nonce ${latestNonce}`);  
-        console.log(`🔄 First available nonce: ${pendingNonce}`);  
-        
-        try {  
-            const stuckTx = await executionProvider.getTransaction({  
-                from: wallet.address,  
-                nonce: latestNonce  
-            });  
-            
-            if (stuckTx && stuckTx.blockNumber === null) {  
-                const txTime = stuckTx.timestamp ? stuckTx.timestamp * 1000 : Date.now();  
-                const ageSeconds = Math.floor((Date.now() - txTime) / 1000);  
-                console.log(`⏳ Transaction at nonce ${latestNonce} is still pending (${ageSeconds}s old)`);  
-                
-                if (Date.now() - txTime > 30000) {  
-                    console.log("🔴 Transaction stuck > 30s, attempting cancel...");  
-                    await cancelStuckTransaction(latestNonce);  
-                    return nextAssignedNonce;  
-                }  
-            }  
-        } catch (err) {  
-            console.log(`ℹ️ Cannot fetch stuck tx details: ${err.message}`);  
-        }  
-        
-        nextAssignedNonce = pendingNonce;  
-        return pendingNonce;  
-    }  
+        try {
+            isProcessingBlock = true;
+            await processBlockMatrix(blockNumber);
+        } catch (err) {
+            console.error(`❌ Matrix Processing Exception on Block #${blockNumber}:`, err.message);
+        } finally {
+            isProcessingBlock = false;
+        }
+    });
 
-    async function cancelStuckTransaction(stuckNonce) {  
-        try {  
-            const feeData = await executionProvider.getFeeData();  
-            
-            const cancelTx = {  
-                to: wallet.address,   
-                value: 0,  
-                nonce: stuckNonce,  
-                maxFeePerGas: feeData.maxFeePerGas ? (feeData.maxFeePerGas * 200n) / 100n : undefined,   
-                maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ? (feeData.maxPriorityFeePerGas * 200n) / 100n : undefined,  
-                gasLimit: 21000  
-            };  
-            
-            console.log(`📤 Sending cancel tx for nonce ${stuckNonce}...`);  
-            const response = await executionWalletV2.sendTransaction(cancelTx);  
-            console.log(`✅ Cancel tx sent: ${response.hash}`);  
-            
-            await new Promise(resolve => setTimeout(resolve, 10000));  
-            
-            const newPending = await executionWalletV2.getNonce("pending");  
-            console.log(`📊 After cancel - Pending: ${newPending}`);  
-            
-            nextAssignedNonce = newPending;  
-            return newPending;  
-            
-        } catch (err) {  
-            console.error(`❌ Cancel failed: ${err.message}`);  
-            nextAssignedNonce = stuckNonce + 1;  
-            return stuckNonce + 1;  
-        }  
-    }  
+    // WSS Health check / Keep-Alive reconnection pattern
+    providerWss._websocket.on("close", () => {
+        console.error("🔴 WebSocket disconnected! Re-establishing interface immediately...");
+        setTimeout(initialize, 3000);
+    });
+}
 
-    async function initConnection() {  
-        if (watchdogTimer) clearTimeout(watchdogTimer);  
-        
-        if (currentWsIndex < WS_ENDPOINTS.length) {  
-            const wsUrl = WS_ENDPOINTS[currentWsIndex];  
-            console.log(`📡 Connecting to WS Pool Endpoint [${currentWsIndex}]: ${wsUrl}`);  
-            try {  
-                provider = new ethers.WebSocketProvider(wsUrl, undefined, { staticNetwork: true });  
-                
-                if (provider.websocket) {  
-                    provider.websocket.onerror = (err) => {  
-                        console.warn(`⚠️ WebSocket socket-level error captured: ${err.message || 'Connection refused'}`);  
-                    };  
-                }  
+// ==========================================
+// 4. ON-CHAIN MATRIX GENERATION (MULTI-HOP)
+// ==========================================
+function generateMatrixPayloads() {
+    const buyRouters = [];
+    const sellRouters = [];
+    const amountsInUSDC = [];
+    const pathsToToken = [];
+    const pathsToUSDC = [];
 
-                currentBlockNumber = await provider.getBlockNumber();  
-                setupWsListeners();  
-                await initializeExecutionStack();  
-            } catch (err) {  
-                console.warn(`⚠️ WS Endpoint [${currentWsIndex}] failed initialization. Rotating...`);  
-                currentWsIndex++;  
-                await initConnection();  
-            }  
-        } else {  
-            console.error("🚨 All WS Pool streams exhausted! Activating HTTP Fallback Engine...");  
-            initHttpFallback();  
-        }  
-    }  
+    const routersList = Object.values(CONFIG.ROUTERS);
+    // Expand core routes across multi-hop assets restored: USDT, WETH, WMATIC, DAI
+    const targetIntermediateTokens = [CONFIG.TOKENS.WETH, CONFIG.TOKENS.WMATIC, CONFIG.TOKENS.DA3, CONFIG.TOKENS.USDT].filter(Boolean);
 
-    function setupWsListeners() {  
-        if (provider.websocket) {  
-            provider.websocket.onclose = () => {  
-                console.warn("⚠️ WebSocket disconnected. Triggering failover rotation...");  
-                currentWsIndex++;  
-                initConnection();  
-            };  
-        }  
-        
-        provider.on("block", async (blockNumber) => {  
-            currentBlockNumber = blockNumber;  
-            resetWatchdog();  
-            
-            if (blockNumber - lastNonceSyncBlock >= CONFIG.nonceSyncBlocks) {  
-                await acquireMutex();  
-                await resetNonceToLatest();  
-                releaseMutex();  
-            }  
-        });  
-    }  
+    // Common inputs for this optimization (e.g. 500 USDC or 1000 USDC allocations)
+    const testAmounts = [ethers.utils.parseUnits("500", 6)]; 
 
-    function resetWatchdog() {  
-        if (watchdogTimer) clearTimeout(watchdogTimer);  
-        watchdogTimer = setTimeout(() => {  
-            console.warn("⏳ Watchdog Alert: 6s block timeout reached. Forcing endpoint rotation...");  
-            currentWsIndex++;  
-            initConnection();  
-        }, 6000);  
-    }  
+    for (const buyRouter of routersList) {
+        for (const sellRouter of routersList) {
+            if (buyRouter === sellRouter) continue; // Must be a cross-dex discrepancy
 
-    function initHttpFallback() {  
-        provider = new ethers.JsonRpcProvider(HTTP_ENDPOINT, undefined, { staticNetwork: true });  
-        initializeExecutionStack();  
-        
-        let lastBlock = -1;  
-        setInterval(async () => {  
-            try {  
-                const currentBlock = await provider.getBlockNumber();  
-                currentBlockNumber = currentBlock;  
-                if (lastBlock !== -1 && currentBlock > lastBlock + 1) {  
-                    console.warn(`📊 Block Gap Detected: Skipped from ${lastBlock} to ${currentBlock}`);  
-                }  
-                
-                if (lastBlock !== -1 && currentBlock - lastNonceSyncBlock >= CONFIG.nonceSyncBlocks) {  
-                    await acquireMutex();  
-                    await resetNonceToLatest();  
-                    releaseMutex();  
-                }  
-                lastBlock = currentBlock;  
-            } catch (err) {  
-                console.error("❌ HTTP Fallback Engine connection error:", err.message);  
-            }  
-        }, CONFIG.pollInterval);  
-    }  
-
-    async function initializeExecutionStack() {  
-        wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);  
-        executionContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, executionWalletV2);  
-        await resetNonceToLatest();  
-        console.log(`🟩 Execution Stack live via Dedicated RPC. Base Nonce Tracked: [${nextAssignedNonce}]`);  
-        console.log("🚀 Main thread initialized with workers");  
-    }  
-
-    async function robustSendTransaction(txOptions, retries = CONFIG.maxStuckNonceRetries) {  
-        for (let attempt = 1; attempt <= retries; attempt++) {  
-            try {  
-                const txData = await executionContract.executeArbitrage.populateTransaction(  
-                    txOptions.paths,  
-                    txOptions.amountIn,  
-                    txOptions.minProfit  
-                );  
-
-                const finalTx = {  
-                    ...txData,  
-                    nonce: txOptions.nonce,  
-                    maxFeePerGas: txOptions.maxFeePerGas,  
-                    maxPriorityFeePerGas: txOptions.maxPriorityFeePerGas,  
-                    gasLimit: txOptions.gasLimit,  
-                    to: CONTRACT_ADDRESS  
-                };  
-
-                const response = await executionWalletV2.sendTransaction(finalTx);  
-                console.log(`✅ TX Sent: Nonce #${txOptions.nonce} | Hash: ${response.hash.substring(0, 18)}...`);  
-                return response;  
-            } catch (err) {  
-                const errMsg = err.message.toLowerCase();  
-                if (errMsg.includes("-32000") || errMsg.includes("in-flight") || errMsg.includes("limit reached") || errMsg.includes("nonce too low")) {  
-                    console.log(`⚠️ Mempool / Limit conflict on attempt ${attempt}/${retries}: ${err.message}`);  
+            for (const intermediateToken of targetIntermediateTokens) {
+                for (const amount of testAmounts) {
                     
-                    if (attempt === retries) {  
-                        console.log(`🔴 RESETTING NONCE SYSTEM - stuck on assignment #${txOptions.nonce}`);  
-                        await forceNoncePastMempool();  
-                        
-                        console.log(`⏳ Waiting ${CONFIG.mempoolWaitBaseMs / 1000} seconds for remote node mempool pipeline clearance...`);  
-                        await new Promise(resolve => setTimeout(resolve, CONFIG.mempoolWaitBaseMs));  
-                        
-                        const newNonce = nextAssignedNonce;  
-                        console.log(`🔄 New nonce resolved after pipeline wait: ${newNonce}`);  
-                        
-                        txOptions.nonce = newNonce;  
-                        nextAssignedNonce = newNonce + 1;  
-                        
-                        const freshFeeData = await provider.getFeeData();  
-                        txOptions.maxFeePerGas = freshFeeData.maxFeePerGas ? (freshFeeData.maxFeePerGas * 130n) / 100n : undefined;  
-                        txOptions.maxPriorityFeePerGas = freshFeeData.maxPriorityFeePerGas ? (freshFeeData.maxPriorityFeePerGas * 130n) / 100n : undefined;  
-
-                        return await robustSendTransaction(txOptions, 1);  
-                    } else {  
-                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));  
-                    }  
-                } else {  
-                    throw err;  
-                }  
-            }  
-        }  
-    }  
-
-    async function processPayloadBroadcast(payload) {  
-        if (currentBlockNumber % CONFIG.executionInterval !== 0) {  
-            return;   
-        }  
-
-        await acquireMutex();  
-
-        if (activeInFlightPayloads >= CONFIG.maxPendingTransactions) {  
-            if (txQueue.length < CONFIG.maxTxQueueDepth) {  
-                txQueue.push(payload);  
-                console.log(`📥 Inflight limit reached (${activeInFlightPayloads}). Payload pushed to TxQueue (Depth: ${txQueue.length})`);  
-            } else {  
-                console.warn(`⚠️ Warning: Max TxQueue Depth reached (${CONFIG.maxTxQueueDepth}). Dropping oldest payload structural frame.`);  
-            }  
-            releaseMutex();  
-            return;  
-        }  
-
-        activeInFlightPayloads++;  
-
-        try {  
-            if (nextAssignedNonce === -1) {  
-                await resetNonceToLatest();  
-            }  
-
-            const currentNonce = nextAssignedNonce;  
-            nextAssignedNonce++;  
-            
-            let minProfit;  
-            try {  
-                minProfit = await executionContract.minimumProfitUSDC({ timeout: CONFIG.rpcTimeout });  
-            } catch {  
-                minProfit = ethers.parseUnits(CONFIG.fallbackProfitUSDC, 6);  
-            }  
-
-            console.log(`🚀 Dispatching Tx Engine Matrix | Nonce: ${currentNonce} | Routes: [${payload.paths.join(" -> ")}]`);  
-
-            const feeData = await provider.getFeeData();  
-            const premiumMaxFeePerGas = feeData.maxFeePerGas ? (feeData.maxFeePerGas * 125n) / 100n : undefined;  
-            const premiumMaxPriorityFeePerGas = feeData.maxPriorityFeePerGas ? (feeData.maxPriorityFeePerGas * 125n) / 100n : undefined;  
-
-            const txOptions = {  
-                paths: payload.paths,  
-                amountIn: payload.amountIn,  
-                minProfit: minProfit,  
-                nonce: currentNonce,  
-                maxFeePerGas: premiumMaxFeePerGas,  
-                maxPriorityFeePerGas: premiumMaxPriorityFeePerGas,  
-                gasLimit: 350000  
-            };  
-
-            releaseMutex();  
-
-            const txResponse = await robustSendTransaction(txOptions);  
-            const receipt = await txResponse.wait();  
-            
-            const iface = new ethers.Interface(CONTRACT_ABI);  
-            receipt.logs.forEach((log) => {  
-                try {  
-                    const parsedLog = iface.parseLog(log);  
-                    if (parsedLog.name === "ArbitrageExecuted") {  
-                        const profitRaw = parsedLog.args.profitInUSDC;  
-                        const profit = parseFloat(ethers.formatUnits(profitRaw, 6));  
-                        totalRealizedProfits += profit;  
-                        console.log(`✨ Success! Realized Profit: +${profit} USDC | Cumulative: ${totalRealizedProfits.toFixed(6)} USDC`);  
-                    }  
-                } catch { /* Mismatch log entry */ }  
-            });  
-
-        } catch (err) {  
-            console.error(`❌ Complete Functional Failure for Execution Nonce Assumed:`, err.message);  
-            nextAssignedNonce = -1;  
-            if (mutexLock) releaseMutex();  
-        } finally {  
-            activeInFlightPayloads--;  
-        }  
-    }  
-
-    const SHARD_MATRICES = [  
-        [ROUTERS.QUICK, ROUTERS.SUSHI],                  
-        [ROUTERS.QUICK, ROUTERS.DFYN],                    
-        [ROUTERS.SUSHI, ROUTERS.DFYN],                    
-        [ROUTERS.QUICK, ROUTERS.SUSHI, ROUTERS.DFYN]     
-    ];
-
-    const activeWorkers = [];
-
-    SHARD_MATRICES.forEach((matrix, index) => {
-        const worker = new Worker(__filename, {
-            workerData: { workerId: index + 1, matrix }
-        });
-
-        worker.on("message", (msg) => {
-            if (msg.type === "EXECUTE_BATCH") {
-                processPayloadBroadcast(msg.payload);
-            } else if (msg.type === "LOG") {
-                console.log(msg.data);
+                    buyRouters.push(buyRouter);
+                    sellRouters.push(sellRouter);
+                    amountsInUSDC.push(amount);
+                    
+                    // Route 1: Base USDC -> Target Volatile Asset
+                    pathsToToken.push([CONFIG.TOKENS.USDC, intermediateToken]);
+                    // Route 2: Target Volatile Asset -> Base USDC
+                    pathsToUSDC.push([intermediateToken, CONFIG.TOKENS.USDC]);
+                }
             }
+        }
+    }
+
+    // Chunk size limiting implementation to prevent Gas Limit Rejections on Polygon
+    const chunks = [];
+    for (let i = 0; i < buyRouters.length; i += CONFIG.BATCH_SIZE_LIMIT) {
+        chunks.push({
+            buyRouters: buyRouters.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
+            sellRouters: sellRouters.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
+            amountsInUSDC: amountsInUSDC.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
+            pathsToToken: pathsToToken.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
+            pathsToUSDC: pathsToUSDC.slice(i, i + CONFIG.BATCH_SIZE_LIMIT),
+            deadline: Math.floor(Date.now() / 1000) + 120
         });
+    }
 
-        worker.on("error", (err) => console.error(`🚨 Worker Shard ${index + 1} Error:`, err));
-        activeWorkers.push(worker);
-    });
+    return chunks;
+}
 
-    initConnection();
+// ==========================================
+// 5. ZERO-REVALIDATION BATCH PIPELINE
+// ==========================================
+async function processBlockMatrix(blockNumber) {
+    console.log(`[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} Across Shards...`);
+    
+    const batches = generateMatrixPayloads();
+    if (batches.length === 0) return;
 
-    process.on("SIGINT", () => {
-        console.log("\n🛑 Gracefully shutting down Engine. Cleaning RPC pools and worker shards...");
-        activeWorkers.forEach(w => w.terminate());
-        if (provider && provider.destroy) provider.destroy();
-        process.exit(0);
-    });
+    // Fetch optimal gas conditions dynamically to compete with public mempool frontrunners
+    const feeData = await providerHttp.getFeeData();
+    const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ? feeData.maxPriorityFeePerGas.mul(2) : ethers.utils.parseUnits("40", "gwei");
+    const maxFeePerGas = feeData.maxFeePerGas ? feeData.maxFeePerGas.add(maxPriorityFeePerGas) : ethers.utils.parseUnits("200", "gwei");
 
-} else {
-    // ============================================================================
-    // WORKER CODE - Only runs in worker threads
-    // ============================================================================
-    const { workerId, matrix } = workerData;
+    // Zero-Revalidation Pattern: Directly dispatch top execution batches to the network without off-chain simulation
+    for (let i = 0; i < Math.min(batches.length, 2); i++) {
+        const currentBatch = batches[i];
+        const targetNonce = currentNonce;
+        
+        console.log(`🚀 Sending Batch Structure #${i+1} to Fastlane Engine via Nonce #${targetNonce}`);
 
-    parentPort.postMessage({
-        type: "LOG",
-        data: `🧵 [Shard #${workerId}] Worker initialized and ready | Matrix Allocation Count: [${matrix.length} Node Pairs]`
-    });
-
-    const scanningInterval = setInterval(() => {
-        const opportunityDetected = Math.random() > 0.98;
-
-        if (opportunityDetected) {
-            const executionPayload = {
-                paths: matrix,
-                amountIn: ethers.parseEther("1000").toString() // 1000 MATIC
+        try {
+            // Build the transaction options payload
+            const txOptions = {
+                nonce: targetNonce,
+                maxPriorityFeePerGas,
+                maxFeePerGas,
+                gasLimit: 3000000 // Fixed structural cap for batch transactions
             };
 
-            parentPort.postMessage({
-                type: "EXECUTE_BATCH",
-                payload: executionPayload
-            });
+            // Call structural array payload inside smart contract execution interface
+            const txPromise = enforcerContract.executeFlashBatchArbitrage(currentBatch, txOptions);
             
-            parentPort.postMessage({
-                type: "LOG",
-                data: `🎯 [Shard #${workerId}] Opportunity detected! Routes: ${matrix.join(" → ")}`
-            });
-        }
-    }, 200);
+            currentNonce++; // Proactively step the local variable ahead to prevent immediate collisions
 
-    parentPort.on('close', () => {
-        clearInterval(scanningInterval);
-        process.exit(0);
+            // Start the stale transaction watchdog timer to prevent system freeze at this nonce number
+            startWatchdog(targetNonce, txOptions);
+
+            const tx = await txPromise;
+            console.log(`✨ Transaction Dispatched! Hash: ${tx.hash}`);
+
+            // Wait for receipt in background thread
+            tx.wait().then((receipt) => {
+                clearWatchdog();
+                if (receipt.status === 1) {
+                    console.log(`✅ Transaction Confirmed inside block ${receipt.blockNumber}`);
+                } else {
+                    console.log(`🔴 On-chain Transaction Reverted: ${receipt.transactionHash}`);
+                }
+            }).catch((err) => {
+                clearWatchdog();
+                console.log(`🔴 Transaction Execution Dropped/Reverted: ${err.message}`);
+            });
+
+        } catch (txError) {
+            console.error(`❌ Batch pipeline transmission failed at runtime:`, txError.message);
+            // Sync up nonce state accurately on unrecoverable failures
+            currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
+            clearWatchdog();
+            break;
+        }
+    }
+}
+
+// ==========================================
+// 6. STUCK TX BLOCKAGE ENGINE (FORCE NONCE)
+// ==========================================
+function startWatchdog(stuckNonce, originalTxOptions) {
+    clearWatchdog();
+    
+    txTimeoutTracker = setTimeout(async () => {
+        console.warn(`🚨 [CRITICAL ALERT] Nonce #${stuckNonce} stuck for more than ${CONFIG.STUCK_TX_TIMEOUT_MS / 1000}s! FORCING nonce advancement past mempool blockage...`);
+        
+        try {
+            // Construct aggressive speed replacement options package (50% bump minimum)
+            const rescueGasPrice = originalTxOptions.maxFeePerGas.mul(15).div(10);
+            const rescuePriorityPrice = originalTxOptions.maxPriorityFeePerGas.mul(15).div(10);
+
+            console.log(`⚡ Sending Empty Speed-Up Cancel Transaction for Nonce #${stuckNonce}...`);
+            const cancelTx = await wallet.sendTransaction({
+                to: wallet.address,
+                value: 0,
+                nonce: stuckNonce,
+                maxFeePerGas: rescueGasPrice,
+                maxPriorityFeePerGas: rescuePriorityPrice,
+                gasLimit: 21000
+            });
+
+            await cancelTx.wait();
+            console.log(`♻️ Successfully cleared roadblock at Nonce #${stuckNonce}. Mempool cleared.`);
+            
+            // Re-sync authoritative nonces from ledger indexers
+            currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
+        } catch (rescueError) {
+            console.error(`❌ Nonce force advancement failed:`, rescueError.message);
+            currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");
+        }
+    }, CONFIG.STUCK_TX_TIMEOUT_MS);
+}
+
+function clearWatchdog() {
+    if (txTimeoutTracker) {
+        clearTimeout(txTimeoutTracker);
+        txTimeoutTracker = null;
+    }
+}
+
+// ==========================================
+// 7. EVENT DECODER & RAW PROFIT LOGGER
+// ==========================================
+function setupLogListeners() {
+    // Subscribes directly to logs emitted from the deployed target enforcer contract instance
+    enforcerContract.on("ArbitrageExecuted", (buyRouter, sellRouter, token, amountInUSDC, beforeBal, afterBal, profitUSDC) => {
+        // Formats the metric out into readable raw parameters directly matching standard token layout
+        const formattedProfit = ethers.utils.formatUnits(profitUSDC, 6);
+        
+        // Command Mandate Check: Raw amounts only - no deductions for gas or other fees displayed.
+        console.log(`💰 Combined Metric Realized Capture: +${formattedProfit} USDC`);
     });
 }
 
-
-
-
-
-/*
-// fix-nonce.js
-import { ethers } from "ethers";
-
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const provider = new ethers.JsonRpcProvider("https://polygon-rpc.com");
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-async function fix() {
-    const pending = await wallet.getNonce("pending");
-    const latest = await wallet.getNonce("latest");
-    console.log(`Pending: ${pending}, Latest: ${latest}`);
-    
-    if (pending > latest) {
-        const feeData = await provider.getFeeData();
-        const cancelTx = await wallet.sendTransaction({
-            to: wallet.address, value: 0,
-            nonce: latest,
-            maxFeePerGas: feeData.maxFeePerGas * 150n / 100n,
-            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas * 150n / 100n,
-            gasLimit: 21000
-        });
-        console.log(`✅ Cancel sent: ${cancelTx.hash}`);
-        await cancelTx.wait();
-        console.log("✅ Stuck nonce cleared!");
-    } else {
-        console.log("✅ No stuck transactions");
-    }
-}
-fix().catch(console.error);
-
-
-
-
-
-
-// fix-nonce.js - Run ONCE to clear stuck nonce before restarting the bot
-import { ethers } from "ethers";
-
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const provider = new ethers.JsonRpcProvider("https://polygon-rpc.com");
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-async function fix() {
-    console.log("🔍 Checking nonce state...");
-    
-    const pending = await wallet.getNonce("pending");
-    const latest = await wallet.getNonce("latest");
-    
-    console.log(`📊 Pending nonce: ${pending}`);
-    console.log(`📊 Latest nonce: ${latest}`);
-    
-    if (pending > latest) {
-        const stuckCount = pending - latest;
-        console.log(`⚠️ Found ${stuckCount} stuck transaction(s)! Clearing nonce ${latest}...`);
-        
-        const feeData = await provider.getFeeData();
-        console.log(`⛽ Base fee: ${feeData.gasPrice ? ethers.formatUnits(feeData.gasPrice, "gwei") : "N/A"} gwei`);
-        
-        // Send a self-transfer with higher gas to replace the stuck transaction
-        const cancelTx = await wallet.sendTransaction({
-            to: wallet.address,
-            value: 0,
-            nonce: latest,
-            maxFeePerGas: feeData.maxFeePerGas ? (feeData.maxFeePerGas * 150n) / 100n : ethers.parseUnits("100", "gwei"),
-            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ? (feeData.maxPriorityFeePerGas * 150n) / 100n : ethers.parseUnits("50", "gwei"),
-            gasLimit: 21000
-        });
-        
-        console.log(`✅ Cancel transaction sent: ${cancelTx.hash}`);
-        console.log("⏳ Waiting for confirmation...");
-        
-        await cancelTx.wait(1);
-        console.log("✅ Stuck nonce cleared! Bot can now restart safely.");
-        
-        // Verify
-        const newPending = await wallet.getNonce("pending");
-        const newLatest = await wallet.getNonce("latest");
-        console.log(`📊 After fix - Pending: ${newPending}, Latest: ${newLatest}`);
-        
-        if (newPending === newLatest) {
-            console.log("✅ All clear! No stuck transactions remaining.");
-        } else {
-            console.log(`⚠️ Still ${newPending - newLatest} stuck tx(s). Run this script again.`);
-        }
-    } else {
-        console.log("✅ No stuck transactions detected. Safe to restart the bot.");
-    }
-}
-
-fix().catch((err) => {
-    console.error("❌ Error:", err.message);
-    process.exit(1);
-});
-*/
+// Kickstart script execution engine
+initialize().catch(console.error);
