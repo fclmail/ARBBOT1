@@ -4,7 +4,7 @@
  * Architecture: Zero-Revalidation Matrix Flash Batch Executor
  */
 
-const { ethers } = require("ethers");
+import { ethers } from "ethers";
 
 // ==========================================
 // 1. CONFIGURATION & ENVIRONMENT SETUP
@@ -114,7 +114,7 @@ function generateMatrixPayloads() {
 
     const routersList = Object.values(CONFIG.ROUTERS);
     // Expand core routes across multi-hop assets restored: USDT, WETH, WMATIC, DAI
-    const targetIntermediateTokens = [CONFIG.TOKENS.WETH, CONFIG.TOKENS.WMATIC, CONFIG.TOKENS.DA3, CONFIG.TOKENS.USDT].filter(Boolean);
+    const targetIntermediateTokens = [CONFIG.TOKENS.WETH, CONFIG.TOKENS.WMATIC, CONFIG.TOKENS.DAI, CONFIG.TOKENS.USDT].filter(Boolean);
 
     // Common inputs for this optimization (e.g. 500 USDC or 1000 USDC allocations)
     const testAmounts = [ethers.utils.parseUnits("500", 6)]; 
