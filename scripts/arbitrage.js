@@ -1,4 +1,4 @@
-⚡js🧿
+
 /**  
  * ARBBOT1 - Production Node.js Engine (FLASH LOAN MODE)
  * Network: Polygon (POSIX)  
