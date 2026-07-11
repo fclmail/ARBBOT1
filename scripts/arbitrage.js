@@ -41,6 +41,7 @@ let provider;
 let wallet;
 let enforcerContract;
 let usdcContract;
+let pingInterval;
 
 async function initialize() {
     console.log("============================================================");
@@ -51,10 +52,34 @@ async function initialize() {
     console.log("🚀 ARBBOT1 - FLASH LOAN ARBITRAGE BOT");
     console.log("============================================================");
 
-    // Establish persistent websocket communication stream
+    // Establish a resilient WebSocket connection with keep-alive pings
     provider = new ethers.WebSocketProvider(WSS_URL);
-    wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    
+    // Prevent Alchemy from closing the connection due to inactivity
+    pingInterval = setInterval(async () => {
+        try {
+            if (provider && provider.websocket && provider.websocket.readyState === 1) { // 1 = OPEN
+                await provider.send("eth_blockNumber", []);
+            }
+        } catch (err) {
+            console.warn("⚠️ WebSocket ping failed:", err.message);
+        }
+    }, 20000); // Ping every 20 seconds
 
+    // Automatically intercept unexpected disconnects gracefully
+    provider.websocket.addEventListener("close", (event) => {
+        clearInterval(pingInterval);
+        console.error(`\n❌ WebSocket disconnected (Code: ${event.code}). Attempting recovery...`);
+        setTimeout(() => {
+            main();
+        }, 2000);
+    });
+
+    provider.websocket.addEventListener("error", (err) => {
+        console.error("⚠️ WebSocket network error encountered:", err.message);
+    });
+
+    wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     enforcerContract = new ethers.Contract(ENFORCER_ADDRESS, ENFORCER_ABI, wallet);
     usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
@@ -109,7 +134,6 @@ function setupEventListeners() {
 async function processBlock(blockNumber) {
     contractState.totalAttempts++;
     // Mempool verification / router strategy payload evaluations go here...
-    // Removed old .getTotalProfits call that crashed the block processing loop.
 }
 
 async function main() {
@@ -131,6 +155,7 @@ async function main() {
 }
 
 function shutdown() {
+    clearInterval(pingInterval);
     console.log("\n============================================================");
     console.log("🛑 Shutting down bot...");
     console.log("============================================================");
