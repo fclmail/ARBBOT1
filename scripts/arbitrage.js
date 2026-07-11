@@ -126,6 +126,8 @@ function setupEventListeners() {
 
 async function processBlock(blockNumber) {
     contractState.totalAttempts++;
+    // Explicit visibility update to prevent CI logs from looking frozen
+    console.log(`📦 [BLOCK] Processing Mainnet Block #${blockNumber} | Total Checked: ${contractState.totalAttempts}`);
     // Mempool verification / router strategy payload evaluations go here...
 }
 
