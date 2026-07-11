@@ -43,11 +43,12 @@ let enforcerContract;
 let usdcContract;
 let pingInterval;
 
-// Helper to create a resilient socket client instance over public endpoints
+// Helper to create a resilient socket client instance utilizing ethers built-in client
 function createWebSocketProvider(url) {
-    const ws = new WebSocket(url);
+    // Ethers client instantiates its own working WebSocket protocol directly inside Node.js
+    const client = new ethers.WebSocket(url);
 
-    ws.addEventListener("close", (event) => {
+    client.addEventListener("close", (event) => {
         clearInterval(pingInterval);
         console.error(`\n❌ Bor Network WebSocket disconnected (Code: ${event.code}). Reconnecting strategy pipeline...`);
         setTimeout(() => {
@@ -55,11 +56,11 @@ function createWebSocketProvider(url) {
         }, 3000);
     });
 
-    ws.addEventListener("error", (err) => {
+    client.addEventListener("error", (err) => {
         console.error("⚠️ Bor Network underlying socket interface error:", err.message);
     });
 
-    return new ethers.WebSocketProvider(ws);
+    return new ethers.WebSocketProvider(client);
 }
 
 async function initialize() {
