@@ -43,24 +43,15 @@ let enforcerContract;
 let usdcContract;
 let pingInterval;
 
-// Helper to create a resilient socket client instance utilizing ethers built-in client
+// Clean Ethers v6 Provider instantiation 
 function createWebSocketProvider(url) {
-    // Ethers client instantiates its own working WebSocket protocol directly inside Node.js
-    const client = new ethers.WebSocket(url);
+    const wsProvider = new ethers.WebSocketProvider(url);
 
-    client.addEventListener("close", (event) => {
-        clearInterval(pingInterval);
-        console.error(`\n❌ Bor Network WebSocket disconnected (Code: ${event.code}). Reconnecting strategy pipeline...`);
-        setTimeout(() => {
-            main();
-        }, 3000);
+    wsProvider.on("error", (err) => {
+        console.error("⚠️ WebSocket provider error:", err.message || err);
     });
 
-    client.addEventListener("error", (err) => {
-        console.error("⚠️ Bor Network underlying socket interface error:", err.message);
-    });
-
-    return new ethers.WebSocketProvider(client);
+    return wsProvider;
 }
 
 async function initialize() {
@@ -74,14 +65,12 @@ async function initialize() {
 
     provider = createWebSocketProvider(WSS_URL);
     
-    // Tightened polling parameters to secure state sync on shared endpoints
+    // Native Ethers v6 keep-alive using standard provider calls instead of hidden properties
     pingInterval = setInterval(async () => {
         try {
-            if (provider && provider.websocket && provider.websocket.readyState === 1) { // 1 = OPEN
-                await provider.send("eth_blockNumber", []);
-            }
+            await provider.getBlockNumber();
         } catch (err) {
-            console.warn("⚠️ WebSocket keep-alive ping rejected:", err.message);
+            console.warn("⚠️ Keep-alive ping failed:", err.message);
         }
     }, 15000);
 
@@ -102,7 +91,7 @@ async function initialize() {
     console.log(`🪙 ${symbol} Decimals: ${decimals}, Symbol: ${symbol}`);
     console.log(`💰 Configured Minimum Profit Requirement: ${ethers.formatUnits(minProfit, decimals)} USDC`);
 
-    // Adjusted history ranges down to 200 blocks to meet free public rate limits without timing out
+    // Dynamic historical tracking safe from public rate limits
     let calculatedTotalProfits = 0n;
     try {
         const filter = enforcerContract.filters.ArbitrageExecuted();
