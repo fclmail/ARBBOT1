@@ -34,7 +34,8 @@ const contractState = {
     totalProfits: 0n,
     minimumProfit: 0n,
     totalAttempts: 0,
-    startTime: null
+    startTime: null,
+    lastCheckedBlock: 0
 };
 
 let provider;
@@ -42,6 +43,7 @@ let wallet;
 let enforcerContract;
 let usdcContract;
 let pingInterval;
+let fallbackPollInterval;
 
 // Clean Ethers v6 Provider instantiation 
 function createWebSocketProvider(url) {
@@ -93,9 +95,11 @@ async function initialize() {
 
     // Dynamic historical tracking safe from public rate limits
     let calculatedTotalProfits = 0n;
+    let currentBlock = 0;
     try {
         const filter = enforcerContract.filters.ArbitrageExecuted();
-        const currentBlock = await provider.getBlockNumber();
+        currentBlock = await provider.getBlockNumber();
+        contractState.lastCheckedBlock = currentBlock;
         const events = await enforcerContract.queryFilter(filter, currentBlock - 200, currentBlock);
         
         for (const event of events) {
@@ -110,34 +114,63 @@ async function initialize() {
     contractState.startTime = Date.now();
 
     console.log(`📈 Historically Accumulated Profit: ${ethers.formatUnits(calculatedTotalProfits, decimals)} USDC`);
-    console.log("✅ Initialization successful. Real-time mempool scanning engaged.");
-    
-    setupEventListeners();
+    console.log("✅ Initialization successful. Real-time scanning engaged.");
 }
 
-function setupEventListeners() {
-    enforcerContract.on("ArbitrageExecuted", (buyRouter, sellRouter, token, amountIn, beforeBal, afterBal, profitUSDC) => {
-        contractState.totalProfits += profitUSDC;
-        console.log(`\n🎉 [EVENT] Trade Success logged on-chain! Net Profit: +${ethers.formatUnits(profitUSDC, 6)} USDC`);
-        console.log(`📈 Updated Total Accumulated Profit: ${ethers.formatUnits(contractState.totalProfits, 6)} USDC\n`);
-    });
+// Manual event block scanner to bypass public node subscription restrictions
+async function checkEventsForBlockRange(fromBlock, toBlock) {
+    try {
+        const filter = enforcerContract.filters.ArbitrageExecuted();
+        const events = await enforcerContract.queryFilter(filter, fromBlock, toBlock);
+        for (const event of events) {
+            contractState.totalProfits += event.args.profitUSDC;
+            console.log(`\n🎉 [EVENT] Trade Success logged on-chain! Net Profit: +${ethers.formatUnits(event.args.profitUSDC, 6)} USDC`);
+            console.log(`📈 Updated Total Accumulated Profit: ${ethers.formatUnits(contractState.totalProfits, 6)} USDC\n`);
+        }
+    } catch (err) {
+        console.debug("ℹ️ Event log poll skipped or rate limited:", err.message);
+    }
 }
 
 async function processBlock(blockNumber) {
     contractState.totalAttempts++;
+    // Mempool verification / router strategy payload evaluations go here...
 }
 
 async function main() {
     try {
         await initialize();
         
-        provider.on("block", async (blockNumber) => {
-            try {
-                await processBlock(blockNumber);
-            } catch (err) {
-                console.error(`❌ Error parsing block ${blockNumber}:`, err.message);
-            }
-        });
+        // Attempt Native WebSocket Subscription, Fallback gracefully to Polling if public node rejects it
+        try {
+            provider.on("block", async (blockNumber) => {
+                try {
+                    await processBlock(blockNumber);
+                    // Accompany real-time block streams with event log matching
+                    await checkEventsForBlockRange(blockNumber, blockNumber);
+                } catch (err) {
+                    console.error(`❌ Error parsing block ${blockNumber}:`, err.message);
+                }
+            });
+            console.log("📡 Subscribed via WebSocket block event streams stream successfully.");
+        } catch (subError) {
+            console.warn("⚠️ WebSocket subscription rejected by Bor endpoint. Initiating high-frequency Polling fallback (2s intervals)...");
+            
+            fallbackPollInterval = setInterval(async () => {
+                try {
+                    const currentBlock = await provider.getBlockNumber();
+                    if (currentBlock > contractState.lastCheckedBlock) {
+                        for (let b = contractState.lastCheckedBlock + 1; b <= currentBlock; b++) {
+                            await processBlock(b);
+                        }
+                        await checkEventsForBlockRange(contractState.lastCheckedBlock + 1, currentBlock);
+                        contractState.lastCheckedBlock = currentBlock;
+                    }
+                } catch (pollErr) {
+                    console.error("❌ Fallback block check engine error:", pollErr.message);
+                }
+            }, 2000); 
+        }
 
     } catch (fatalError) {
         console.error("\n❌ Fatal Error during runtime initialization:", fatalError.message);
@@ -147,6 +180,7 @@ async function main() {
 
 function shutdown() {
     clearInterval(pingInterval);
+    if (fallbackPollInterval) clearInterval(fallbackPollInterval);
     console.log("\n============================================================");
     console.log("🛑 Shutting down bot...");
     console.log("============================================================");
