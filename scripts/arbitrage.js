@@ -1,11 +1,4 @@
-Gmail is better on the app
-Secure, fast & organized email
-Open
-x⚡jslog
-C
-CASHCOIN
-to CASHCOIN, scimaxmovies, scimax7.7, +1
-2 days agoDetails
+
 /**  
  * ARBBOT1 - Production Node.js Engine (FIXED)  
  * Network: Polygon (POSIX)  
@@ -594,39 +587,3 @@ main().catch((error) => {
 
 
 
-logs
-
-
-
-📡 Connecting Matrix Engine via WebSockets...
-✅ Wallet is contract owner. Full access granted.
-🏦 Contract USDC Balance: 0.059488
-🌐 PRODUCTION MATRIX ENGINE OPERATIONAL. Initial Nonce: [1489]
-📊 Event listener attached to WebSocket provider.
-📡 WebSocket Stream Cluster active — awaiting block emissions...
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949509 Across Shards...
-⏳ Block #89949510 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949511 Across Shards...
-⏳ Block #89949512 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949513 Across Shards...
-⏳ Block #89949514 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949515 Across Shards...
-⏳ Block #89949516 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949517 Across Shards...
-⏳ Block #89949518 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949519 Across Shards...
-⏳ Block #89949520 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949521 Across Shards...
-⏳ Block #89949522 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949523 Across Shards...
-⏳ Block #89949524 skipped (previous still processing).
-⏳ No profitable batches found in this block.
-[WebSocket Stream Cluster] 🔍 Scanning Block #89949525 Across Shards...
-⏳ Block #89949526 skipped (previous still processi
