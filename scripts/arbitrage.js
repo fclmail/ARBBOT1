@@ -2,34 +2,45 @@ import { ethers } from "ethers";
 import dotenv from "dotenv";
 dotenv.config();
 
-// Swapped configuration variables to prioritize the direct Polygon Bor gateway architecture
+// RPC Endpoints
 const WSS_URL = "wss://polygon-bor-rpc.publicnode.com";
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-// Raw Configuration Strings (Safe from top-level ESM module parsing constraints)
-const RAW_ROUTER_A = "0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff"; // QuickSwap Router
-const RAW_ROUTER_B = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"; // SushiSwap Router
-const RAW_ENFORCER_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
-const RAW_USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"; // Polygon USDC
+// Setup Wallet and Core Infrastructure Addresses
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
+const RAW_ROUTER_A = "0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff";       // QuickSwap Router
+const RAW_ROUTER_B = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506";       // SushiSwap Router
+const RAW_ENFORCER_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"; // Your Custom Contract
+const RAW_USDCE_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";    // Bridged USDC.e (Ending in 4174)
 const RAW_WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
-// Properly checksummed variables assigned dynamically during async initialization
-let ROUTER_A, ROUTER_B, ENFORCER_ADDRESS, USDC_ADDRESS, WETH_ADDRESS;
-let pathToToken, pathToUSDC;
-const tradeSize = ethers.parseUnits("1000", 6); // Test candidate size: 1000 USDC
+// Sanitized Address Checksum Targets
+const ROUTER_A = ethers.getAddress(RAW_ROUTER_A.toLowerCase());
+const ROUTER_B = ethers.getAddress(RAW_ROUTER_B.toLowerCase());
+const ENFORCER_ADDRESS = ethers.getAddress(RAW_ENFORCER_ADDRESS.toLowerCase());
+const USDCE_ADDRESS = ethers.getAddress(RAW_USDCE_ADDRESS.toLowerCase());
+const WETH_ADDRESS = ethers.getAddress(RAW_WETH_ADDRESS.toLowerCase());
 
-// Cleaned ABI matching your smart contract definitions precisely
+// Routing Array Structures
+const pathToToken = [USDCE_ADDRESS, WETH_ADDRESS];
+const pathToUSDC = [WETH_ADDRESS, USDCE_ADDRESS];
+
+// Dynamic Trade Volume Options (Evaluated on-chain by your custom execution hook)
+const CANDIDATE_SIZES = [
+    ethers.parseUnits("100", 6),
+    ethers.parseUnits("500", 6),
+    ethers.parseUnits("1000", 6)
+];
+
+// Fallback Baseline Simulation Parameter (Single Trade Size Option)
+const SINGLE_SIMULATION_SIZE = ethers.parseUnits("1000", 6);
+
 const ENFORCER_ABI = [
-    "constructor(address _usdc, address _vault, uint256 _minimumProfitUSDC, address _aavePoolAddress)",
     "function owner() view returns (address)",
     "function vault() view returns (address)",
     "function usdc() view returns (address)",
-    "function aavePoolAddress() view returns (address)",
     "function minimumProfitUSDC() view returns (uint256)",
     "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
-    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
-    "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] calldata candidateSizes, address[] calldata pathToToken, address[] calldata pathToUSDC, uint256 deadline) external",
-    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) calldata batch) external",
+    "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",
     "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"
 ];
 
@@ -39,187 +50,142 @@ const ERC20_ABI = [
     "function symbol() view returns (string)"
 ];
 
-// Bot execution telemetry metrics
-const contractState = {
+const engineState = {
     totalProfits: 0n,
-    minimumProfit: 0n,
-    totalAttempts: 0,
+    minimumProfitThreshold: 0n,
+    totalBlocksChecked: 0,
     startTime: null
 };
 
 let provider;
 let wallet;
 let enforcerContract;
-let usdcContract;
-let pingInterval;
+let tokenContract;
+let keepAliveInterval;
 
-// Clean Ethers v6 Provider instantiation 
-function createWebSocketProvider(url) {
-    const wsProvider = new ethers.WebSocketProvider(url);
-
-    wsProvider.on("error", (err) => {
-        console.error("⚠️ WebSocket provider error:", err.message || err);
+function initWebSocketProvider(url) {
+    const wsInstance = new ethers.WebSocketProvider(url);
+    wsInstance.on("error", (err) => {
+        console.error("⚠️ Active WebSocket Layer Error:", err.message || err);
     });
-
-    return wsProvider;
+    return wsInstance;
 }
 
-async function initialize() {
+async function initializeEngine() {
     console.log("============================================================");
-    console.log("🚀 ARBBOT1 - FLASH LOAN ARBITRAGE SYSTEM");
-    console.log(`🌐 Network: Polygon Mainnet (Direct Bor Infrastructure)`);
-    console.log(`📅 Started: ${new Date().toLocaleString()}`);
-    console.log("============================================================");
-    console.log("🚀 ARBBOT1 - FLASH LOAN ARBITRAGE BOT");
+    console.log("🚀 ARBBOT1 - PRODUCTION MATRIX FLASH LOAN ENGINE");
+    console.log(`🌐 Infrastructure Context: Polygon Mainnet Execution Shard`);
+    console.log(`📅 Timestamp: ${new Date().toLocaleString()}`);
     console.log("============================================================");
 
-    // Compute compliant lower/mixed case checksum addresses safely at execution time
-    ROUTER_A = ethers.getAddress(RAW_ROUTER_A.toLowerCase());
-    ROUTER_B = ethers.getAddress(RAW_ROUTER_B.toLowerCase());
-    ENFORCER_ADDRESS = ethers.getAddress(RAW_ENFORCER_ADDRESS.toLowerCase());
-    USDC_ADDRESS = ethers.getAddress(RAW_USDC_ADDRESS.toLowerCase());
-    WETH_ADDRESS = ethers.getAddress(RAW_WETH_ADDRESS.toLowerCase());
-
-    // Initialize paths once checksums are set
-    pathToToken = [USDC_ADDRESS, WETH_ADDRESS];
-    pathToUSDC = [WETH_ADDRESS, USDC_ADDRESS];
-
-    provider = createWebSocketProvider(WSS_URL);
+    provider = initWebSocketProvider(WSS_URL);
     
-    // Native Ethers v6 keep-alive using standard provider calls instead of hidden properties
-    pingInterval = setInterval(async () => {
+    // Core keep-alive ping layer to secure streaming channels
+    keepAliveInterval = setInterval(async () => {
         try {
             await provider.getBlockNumber();
         } catch (err) {
-            console.warn("⚠️ Keep-alive ping failed:", err.message);
+            console.warn("⚠️ Telemetry link warning (ping dropout):", err.message);
         }
     }, 15000);
 
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     enforcerContract = new ethers.Contract(ENFORCER_ADDRESS, ENFORCER_ABI, wallet);
-    usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
+    tokenContract = new ethers.Contract(USDCE_ADDRESS, ERC20_ABI, provider);
 
-    console.log(`👤 Bot Wallet: ${wallet.address}`);
-    console.log(`📋 Contract Target: ${enforcerContract.target}`);
+    console.log(`👤 Engine Node Wallet: ${wallet.address}`);
+    console.log(`📋 On-Chain Enforcer Proxy: ${enforcerContract.target}`);
 
-    const contractBalance = await usdcContract.balanceOf(enforcerContract.target);
-    const minProfit = await enforcerContract.minimumProfitUSDC();
-    const decimals = await usdcContract.decimals();
-    const symbol = await usdcContract.symbol();
+    const contractAssetBalance = await tokenContract.balanceOf(enforcerContract.target);
+    const configuredMinProfit = await enforcerContract.minimumProfitUSDC();
+    const assetDecimals = await tokenContract.decimals();
+    const assetSymbol = await tokenContract.symbol();
 
-    console.log(`🏦 Vault Address: ${await enforcerContract.vault()}`);
-    console.log(`📊 Current Contract Balance: ${ethers.formatUnits(contractBalance, decimals)} ${symbol}`);
-    console.log(`🪙 ${symbol} Decimals: ${decimals}, Symbol: ${symbol}`);
-    console.log(`💰 Configured Minimum Profit Requirement: ${ethers.formatUnits(minProfit, decimals)} USDC`);
+    console.log(`🏦 Current Target Balance: ${ethers.formatUnits(contractAssetBalance, assetDecimals)} ${assetSymbol}`);
+    console.log(`💰 Configured On-Chain Minimum Profit Requirement: ${ethers.formatUnits(configuredMinProfit, assetDecimals)} ${assetSymbol}`);
 
-    // Quiet initialization of logs. If public node rejects the query, we bypass silently.
-    let calculatedTotalProfits = 0n;
-    try {
-        const filter = enforcerContract.filters.ArbitrageExecuted();
-        const currentBlock = await provider.getBlockNumber();
-        const events = await enforcerContract.queryFilter(filter, currentBlock - 100, currentBlock);
-        
-        for (const event of events) {
-            calculatedTotalProfits += event.args.profitUSDC;
-        }
-    } catch (error) {
-        // Suppress noisy output for public RPC index limits
-    }
+    engineState.minimumProfitThreshold = configuredMinProfit;
+    engineState.startTime = Date.now();
 
-    contractState.totalProfits = calculatedTotalProfits;
-    contractState.minimumProfit = minProfit;
-    contractState.startTime = Date.now();
-
-    console.log(`📈 Historically Accumulated Profit: ${ethers.formatUnits(calculatedTotalProfits, decimals)} USDC`);
-    console.log("✅ Initialization successful. Real-time scanning engaged.");
-    
-    setupEventListeners();
+    console.log("✅ State Matrix verified. Streaming active...");
+    registerContractEvents();
 }
 
-function setupEventListeners() {
-    // Utilize native event hooks that stream cleanly over WebSockets without calling eth_getLogs
+function registerContractEvents() {
     enforcerContract.on("ArbitrageExecuted", (buyRouter, sellRouter, token, amountIn, beforeBal, afterBal, profitUSDC) => {
-        contractState.totalProfits += profitUSDC;
-        console.log(`\n🎉 [EVENT] Trade Success logged on-chain! Net Profit: +${ethers.formatUnits(profitUSDC, 6)} USDC`);
-        console.log(`📈 Updated Total Accumulated Profit: ${ethers.formatUnits(contractState.totalProfits, 6)} USDC\n`);
+        engineState.totalProfits += profitUSDC;
+        console.log(`\n🎉 [SETTLEMENT EVENT] Trade Executed Successfully On-Chain!`);
+        console.log(`📈 Net Yield Captured: +${ethers.formatUnits(profitUSDC, 6)} USDC.e`);
     });
 }
 
-async function processBlock(blockNumber) {
-    contractState.totalAttempts++;
-    console.log(`📦 [BLOCK] Processing Mainnet Block #${blockNumber} | Total Checked: ${contractState.totalAttempts}`);
-
+async function evaluateBlockState(blockNumber) {
+    engineState.totalBlocksChecked++;
+    
     try {
-        // 1. Simulates price variance across target DEX routers on-chain
+        // Run pre-flight checks using a clean view static call simulation
         const [estimatedFinalUSDC, estimatedProfit] = await enforcerContract.simulateArbitrageProfit(
             ROUTER_A,
             ROUTER_B,
-            tradeSize,
+            SINGLE_SIMULATION_SIZE,
             pathToToken,
             pathToUSDC
         );
 
-        // 2. Evaluate if simulated return passes target threshold limits
-        if (estimatedProfit > contractState.minimumProfit) {
-            console.log(`🔥 Profitable Opportunity Detected! Profit Margin: +${ethers.formatUnits(estimatedProfit, 6)} USDC. Sending Flash Loan Execution Payload...`);
+        // If the route returns a profitable spread over your local target
+        if (estimatedProfit > engineState.minimumProfitThreshold) {
+            console.log(`📦 [BLOCK #${blockNumber}] 🔥 Divergence Discovered! Net profit target met: +${ethers.formatUnits(estimatedProfit, 6)} USDC.e`);
             
-            const deadline = Math.floor(Date.now() / 1000) + 60; // 1-minute transaction execution deadline
+            const transactionDeadline = Math.floor(Date.now() / 1000) + 60;
             
-            // Send the signed transaction straight to the network enforcer contract
-            const tx = await enforcerContract.executeAaveFlashLoanArbitrage(
+            // Dispatch high-priority transaction covering multiple batch candidates
+            const tx = await enforcerContract.executeBestFlashLoanArbitrage(
                 ROUTER_A,
                 ROUTER_B,
-                tradeSize,
+                CANDIDATE_SIZES,
                 pathToToken,
                 pathToUSDC,
-                deadline
+                transactionDeadline,
+                { gasLimit: 800000 }
             );
             
-            console.log(`🚀 Transaction Dispatched! Hash: ${tx.hash}`);
-            await tx.wait(); // Pause thread synchronously until execution is verified in a block
-            console.log(`✅ Transaction fully settled in block.`);
+            console.log(`🚀 Settlement pipeline dispatched! Hash: ${tx.hash}`);
+            await tx.wait();
+        } else {
+            console.log(`📦 [BLOCK #${blockNumber}] ℹ️ Micro-divergence flagged, but variance below target threshold.`);
         }
 
     } catch (err) {
-        // Suppress errors caused by standard lack of market divergence or transient public node dropouts
-        console.debug(`ℹ️ Block simulation skipped or no path divergence:`, err.message);
+        // Catches contract execution reverts cleanly when pricing layers are correlated
+        if (err.code === "CALL_EXCEPTION" || err.message.includes("reverted")) {
+            console.log(`📦 [BLOCK #${blockNumber}] ℹ️ System scanning. No profitable arbitrage divergence present.`);
+        } else {
+            console.error(`📦 [BLOCK #${blockNumber}] ⚠️ Processing Layer Alert:`, err.message);
+        }
     }
 }
 
 async function main() {
     try {
-        await initialize();
+        await initializeEngine();
         
         provider.on("block", async (blockNumber) => {
-            try {
-                await processBlock(blockNumber);
-            } catch (err) {
-                console.error(`❌ Error parsing block ${blockNumber}:`, err.message);
-            }
+            await evaluateBlockState(blockNumber);
         });
-        console.log("📡 Subscribed via WebSocket block event streams successfully.");
+        console.log("📡 WebSocket Event Stream Cluster listening...");
 
-    } catch (fatalError) {
-        console.error("\n❌ Fatal Error during runtime initialization:", fatalError.message);
-        shutdown();
+    } catch (criticalFailure) {
+        console.error("\n❌ Initialization Vector Aborted:", criticalFailure.message);
+        emergencyExit();
     }
 }
 
-function shutdown() {
-    clearInterval(pingInterval);
-    console.log("\n============================================================");
-    console.log("🛑 Shutting down bot...");
-    console.log("============================================================");
-    
-    const runtimeHours = ((Date.now() - (contractState.startTime || Date.now())) / 1000 / 3600).toFixed(2);
-    console.log("\n📊 Final Performance Summary:");
-    console.log(`   Runtime: ${runtimeHours} hours`);
-    console.log(`   Total Blocks Evaluated: ${contractState.totalAttempts}`);
-    console.log(`   Total System Profits Saved: ${ethers.formatUnits(contractState.totalProfits, 6)} USDC`);
+function emergencyExit() {
+    clearInterval(keepAliveInterval);
     process.exit(0);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", emergencyExit);
+process.on("SIGTERM", emergencyExit);
 
 main();
