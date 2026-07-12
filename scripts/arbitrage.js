@@ -5,15 +5,16 @@ dotenv.config();
 // Swapped configuration variables to prioritize the direct Polygon Bor gateway architecture
 const WSS_URL = "wss://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const ENFORCER_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
-const USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"; // Polygon USDC
 
-// Target DEX Routers for Real-Time Price Divergence Scans
-const ROUTER_A = "0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff"; // QuickSwap Router
-const ROUTER_B = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"; // SushiSwap Router
+// Dynamic formatters ensuring perfect Ethers v6 checksum validation matching
+const ROUTER_A = ethers.getAddress("0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff"); // QuickSwap Router
+const ROUTER_B = ethers.getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"); // SushiSwap Router
+
+const ENFORCER_ADDRESS = ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc");
+const USDC_ADDRESS = ethers.getAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"); // Polygon USDC
+const WETH_ADDRESS = ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619");
 
 // Asset Swapping Paths (USDC -> WETH -> USDC)
-const WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 const pathToToken = [USDC_ADDRESS, WETH_ADDRESS];
 const pathToUSDC = [WETH_ADDRESS, USDC_ADDRESS];
 const tradeSize = ethers.parseUnits("1000", 6); // Test candidate size: 1000 USDC
