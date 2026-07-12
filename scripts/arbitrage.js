@@ -8,6 +8,16 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const ENFORCER_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"; // Polygon USDC
 
+// Target DEX Routers for Real-Time Price Divergence Scans
+const ROUTER_A = "0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff"; // QuickSwap Router
+const ROUTER_B = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"; // SushiSwap Router
+
+// Asset Swapping Paths (USDC -> WETH -> USDC)
+const WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+const pathToToken = [USDC_ADDRESS, WETH_ADDRESS];
+const pathToUSDC = [WETH_ADDRESS, USDC_ADDRESS];
+const tradeSize = ethers.parseUnits("1000", 6); // Test candidate size: 1000 USDC
+
 // Cleaned ABI matching your smart contract definitions precisely
 const ENFORCER_ABI = [
     "constructor(address _usdc, address _vault, uint256 _minimumProfitUSDC, address _aavePoolAddress)",
@@ -126,9 +136,43 @@ function setupEventListeners() {
 
 async function processBlock(blockNumber) {
     contractState.totalAttempts++;
-    // Explicit visibility update to prevent CI logs from looking frozen
     console.log(`📦 [BLOCK] Processing Mainnet Block #${blockNumber} | Total Checked: ${contractState.totalAttempts}`);
-    // Mempool verification / router strategy payload evaluations go here...
+
+    try {
+        // 1. Simulates price variance across target DEX routers on-chain
+        const [estimatedFinalUSDC, estimatedProfit] = await enforcerContract.simulateArbitrageProfit(
+            ROUTER_A,
+            ROUTER_B,
+            tradeSize,
+            pathToToken,
+            pathToUSDC
+        );
+
+        // 2. Evaluate if simulated return passes target threshold limits
+        if (estimatedProfit > contractState.minimumProfit) {
+            console.log(`🔥 Profitable Opportunity Detected! Profit Margin: +${ethers.formatUnits(estimatedProfit, 6)} USDC. Sending Flash Loan Execution Payload...`);
+            
+            const deadline = Math.floor(Date.now() / 1000) + 60; // 1-minute transaction execution deadline
+            
+            // Send the signed transaction straight to the network enforcer contract
+            const tx = await enforcerContract.executeAaveFlashLoanArbitrage(
+                ROUTER_A,
+                ROUTER_B,
+                tradeSize,
+                pathToToken,
+                pathToUSDC,
+                deadline
+            );
+            
+            console.log(`🚀 Transaction Dispatched! Hash: ${tx.hash}`);
+            await tx.wait(); // Pause thread synchronously until execution is verified in a block
+            console.log(`✅ Transaction fully settled in block.`);
+        }
+
+    } catch (err) {
+        // Suppress errors caused by standard lack of market divergence or transient public node dropouts
+        console.debug(`ℹ️ Block simulation skipped or no path divergence:`, err.message);
+    }
 }
 
 async function main() {
