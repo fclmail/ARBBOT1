@@ -1,191 +1,632 @@
-import { ethers } from "ethers";
-import dotenv from "dotenv";
-dotenv.config();
+Gmail is better on the app
+Secure, fast & organized email
+Open
+x⚡jslog
+C
+CASHCOIN
+to CASHCOIN, scimaxmovies, scimax7.7, +1
+2 days agoDetails
+/**  
+ * ARBBOT1 - Production Node.js Engine (FIXED)  
+ * Network: Polygon (POSIX)  
+ * Architecture: Vault-Arbitrage Batch Executor with Profit Capture  
+ * Version: Ethers v6 Direct Modules + ES Modules Compatible  
+ */  
 
-// RPC Endpoints
-const WSS_URL = "wss://polygon-bor-rpc.publicnode.com";
+import { Wallet, Contract, JsonRpcProvider, WebSocketProvider, parseUnits, formatUnits, getAddress } from "ethers";  
 
-// Setup Wallet and Core Infrastructure Addresses
-const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
-const RAW_ROUTER_A = "0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff";       // QuickSwap Router
-const RAW_ROUTER_B = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506";       // SushiSwap Router
-const RAW_ENFORCER_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"; // Your Custom Contract
-const RAW_USDCE_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";    // Bridged USDC.e (Ending in 4174)
-const RAW_WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+// ==========================================  
+// 1. CONFIGURATION & ENVIRONMENT SETUP  
+// ==========================================  
+const CONFIG = {  
+    WSS_RPC: "wss://polygon-bor-rpc.publicnode.com",  
+    HTTP_RPC: "https://polygon-bor-rpc.publicnode.com",  
+   
+    PRIVATE_KEY: process.env.PRIVATE_KEY || "", // MUST be set via env  
+   
+    CONTRACT_ADDRESS: getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"),  
+    USDC_ADDRESS: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),  
+   
+    TOKENS: {  
+        USDC: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),  
+        WETH: getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),  
+        WMATIC: getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),  
+        DAI: "0x8f3Cf7aD23Cd3CaDeA96143C01F6f155802654e5a9",  
+        USDT: getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")  
+    },  
 
-// Sanitized Address Checksum Targets
-const ROUTER_A = ethers.getAddress(RAW_ROUTER_A.toLowerCase());
-const ROUTER_B = ethers.getAddress(RAW_ROUTER_B.toLowerCase());
-const ENFORCER_ADDRESS = ethers.getAddress(RAW_ENFORCER_ADDRESS.toLowerCase());
-const USDCE_ADDRESS = ethers.getAddress(RAW_USDCE_ADDRESS.toLowerCase());
-const WETH_ADDRESS = ethers.getAddress(RAW_WETH_ADDRESS.toLowerCase());
+    ROUTERS: {  
+        QUICK_SWAP: getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),  
+        SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"),  
+        DFYN: "0xA102072AEE07Cccf2a9b78B1E54D1B2aF8f38f3"  
+    },  
 
-// Routing Array Structures
-const pathToToken = [USDCE_ADDRESS, WETH_ADDRESS];
-const pathToUSDC = [WETH_ADDRESS, USDCE_ADDRESS];
+    BATCH_SIZE_LIMIT: 25,  
+    STUCK_TX_TIMEOUT_MS: 8000,  
+    MIN_PROFIT_USDC: parseUnits("0.00001", 6), // Minimum profit threshold  
+    BASE_ARBITRAGE_AMOUNT: parseUnits(".4", 6), // Amount per arbitrage leg  
+    CANDIDATE_SIZES: [  
+        parseUnits("100", 6),  
+        parseUnits("250", 6),  
+        parseUnits("500", 6),  
+        parseUnits("1000", 6),  
+        parseUnits("2000", 6)  
+    ]  
+};  
 
-// Dynamic Trade Volume Options (Evaluated on-chain by your custom execution hook)
-const CANDIDATE_SIZES = [
-    ethers.parseUnits("100", 6),
-    ethers.parseUnits("500", 6),
-    ethers.parseUnits("1000", 6)
-];
+// ==========================================  
+// 2. FULL CONTRACT ABI DEFINITION  
+// ==========================================  
+const ENFORCER_ABI = [  
+    // --- Batch Execution ---  
+    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",  
+   
+    // --- Single Vault Arbitrage ---  
+    "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",  
+   
+    // --- Flash Loan Single ---  
+    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",  
+   
+    // --- Best Size Auto Flash Loan ---  
+    "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",  
+   
+    // --- Simulation ---  
+    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC) external view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",  
+    "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC) external view returns (uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit)",  
+   
+    // --- Owner Functions ---  
+    "function withdraw(uint256 amount) external",  
+    "function setVault(address _newVault) external",  
+    "function owner() external view returns (address)",  
+    "function vault() external view returns (address)",  
+    "function minimumProfitUSDC() external view returns (uint256)",  
+   
+    // --- ERC20 ---  
+    "function balanceOf(address account) external view returns (uint256)",  
+   
+    // Events  
+    "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"  
+];  
 
-// Fallback Baseline Simulation Parameter (Single Trade Size Option)
-const SINGLE_SIMULATION_SIZE = ethers.parseUnits("1000", 6);
+const ERC20_ABI = [  
+    "function balanceOf(address account) external view returns (uint256)",  
+    "function approve(address spender, uint256 amount) external returns (bool)",  
+    "function allowance(address owner, address spender) external view returns (uint256)",  
+    "function transfer(address recipient, uint256 amount) external returns (bool)"  
+];  
 
-const ENFORCER_ABI = [
-    "function owner() view returns (address)",
-    "function vault() view returns (address)",
-    "function usdc() view returns (address)",
-    "function minimumProfitUSDC() view returns (uint256)",
-    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] calldata pathToToken, address[] calldata pathToUSDC) view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
-    "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",
-    "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"
-];
+// ==========================================  
+// 3. GLOBAL STATE  
+// ==========================================  
+let providerWss;  
+let providerHttp;  
+let wallet;  
+let enforcerContract;  
+let usdcContract;  
 
-const ERC20_ABI = [
-    "function balanceOf(address account) view returns (uint256)",
-    "function decimals() view returns (uint8)",
-    "function symbol() view returns (string)"
-];
+let currentNonce = -1;  
+let isProcessingBlock = false;  
+let txTimeoutTracker = null;  
+let profitAccumulated = 0n;  
+let withdrawThreshold = parseUnits("10", 6); // Auto-withdraw after 10 USDC profit  
+let lastWithdrawBlock = 0;  
 
-const engineState = {
-    totalProfits: 0n,
-    minimumProfitThreshold: 0n,
-    totalBlocksChecked: 0,
-    startTime: null
-};
+// ==========================================  
+// 4. INITIALIZATION (FIXED)  
+// ==========================================  
+async function initialize() {  
+    console.log("📡 Connecting Matrix Engine via WebSockets...");  
+   
+    if (!CONFIG.PRIVATE_KEY || CONFIG.PRIVATE_KEY === "0x0000000000000000000000000000000000000000000000000000000000000000") {  
+        throw new Error("❌ Fatal: Valid PRIVATE_KEY must be supplied via environment variable.");  
+    }  
 
-let provider;
-let wallet;
-let enforcerContract;
-let tokenContract;
-let keepAliveInterval;
+    // FIX #2: Create providers with ENS disabled  
+    providerHttp = new JsonRpcProvider(CONFIG.HTTP_RPC, undefined, {  
+        staticNetwork: true,  // Prevents ENS lookup  
+    });  
+   
+    providerWss = new WebSocketProvider(CONFIG.WSS_RPC, undefined, {  
+        staticNetwork: true,  
+    });  
+   
+    // Explicitly disable ENS resolver  
+    providerHttp.ens = null;  
+    providerWss.ens = null;  
+   
+    wallet = new Wallet(CONFIG.PRIVATE_KEY, providerHttp);  
+    enforcerContract = new Contract(CONFIG.CONTRACT_ADDRESS, ENFORCER_ABI, wallet);  
+    usdcContract = new Contract(CONFIG.USDC_ADDRESS, ERC20_ABI, wallet);  
 
-function initWebSocketProvider(url) {
-    const wsInstance = new ethers.WebSocketProvider(url);
-    wsInstance.on("error", (err) => {
-        console.error("⚠️ Active WebSocket Layer Error:", err.message || err);
-    });
-    return wsInstance;
-}
+    // Verify ownership  
+    const contractOwner = await enforcerContract.owner();  
+    if (contractOwner.toLowerCase() !== wallet.address.toLowerCase()) {  
+        console.warn(`⚠️ WARNING: Wallet ${wallet.address} is NOT the contract owner.`);  
+        console.warn(`   Contract owner is: ${contractOwner}`);  
+        console.warn("   Only simulate operations. Withdraw and batch exec will fail.");  
+    } else {  
+        console.log(`✅ Wallet is contract owner. Full access granted.`);  
+    }  
 
-async function initializeEngine() {
-    console.log("============================================================");
-    console.log("🚀 ARBBOT1 - PRODUCTION MATRIX FLASH LOAN ENGINE");
-    console.log(`🌐 Infrastructure Context: Polygon Mainnet Execution Shard`);
-    console.log(`📅 Timestamp: ${new Date().toLocaleString()}`);
-    console.log("============================================================");
+    currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
+   
+    const contractBalance = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);  
+    console.log(`🏦 Contract USDC Balance: ${formatUnits(contractBalance, 6)}`);  
+   
+    console.log(`🌐 PRODUCTION MATRIX ENGINE OPERATIONAL. Initial Nonce: [${currentNonce}]`);  
 
-    provider = initWebSocketProvider(WSS_URL);
-    
-    // Core keep-alive ping layer to secure streaming channels
-    keepAliveInterval = setInterval(async () => {
-        try {
-            await provider.getBlockNumber();
-        } catch (err) {
-            console.warn("⚠️ Telemetry link warning (ping dropout):", err.message);
-        }
-    }, 15000);
+    // Setup event listener (FIX: use WebSocket for reliable filters)  
+    setupLogListeners();  
 
-    wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    enforcerContract = new ethers.Contract(ENFORCER_ADDRESS, ENFORCER_ABI, wallet);
-    tokenContract = new ethers.Contract(USDCE_ADDRESS, ERC20_ABI, provider);
+    // Block processing loop  
+    providerWss.on("block", async (blockNumber) => {  
+        if (isProcessingBlock) {  
+            console.log(`⏳ Block #${blockNumber} skipped (previous still processing).`);  
+            return;  
+        }  
+       
+        try {  
+            isProcessingBlock = true;  
+            await processBlockMatrix(blockNumber);  
+        } catch (error) {  
+            console.error(`❌ Error processing block #${blockNumber}:`, error.message);  
+        } finally {  
+            isProcessingBlock = false;  
+        }  
+    });  
 
-    console.log(`👤 Engine Node Wallet: ${wallet.address}`);
-    console.log(`📋 On-Chain Enforcer Proxy: ${enforcerContract.target}`);
+    console.log("📡 WebSocket Stream Cluster active — awaiting block emissions...");  
+}  
 
-    const contractAssetBalance = await tokenContract.balanceOf(enforcerContract.target);
-    const configuredMinProfit = await enforcerContract.minimumProfitUSDC();
-    const assetDecimals = await tokenContract.decimals();
-    const assetSymbol = await tokenContract.symbol();
+// ==========================================  
+// 5. EVENT LISTENERS (FIXED - NO STALE FILTERS)  
+// ==========================================  
+function setupLogListeners() {  
+    // FIX #3: Use WebSocket provider for event subscriptions  
+    // This avoids the "filter not found" error on HTTP providers  
+   
+    const contractOnWss = new Contract(CONFIG.CONTRACT_ADDRESS, ENFORCER_ABI, providerWss);  
+   
+    contractOnWss.on("ArbitrageExecuted", (buyRouter, sellRouter, token, amountInUSDC, beforeBal, afterBal, profitUSDC, event) => {  
+        const profitFormatted = formatUnits(profitUSDC, 6);  
+        console.log(`💰 ArbitrageExecuted: profit=${profitFormatted} USDC | tx=${event.log.transactionHash.slice(0, 10)}...`);  
+       
+        // Accumulate profit tracking  
+        profitAccumulated += profitUSDC;  
+       
+        // Auto-withdraw if profit threshold reached  
+        if (profitAccumulated >= withdrawThreshold) {  
+            console.log(`🚀 Profit ${formatUnits(profitAccumulated, 6)} USDC >= threshold. Attempting withdraw...`);  
+            withdrawProfits();  
+        }  
+    });  
+   
+    console.log("📊 Event listener attached to WebSocket provider.");  
+}  
 
-    console.log(`🏦 Current Target Balance: ${ethers.formatUnits(contractAssetBalance, assetDecimals)} ${assetSymbol}`);
-    console.log(`💰 Configured On-Chain Minimum Profit Requirement: ${ethers.formatUnits(configuredMinProfit, assetDecimals)} ${assetSymbol}`);
+// ==========================================  
+// 6. PROFIT SIMULATION  
+// ==========================================  
+async function simulatePair(buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC) {  
+    try {  
+        const [estimatedFinalUSDC, estimatedProfit] = await enforcerContract.simulateArbitrageProfit(  
+            buyRouter,  
+            sellRouter,  
+            amountInUSDC,  
+            pathToToken,  
+            pathToUSDC  
+        );  
+       
+        return { estimatedFinalUSDC, estimatedProfit };  
+    } catch (error) {  
+        // Simulation might fail on dry run, that's ok  
+        return { estimatedFinalUSDC: 0n, estimatedProfit: 0n };  
+    }  
+}  
 
-    engineState.minimumProfitThreshold = configuredMinProfit;
-    engineState.startTime = Date.now();
+// ==========================================  
+// 7. MATRIX GENERATION  
+// ==========================================  
+async function generateMatrixPayloads(availableBalance) {  
+    const routerNames = Object.entries(CONFIG.ROUTERS);  
+    const tokens = Object.entries(CONFIG.TOKENS);  
+    const batches = [];  
+   
+    let currentBatch = {  
+        buyRouters: [],  
+        sellRouters: [],  
+        amountsInUSDC: [],  
+        pathsToToken: [],  
+        pathsToUSDC: [],  
+        deadline: Math.floor(Date.now() / 1000) + 120  
+    };  
+   
+    let batchCount = 0;  
+   
+    for (let i = 0; i < routerNames.length; i++) {  
+        const [buyName, buyRouter] = routerNames[i];  
+       
+        for (let j = 0; j < routerNames.length; j++) {  
+            if (i === j) continue; // Skip same router pairs  
+           
+            const [sellName, sellRouter] = routerNames[j];  
+           
+            for (let t = 0; t < tokens.length; t++) {  
+                const [tokenName, tokenAddr] = tokens[t];  
+                if (tokenAddr === CONFIG.USDC_ADDRESS) continue; // Skip USDC itself  
+               
+                const amountInUSDC = CONFIG.BASE_ARBITRAGE_AMOUNT;  
+                const pathToToken = [CONFIG.USDC_ADDRESS, tokenAddr];  
+                const pathToUSDC = [tokenAddr, CONFIG.USDC_ADDRESS];  
+               
+                // Simulate to check profitability  
+                const { estimatedProfit } = await simulatePair(  
+                    buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC  
+                );  
+               
+                if (estimatedProfit < CONFIG.MIN_PROFIT_USDC) continue; // Skip unprofitable  
+               
+                // Add to current batch  
+                currentBatch.buyRouters.push(buyRouter);  
+                currentBatch.sellRouters.push(sellRouter);  
+                currentBatch.amountsInUSDC.push(amountInUSDC);  
+                currentBatch.pathsToToken.push(pathToToken);  
+                currentBatch.pathsToUSDC.push(pathToUSDC);  
+               
+                batchCount++;  
+               
+                // If batch is full, start a new one  
+                if (batchCount >= CONFIG.BATCH_SIZE_LIMIT) {  
+                    batches.push({ ...currentBatch });  
+                    currentBatch = {  
+                        buyRouters: [],  
+                        sellRouters: [],  
+                        amountsInUSDC: [],  
+                        pathsToToken: [],  
+                        pathsToUSDC: [],  
+                        deadline: Math.floor(Date.now() / 1000) + 120  
+                    };  
+                    batchCount = 0;  
+                }  
+            }  
+        }  
+    }  
+   
+    // Push remaining items  
+    if (batchCount > 0) {  
+        batches.push({ ...currentBatch });  
+    }  
+   
+    return batches;  
+}  
 
-    console.log("✅ State Matrix verified. Streaming active...");
-    registerContractEvents();
-}
+// ==========================================  
+// 8. PROFIT WITHDRAWAL  
+// ==========================================  
+async function withdrawProfits() {  
+    try {  
+        const contractBalance = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);  
+       
+        if (contractBalance <= 0n) {  
+            console.log("⚠️ No USDC in contract to withdraw.");  
+            return;  
+        }  
+       
+        console.log(`💸 Withdrawing ${formatUnits(contractBalance, 6)} USDC to owner...`);  
+       
+        const tx = await enforcerContract.withdraw(contractBalance, {  
+            gasLimit: 100000,  
+            gasPrice: await providerHttp.getFeeData().then(f => f.gasPrice)  
+        });  
+       
+        const receipt = await tx.wait();  
+        console.log(`✅ Withdraw successful: ${receipt.hash}`);  
+       
+        profitAccumulated = 0n;  
+        lastWithdrawBlock = receipt.blockNumber;  
+       
+    } catch (error) {  
+        console.error(`❌ Withdraw failed: ${error.message}`);  
+    }  
+}  
 
-function registerContractEvents() {
-    enforcerContract.on("ArbitrageExecuted", (buyRouter, sellRouter, token, amountIn, beforeBal, afterBal, profitUSDC) => {
-        engineState.totalProfits += profitUSDC;
-        console.log(`\n🎉 [SETTLEMENT EVENT] Trade Executed Successfully On-Chain!`);
-        console.log(`📈 Net Yield Captured: +${ethers.formatUnits(profitUSDC, 6)} USDC.e`);
-    });
-}
+// ==========================================  
+// 9. CORE BLOCK PROCESSOR (FIXED)  
+// ==========================================  
+async function processBlockMatrix(blockNumber) {  
+    console.log(`[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} Across Shards...`);  
+   
+    // Step 1: Check contract USDC balance  
+    const contractBalance = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);  
+   
+    if (contractBalance < CONFIG.BASE_ARBITRAGE_AMOUNT) {  
+        console.log(`⚠️ Low vault balance: ${formatUnits(contractBalance, 6)} USDC. Need funding.`);  
+        return;  
+    }  
+   
+    // Step 2: Generate profitable batches  
+    const batches = await generateMatrixPayloads(contractBalance);  
+   
+    if (batches.length === 0) {  
+        console.log("⏳ No profitable batches found in this block.");  
+        return;  
+    }  
+   
+    // Step 3: Get fresh fee data  
+    const feeData = await providerHttp.getFeeData();  
+    const maxFeePerGas = feeData.gasPrice * 2n;  
+   
+    // Step 4: Process each batch sequentially  
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {  
+        try {  
+            console.log(`🚀 Sending Batch Structure #${batchIdx + 1} to Fastlane Engine via Nonce #${currentNonce}`);  
+           
+            const batch = batches[batchIdx];  
+           
+            // FIX #1: Use static call first to verify it will succeed  
+            const canExecute = await providerHttp.call({  
+                from: wallet.address,  
+                to: CONFIG.CONTRACT_ADDRESS,  
+                data: enforcerContract.interface.encodeFunctionData("executeFlashBatchArbitrage", [batch]),  
+                gasLimit: 5000000  
+            }).then(() => true).catch(() => false);  
+           
+            if (!canExecute) {  
+                console.log(`⏭️ Batch #${batchIdx + 1} failed simulation. Skipping.`);  
+                continue;  
+            }  
+           
+            // FIX #4: Correct nonce management — get fresh nonce for each tx  
+            const nonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
+           
+            const tx = await enforcerContract.executeFlashBatchArbitrage(batch, {  
+                nonce: nonce,  
+                gasLimit: 5000000,  
+                maxFeePerGas: maxFeePerGas,  
+                maxPriorityFeePerGas: maxFeePerGas / 10n,  
+                type: 2  
+            });  
+           
+            console.log(`✅ Tx sent: ${tx.hash}`);  
+           
+            // Wait for confirmation with timeout  
+            const receipt = await Promise.race([  
+                tx.wait(),  
+                new Promise((_, reject) =>  
+                    setTimeout(() => reject(new Error("TX_TIMEOUT")), CONFIG.STUCK_TX_TIMEOUT_MS)  
+                )  
+            ]);  
+           
+            if (receipt) {  
+                console.log(`✅ Batch #${batchIdx + 1} confirmed in block ${receipt.blockNumber}`);  
+               
+                // Update nonce tracker  
+                currentNonce = receipt.blockNumber;  
+               
+                // Check contract balance after execution  
+                const newBalance = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);  
+                console.log(`💰 Contract USDC Balance: ${formatUnits(newBalance, 6)}`);  
+               
+                // Auto-withdraw if enough profit accumulated  
+                if (profitAccumulated >= withdrawThreshold) {  
+                    console.log(`🎯 Profit threshold hit! Withdrawing ${formatUnits(profitAccumulated, 6)} USDC...`);  
+                    await withdrawProfits();  
+                }  
+            }  
+           
+        } catch (txError) {  
+            if (txError.message === "TX_TIMEOUT") {  
+                console.log(`⏰ Batch #${batchIdx + 1} transaction timeout. Moving on.`);  
+            } else if (txError.message.includes("replaced") || txError.message.includes("repriced")) {  
+                console.log(`🔄 Transaction was replaced/repriced for batch #${batchIdx + 1}. Continuing.`);  
+            } else if (txError.message.includes("already known")) {  
+                console.log(`📡 Transaction already in mempool for batch #${batchIdx + 1}.`);  
+            } else if (txError.message.includes("nonce too low")) {  
+                console.log(`🔄 Nonce mismatch. Refreshing nonce...`);  
+                currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
+            } else if (txError.message.includes("insufficient funds")) {  
+                console.log(`💔 Insufficient MATIC for gas. Fund wallet immediately!`);  
+                break; // Stop further processing until funded  
+            } else {  
+                console.error(`❌ Batch #${batchIdx + 1} failed: ${txError.message.slice(0, 200)}`);  
+            }  
+        }  
+    }  
+}  
 
-async function evaluateBlockState(blockNumber) {
-    engineState.totalBlocksChecked++;
-    
-    try {
-        // Run pre-flight checks using a clean view static call simulation
-        const [estimatedFinalUSDC, estimatedProfit] = await enforcerContract.simulateArbitrageProfit(
-            ROUTER_A,
-            ROUTER_B,
-            SINGLE_SIMULATION_SIZE,
-            pathToToken,
-            pathToUSDC
-        );
+// ==========================================  
+// 10. PROFIT CAPTURE VAULT FUNDING PRESET  
+// ==========================================  
+/*  
+ * HOW TO CAPTURE PROFITS & INCREASE CONTRACT BALANCE:  
+ *  
+ * Problem #1: Contract balance wasn't increasing  
+ * Root Cause: The contract starts with 0 USDC. `executeFlashBatchArbitrage`  
+ *   uses the contract's own USDC balance as capital. With 0 balance,  
+ *   the internal check `batch.amountsInUSDC[i] > usdc.balanceOf(address(this))`  
+ *   skips ALL trades. Nothing executes.  
+ *  
+ * Fix #1: Fund the contract with initial capital  
+ *   - Send USDC to the contract address (0xB1a557...4Fcc)  
+ *   - Recommend starting capital: 5,000 - 10,000 USDC  
+ *   - After each profitable batch, USDC grows inside the contract  
+ *  
+ * Fix #2: Set vault address if using `executeArbitrage`  
+ *   `executeArbitrage` checks `msg.sender == owner || msg.sender == vault`  
+ *   Call: `enforcerContract.setVault(vaultAddress)`  
+ *   Then vault can call `executeArbitrage` directly  
+ *  
+ * Problem #2: Profits not withdrawn  
+ * Root Cause: The JS only calls `executeFlashBatchArbitrage` which leaves  
+ *   all profits in the contract. No separate withdraw call was made.  
+ *  
+ * Fix #3: Auto-withdraw mechanism (implemented above)  
+ *   - `profitAccumulated` tracks profits from events  
+ *   - When profit >= `withdrawThreshold` (10 USDC), auto-call `withdraw()`  
+ *   - Profits move from contract -> owner wallet  
+ *  
+ * Problem #3: ENS resolver error  
+ * Root Cause: Ethers v6 by default resolves ENS names on every transaction.  
+ *   On Polygon, there's no ENS resolver, causing silent failures.  
+ *  
+ * Fix #4: `staticNetwork: true` in provider options (implemented above)  
+ *   - Disables ENS lookups  
+ *   - Provider nullifies ENS resolver  
+ */  
 
-        // If the route returns a profitable spread over your local target
-        if (estimatedProfit > engineState.minimumProfitThreshold) {
-            console.log(`📦 [BLOCK #${blockNumber}] 🔥 Divergence Discovered! Net profit target met: +${ethers.formatUnits(estimatedProfit, 6)} USDC.e`);
-            
-            const transactionDeadline = Math.floor(Date.now() / 1000) + 60;
-            
-            // Dispatch high-priority transaction covering multiple batch candidates
-            const tx = await enforcerContract.executeBestFlashLoanArbitrage(
-                ROUTER_A,
-                ROUTER_B,
-                CANDIDATE_SIZES,
-                pathToToken,
-                pathToUSDC,
-                transactionDeadline,
-                { gasLimit: 800000 }
-            );
-            
-            console.log(`🚀 Settlement pipeline dispatched! Hash: ${tx.hash}`);
-            await tx.wait();
-        } else {
-            console.log(`📦 [BLOCK #${blockNumber}] ℹ️ Micro-divergence flagged, but variance below target threshold.`);
-        }
+// ==========================================  
+// 11. FUNDING & WITHDRAWAL COMMANDS  
+// ==========================================  
+async function fundContract(amountUSDC) {  
+    console.log(`💸 Funding contract with ${formatUnits(amountUSDC, 6)} USDC...`);  
+   
+    // Check approval  
+    const allowance = await usdcContract.allowance(wallet.address, CONFIG.CONTRACT_ADDRESS);  
+    if (allowance < amountUSDC) {  
+        console.log("📝 Approving USDC transfer...");  
+        const approveTx = await usdcContract.approve(CONFIG.CONTRACT_ADDRESS, amountUSDC);  
+        await approveTx.wait();  
+        console.log(`✅ Approval tx: ${approveTx.hash}`);  
+    }  
+   
+    // Transfer USDC directly to contract  
+    const tx = await usdcContract.transfer(CONFIG.CONTRACT_ADDRESS, amountUSDC);  
+    const receipt = await tx.wait();  
+    console.log(`✅ Funded: ${receipt.hash}`);  
+    console.log(`💰 New contract balance: ${formatUnits(await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS), 6)} USDC`);  
+}  
 
-    } catch (err) {
-        // Catches contract execution reverts cleanly when pricing layers are correlated
-        if (err.code === "CALL_EXCEPTION" || err.message.includes("reverted")) {
-            console.log(`📦 [BLOCK #${blockNumber}] ℹ️ System scanning. No profitable arbitrage divergence present.`);
-        } else {
-            console.error(`📦 [BLOCK #${blockNumber}] ⚠️ Processing Layer Alert:`, err.message);
-        }
-    }
-}
+async function emergencyWithdraw(amountUSDC) {  
+    const amount = parseUnits(amountUSDC.toString(), 6);  
+    console.log(`🚨 Emergency withdraw: ${amountUSDC} USDC...`);  
+   
+    const tx = await enforcerContract.withdraw(amount);  
+    const receipt = await tx.wait();  
+    console.log(`✅ Emergency withdraw: ${receipt.hash}`);  
+}  
 
-async function main() {
-    try {
-        await initializeEngine();
-        
-        provider.on("block", async (blockNumber) => {
-            await evaluateBlockState(blockNumber);
+async function withdrawAll() {  
+    const balance = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);  
+    if (balance > 0n) {  
+        await emergencyWithdraw(formatUnits(balance, 6));  
+    } else {  
+        console.log("No USDC to withdraw.");  
+    }  
+}  
+
+// ==========================================  
+// 12. COMMAND LINE INTERFACE  
+// ==========================================  
+async function main() {  
+    const args = process.argv.slice(2);  
+    const command = args[0];  
+   
+    if (command === "fund" && args[1]) {  
+        const amount = parseUnits(args[1], 6);  
+        await initialize();  
+        await fundContract(amount);  
+    } else if (command === "withdraw" && args[1]) {  
+        const amount = parseUnits(args[1], 6);  
+        await initialize();  
+        const tx = await enforcerContract.withdraw(amount);  
+        await tx.wait();  
+        console.log(`✅ Withdrawn: ${args[1]} USDC`);  
+    } else if (command === "withdraw-all") {  
+        await initialize();  
+        await withdrawAll();  
+    } else if (command === "balance") {  
+        await initialize();  
+        const contractBal = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);  
+        const walletBal = await usdcContract.balanceOf(wallet.address);  
+        console.log(`🏦 Contract: ${formatUnits(contractBal, 6)} USDC`);  
+        console.log(`👛 Wallet: ${formatUnits(walletBal, 6)} USDC`);  
+        console.log(`⛽ MATIC: ${formatUnits(await providerHttp.getBalance(wallet.address), 18)}`);  
+    } else if (command === "status") {  
+        await initialize();  
+        const owner = await enforcerContract.owner();  
+        const vault = await enforcerContract.vault();  
+        const minProfit = await enforcerContract.minimumProfitUSDC();  
+        const contractBal = await usdcContract.balanceOf(CONFIG.CONTRACT_ADDRESS);  
+        console.log(`👤 Owner: ${owner}`);  
+        console.log(`🏛️ Vault: ${vault}`);  
+        console.log(`📉 Min Profit: ${formatUnits(minProfit, 6)} USDC`);  
+        console.log(`💰 Contract Balance: ${formatUnits(contractBal, 6)} USDC`);  
+        console.log(`👛 Wallet Balance: ${formatUnits(await usdcContract.balanceOf(wallet.address), 6)} USDC`);  
+    } else if (command === "set-vault" && args[1]) {  
+        await initialize();  
+        const tx = await enforcerContract.setVault(getAddress(args[1]));  
+        await tx.wait();  
+        console.log(`✅ Vault set to: ${args[1]}`);  
+    } else {  
+        // Default: run the bot  
+        console.log("🚀 ARBBOT1 Production Engine Starting...");  
+        console.log("Commands:");  
+        console.log("  npm start              - Run bot (default)");  
+        console.log("  npm run fund <amount>  - Fund contract with USDC");  
+        console.log("  npm run withdraw <amt> - Withdraw USDC from contract");  
+        console.log("  npm run withdraw-all   - Withdraw all USDC");  
+        console.log("  npm run balance        - Check balances");  
+        console.log("  npm run status         - Full contract status");  
+        console.log("  npm run set-vault <addr> - Set vault address");  
+        console.log("");  
+       
+        await initialize();  
+       
+        // Keep alive  
+        process.on("SIGINT", async () => {  
+            console.log("\n🛑 Shutting down...");  
+            await withdrawAll();
+            process.exit(0);
         });
-        console.log("📡 WebSocket Event Stream Cluster listening...");
-
-    } catch (criticalFailure) {
-        console.error("\n❌ Initialization Vector Aborted:", criticalFailure.message);
-        emergencyExit();
+       
+        process.on("SIGTERM", async () => {
+            console.log("\n🛑 Terminating...");
+            await withdrawAll();
+            process.exit(0);
+        });
     }
 }
 
-function emergencyExit() {
-    clearInterval(keepAliveInterval);
-    process.exit(0);
-}
+main().catch((error) => {
+    console.error("💥 Fatal Error:", error);
+    process.exit(1);
+});
 
-process.on("SIGINT", emergencyExit);
-process.on("SIGTERM", emergencyExit);
 
-main();
+
+logs
+
+
+
+📡 Connecting Matrix Engine via WebSockets...
+✅ Wallet is contract owner. Full access granted.
+🏦 Contract USDC Balance: 0.059488
+🌐 PRODUCTION MATRIX ENGINE OPERATIONAL. Initial Nonce: [1489]
+📊 Event listener attached to WebSocket provider.
+📡 WebSocket Stream Cluster active — awaiting block emissions...
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949509 Across Shards...
+⏳ Block #89949510 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949511 Across Shards...
+⏳ Block #89949512 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949513 Across Shards...
+⏳ Block #89949514 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949515 Across Shards...
+⏳ Block #89949516 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949517 Across Shards...
+⏳ Block #89949518 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949519 Across Shards...
+⏳ Block #89949520 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949521 Across Shards...
+⏳ Block #89949522 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949523 Across Shards...
+⏳ Block #89949524 skipped (previous still processing).
+⏳ No profitable batches found in this block.
+[WebSocket Stream Cluster] 🔍 Scanning Block #89949525 Across Shards...
+⏳ Block #89949526 skipped (previous still processi
