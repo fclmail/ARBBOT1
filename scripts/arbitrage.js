@@ -6,17 +6,16 @@ dotenv.config();
 const WSS_URL = "wss://polygon-bor-rpc.publicnode.com";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
-// Dynamic formatters ensuring perfect Ethers v6 checksum validation matching
-const ROUTER_A = ethers.getAddress("0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff"); // QuickSwap Router
-const ROUTER_B = ethers.getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"); // SushiSwap Router
+// Raw Configuration Strings (Safe from top-level ESM module parsing constraints)
+const RAW_ROUTER_A = "0xa5E0829CaCEd8bFDD4De3c43696c57F7D7A678ff"; // QuickSwap Router
+const RAW_ROUTER_B = "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"; // SushiSwap Router
+const RAW_ENFORCER_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
+const RAW_USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"; // Polygon USDC
+const RAW_WETH_ADDRESS = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 
-const ENFORCER_ADDRESS = ethers.getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc");
-const USDC_ADDRESS = ethers.getAddress("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"); // Polygon USDC
-const WETH_ADDRESS = ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619");
-
-// Asset Swapping Paths (USDC -> WETH -> USDC)
-const pathToToken = [USDC_ADDRESS, WETH_ADDRESS];
-const pathToUSDC = [WETH_ADDRESS, USDC_ADDRESS];
+// Properly checksummed variables assigned dynamically during async initialization
+let ROUTER_A, ROUTER_B, ENFORCER_ADDRESS, USDC_ADDRESS, WETH_ADDRESS;
+let pathToToken, pathToUSDC;
 const tradeSize = ethers.parseUnits("1000", 6); // Test candidate size: 1000 USDC
 
 // Cleaned ABI matching your smart contract definitions precisely
@@ -73,6 +72,17 @@ async function initialize() {
     console.log("============================================================");
     console.log("🚀 ARBBOT1 - FLASH LOAN ARBITRAGE BOT");
     console.log("============================================================");
+
+    // Compute compliant lower/mixed case checksum addresses safely at execution time
+    ROUTER_A = ethers.getAddress(RAW_ROUTER_A.toLowerCase());
+    ROUTER_B = ethers.getAddress(RAW_ROUTER_B.toLowerCase());
+    ENFORCER_ADDRESS = ethers.getAddress(RAW_ENFORCER_ADDRESS.toLowerCase());
+    USDC_ADDRESS = ethers.getAddress(RAW_USDC_ADDRESS.toLowerCase());
+    WETH_ADDRESS = ethers.getAddress(RAW_WETH_ADDRESS.toLowerCase());
+
+    // Initialize paths once checksums are set
+    pathToToken = [USDC_ADDRESS, WETH_ADDRESS];
+    pathToUSDC = [WETH_ADDRESS, USDC_ADDRESS];
 
     provider = createWebSocketProvider(WSS_URL);
     
