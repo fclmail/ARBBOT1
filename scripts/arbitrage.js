@@ -31,7 +31,7 @@ const CONFIG = {
     ROUTERS: {  
         QUICK_SWAP: getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),  
         SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"),  
-        DFYN: getAddress("0xA102072AEE07Cccf2a9b78B1E54D1B2aF8f38f3"),
+        DFYN: "0xA102072AEE07Cccf2a9b78B1E54D1B2aF8f38f3"
     },  
 
     BATCH_SIZE_LIMIT: 25,  
