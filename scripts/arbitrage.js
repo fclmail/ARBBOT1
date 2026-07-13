@@ -31,14 +31,12 @@ const CONFIG = {
     },  
     BATCH_SIZE_LIMIT: 25,  
     STUCK_TX_TIMEOUT_MS: 8000,  
-    MIN_PROFIT_USDC: parseUnits("0.0010", 6), // Minimum profit threshold  
-    BASE_ARBITRAGE_AMOUNT: parseUnits("4", 6), // Amount per arbitrage leg  
+    MIN_PROFIT_USDC: parseUnits("0.000000", 6), // 0 profit threshold (covers cost only)  
+    BASE_ARBITRAGE_AMOUNT: parseUnits("500.00", 6), // Increased capital so price discrepancies are visible  
     CANDIDATE_SIZES: [  
-        parseUnits("4", 6),  
-        parseUnits("40", 6),  
-        parseUnits("400", 6),  
-        parseUnits("4000", 6),  
-        parseUnits("40000000", 6)  
+        parseUnits("100.00", 6),  
+        parseUnits("500.00", 6),  
+        parseUnits("1000.00", 6)  
     ]  
 };  
 
@@ -139,7 +137,7 @@ async function initialize() {
             isProcessingBlock = true;  
             await processBlockMatrix(blockNumber);  
         } catch (error) {  
-            // Silent drop block processing errors to maintain ws context streams  
+            // Silent drop to maintain stream alignment  
         } finally {  
             isProcessingBlock = false;  
         }  
@@ -211,7 +209,7 @@ async function generateMatrixPayloads(availableBalance) {
             const [, sellRouter] = routerNames[j];  
            
             for (let t = 0; t < tokens.length; t++) {  
-                const [tokenName, tokenAddr] = tokens[t];  
+                const [, tokenAddr] = tokens[t];  
                 if (tokenAddr === CONFIG.USDC_ADDRESS) continue;  
                
                 const amountInUSDC = CONFIG.BASE_ARBITRAGE_AMOUNT;  
@@ -222,7 +220,7 @@ async function generateMatrixPayloads(availableBalance) {
                     buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC  
                 );  
                
-                if (estimatedProfit <= CONFIG.MIN_PROFIT_USDC) continue;  
+                if (estimatedProfit < CONFIG.MIN_PROFIT_USDC) continue;  
                
                 currentBatch.buyRouters.push(buyRouter);  
                 currentBatch.sellRouters.push(sellRouter);  
@@ -272,7 +270,7 @@ async function withdrawProfits() {
         });  
        
         const receipt = await tx.wait();  
-        console.log(`✅ Withdraw successful: ${receipt.hash}`);  
+        console.log(`Paperwork confirmed: ${receipt.hash}`);  
        
         profitAccumulated = 0n;  
        
@@ -287,7 +285,6 @@ async function withdrawProfits() {
 async function processBlockMatrix(blockNumber) {  
     console.log(`[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} via Aave Flash Loan Route...`);  
   
-    // High balance allocation abstraction bypassing zero-balance state requirements
     const mockBalance = parseUnits("10000", 6);  
     const batches = await generateMatrixPayloads(mockBalance);  
   
@@ -358,7 +355,7 @@ async function processBlockMatrix(blockNumber) {
                 }  
   
             } catch (txError) {  
-                 // Failures captured cleanly here to keep internal iterator moving
+                 // Failures captured cleanly here to keep context alignment active
             }  
         }  
     }  
