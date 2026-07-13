@@ -35,7 +35,6 @@ const CONFIG = {
         GHST: getAddress("0x385eeac5cb85a38a9a07a70c73e0a3271cfb54a7")  
     },  
     ROUTERS: {  
-        // FIXED: All router configurations downcased to fully neutralize validation failures
         QUICK_SWAP: getAddress("0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff"),  
         SUSHI_SWAP: getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),  
         DFYN:       getAddress("0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429"),  
@@ -44,8 +43,8 @@ const CONFIG = {
     },  
     BATCH_SIZE_LIMIT: 25,  
     STUCK_TX_TIMEOUT_MS: 8000,  
-    BASE_ARBITRAGE_AMOUNT: parseUnits("5.00", 6),   
-    AAVE_PREMIUM_FACTOR: 1n // 0.05% fee tracking  
+    BASE_ARBITRAGE_AMOUNT: parseUnits("500.00", 6),   
+    AAVE_PREMIUM_FACTOR: 5n // 0.05% fee tracking  
 };  
 
 // ROUTER ABI for pricing checks
@@ -96,11 +95,11 @@ async function checkArbitrageProfitability(buyRouter, sellRouter, amountIn, path
         const routerBuy = new Contract(buyRouter, ROUTER_ABI, providerHttp);  
         const routerSell = new Contract(sellRouter, ROUTER_ABI, providerHttp);  
 
-        // 1. Calculate tokens received out of first exchange  
+        // 1. Calculate tokens received out of first exchange matrix path  
         const amountsOutBuy = await routerBuy.getAmountsOut(amountIn, pathToToken);  
         const midTokenAmount = amountsOutBuy[amountsOutBuy.length - 1];  
 
-        // 2. Calculate final USDC returned from second exchange  
+        // 2. Calculate final USDC returned from second exchange matrix path  
         const amountsOutSell = await routerSell.getAmountsOut(midTokenAmount, pathToUSDC);  
         const finalUSDC = amountsOutSell[amountsOutSell.length - 1];  
 
@@ -128,45 +127,54 @@ async function processBlockMatrix(blockNumber) {
         for (let [sName, sellRouter] of routerEntries) {  
             if (buyRouter === sellRouter) continue;  
 
-            for (let [tName, tokenAddr] of tokenEntries) {  
-                if (tokenAddr === CONFIG.USDC_ADDRESS) continue;  
+            for (let [t1Name, t1Addr] of tokenEntries) {  
+                if (t1Addr === CONFIG.USDC_ADDRESS) continue;  
 
-                const amountInUSDC = CONFIG.BASE_ARBITRAGE_AMOUNT;  
-                const pathToToken = [CONFIG.USDC_ADDRESS, tokenAddr];  
-                const pathToUSDC = [tokenAddr, CONFIG.USDC_ADDRESS];  
+                // -------------------------------------------------------------
+                // TRIPLE-HOP PATH MATRIX INTEGRATION LAYER
+                // -------------------------------------------------------------
+                for (let [t2Name, t2Addr] of tokenEntries) {  
+                    if (t2Addr === CONFIG.USDC_ADDRESS || t1Addr === t2Addr) continue;  
 
-                console.log(`🚀 Checking Route: ${bName} -> ${sName} via ${tName}`);  
+                    const amountInUSDC = CONFIG.BASE_ARBITRAGE_AMOUNT;  
+                    
+                    // Route Blueprint: USDC -> Token1 -> Token2 -> USDC
+                    const pathToToken = [CONFIG.USDC_ADDRESS, t1Addr, t2Addr];  
+                    const pathToUSDC = [t2Addr, CONFIG.USDC_ADDRESS];  
 
-                // Run off-chain JS verification engine  
-                const { isProfitable, expectedProfit } = await checkArbitrageProfitability(  
-                    buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC  
-                );  
+                    console.log(`🚀 Checking Triple-Hop: ${bName} -> ${sName} via [${t1Name} -> ${t2Name}]`);  
 
-                if (!isProfitable) {  
-                    console.log(`⏭️ Route lacks necessary spread to clear Aave premium. Skipping.`);  
-                    continue;  
-                }  
-
-                console.log(`🔥 Profitable Path Found! Expected Surplus: ${formatUnits(expectedProfit, 6)} USDC`);  
-                try {  
-                    const nonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
-                    const feeData = await providerHttp.getFeeData();  
-
-                    console.log(`⚡ Dispatching Aave Flash Loan on Nonce: [${nonce}]`);  
-                    const tx = await enforcerContract.executeAaveFlashLoanArbitrage(  
-                        buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC, deadline, {  
-                            nonce: nonce,  
-                            gasLimit: 2500000,  
-                            maxFeePerGas: feeData.gasPrice * 2n,  
-                            maxPriorityFeePerGas: feeData.gasPrice / 5n,  
-                            type: 2  
-                        }  
+                    // Evaluate multi-hop paths off-chain  
+                    const { isProfitable, expectedProfit } = await checkArbitrageProfitability(  
+                        buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC  
                     );  
-                    console.log(`✅ Flash Loan Executed: ${tx.hash}`);  
-                    const receipt = await tx.wait();  
-                    console.log(`✨ Flash execution confirmed in block ${receipt.blockNumber}\n`);  
-                } catch (txEx) {  
-                    console.log(`❌ Execution failure: ${txEx.message}`);  
+
+                    if (!isProfitable) {  
+                        console.log(`⏭️ Route lacks necessary spread to clear Aave premium. Skipping.`);  
+                        continue;  
+                    }  
+
+                    console.log(`🔥 Profitable Triple-Hop Found! Expected Surplus: ${formatUnits(expectedProfit, 6)} USDC`);  
+                    try {  
+                        const nonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
+                        const feeData = await providerHttp.getFeeData();  
+
+                        console.log(`⚡ Dispatching Aave Flash Loan on Nonce: [${nonce}]`);  
+                        const tx = await enforcerContract.executeAaveFlashLoanArbitrage(  
+                            buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC, deadline, {  
+                                nonce: nonce,  
+                                gasLimit: 3000000,  
+                                maxFeePerGas: feeData.gasPrice * 2n,  
+                                maxPriorityFeePerGas: feeData.gasPrice / 5n,  
+                                type: 2  
+                            }  
+                        );  
+                        console.log(`✅ Flash Loan Executed: ${tx.hash}`);  
+                        const receipt = await tx.wait();  
+                        console.log(`✨ Flash execution confirmed in block ${receipt.blockNumber}\n`);  
+                    } catch (txEx) {  
+                        console.log(`❌ Execution failure: ${txEx.message}`);  
+                    }  
                 }  
             }  
         }  
