@@ -1,189 +1,705 @@
-/** * ARBBOT1 - Production Node.js Engine (Off-Chain Pricing Verification)  
- * Network: Polygon (POSIX)  
- * Architecture: Flash Loan Arbitrage Sequential Executor with Profit Capture  
- * Version: Ethers v6 Direct Modules + ES Modules Compatible  
- */  
-import { Wallet, Contract, JsonRpcProvider, WebSocketProvider, parseUnits, formatUnits, getAddress } from "ethers";  
+import dotenv from "dotenv";
+import { ethers } from "ethers";
 
-// ==========================================  
-// 1. CONFIGURATION & ENVIRONMENT SETUP  
-// ==========================================  
-const CONFIG = {  
-    WSS_RPC: "wss://polygon-bor-rpc.publicnode.com",  
-    HTTP_RPC: "https://polygon-bor-rpc.publicnode.com",  
-   
-    PRIVATE_KEY: process.env.PRIVATE_KEY || "",  
-   
-    CONTRACT_ADDRESS: getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"),  
-    USDC_ADDRESS: getAddress("0x2791bca1f2de4661ed88a30c99a7a9449aa84174"),  
-   
-    TOKENS: {  
-        USDC: getAddress("0x2791bca1f2de4661ed88a30c99a7a9449aa84174"),  
-        WETH: getAddress("0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"),  
-        WMATIC: getAddress("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),  
-        DAI: getAddress("0x8f3cf6ad15024657154e65d401430046f383903e"),   
-        USDT: getAddress("0xc2132d05d31c914a87c6611c10748aeb04b58e8f"),  
-        WBTC: getAddress("0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"), 
-        CRV: getAddress("0x172370d5cd632221a5d947f4575907617494f26e"), 
-        LINK: getAddress("0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"), 
-        UNI: getAddress("0xb33eaad8d922b1083446dc23f610c2567fb5180f"), 
-        AAVE: getAddress("0xd6df932a45c0f255f85145f286ea0b292b21c90b"), 
-        SUSHI: getAddress("0x0b3f868e0be5597d5db7feb59e1cadbb0fdda50a"), 
-        QUICK: getAddress("0xb5c064f955d8e7f38fe0460c556a72987494ee17"), 
-        MATICX: getAddress("0xfa68fb4628dff1028cfec22b4162fccd0d45efb6"), 
-        BAL: getAddress("0x9a71012b13ca4d3d0cdc72a177df3ef03b0e76a3"), 
-        GHST: getAddress("0x385eeac5cb85a38a9a07a70c73e0a3271cfb54a7")  
-    },  
-    ROUTERS: {  
-        QUICK_SWAP: getAddress("0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff"),  
-        SUSHI_SWAP: getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),  
-        DFYN:       getAddress("0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429"),  
-        PEARL_V2:   getAddress("0xef8b8c496a929fd39225df1f52361c1ab57f22e8"),  
-        APE_SWAP:   getAddress("0xc0788a3d035548248853c802456a831a2933d744")  
-    },  
-    BATCH_SIZE_LIMIT: 25,  
-    STUCK_TX_TIMEOUT_MS: 8000,  
-    BASE_ARBITRAGE_AMOUNT: parseUnits("0.04000", 6),   
-    AAVE_PREMIUM_FACTOR: 5n // 0.05% fee track  
-};  
+dotenv.config({ override:false });
 
-// ROUTER ABI for pricing checks
-const ROUTER_ABI = [  
-    "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"  
-];  
+/* =========================================================
+   ENV
+========================================================= */
 
-const ENFORCER_ABI = [  
-    "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",  
-    "function withdraw(uint256 amount) external",  
-    "function owner() external view returns (address)",  
-    "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"  
-];  
+const PRIVATE_KEY =
+process.env.WALLET_PRIVATE_KEY ||
+process.env.PRIVATE_KEY;
 
-const ERC20_ABI = ["function balanceOf(address account) external view returns (uint256)"];  
+if(!PRIVATE_KEY)
+throw new Error("PRIVATE KEY MISSING");
 
-let providerWss, providerHttp, wallet, enforcerContract, usdcContract;  
-let currentNonce = -1;  
-let isProcessingBlock = false;  
+/* =========================================================
+   RPC
+========================================================= */
 
-async function initialize() {  
-    console.log("🚀 ARBBOT1 Production Engine Starting...");  
-    console.log("📡 Connecting Matrix Engine via WebSockets...");  
-    providerHttp = new JsonRpcProvider(CONFIG.HTTP_RPC, undefined, { staticNetwork: true });  
-    providerWss = new WebSocketProvider(CONFIG.WSS_RPC, undefined, { staticNetwork: true });  
-  
-    wallet = new Wallet(CONFIG.PRIVATE_KEY, providerHttp);  
-    enforcerContract = new Contract(CONFIG.CONTRACT_ADDRESS, ENFORCER_ABI, wallet);  
-    usdcContract = new Contract(CONFIG.USDC_ADDRESS, ERC20_ABI, wallet);  
-  
-    currentNonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
-    console.log(`🌐 ENGINE OPERATIONAL. Initial Nonce: [${currentNonce}]`);  
-  
-    providerWss.on("block", async (blockNumber) => {  
-        if (isProcessingBlock) return;  
-        try {  
-            isProcessingBlock = true;  
-            await processBlockMatrix(blockNumber);  
-        } catch (err) { /* Catch silence */ }  
-        finally { isProcessingBlock = false; }  
-    });  
+const RPCS=[
 
-    console.log("📡 WebSocket Stream Cluster active — awaiting block emissions...\n");  
-}  
+"https://polygon-bor-rpc.publicnode.com",
 
-async function checkArbitrageProfitability(buyRouter, sellRouter, amountIn, pathToToken, pathToUSDC) {  
-    try {  
-        const routerBuy = new Contract(buyRouter, ROUTER_ABI, providerHttp);  
-        const routerSell = new Contract(sellRouter, ROUTER_ABI, providerHttp);  
+"https://polygon.llamarpc.com",
 
-        // 1. Calculate tokens received out of first exchange matrix path  
-        const amountsOutBuy = await routerBuy.getAmountsOut(amountIn, pathToToken);  
-        const midTokenAmount = amountsOutBuy[amountsOutBuy.length - 1];  
+"https://rpc.ankr.com/polygon"
 
-        // 2. Calculate final USDC returned from second exchange matrix path  
-        const amountsOutSell = await routerSell.getAmountsOut(midTokenAmount, pathToUSDC);  
-        const finalUSDC = amountsOutSell[amountsOutSell.length - 1];  
+];
 
-        // 3. Calculate minimal Aave threshold requirement (Amount + 0.05% Premium)  
-        const premiumCost = (amountIn * CONFIG.AAVE_PREMIUM_FACTOR) / 10000n;  
-        const totalRequiredBack = amountIn + premiumCost;  
+let rpcIndex=0;
 
-        if (finalUSDC > totalRequiredBack) {  
-            return { isProfitable: true, expectedProfit: finalUSDC - totalRequiredBack };  
-        }  
-        return { isProfitable: false, expectedProfit: 0n };  
-    } catch (e) {  
-        return { isProfitable: false, expectedProfit: 0n };  
-    }  
-}  
+let provider;
+let wallet;
 
-async function processBlockMatrix(blockNumber) {  
-    console.log(`[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} via Off-Chain Rates...`);  
-  
-    const routerEntries = Object.entries(CONFIG.ROUTERS);  
-    const tokenEntries = Object.entries(CONFIG.TOKENS);  
-    const deadline = Math.floor(Date.now() / 1000) + 120;  
+let vault;
+let usdc;
 
-    for (let [bName, buyRouter] of routerEntries) {  
-        for (let [sName, sellRouter] of routerEntries) {  
-            if (buyRouter === sellRouter) continue;  
+let routerContracts={};
 
-            for (let [t1Name, t1Addr] of tokenEntries) {  
-                if (t1Addr === CONFIG.USDC_ADDRESS) continue;  
+/* =========================================================
+   CONTRACT
+========================================================= */
 
-                // -------------------------------------------------------------
-                // TRIPLE-HOP PATH MATRIX INTEGRATION LAYER
-                // -------------------------------------------------------------
-                for (let [t2Name, t2Addr] of tokenEntries) {  
-                    if (t2Addr === CONFIG.USDC_ADDRESS || t1Addr === t2Addr) continue;  
+const CONTRACT_ADDRESS =
+"0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
-                    const amountInUSDC = CONFIG.BASE_ARBITRAGE_AMOUNT;  
-                    
-                    // Route Blueprint: USDC -> Token1 -> Token2 -> USDC
-                    const pathToToken = [CONFIG.USDC_ADDRESS, t1Addr, t2Addr];  
-                    const pathToUSDC = [t2Addr, CONFIG.USDC_ADDRESS];  
+/* =========================================================
+   TOKENS
+========================================================= */
 
-                    console.log(`🚀 Checking Triple-Hop: ${bName} -> ${sName} via [${t1Name} -> ${t2Name}]`);  
+const TOKENS={
 
-                    // Evaluate multi-hop paths off-chain  
-                    const { isProfitable, expectedProfit } = await checkArbitrageProfitability(  
-                        buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC  
-                    );  
+USDC:
+"0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
 
-                    if (!isProfitable) {  
-                        console.log(`⏭️ Route lacks necessary spread to clear Aave premium. Skipping.`);  
-                        continue;  
-                    }  
+USDT:
+"0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
 
-                    console.log(`🔥 Profitable Triple-Hop Found! Expected Surplus: ${formatUnits(expectedProfit, 6)} USDC`);  
-                    try {  
-                        const nonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
-                        const feeData = await providerHttp.getFeeData();  
+DAI:
+"0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"
 
-                        console.log(`⚡ Dispatching Aave Flash Loan on Nonce: [${nonce}]`);  
-                        const tx = await enforcerContract.executeAaveFlashLoanArbitrage(  
-                            buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC, deadline, {  
-                                nonce: nonce,  
-                                gasLimit: 3000000,  
-                                maxFeePerGas: feeData.gasPrice * 2n,  
-                                maxPriorityFeePerGas: feeData.gasPrice / 5n,  
-                                type: 2  
-                            }  
-                        );  
-                        console.log(`✅ Flash Loan Executed: ${tx.hash}`);  
-                        const receipt = await tx.wait();  
-                        console.log(`✨ Flash execution confirmed in block ${receipt.blockNumber}\n`);  
-                    } catch (txEx) {  
-                        console.log(`❌ Execution failure: ${txEx.message}`);  
-                    }  
-                }  
-            }  
-        }  
-    }  
-}  
+};
 
-async function main() {  
-    await initialize();  
-    process.on("SIGINT", () => process.exit(0));  
-    process.on("SIGTERM", () => process.exit(0));  
-}  
-main().catch((e) => process.exit(1));
+const USDC = TOKENS.USDC;
+
+/* =========================================================
+   ROUTERS
+========================================================= */
+
+const routers={
+
+QuickSwap:
+"0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+
+SushiSwap:
+"0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+
+Dfyn:
+"0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+
+ApeSwap:
+"0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607"
+
+};
+
+/* =========================================================
+   FLASH LOAN DYNAMIC SIZES
+========================================================= */
+
+const FLASH_SIZES=[
+
+ethers.parseUnits("1000",6),
+
+ethers.parseUnits("2500",6),
+
+ethers.parseUnits("5000",6),
+
+ethers.parseUnits("10000",6),
+
+ethers.parseUnits("25000",6),
+
+ethers.parseUnits("50000",6)
+
+];
+
+/* =========================================================
+   PROFIT FILTERS
+========================================================= */
+
+const MIN_PROFIT =
+ethers.parseUnits("2.00",6);
+
+const MIN_BATCH_PROFIT =
+ethers.parseUnits("10.00",6);
+
+const WORKER_COUNT = 24;
+
+/* =========================================================
+   ABI
+========================================================= */
+
+const erc20Abi=[
+
+"function balanceOf(address) view returns(uint256)"
+
+];
+
+const contractAbi=[
+
+"function executeBestFlashLoanArbitrage(address,address,uint256[],address[],address[],uint256)",
+
+"function minimumProfitUSDC() view returns(uint256)",
+
+"function findBestFlashLoanSize(address,address,uint256[],address[],address[]) view returns((uint256 amountIn,uint256 estimatedFinalUSDC,uint256 estimatedProfit))"
+
+];
+
+const routerAbi=[
+
+"function getAmountsOut(uint,address[]) view returns(uint[])"
+
+];
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const fmt=x=>ethers.formatUnits(x,6);
+
+const sleep=ms=>
+new Promise(r=>setTimeout(r,ms));
+
+function now(){
+
+return Math.floor(Date.now()/1000);
+
+}
+
+/* =========================================================
+   STATE
+========================================================= */
+
+let isExecuting=false;
+
+let runningProfit=0n;
+
+let queuedTrades=[];
+
+/* =========================================================
+   PROVIDER
+========================================================= */
+
+function newProvider(){
+
+const url=RPCS[rpcIndex];
+
+rpcIndex=(rpcIndex+1)%RPCS.length;
+
+return new ethers.JsonRpcProvider(url);
+
+}
+
+function rebuildContracts(){
+
+wallet=
+new ethers.Wallet(
+PRIVATE_KEY,
+provider
+);
+
+usdc=
+new ethers.Contract(
+USDC,
+erc20Abi,
+wallet
+);
+
+vault=
+new ethers.Contract(
+CONTRACT_ADDRESS,
+contractAbi,
+wallet
+);
+
+routerContracts=
+Object.fromEntries(
+
+Object.values(routers).map(r=>[
+
+r,
+
+new ethers.Contract(
+r,
+routerAbi,
+provider
+)
+
+])
+
+);
+
+}
+
+async function initProvider(){
+
+provider=newProvider();
+
+await provider.getNetwork();
+
+rebuildContracts();
+
+const min=
+await vault.minimumProfitUSDC();
+
+console.log(
+`ONCHAIN MIN ${fmt(min)} USDC\n`
+);
+
+}
+
+/* =========================================================
+   STABLE MULTI-HOP PATHS
+========================================================= */
+
+function buildStablePaths(){
+
+return[
+
+[
+USDC,
+TOKENS.DAI,
+TOKENS.USDT,
+USDC
+],
+
+[
+USDC,
+TOKENS.USDT,
+TOKENS.DAI,
+USDC
+],
+
+[
+USDC,
+TOKENS.DAI,
+USDC
+],
+
+[
+USDC,
+TOKENS.USDT,
+USDC
+],
+
+[
+USDC,
+TOKENS.DAI,
+TOKENS.USDT,
+TOKENS.DAI,
+USDC
+]
+
+];
+
+}
+
+/* =========================================================
+   QUOTE
+========================================================= */
+
+async function quote(
+
+router,
+amount,
+path
+
+){
+
+try{
+
+const out=
+await routerContracts[router]
+.getAmountsOut(
+amount,
+path
+);
+
+return out.at(-1);
+
+}catch{
+
+return null;
+
+}
+
+}
+
+/* =========================================================
+   SIMULATE SIZE
+========================================================= */
+
+async function simulateSize(
+
+router,
+path,
+size
+
+){
+
+const out=
+await quote(
+router,
+size,
+path
+);
+
+if(!out)
+return null;
+
+const profit=
+out-size;
+
+if(profit<=0n)
+return null;
+
+return{
+
+size,
+finalOut:out,
+profit
+
+};
+
+}
+
+/* =========================================================
+   FIND BEST SIZE
+========================================================= */
+
+async function findBestStableTrade(
+
+router,
+path
+
+){
+
+let best=null;
+
+for(const size of FLASH_SIZES){
+
+const sim=
+await simulateSize(
+router,
+path,
+size
+);
+
+if(!sim)
+continue;
+
+if(
+sim.profit < MIN_PROFIT
+)
+continue;
+
+if(
+!best ||
+sim.profit > best.profit
+){
+
+best=sim;
+
+}
+
+}
+
+if(!best)
+return null;
+
+return{
+
+router,
+
+path,
+
+amountIn:best.size,
+
+expectedProfit:best.profit,
+
+estimatedFinal:
+best.finalOut
+
+};
+
+}
+
+/* =========================================================
+   REVALIDATE
+========================================================= */
+
+async function revalidateTrade(t){
+
+const out=
+await quote(
+t.router,
+t.amountIn,
+t.path
+);
+
+if(!out)
+return null;
+
+const profit=
+out-t.amountIn;
+
+if(profit<MIN_PROFIT)
+return null;
+
+t.expectedProfit=profit;
+
+return t;
+
+}
+
+/* =========================================================
+   EXECUTE
+========================================================= */
+
+async function executeTrade(t){
+
+isExecuting=true;
+
+try{
+
+console.log(
+"\nFLASH LOAN EXECUTION\n"
+);
+
+console.log(
+`ROUTER ${t.router}`
+);
+
+console.log(
+`SIZE ${fmt(t.amountIn)}`
+);
+
+console.log(
+`EXPECTED ${fmt(t.expectedProfit)} USDC`
+);
+
+console.log(
+`\nPATH`
+);
+
+console.log(
+t.path.join(" -> ")
+);
+
+const tx=
+await vault
+.executeBestFlashLoanArbitrage(
+
+t.router,
+
+t.router,
+
+FLASH_SIZES,
+
+t.path,
+
+t.path,
+
+now()+30
+
+);
+
+console.log(
+`\nTX SENT`
+);
+
+console.log(
+tx.hash
+);
+
+const receipt=
+await tx.wait();
+
+console.log(
+`\nCONFIRMED`
+);
+
+console.log(
+`BLOCK ${receipt.blockNumber}`
+);
+
+console.log(
+`\nEXPECTED NET`
+);
+
+console.log(
+`${fmt(t.expectedProfit)} USDC\n`
+);
+
+}catch(err){
+
+console.log(
+"\nEXECUTION FAILED\n"
+);
+
+console.log(
+err.reason ||
+err.message
+);
+
+}
+
+isExecuting=false;
+
+}
+
+/* =========================================================
+   SCAN LOOP
+========================================================= */
+
+async function scanLoop(){
+
+const tasks=[];
+
+for(const r of Object.values(routers)){
+
+for(const p of buildStablePaths()){
+
+tasks.push({
+
+router:r,
+
+path:p
+
+});
+
+}
+
+}
+
+let i=0;
+
+async function worker(){
+
+while(true){
+
+try{
+
+if(isExecuting){
+
+await sleep(25);
+
+continue;
+
+}
+
+const task=
+tasks[
+i++ % tasks.length
+];
+
+const trade=
+await findBestStableTrade(
+
+task.router,
+
+task.path
+
+);
+
+if(!trade){
+
+await sleep(5);
+
+continue;
+
+}
+
+queuedTrades.push(trade);
+
+runningProfit+=
+trade.expectedProfit;
+
+console.log(
+`MICRO FOUND ${fmt(trade.expectedProfit)}`
+);
+
+console.log(
+`SCALED SIZE ${fmt(trade.amountIn)}`
+);
+
+console.log(
+`RUNNING ${fmt(runningProfit)}\n`
+);
+
+if(
+
+!isExecuting &&
+
+runningProfit >=
+MIN_BATCH_PROFIT
+
+){
+
+const best=
+queuedTrades.sort(
+
+(a,b)=>
+
+Number(
+b.expectedProfit-
+a.expectedProfit
+)
+
+)[0];
+
+queuedTrades=[];
+
+runningProfit=0n;
+
+const valid=
+await revalidateTrade(best);
+
+if(valid){
+
+await executeTrade(valid);
+
+}
+
+}
+
+}catch{
+
+await sleep(50);
+
+}
+
+}
+
+}
+
+await Promise.all(
+
+Array.from(
+{length:WORKER_COUNT},
+worker
+)
+
+);
+
+}
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+(async function main(){
+
+console.log(
+"\nPURE STABLECOIN FLASH BOT STARTED\n"
+);
+
+await initProvider();
+
+const pol=
+await provider.getBalance(
+wallet.address
+);
+
+console.log(
+`POL ${ethers.formatEther(pol)}\n`
+);
+
+console.log(
+"SCANNING STABLE MULTI-HOP ROUTES...\n"
+);
+
+await scanLoop();
+
+})();
