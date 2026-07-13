@@ -32,7 +32,7 @@ const CONFIG = {
     BATCH_SIZE_LIMIT: 25,  
     STUCK_TX_TIMEOUT_MS: 8000,  
     MIN_PROFIT_USDC: parseUnits("0.000000", 6), // 0 profit threshold (covers cost only)  
-    BASE_ARBITRAGE_AMOUNT: parseUnits("500.00", 6), // Increased capital so price discrepancies are visible  
+    BASE_ARBITRAGE_AMOUNT: parseUnits("500.00", 6), // Increased capital pool  
     CANDIDATE_SIZES: [  
         parseUnits("100.00", 6),  
         parseUnits("500.00", 6),  
@@ -44,33 +44,18 @@ const CONFIG = {
 // 2. FULL CONTRACT ABI DEFINITION  
 // ==========================================  
 const ENFORCER_ABI = [  
-    // --- Batch Execution ---  
     "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",  
-   
-    // --- Single Vault Arbitrage ---  
     "function executeArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",  
-   
-    // --- Flash Loan Single ---  
     "function executeAaveFlashLoanArbitrage(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",  
-   
-    // --- Best Size Auto Flash Loan ---  
     "function executeBestFlashLoanArbitrage(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC, uint256 deadline) external",  
-   
-    // --- Simulation ---  
     "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC) external view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",  
     "function findBestFlashLoanSize(address buyRouter, address sellRouter, uint256[] candidateSizes, address[] pathToToken, address[] pathToUSDC) external view returns (uint256 amountIn, uint256 estimatedFinalUSDC, uint256 estimatedProfit)",  
-   
-    // --- Owner Functions ---  
     "function withdraw(uint256 amount) external",  
     "function setVault(address _newVault) external",  
     "function owner() external view returns (address)",  
     "function vault() external view returns (address)",  
     "function minimumProfitUSDC() external view returns (uint256)",  
-   
-    // --- ERC20 ---  
     "function balanceOf(address account) external view returns (uint256)",  
-   
-    // Events  
     "event ArbitrageExecuted(address indexed buyRouter, address indexed sellRouter, address indexed token, uint256 amountInUSDC, uint256 beforeBal, uint256 afterBal, uint256 profitUSDC)"  
 ];  
 
@@ -92,7 +77,7 @@ let usdcContract;
 let currentNonce = -1;  
 let isProcessingBlock = false;  
 let profitAccumulated = 0n;  
-let withdrawThreshold = parseUnits("10", 6); // Auto-withdraw after 10 USDC profit  
+let withdrawThreshold = parseUnits("10", 6);  
 
 // ==========================================  
 // 4. INITIALIZATION  
@@ -137,7 +122,7 @@ async function initialize() {
             isProcessingBlock = true;  
             await processBlockMatrix(blockNumber);  
         } catch (error) {  
-            // Silent drop to maintain stream alignment  
+            // Drop runtime processing errors gracefully  
         } finally {  
             isProcessingBlock = false;  
         }  
@@ -280,7 +265,7 @@ async function withdrawProfits() {
 }  
 
 // ==========================================  
-// 9. CORE BLOCK PROCESSOR (AAVE FLASH LOAN ENGINE)  
+// 9. CORE BLOCK PROCESSOR WITH DIAGNOSTIC SIMULATOR  
 // ==========================================  
 async function processBlockMatrix(blockNumber) {  
     console.log(`[WebSocket Stream Cluster] 🔍 Scanning Block #${blockNumber} via Aave Flash Loan Route...`);  
@@ -310,6 +295,7 @@ async function processBlockMatrix(blockNumber) {
 
                 console.log(`🚀 Simulating Flash Loan Arbitrage Leg [Asset: ${pathToToken[1].slice(0, 8)}...]`);  
   
+                // UPDATED: Catch and explicitly display the underlying EVM simulation failure error
                 const canExecute = await providerHttp.call({  
                     from: wallet.address,  
                     to: CONFIG.CONTRACT_ADDRESS,  
@@ -317,7 +303,10 @@ async function processBlockMatrix(blockNumber) {
                         buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC, deadline  
                     ]),  
                     gasLimit: 3000000  
-                }).then(() => true).catch(() => false);  
+                }).then(() => true).catch((err) => {
+                    console.log(`❌ Simulation Reverted: ${err.message.slice(0, 95)}...`);
+                    return false;
+                });  
   
                 if (!canExecute) {  
                     console.log(`⏭️ Flash loan path failed simulation. Skipping.`);  
@@ -355,7 +344,7 @@ async function processBlockMatrix(blockNumber) {
                 }  
   
             } catch (txError) {  
-                 // Failures captured cleanly here to keep context alignment active
+                 // Failures captured cleanly here to keep sequence active
             }  
         }  
     }  
