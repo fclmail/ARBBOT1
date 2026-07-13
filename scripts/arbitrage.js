@@ -15,23 +15,39 @@ const CONFIG = {
     PRIVATE_KEY: process.env.PRIVATE_KEY || "",  
    
     CONTRACT_ADDRESS: getAddress("0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc"),  
-    USDC_ADDRESS: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),  
+    USDC_ADDRESS: getAddress("0x2791bca1f2de4661ed88a30c99a7a9449aa84174"),  
    
     TOKENS: {  
-        USDC: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),  
-        WETH: getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),  
-        WMATIC: getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),  
-        // FIXED: Lowercase bypasses validation string errors entirely inside getAddress()
+        USDC: getAddress("0x2791bca1f2de4661ed88a30c99a7a9449aa84174"),  
+        WETH: getAddress("0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"),  
+        WMATIC: getAddress("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),  
         DAI: getAddress("0x8f3cf6ad15024657154e65d401430046f383903e"),   
-        USDT: getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")  
+        USDT: getAddress("0xc2132d05d31c914a87c6611c10748aeb04b58e8f"),
+        
+        // --- ADDED ERC-20 TOKENS ---
+        WBTC: getAddress("0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"), 
+        CRV: getAddress("0x172370d5cd632221a5d947f4575907617494f26e"), 
+        LINK: getAddress("0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"), 
+        UNI: getAddress("0xb33eaad8d922b1083446dc23f610c2567fb5180f"), 
+        AAVE: getAddress("0xd6df932a45c0f255f85145f286ea0b292b21c90b"), 
+        SUSHI: getAddress("0x0b3f868e0be5597d5db7feb59e1cadbb0fdda50a"), 
+        QUICK: getAddress("0xb5c064f955d8e7f38fe0460c556a72987494ee17"), 
+        MATICX: getAddress("0xfa68fb4628dff1028cfec22b4162fccd0d45efb6"), 
+        BAL: getAddress("0x9a71012b13ca4d3d0cdc72a177df3ef03b0e76a3"), 
+        GHST: getAddress("0x385eeac5cb85a38a9a07a70c73e0a3271cfb54a7")
     },  
     ROUTERS: {  
         QUICK_SWAP: getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),  
-        SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506")  
+        SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"),  
+        
+        // --- ADDED DEX ROUTERS ---
+        DFYN:       getAddress("0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429"),
+        PEARL_V2:   getAddress("0xef8b8c496a929fd39225df1f52361c1ab57f22e8"),
+        APE_SWAP:   getAddress("0xC0788A3D035548248853c802456A831a2933d744")
     },  
     BATCH_SIZE_LIMIT: 25,  
     STUCK_TX_TIMEOUT_MS: 8000,  
-    BASE_ARBITRAGE_AMOUNT: parseUnits("5.00", 6),   
+    BASE_ARBITRAGE_AMOUNT: parseUnits("500.00", 6),   
     AAVE_PREMIUM_FACTOR: 5n // 0.05% fee tracking  
 };  
 
