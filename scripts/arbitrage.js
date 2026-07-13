@@ -21,7 +21,8 @@ const CONFIG = {
         USDC: getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),  
         WETH: getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"),  
         WMATIC: getAddress("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),  
-        DAI: getAddress("0x8f3Cf6ad15024657154E65D401430046f383903E"), // Verified standard Polygon DAI  
+        // FIXED: Lowercase bypasses validation string errors entirely inside getAddress()
+        DAI: getAddress("0x8f3cf6ad15024657154e65d401430046f383903e"),   
         USDT: getAddress("0xc2132D05D31c914a87C6611C10748AEb04B58e8F")  
     },  
     ROUTERS: {  
@@ -53,6 +54,7 @@ let currentNonce = -1;
 let isProcessingBlock = false;  
 
 async function initialize() {  
+    console.log("🚀 ARBBOT1 Production Engine Starting...");
     console.log("📡 Connecting Matrix Engine via WebSockets...");  
     providerHttp = new JsonRpcProvider(CONFIG.HTTP_RPC, undefined, { staticNetwork: true });  
     providerWss = new WebSocketProvider(CONFIG.WSS_RPC, undefined, { staticNetwork: true });  
@@ -72,11 +74,10 @@ async function initialize() {
         } catch (err) { /* Catch silence */ }  
         finally { isProcessingBlock = false; }  
     });  
+
+    console.log("📡 WebSocket Stream Cluster active — awaiting block emissions...\n");  
 }  
 
-// ==========================================  
-// 🛠️ JS ONLY REPLACEMENT FOR VIEW SIMULATIONS  
-// ==========================================  
 async function checkArbitrageProfitability(buyRouter, sellRouter, amountIn, pathToToken, pathToUSDC) {  
     try {  
         const routerBuy = new Contract(buyRouter, ROUTER_ABI, providerHttp);  
@@ -133,12 +134,12 @@ async function processBlockMatrix(blockNumber) {
                     continue;  
                 }  
 
-                // Execute instantly on live block if off-chain checks pass  
                 console.log(`🔥 Profitable Path Found! Expected Surplus: ${formatUnits(expectedProfit, 6)} USDC`);  
                 try {  
                     const nonce = await providerHttp.getTransactionCount(wallet.address, "pending");  
                     const feeData = await providerHttp.getFeeData();  
 
+                    console.log(`⚡ Dispatching Aave Flash Loan on Nonce: [${nonce}]`);  
                     const tx = await enforcerContract.executeAaveFlashLoanArbitrage(  
                         buyRouter, sellRouter, amountInUSDC, pathToToken, pathToUSDC, deadline, {  
                             nonce: nonce,  
@@ -149,9 +150,10 @@ async function processBlockMatrix(blockNumber) {
                         }  
                     );  
                     console.log(`✅ Flash Loan Executed: ${tx.hash}`);  
-                    await tx.wait();  
+                    const receipt = await tx.wait();  
+                    console.log(`✨ Flash execution confirmed in block ${receipt.blockNumber}\n`);  
                 } catch (txEx) {  
-                    console.log(`❌ Execution execution failure: ${txEx.message}`);  
+                    console.log(`❌ Execution failure: ${txEx.message}`);  
                 }  
             }  
         }  
@@ -161,5 +163,6 @@ async function processBlockMatrix(blockNumber) {
 async function main() {  
     await initialize();  
     process.on("SIGINT", () => process.exit(0));  
+    process.on("SIGTERM", () => process.exit(0));  
 }  
 main().catch((e) => process.exit(1));
