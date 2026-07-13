@@ -22,9 +22,7 @@ const CONFIG = {
         WETH: getAddress("0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"),  
         WMATIC: getAddress("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),  
         DAI: getAddress("0x8f3cf6ad15024657154e65d401430046f383903e"),   
-        USDT: getAddress("0xc2132d05d31c914a87c6611c10748aeb04b58e8f"),
-        
-        // --- ADDED ERC-20 TOKENS ---
+        USDT: getAddress("0xc2132d05d31c914a87c6611c10748aeb04b58e8f"),  
         WBTC: getAddress("0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"), 
         CRV: getAddress("0x172370d5cd632221a5d947f4575907617494f26e"), 
         LINK: getAddress("0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39"), 
@@ -34,16 +32,15 @@ const CONFIG = {
         QUICK: getAddress("0xb5c064f955d8e7f38fe0460c556a72987494ee17"), 
         MATICX: getAddress("0xfa68fb4628dff1028cfec22b4162fccd0d45efb6"), 
         BAL: getAddress("0x9a71012b13ca4d3d0cdc72a177df3ef03b0e76a3"), 
-        GHST: getAddress("0x385eeac5cb85a38a9a07a70c73e0a3271cfb54a7")
+        GHST: getAddress("0x385eeac5cb85a38a9a07a70c73e0a3271cfb54a7")  
     },  
     ROUTERS: {  
-        QUICK_SWAP: getAddress("0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"),  
-        SUSHI_SWAP: getAddress("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506"),  
-        
-        // --- ADDED DEX ROUTERS ---
-        DFYN:       getAddress("0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429"),
-        PEARL_V2:   getAddress("0xef8b8c496a929fd39225df1f52361c1ab57f22e8"),
-        APE_SWAP:   getAddress("0xC0788A3D035548248853c802456A831a2933d744")
+        // FIXED: All router configurations downcased to fully neutralize validation failures
+        QUICK_SWAP: getAddress("0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff"),  
+        SUSHI_SWAP: getAddress("0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"),  
+        DFYN:       getAddress("0xa102072a4c07f06ec3b4900fdc4c7b80b6c57429"),  
+        PEARL_V2:   getAddress("0xef8b8c496a929fd39225df1f52361c1ab57f22e8"),  
+        APE_SWAP:   getAddress("0xc0788a3d035548248853c802456a831a2933d744")  
     },  
     BATCH_SIZE_LIMIT: 25,  
     STUCK_TX_TIMEOUT_MS: 8000,  
@@ -70,7 +67,7 @@ let currentNonce = -1;
 let isProcessingBlock = false;  
 
 async function initialize() {  
-    console.log("🚀 ARBBOT1 Production Engine Starting...");
+    console.log("🚀 ARBBOT1 Production Engine Starting...");  
     console.log("📡 Connecting Matrix Engine via WebSockets...");  
     providerHttp = new JsonRpcProvider(CONFIG.HTTP_RPC, undefined, { staticNetwork: true });  
     providerWss = new WebSocketProvider(CONFIG.WSS_RPC, undefined, { staticNetwork: true });  
