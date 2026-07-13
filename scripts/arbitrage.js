@@ -22,6 +22,7 @@ let provider;
 let wallet;
 let usdc;
 let vault;
+let multicallContract;
 
 /* ================= CONFIG ================= */
 
@@ -29,15 +30,16 @@ const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
 const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
 
-const WORKER_COUNT = 16;
-
-/* ================= CONTRACT ================= */
+/* ================= CONTRACTS ================= */
 
 const CONTRACT_ADDRESS =
   "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
 
 const USDC =
   "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+
+const MULTICALL_ADDRESS = 
+  "0xcA11bde05977b3631167028862bE2a173976CA11";
 
 /* ================= ABI ================= */
 
@@ -54,7 +56,11 @@ const routerAbi = [
   "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
-/* ================= ROUTERS (RESTORED FULL SET) ================= */
+const multicallAbi = [
+  "function aggregate((address target, bytes callData)[] calls) view returns (uint256 blockNumber, bytes[] returnData)"
+];
+
+/* ================= ROUTERS ================= */
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -65,7 +71,7 @@ const routers = {
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS (RESTORED FULL LIST) ================= */
+/* ================= TOKENS ================= */
 
 const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
@@ -88,21 +94,11 @@ let microTrades = [];
 let runningProfit = 0n;
 let isExecuting = false;
 
-/* ================= ROUTER CACHE (OPTIMIZATION 1) ================= */
+/* ================= INTERFACE FOR ENCODING ================= */
 
-const routerCache = new Map();
+const routerInterface = new ethers.Interface(routerAbi);
 
-function getRouter(addr) {
-  if (!routerCache.has(addr)) {
-    routerCache.set(
-      addr,
-      new ethers.Contract(addr, routerAbi, provider)
-    );
-  }
-  return routerCache.get(addr);
-}
-
-/* ================= PROVIDER ================= */
+/* ================= PROVIDER & UTILS ================= */
 
 function newProvider() {
   const url = RPCS[rpcIndex];
@@ -112,14 +108,9 @@ function newProvider() {
 
 function rebuild() {
   wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
   usdc = new ethers.Contract(USDC, erc20Abi, wallet);
-
-  vault = new ethers.Contract(
-    CONTRACT_ADDRESS,
-    contractAbi,
-    wallet
-  );
+  vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+  multicallContract = new ethers.Contract(MULTICALL_ADDRESS, multicallAbi, provider);
 }
 
 /* ================= INIT ================= */
@@ -133,77 +124,24 @@ async function init() {
   console.log(`ONCHAIN MIN PROFIT ${ethers.formatUnits(min, 6)}\n`);
 }
 
-/* ================= QUOTE ================= */
+/* ================= ZERO-REVALIDATION UTILS ================= */
 
-async function quote(router, amount, path) {
+function encodeLoopQuery(routerAddress, amount, tokenAddress) {
+  const cyclicPath = [USDC, tokenAddress, USDC];
+  return {
+    target: routerAddress,
+    callData: routerInterface.encodeFunctionData("getAmountsOut", [amount, cyclicPath])
+  };
+}
+
+function decodeLoopOutput(hexData) {
   try {
-    const out =
-      await getRouter(router).getAmountsOut(amount, path);
-
-    return out.at(-1);
+    const decoded = routerInterface.decodeFunctionResult("getAmountsOut", hexData);
+    const amountsArray = decoded[0]; 
+    return amountsArray.at(-1); 
   } catch {
     return null;
   }
-}
-
-/* ================= FULL MULTI-HOP PATHS (RESTORED) ================= */
-
-function buildBuyPaths(token) {
-  return [
-    [USDC, token],
-    [USDC, TOKENS.WETH, token],
-    [USDC, TOKENS.WMATIC, token],
-    [USDC, TOKENS.DAI, token],
-    [USDC, TOKENS.USDT, token]
-  ];
-}
-
-function buildSellPaths(token) {
-  return [
-    [token, USDC],
-    [token, TOKENS.WETH, USDC],
-    [token, TOKENS.WMATIC, USDC],
-    [token, TOKENS.DAI, USDC],
-    [token, TOKENS.USDT, USDC]
-  ];
-}
-
-/* ================= FIND TRADE (PARALLEL OPTIMIZED) ================= */
-
-async function findTrade(buy, sell, token) {
-  const buyPaths = buildBuyPaths(token);
-  const sellPaths = buildSellPaths(token);
-
-  const results = await Promise.all(
-    buyPaths.map(async (bp) => {
-      const buyOut = await quote(buy, TRADE_AMOUNT, bp);
-      if (!buyOut) return null;
-
-      const sells = await Promise.all(
-        sellPaths.map(async (sp) => {
-          const sellOut = await quote(sell, buyOut, sp);
-          if (!sellOut) return null;
-
-          const profit = sellOut - TRADE_AMOUNT;
-          if (profit < MIN_PROFIT) return null;
-
-          return {
-            buy,
-            sell,
-            token,
-            amountIn: TRADE_AMOUNT,
-            buyPath: bp,
-            sellPath: sp,
-            expectedProfit: profit
-          };
-        })
-      );
-
-      return sells.find(Boolean);
-    })
-  );
-
-  return results.find(Boolean);
 }
 
 /* ================= EXECUTION ================= */
@@ -232,85 +170,121 @@ async function executeBatch(trades) {
   console.log(`EXECUTING ${usable.length} TRADES`);
   console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected, 6)}\n`);
 
-  const tx = await vault.executeFlashBatchArbitrage({
-    buyRouters: usable.map(t => t.buy),
-    sellRouters: usable.map(t => t.sell),
-    amountsInUSDC: usable.map(t => t.amountIn),
-    pathsToToken: usable.map(t => t.buyPath),
-    pathsToUSDC: usable.map(t => t.sellPath),
-    deadline: Math.floor(Date.now() / 1000) + 30
-  });
+  if (usable.length === 0) {
+    console.log("No valid trades fit contract balance restrictions.");
+    isExecuting = false;
+    return;
+  }
 
-  console.log(`TX ${tx.hash}`);
+  try {
+    const tx = await vault.executeFlashBatchArbitrage({
+      buyRouters: usable.map(t => t.buy),
+      sellRouters: usable.map(t => t.sell),
+      amountsInUSDC: usable.map(t => t.amountIn),
+      pathsToToken: usable.map(t => t.buyPath),
+      pathsToUSDC: usable.map(t => t.sellPath),
+      deadline: Math.floor(Date.now() / 1000) + 30
+    });
 
-  await provider.waitForTransaction(tx.hash);
+    console.log(`TX ${tx.hash}`);
+    await provider.waitForTransaction(tx.hash);
 
-  const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
+    const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-  console.log("\n================ AFTER ================");
-  console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
-  console.log(`REAL PROFIT    ${ethers.formatUnits(afterContract - beforeContract, 6)}\n`);
+    console.log("\n================ AFTER ================");
+    console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
+    console.log(`REAL PROFIT    ${ethers.formatUnits(afterContract - beforeContract, 6)}\n`);
+  } catch (err) {
+    console.error("Batch Transaction execution failed:", err.message);
+  }
 
   isExecuting = false;
 }
 
-/* ================= WORKERS (16 PARALLEL OPTIMIZED) ================= */
+/* ================= ZERO-REVALIDATION HIGH SPEED SCAN ================= */
 
-async function worker(id, tasks) {
+async function scan() {
+  console.log("🚀 High-Speed Zero-Revalidation Engine Running...");
+
+  // Generate static cross-combinations of paths: Router X -> Token Y -> Router X
+  const structuralRoutes = [];
+  for (const rAddress of Object.values(routers)) {
+    for (const tAddress of Object.values(TOKENS)) {
+      structuralRoutes.push({
+        router: rAddress,
+        token: tAddress
+      });
+    }
+  }
+
+  console.log(`Prepared ${structuralRoutes.length} distinct search routes.`);
+  console.log("⚡ Polling EVM State for high-profit opportunities...\n");
+
+  const BATCH_CHUNK_SIZE = 250; 
+
   while (true) {
-    if (isExecuting) continue;
-
-    const batch = [];
-
-    for (let i = 0; i < 5; i++) {
-      batch.push(tasks[(id + i) % tasks.length]);
+    if (isExecuting) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      continue;
     }
 
-    const results = await Promise.all(
-      batch.map(t => findTrade(t.buy, t.sell, t.token))
-    );
+    for (let i = 0; i < structuralRoutes.length; i += BATCH_CHUNK_SIZE) {
+      if (isExecuting) break;
 
-    for (const r of results) {
-      if (!r) continue;
+      const chunk = structuralRoutes.slice(i, i + BATCH_CHUNK_SIZE);
+      const calls = chunk.map(route => 
+        encodeLoopQuery(route.router, TRADE_AMOUNT, route.token)
+      );
 
-      microTrades.push(r);
-      runningProfit += r.expectedProfit;
+      try {
+        const [, batchReturnData] = await multicallContract.aggregate(calls);
 
-      console.log(`RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
+        for (let j = 0; j < chunk.length; j++) {
+          const finalUSDC = decodeLoopOutput(batchReturnData[j]);
+          if (!finalUSDC) continue;
+
+          if (finalUSDC > TRADE_AMOUNT) {
+            const profit = finalUSDC - TRADE_AMOUNT;
+
+            if (profit >= MIN_PROFIT) {
+              microTrades.push({
+                buy: chunk[j].router,
+                sell: chunk[j].router, 
+                token: chunk[j].token,
+                amountIn: TRADE_AMOUNT,
+                buyPath: [USDC, chunk[j].token],
+                sellPath: [chunk[j].token, USDC],
+                expectedProfit: profit
+              });
+
+              runningProfit += profit;
+              console.log(`✨ Direct Profit Captured: +${ethers.formatUnits(profit, 6)} USDC`);
+              console.log(`RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
+            }
+          }
+        }
+      } catch (err) {
+        // Switch nodes/rebuild objects seamlessly on network hiccups
+        provider = newProvider();
+        rebuild();
+        break;
+      }
     }
 
-    if (runningProfit >= MIN_BATCH_PROFIT) {
+    // Evaluate pipeline limits to trigger block commitments
+    if (microTrades.length > 0 && runningProfit >= MIN_BATCH_PROFIT) {
       isExecuting = true;
-
-      const batchCopy = [...microTrades];
+      const pipelineCopy = [...microTrades];
+      
       microTrades = [];
       runningProfit = 0n;
 
-      await executeBatch(batchCopy);
+      await executeBatch(pipelineCopy);
     }
+
+    // 50ms interval break to minimize infrastructure stress
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
-}
-
-/* ================= SCAN ================= */
-
-async function scan() {
-  const tasks = [];
-
-  for (const b of Object.values(routers)) {
-    for (const s of Object.values(routers)) {
-      if (b === s) continue;
-
-      for (const t of Object.values(TOKENS)) {
-        tasks.push({ buy: b, sell: s, token: t });
-      }
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: WORKER_COUNT }, (_, i) =>
-      worker(i, tasks)
-    )
-  );
 }
 
 /* ================= MAIN ================= */
