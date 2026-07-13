@@ -31,7 +31,7 @@ const CONFIG = {
     },  
     BATCH_SIZE_LIMIT: 25,  
     STUCK_TX_TIMEOUT_MS: 8000,  
-    BASE_ARBITRAGE_AMOUNT: parseUnits("50.00", 6),   
+    BASE_ARBITRAGE_AMOUNT: parseUnits("5000000.00", 6),   
     AAVE_PREMIUM_FACTOR: 5n // 0.05% fee tracking  
 };  
 
