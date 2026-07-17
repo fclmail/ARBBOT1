@@ -1,6 +1,3 @@
-/*🛠️⚡🛠️ RUNNING TOTAL& LOGS */
-
-
 import dotenv from "dotenv";
 import { ethers } from "ethers";
 
@@ -30,9 +27,9 @@ let vault;
 
 const TRADE_AMOUNT = ethers.parseUnits("0.02", 6);
 const MIN_PROFIT = ethers.parseUnits("0.000001", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.100", 6);
+const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
 
-const WORKER_COUNT = 16;
+const WORKER_COUNT = 8; // Reduced from 16 to prevent RPC rate limiting
 
 /* ================= CONTRACT ================= */
 
@@ -57,7 +54,7 @@ const routerAbi = [
   "function getAmountsOut(uint,address[]) view returns(uint[])"
 ];
 
-/* ================= ROUTERS (RESTORED FULL SET) ================= */
+/* ================= ROUTERS ================= */
 
 const routers = {
   QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
@@ -68,116 +65,10 @@ const routers = {
   Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
 };
 
-/* ================= TOKENS (RESTORED FULL LIST) ================= */
+/* ================= TOKENS ================= */
 
 const TOKENS = {
   AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-
-TOKENA: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-TOKENB: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
-TOKENC: "0x3BA4c387f786bFEE076A58914F5Bd38d668B42c3",
-TOKEND: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
-TOKENE: "0xd93f7e271cb87c23aaa73edc008a79646d1f9912",
-TOKENF: "0x06d02e9d62a13fc76bb229373fb3bbbd1101d2fc",
-TOKENG: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-TOKENH: "0xf854225caaef5a722884a68a23215dfa5386751e",
-TOKENI: "0xb0897686c545045afc77cf20ec7a532e3120e0f1",
-TOKENJ: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-TOKENK: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-TOKENL: "0xe50fa9b3c56ffb159cb0fca61f5c9d750e8128c8",
-TOKENM: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
-TOKENN: "0x99af3eea856556646c98c8b9b2548fe815240750",
-TOKENO: "0x2C89bbc92BD86F8075d1DEcc58C7F4E0107f286b",
-TOKENP: "0xada58df0f643d959c2a47c9d4d4c1a4defe3f11c",
-TOKENQ: "0x2893Ef551B6dD69F661Ac00F11D93E5Dc5Dc0e99",
-TOKENR: "0x6f8a06447ff6fcf75d803135a7de15ce88c1d4ec",
-TOKENS: "0xb33eaad8d922b1083446dc23f610c2567fb5180f",
-TOKENT: "0x553d3d295e0f695b9228246232edf400ed3560b5",
-TOKENU: "0xffa4d863c96e743a2e1513824ea006b8d0353c57",
-TOKENV: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-TOKENW: "0xa0769f7a8fc65e47de93797b4e21c073c117fc80",
-TOKENX: "0x61299774020da444af134c82fa83e3810b309991",
-TOKENY: "0x41b3966b4ff7b427969ddf5da3627d6aeae9a48e",
-TOKENZ: "0x0266F4F08D82372CF0FcbCCc0Ff74309089c74d1",
-
-TOKENAA: "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
-TOKENAB: "0x2e1ad108ff1d8c782fcbbb89aad783ac49586756",
-TOKENAC: "0x4e8dc2149eac3f3def36b1c281ea466338249371",
-TOKENAD: "0x7583feddbcefa813dc18259940f76a02710a8905",
-TOKENAE: "0x172370d5cd63279efa6d502dab29171933a610af",
-TOKENAF: "0xc3c7d422809852031b44ab29eec9f1eff2a58756",
-TOKENAG: "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
-TOKENAH: "0x5ffd62d3c3ee2e81c00a7b9079fb248e7df024a8",
-TOKENAI: "0x6985884c4392d348587b19cb9eaaf157f13271cd",
-TOKENAJ: "0xcb059c5573646047d6d88dddb87b745c18161d3b",
-TOKENAK: "0x6abb753c1893194de4a83c6e8b4eadfc105fd5f5",
-TOKENAL: "0x45c32fa6df82ead1e2ef74d17b76547eddfaff89",
-TOKENAM: "0xc4Ce1D6F5D98D65eE25Cf85e9F2E9DcFEe6Cb5d6",
-TOKENAN: "0xa3f751662e282e83ec3cbc387d225ca56dd63d3a",
-TOKENAO: "0x00000000efe302beaa2b3e6e1b18d08d69a9012a",
-TOKENAP: "0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32",
-TOKENAQ: "0x5fe2b58c013d7601147dcdd68c143a77499f5531",
-TOKENAR: "0xf1938ce12400f9a761084e7a80d37e732a4da056",
-TOKENAS: "0x8505b9d2254a7ae468c0e9dd10ccea3a837aef5c",
-TOKENAT: "0xe4880249745eac5f1ed9d8f7df844792d560e750",
-TOKENAU: "0x67ce67ec4fcd4aca0fcb738dd080b2a21ff69d75",
-TOKENAV: "0xB7b31a6BC18e48888545CE79e83E06003bE70930",
-TOKENAW: "0xb46e0ae620efd98516f49bb00263317096c114b2",
-TOKENAX: "0xa1c57f48f0deb89f569dfbe6e2b7f46d33606fd4",
-TOKENAY: "0x50b728d8d964fd00c2d0aad81718b71311fef68a",
-TOKENAZ: "0xBbba073C31bF03b8ACf7c28EF0738DeCF3695683",
-
-TOKENBA: "0x3cef98bb43d732e2f285ee605a8158cde967d219",
-TOKENBB: "0x43eDD7f3831b08FE70B7555ddD373C8bF65a9050",
-TOKENBC: "0xee327f889d5947c1dc1934bb208a1e792f953e96",
-TOKENBD: "0xFCe60bBc52a5705CeC5B445501FBAf3274Dc43D0",
-TOKENBE: "0xf1815bd50389c46847f0bda824ec8da914045d14",
-TOKENBF: "0x80eede496655fb9047dd39d9f418d5483ed600df",
-TOKENBG: "0x9c2c5fd7b07e95ee044ddeba0e97a665f142394f",
-TOKENBH: "0x0b220b82f3ea3b7f6d9a1d8ab58930c064a2b5bf",
-TOKENBI: "0x2f4efd3aa42e15a1ec6114547151b63ee5d39958",
-TOKENBJ: "0xf50d05a1402d0adafa880d36050736f9f6ee7dee",
-TOKENBK: "0x3Ec3849C33291a9eF4c5dB86De593EB4A37fDe45",
-TOKENBL: "0x6d1fdbb266fcc09a16a22016369210a15bb95761",
-TOKENBM: "0xda537104d6a5edd53c6fbba9a898708e465260b6",
-TOKENBN: "0x3962f4a0a0051dcce0be73a7e09cef5756736712",
-TOKENBO: "0x8a16d4bf8a0a716017e8d2262c4ac32927797a2f",
-TOKENBP: "0x5559edb74751a0ede9dea4dc23aee72cca6be3d5",
-TOKENBQ: "0x07cc1cc3628cc1615120df781ef9fc8ec2feae09",
-TOKENBR: "0xA7E22972a19dd924aFeEDf3Db28033B146801081",
-TOKENBS: "0x0c51f415cf478f8d08c246a6c6ee180c5dc3a012",
-TOKENBT: "0xe2341718c6c0cbfa8e6686102dd8fbf4047a9e9b",
-TOKENBU: "0x2c72d25530191ebd244eb6325e1892480b0e6e28",
-TOKENBV: "0x7ec26842f195c852fa843bb9f6d8b583a274a157",
-TOKENBW: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
-TOKENBX: "0x4ed141110f6eeeaba9a1df36d8c26f684d2475dc",
-TOKENBY: "0x6e4e624106cb12e168e6533f8ec7c82263358940",
-TOKENBZ: "0xf8f9efc0db77d8881500bb06ff5d6abc3070e695",
-
-TOKENCA: "0x236eec6359fb44cce8f97e99387aa7f8cd5cde1f",
-TOKENCB: "0x4e36d8006416ea1d939a0eeae73afdaca86bd376",
-TOKENCC: "0x0b3f868e0be5597d5db7feb59e1cadbb0fdda50a",
-TOKENCD: "0x98965474ecbec2f532f1f780ee37b0b05f77ca55",
-TOKENCE: "0xd4dd9e2f021bb459d5a5f6c24c12fe09c5d45553",
-TOKENCF: "0xd2507e7b5794179380673870d88b22f94da6abe0",
-TOKENCG: "0xC53fA49ba78bC02D3eB2858b456C95CB6DcB52Cf",
-TOKENCH: "0x8Cf745561791A43d70F75e85FbC6e3752395C5f0",
-TOKENCI: "0xe3322702bedaaed36cddab233360b939775ae5f1",
-TOKENCJ: "0x7205705771547cf79201111b4bd8aaf29467b9ec",
-TOKENCK: "0xb25e20de2f2ebb4cffd4d16a55c7b395e8a94762",
-TOKENCL: "0x2b9e7ccdf0f4e5b24757c1e1a80e311e34cb10c7",
-TOKENCM: "0xc8a94a3d3d2dabc3c1caffffdca6a7543c3e3e65",
-TOKENCN: "0x0621d647cecbfb64b79e44302c1933cb4f27054d",
-TOKENCO: "0xe78649874bcdb7a9d1666e665f340723a0187482",
-TOKENCP: "0x101a023270368c0d50bffb62780f4afd4ea79c35",
-TOKENCQ: "0xff7f8f301f7a706e3cfd3d2275f5dc0b9ee8009b",
-TOKENCR: "0x3066818837c5e6ed6601bd5a91b0762877a6b731",
-TOKENCS: "0x6f3b3286fd86d8b47ec737ceb3d0d354cc657b3e",
-TOKENCT: "0x779b299ea455d35a44fe9bac48648be22c08dea2",
-TOKENCU: "0xe0339c80ffde91f3e20494df88d4206d86024cdf",
-TOKENCV: "0x692597b009d13c4049a947cab2239b7d6517875f",
-TOKENCW: "0x71c7656ec7ab88b098defb751b7401b5f6d8976f",
-  
   APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
   CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
   DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
@@ -197,7 +88,35 @@ let microTrades = [];
 let runningProfit = 0n;
 let isExecuting = false;
 
-/* ================= ROUTER CACHE (OPTIMIZATION 1) ================= */
+/* ================= PROVIDER ================= */
+
+function newProvider() {
+  const url = RPCS[rpcIndex];
+  rpcIndex = (rpcIndex + 1) % RPCS.length;
+  return new ethers.JsonRpcProvider(url);
+}
+
+/* ================= INIT ================= */
+
+async function init() {
+  provider = newProvider();
+  await provider.getNetwork();
+
+  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+
+  vault = new ethers.Contract(
+    CONTRACT_ADDRESS,
+    contractAbi,
+    wallet
+  );
+
+  const min = await vault.minimumProfitUSDC();
+  console.log(`ONCHAIN MIN PROFIT ${ethers.formatUnits(min, 6)}\n`);
+}
+
+/* ================= ROUTER HELPER ================= */
 
 const routerCache = new Map();
 
@@ -209,37 +128,6 @@ function getRouter(addr) {
     );
   }
   return routerCache.get(addr);
-}
-
-/* ================= PROVIDER ================= */
-
-function newProvider() {
-  const url = RPCS[rpcIndex];
-  rpcIndex = (rpcIndex + 1) % RPCS.length;
-  return new ethers.JsonRpcProvider(url);
-}
-
-function rebuild() {
-  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-
-  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
-
-  vault = new ethers.Contract(
-    CONTRACT_ADDRESS,
-    contractAbi,
-    wallet
-  );
-}
-
-/* ================= INIT ================= */
-
-async function init() {
-  provider = newProvider();
-  await provider.getNetwork();
-  rebuild();
-
-  const min = await vault.minimumProfitUSDC();
-  console.log(`ONCHAIN MIN PROFIT ${ethers.formatUnits(min, 6)}\n`);
 }
 
 /* ================= QUOTE ================= */
@@ -255,7 +143,7 @@ async function quote(router, amount, path) {
   }
 }
 
-/* ================= FULL MULTI-HOP PATHS (RESTORED) ================= */
+/* ================= PATHS ================= */
 
 function buildBuyPaths(token) {
   return [
@@ -277,7 +165,7 @@ function buildSellPaths(token) {
   ];
 }
 
-/* ================= FIND TRADE (PARALLEL OPTIMIZED) ================= */
+/* ================= FIND TRADE ================= */
 
 async function findTrade(buy, sell, token) {
   const buyPaths = buildBuyPaths(token);
@@ -315,63 +203,115 @@ async function findTrade(buy, sell, token) {
   return results.find(Boolean);
 }
 
-/* ================= EXECUTION ================= */
+/* ================= EXECUTION (FIXED STALL SAFE) ================= */
 
 async function executeBatch(trades) {
   console.log("\n================ BATCH EXECUTION ================");
+  console.log(`Executing ${trades.length} trades`);
+  console.log(`Total expected profit: ${ethers.formatUnits(
+    trades.reduce((a, t) => a + t.expectedProfit, 0n), 6
+  )}\n`);
 
-  const beforeWallet = await usdc.balanceOf(wallet.address);
   const beforeContract = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-  console.log(`WALLET BEFORE   ${ethers.formatUnits(beforeWallet, 6)}`);
-  console.log(`CONTRACT BEFORE ${ethers.formatUnits(beforeContract, 6)}\n`);
+  console.log(`Contract balance before: ${ethers.formatUnits(beforeContract, 6)}`);
 
   let usable = [];
   let used = 0n;
   let expected = 0n;
 
   for (const t of trades) {
-    if (used + t.amountIn > beforeContract) break;
-
+    if (used + t.amountIn > beforeContract) {
+      console.log(`⚠️ Skipping trade - insufficient contract balance`);
+      break;
+    }
     used += t.amountIn;
     expected += t.expectedProfit;
     usable.push(t);
   }
 
+  if (usable.length === 0) {
+    console.log("❌ No executable trades found\n");
+    isExecuting = false;
+    return;
+  }
+
   console.log(`EXECUTING ${usable.length} TRADES`);
   console.log(`EXPECTED PROFIT ${ethers.formatUnits(expected, 6)}\n`);
 
-  const tx = await vault.executeFlashBatchArbitrage({
-    buyRouters: usable.map(t => t.buy),
-    sellRouters: usable.map(t => t.sell),
-    amountsInUSDC: usable.map(t => t.amountIn),
-    pathsToToken: usable.map(t => t.buyPath),
-    pathsToUSDC: usable.map(t => t.sellPath),
-    deadline: Math.floor(Date.now() / 1000) + 30
-  });
+  try {
+    const tx = await vault.executeFlashBatchArbitrage({
+      buyRouters: usable.map(t => t.buy),
+      sellRouters: usable.map(t => t.sell),
+      amountsInUSDC: usable.map(t => t.amountIn),
+      pathsToToken: usable.map(t => t.buyPath),
+      pathsToUSDC: usable.map(t => t.sellPath),
+      deadline: Math.floor(Date.now() / 1000) + 30
+    });
 
-  console.log(`TX ${tx.hash}`);
+    console.log(`TX SENT ${tx.hash}...`);
+    console.log("⏳ WAITING FOR CONFIRMATION...\n");
 
-  await provider.waitForTransaction(tx.hash);
+    /* ================= TIMEOUT SAFE WAIT ================= */
 
-  const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
+    const receipt = await Promise.race([
+      provider.waitForTransaction(tx.hash),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("TIMEOUT")), 45000)
+      )
+    ]).catch(() => null);
 
-  console.log("\n================ AFTER ================");
-  console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
-  console.log(`REAL PROFIT    ${ethers.formatUnits(afterContract - beforeContract, 6)}\n`);
+    if (!receipt) {
+      console.log("⚠️ TX TIMEOUT - Transaction may still be pending");
+      console.log("⚠️ Check explorer for tx:", tx.hash);
+    } else {
+      console.log(`✅ TX CONFIRMED in block ${receipt.blockNumber}`);
+      console.log(`Gas used: ${receipt.gasUsed.toString()}`);
+      
+      const afterContract = await usdc.balanceOf(CONTRACT_ADDRESS);
+      const realProfit = afterContract - beforeContract;
+
+      console.log("\n================ RESULTS ================");
+      console.log(`CONTRACT AFTER ${ethers.formatUnits(afterContract, 6)}`);
+      console.log(`REAL PROFIT    ${ethers.formatUnits(realProfit, 6)}`);
+      
+      if (realProfit > 0) {
+        console.log("✅ PROFITABLE BATCH EXECUTION!\n");
+      } else {
+        console.log("⚠️ BATCH WAS NOT PROFITABLE\n");
+      }
+    }
+  } catch (error) {
+    console.log(`❌ TX FAILED: ${error.message}`);
+    
+    // Check if error is due to failing simulation
+    if (error.message.includes("execution reverted")) {
+      console.log("⚠️ Transaction was reverted - prices may have changed");
+    }
+  }
+
+  console.log("✅ BATCH COMPLETE - RESUMING SCAN\n");
 
   isExecuting = false;
 }
 
-/* ================= WORKERS (16 PARALLEL OPTIMIZED) ================= */
+/* ================= WORKERS (FIXED) ================= */
 
 async function worker(id, tasks) {
+  let consecutiveEmptyScans = 0;
+
   while (true) {
-    if (isExecuting) continue;
+    // ⚡ FIX: Replace busy-wait with proper async delay
+    if (isExecuting) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      continue;
+    }
+
+    // Add delay between scans to prevent CPU saturation and RPC rate limiting
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     const batch = [];
-
-    for (let i = 0; i < 5; i++) {
+    const batchSize = Math.min(3, tasks.length); // Reduced batch size per worker
+    for (let i = 0; i < batchSize; i++) {
       batch.push(tasks[(id + i) % tasks.length]);
     }
 
@@ -379,23 +319,43 @@ async function worker(id, tasks) {
       batch.map(t => findTrade(t.buy, t.sell, t.token))
     );
 
+    let foundTrades = 0;
     for (const r of results) {
       if (!r) continue;
 
+      // Double check we're still not executing (race condition protection)
+      if (isExecuting) break;
+
       microTrades.push(r);
       runningProfit += r.expectedProfit;
+      foundTrades++;
+      consecutiveEmptyScans = 0;
 
-      console.log(`RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
+      console.log(`[Worker ${id}] RUNNING TOTAL ${ethers.formatUnits(runningProfit, 6)}`);
     }
 
-    if (runningProfit >= MIN_BATCH_PROFIT) {
+    if (foundTrades === 0) {
+      consecutiveEmptyScans++;
+    }
+
+    // Check if we should execute
+    if (!isExecuting && runningProfit >= MIN_BATCH_PROFIT) {
       isExecuting = true;
 
       const batchCopy = [...microTrades];
       microTrades = [];
       runningProfit = 0n;
 
+      console.log(`\n🎯 Batch profit threshold reached! Executing ${batchCopy.length} trades...`);
       await executeBatch(batchCopy);
+      
+      // Small delay after execution to let things settle
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // If we've had many empty scans, add extra delay to prevent hammering RPC
+    if (consecutiveEmptyScans > 10) {
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 }
@@ -415,6 +375,9 @@ async function scan() {
     }
   }
 
+  console.log(`Total trading pairs to scan: ${tasks.length}`);
+  console.log(`Starting ${WORKER_COUNT} workers...\n`);
+
   await Promise.all(
     Array.from({ length: WORKER_COUNT }, (_, i) =>
       worker(i, tasks)
@@ -422,15 +385,51 @@ async function scan() {
   );
 }
 
+/* ================= SAFETY MONITOR ================= */
+
+async function safetyMonitor() {
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 10000)); // Check every 10 seconds
+
+    if (isExecuting) {
+      const timeSinceLastLog = Date.now();
+      // If execution takes longer than 2 minutes, log a warning
+      console.log("⚠️ Execution still in progress...");
+    }
+
+    // Check wallet balance
+    try {
+      const bal = await provider.getBalance(wallet.address);
+      console.log(`💰 POL Balance: ${ethers.formatEther(bal)}`);
+    } catch {
+      // Provider might be busy, skip this check
+    }
+  }
+}
+
 /* ================= MAIN ================= */
 
 (async function main() {
-  console.log("🚀 BOT STARTED\n");
+  console.log("🚀 ARBITRAGE BOT STARTED");
+  console.log("=".repeat(50));
+  console.log(`Trade Amount: ${ethers.formatUnits(TRADE_AMOUNT, 6)} USDC`);
+  console.log(`Min Profit: ${ethers.formatUnits(MIN_PROFIT, 6)} USDC`);
+  console.log(`Batch Min Profit: ${ethers.formatUnits(MIN_BATCH_PROFIT, 6)} USDC`);
+  console.log(`Workers: ${WORKER_COUNT}`);
+  console.log("=".repeat(50) + "\n");
 
   await init();
 
   const bal = await provider.getBalance(wallet.address);
-  console.log(`POL BALANCE ${ethers.formatEther(bal)}\n`);
+  console.log(`💰 POL BALANCE: ${ethers.formatEther(bal)}`);
+  console.log(`📝 WALLET: ${wallet.address}\n`);
 
+  // Start safety monitor in background
+  safetyMonitor().catch(console.error);
+
+  // Start main scanning loop
   await scan();
-})();
+})().catch(error => {
+  console.error("❌ FATAL ERROR:", error);
+  process.exit(1);
+});
