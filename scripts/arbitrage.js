@@ -43,6 +43,11 @@ const TOKENS = {
 const TRADE_AMOUNT_USDC = ethers.parseUnits("0.02", 6); // $0.02 Micro capital target
 const MIN_PROFIT_USDC = ethers.parseUnits("0.0002", 6); // $0.0002 Micro target filter
 
+// ==========================================
+// ADJUSTABLE BATCH SIZE CONFIGURATION
+// ==========================================
+const BATCH_SIZE = 4; // Change this value to adjust the number of items bundled per transaction (e.g., 3 to 100)
+
 /* ==========================================================================
    2. MINIMAL ABIs REQUIRED FOR ROUTING & TELEMETRY
    ========================================================================== */
@@ -103,13 +108,21 @@ function buildTriangularPaths() {
 }
 
 /* ==========================================================================
-   5. PARALLEL TIMED SCANNER
+   5. PARALLEL TIMED SCANNER (WITH EARLY BREAK BASED ON BATCH SIZE)
    ========================================================================== */
 async function parallelScan(tokenPaths, routerContractsArray) {
     const opportunities = [];
 
-    const scanPromises = tokenPaths.flatMap((path) => {
-        return routerContractsArray.map(async (routerContract) => {
+    for (const path of tokenPaths) {
+        // Break out of the primary loop immediately if our batch is full
+        if (opportunities.length >= BATCH_SIZE) {
+            break;
+        }
+
+        const scanPromises = routerContractsArray.map(async (routerContract) => {
+            // Internal safety valve if another parallel worker finishes the job mid-flight
+            if (opportunities.length >= BATCH_SIZE) return;
+
             const amountOut = await getCachedQuote(routerContract, TRADE_AMOUNT_USDC, path);
             
             if (amountOut) {
@@ -125,20 +138,21 @@ async function parallelScan(tokenPaths, routerContractsArray) {
                 }
             }
         });
-    });
 
-    await Promise.all(scanPromises);
-    return opportunities;
+        await Promise.all(scanPromises);
+    }
+
+    return opportunities.slice(0, BATCH_SIZE);
 }
 
 /* ==========================================================================
-   6. ZERO REVALIDATION PIPELINE
+   6. ZERO REVALIDATION PIPELINE WITH RESTORED BATCH SPLICING
    ========================================================================== */
 async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract, trades) {
     if (trades.length === 0) return;
 
-    // Limit execution payload to a max chunk size per batch transaction
-    const activeTrades = trades.slice(0, 4);
+    // Enforce dynamic splicing based entirely on your adjustable parameter
+    const activeTrades = trades.slice(0, BATCH_SIZE);
 
     const payload = {
         routers: activeTrades.map(t => t.router),
@@ -148,11 +162,11 @@ async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract,
 
     try {
         const contractBalanceBefore = BigInt(await usdcContract.balanceOf(arbitrageContract.target));
-        console.log(`\n🔥 EXECUTING BATCH (${activeTrades.length} routes)`);
+        console.log(`\n🔥 EXECUTING BATCH (${activeTrades.length} routes pooled)`);
         console.log(`[BALANCE BEFORE] ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
 
         const txOptions = {
-            gasLimit: 1500000n, 
+            gasLimit: 2500000n, // Dynamic safety buffer sized for batch scaling
             maxFeePerGas: ethers.parseUnits("250", "gwei"),
             maxPriorityFeePerGas: ethers.parseUnits("40", "gwei")
         };
@@ -165,7 +179,7 @@ async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract,
         );
 
         console.log(`📡 Broadcasted: ${txResponse.hash}`);
-        const txReceipt = await txResponse.wait(1);
+        await txResponse.wait(1);
         
         const contractBalanceAfter = BigInt(await usdcContract.balanceOf(arbitrageContract.target));
         console.log(`[BALANCE AFTER]  ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
@@ -198,8 +212,9 @@ async function main() {
 
     const tokenPaths = buildTriangularPaths();
     console.log(`🚀 Engine hot. Ready to stream scans on ${tokenPaths.length} multi-hop tracks.`);
+    console.log(`📦 Configured Batch Size target: ${BATCH_SIZE}`);
 
-    // Continuous loop framework matching JS1 style instead of waiting for block listeners
+    // Continuous event framework loop
     while (true) {
         try {
             const discoveredTrades = await parallelScan(tokenPaths, routerContractsArray);
@@ -208,7 +223,7 @@ async function main() {
                 await executeArbitrageZeroRevalidation(arbitrageContract, usdcContract, discoveredTrades);
             }
             
-            // Short tick throttle to avoid getting ratelimited by the public node RPC
+            // Short tick throttle to protect the RPC node endpoint from rate-limiting 
             await new Promise(resolve => setTimeout(resolve, 300));
         } catch (loopError) {
             console.error(`⚠️ Cycle iteration error: ${loopError.message}`);
