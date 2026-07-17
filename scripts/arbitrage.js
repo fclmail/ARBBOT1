@@ -143,7 +143,7 @@ TOKENCW: "0x71c7656ec7ab88b098defb751b7401b5f6d8976f",
 };
 
 // Target execution parameters (Fixed for Ethers v6 ESM)
-const TRADE_AMOUNT_USDC = ethers.parseUnits("1000", 6); // $1000 base capital example
+const TRADE_AMOUNT_USDC = ethers.parseUnits(".02", 6); // $1000 base capital example
 
 /* ==========================================================================
    2. MINIMAL ABIs REQUIRED FOR ROUTING & TELEMETRY
