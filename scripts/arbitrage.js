@@ -1,11 +1,14 @@
 import { ethers } from "ethers";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 /* ==========================================================================
    1. NETWORK, PROVIDER, AND CONFIGURATION KEYS
    ========================================================================== */
-const RPC_URL = "YOUR_POLYGON_WEBSOCKET_OR_HTTP_URL"; // Use a low-latency provider
-const PRIVATE_KEY = "YOUR_WALLET_PRIVATE_KEY";
-const ARBITRAGE_CONTRACT_ADDRESS = "YOUR_DEPLOYED_SMART_CONTRACT_ADDRESS";
+const RPC_URL = process.env.RPC_URL || "YOUR_POLYGON_WEBSOCKET_OR_HTTP_URL";
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const ARBITRAGE_CONTRACT_ADDRESS = process.env.ARBITRAGE_CONTRACT || "YOUR_DEPLOYED_SMART_CONTRACT_ADDRESS";
 
 // Router Addresses on Polygon
 const routers = {
@@ -194,12 +197,27 @@ async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract,
    7. CORE LIFECYCLE INITIALIZER & ENGINE ENTRYPOINT
    ========================================================================== */
 async function main() {
+    // Validate critical environment variables
+    if (!PRIVATE_KEY) {
+        throw new Error("PRIVATE_KEY environment variable is not set. Create a .env file with PRIVATE_KEY=0xyour_actual_private_key");
+    }
+    if (!RPC_URL || RPC_URL === "YOUR_POLYGON_WEBSOCKET_OR_HTTP_URL") {
+        throw new Error("RPC_URL environment variable is not set correctly.");
+    }
+
     // Standard v6 provider setups
     const provider = new ethers.JsonRpcProvider(RPC_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
+    // Validate wallet address is derived correctly
+    console.log(`🔑 Wallet Address: ${wallet.address}`);
+
     // Initialize foundational asset contract interfaces
     const usdcContract = new ethers.Contract(HOP_TOKENS.USDC, ERC20_ABI, provider);
+    
+    if (!ARBITRAGE_CONTRACT_ADDRESS || ARBITRAGE_CONTRACT_ADDRESS === "YOUR_DEPLOYED_SMART_CONTRACT_ADDRESS") {
+        throw new Error("ARBITRAGE_CONTRACT environment variable is not set correctly.");
+    }
     const arbitrageContract = new ethers.Contract(ARBITRAGE_CONTRACT_ADDRESS, ARBITRAGE_CONTRACT_ABI, wallet);
 
     // Generate active local instances of multi-router interfaces
