@@ -1,4 +1,5 @@
 import { ethers } from "ethers";
+
 /* ==========================================================================
    1. NETWORK, PROVIDER, AND CONFIGURATION KEYS
    ========================================================================== */
@@ -32,8 +33,8 @@ const EXOTIC_TOKENS = {
     UNI: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
 };
 
-// Target execution parameters
-const TRADE_AMOUNT_USDC = ethers.utils.parseUnits("1000", 6); // $1000 base capital example
+// Target execution parameters (Fixed for Ethers v6 ESM)
+const TRADE_AMOUNT_USDC = ethers.parseUnits("1000", 6); // $1000 base capital example
 
 /* ==========================================================================
    2. MINIMAL ABIs REQUIRED FOR ROUTING & TELEMETRY
@@ -62,7 +63,7 @@ function flushRouterCache(blockNumber) {
 }
 
 async function getCachedQuote(routerContract, amountIn, tokenPath) {
-    const cacheKey = `${routerContract.address}-${tokenPath.join('-')}-${amountIn.toString()}-${currentBlockNumber}`;
+    const cacheKey = `${routerContract.target}-${tokenPath.join('-')}-${amountIn.toString()}-${currentBlockNumber}`;
     
     if (routerQuoteCache.has(cacheKey)) {
         return routerQuoteCache.get(cacheKey);
@@ -70,7 +71,7 @@ async function getCachedQuote(routerContract, amountIn, tokenPath) {
 
     try {
         const amountsOut = await routerContract.getAmountsOut(amountIn, tokenPath);
-        const finalAmount = amountsOut[amountsOut.length - 1];
+        const finalAmount = BigInt(amountsOut[amountsOut.length - 1]);
         routerQuoteCache.set(cacheKey, finalAmount);
         return finalAmount;
     } catch (err) {
@@ -116,9 +117,9 @@ async function parallelScan(tokenPaths, routerContractsArray) {
         return routerContractsArray.map(async (routerContract) => {
             const amountOut = await getCachedQuote(routerContract, TRADE_AMOUNT_USDC, path);
             
-            if (amountOut && amountOut.gt(TRADE_AMOUNT_USDC)) {
+            if (amountOut && amountOut > TRADE_AMOUNT_USDC) {
                 opportunities.push({
-                    router: routerContract.address,
+                    router: routerContract.target,
                     path: path,
                     amount: TRADE_AMOUNT_USDC,
                     expectedOutput: amountOut
@@ -145,16 +146,16 @@ async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract,
     };
 
     try {
-        // Fetch raw balances immediately before trade execution
-        const contractBalanceBefore = await usdcContract.balanceOf(arbitrageContract.address);
-        console.log(`\n[BALANCE BEFORE EX] ${ethers.utils.formatUnits(contractBalanceBefore, 6)} USDC`);
+        // Fetch raw balances immediately before trade execution (Fixed for Ethers v6 ESM)
+        const contractBalanceBefore = BigInt(await usdcContract.balanceOf(arbitrageContract.target));
+        console.log(`\n[BALANCE BEFORE EX] ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
         console.log(`⚡ Zero Revalidation Rule: Bypassing simulations. Injecting payload directly to mempool...`);
 
-        // Force highly aggressive, deterministic gas parameters to skip all client-side pre-flight checks
+        // Force highly aggressive, deterministic gas parameters to skip all client-side pre-flight checks (Fixed for Ethers v6 ESM)
         const txOptions = {
-            gasLimit: 2000000, 
-            maxFeePerGas: ethers.utils.parseUnits("300", "gwei"),
-            maxPriorityFeePerGas: ethers.utils.parseUnits("50", "gwei")
+            gasLimit: 2000000n, 
+            maxFeePerGas: ethers.parseUnits("300", "gwei"),
+            maxPriorityFeePerGas: ethers.parseUnits("50", "gwei")
         };
 
         // Fire directly to the contract without awaiting estimateGas/callStatic
@@ -171,15 +172,15 @@ async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract,
         const txReceipt = await txResponse.wait(1);
         console.log(`📦 Transaction Mined inside Block: ${txReceipt.blockNumber}`);
         
-        // Fetch raw balances immediately after trade confirmation
-        const contractBalanceAfter = await usdcContract.balanceOf(arbitrageContract.address);
-        console.log(`[BALANCE AFTER EX]  ${ethers.utils.formatUnits(contractBalanceAfter, 6)} USDC`);
+        // Fetch raw balances immediately after trade confirmation (Fixed for Ethers v6 ESM)
+        const contractBalanceAfter = BigInt(await usdcContract.balanceOf(arbitrageContract.target));
+        console.log(`[BALANCE AFTER EX]  ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
 
-        const netProfit = contractBalanceAfter.sub(contractBalanceBefore);
-        if (netProfit.gt(0)) {
-            console.log(`🎉 SUCCESS: Net yield of +${ethers.utils.formatUnits(netProfit, 6)} USDC captured directly into contract memory.`);
+        const netProfit = contractBalanceAfter - contractBalanceBefore;
+        if (netProfit > 0n) {
+            console.log(`🎉 SUCCESS: Net yield of +${ethers.formatUnits(netProfit, 6)} USDC captured directly into contract memory.`);
         } else {
-            console.log(`ℹ️ CRADLE COMPLETION: Tx mined, gas spent. Net yield change: ${ethers.utils.formatUnits(netProfit, 6)} USDC.`);
+            console.log(`ℹ️ CRADLE COMPLETION: Tx mined, gas spent. Net yield change: ${ethers.formatUnits(netProfit, 6)} USDC.`);
         }
 
     } catch (criticalError) {
@@ -193,8 +194,8 @@ async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract,
    7. CORE LIFECYCLE INITIALIZER & ENGINE ENTRYPOINT
    ========================================================================== */
 async function main() {
-    // Standard provider setups
-    const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
+    // Standard v6 provider setups
+    const provider = new ethers.JsonRpcProvider(RPC_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
     // Initialize foundational asset contract interfaces
