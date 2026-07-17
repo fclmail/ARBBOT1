@@ -8,7 +8,7 @@ dotenv.config();
    ========================================================================== */
 const RPC_URL = process.env.RPC_URL || "YOUR_POLYGON_WEBSOCKET_OR_HTTP_URL";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const ARBITRAGE_CONTRACT_ADDRESS = process.env.ARBITRAGE_CONTRACT || "YOUR_DEPLOYED_SMART_CONTRACT_ADDRESS";
+const ARBITRAGE_CONTRACT_ADDRESS = process.env.ARBITRAGE_CONTRACT || "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958";
 
 // Router Addresses on Polygon
 const routers = {
