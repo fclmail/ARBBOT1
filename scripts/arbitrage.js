@@ -1,5 +1,4 @@
-const { ethers } = require("ethers");
-
+import { ethers } from "ethers";
 /* ==========================================================================
    1. NETWORK, PROVIDER, AND CONFIGURATION KEYS
    ========================================================================== */
