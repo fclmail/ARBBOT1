@@ -3,12 +3,14 @@ import { ethers } from "ethers";
 // ==========================================
 // CONFIGURATION & CONFIG CONSTANTS
 // ==========================================
-const PROVIDER_RPC = "YOUR_RPC_URL"; 
-const PRIVATE_KEY = "YOUR_PRIVATE_KEY";
-const CONTRACT_ADDRESS = "YOUR_ENFORCER_CONTRACT_ADDRESS";
+const PROVIDER_RPC = "wss://polygon-bor-rpc.publicnode.com"; // Standard public Polygon Mainnet RPC
+const CONTRACT_ADDRESS = "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958";
+
+// Safely pull the private key from environment secrets
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // Target Batch Sizing Condition
-const TARGET_BATCH_SIZE = 3; // Transaction executes ONLY when exactly this many items are collected
+const TARGET_BATCH_SIZE = 3; 
 
 // ABI containing required methods
 const CONTRACT_ABI = [
@@ -40,9 +42,8 @@ async function queueArbitrageRoute(route, contractWithSigner) {
     currentBatch.sellRouters.push(route.sellRouter);
     currentBatch.amountsInUSDC.push(route.amountInUSDC);
     currentBatch.pathsToToken.push(route.pathToToken);
-    currentBatch.pathsToUSDC.push(route.pathToUSDC);
+    currentBatch.pathsToUSDC.push(route.pathsToUSDC);
     
-    // Check if configuration volume limit is hit
     if (currentBatch.buyRouters.length >= TARGET_BATCH_SIZE) {
         console.log(`\n🚀 [Batch Target Reached] Target size of ${TARGET_BATCH_SIZE} hit! Dispatched to EVM...`);
         await executeQueuedBatch(contractWithSigner);
@@ -56,12 +57,11 @@ async function queueArbitrageRoute(route, contractWithSigner) {
  */
 async function executeQueuedBatch(contractWithSigner) {
     try {
-        // Apply fresh deadline timestamp for the bundle block matrix
         currentBatch.deadline = Math.floor(Date.now() / 1000) + 120; // 2 minutes execution window
 
         console.log("[Tx] Sending payload data structure to executeFlashBatchArbitrage...");
         const tx = await contractWithSigner.executeFlashBatchArbitrage(currentBatch, {
-            gasLimit: 1500000 // Approximate buffer allowance for iterative multi-swaps
+            gasLimit: 1500000 
         });
         
         console.log(`[Tx Sent] Hash: ${tx.hash}`);
@@ -71,7 +71,6 @@ async function executeQueuedBatch(contractWithSigner) {
     } catch (error) {
         console.error("❌ [Execution Failed] Batch fallback or revert triggered:", error.reason || error.message);
     } finally {
-        // Flush memory states to avoid double spending signatures
         resetBatchQueue();
     }
 }
@@ -91,11 +90,18 @@ function resetBatchQueue() {
 // CORE EXECUTION ENTRYPOINT
 // ==========================================
 async function main() {
+    // Fail early explicitly if the GitHub Secret is missing or named incorrectly
+    if (!PRIVATE_KEY || PRIVATE_KEY.includes("YOUR_PRIVATE_KEY")) {
+        throw new Error("Missing process.env.PRIVATE_KEY. Check your GitHub Repository Secrets environment setup.");
+    }
+
     const provider = new ethers.JsonRpcProvider(PROVIDER_RPC);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
     console.log(`Initializing Arbitrage Enforcer Client Engine...`);
+    console.log(`Network Target: Polygon Mainnet`);
+    console.log(`Contract Target: ${CONTRACT_ADDRESS}`);
     console.log(`Monitoring targeted batch condition matrix: [${TARGET_BATCH_SIZE}] entries.`);
 
     // --- DEMO SAMPLE INPUT GENERATOR ---
@@ -123,11 +129,9 @@ async function main() {
         }
     ];
 
-    // Simulating discovery engine execution loops
     for (const route of sampleDiscoveredRoutes) {
         await queueArbitrageRoute(route, contract);
     }
 }
 
-// ESM Entry execution format
 main().catch(console.error);
