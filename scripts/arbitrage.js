@@ -6,7 +6,8 @@ dotenv.config();
 /* ==========================================================================
    1. NETWORK, PROVIDER, AND CONFIGURATION KEYS
    ========================================================================== */
-const RPC_URL = process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com";
+const RPC_URL = process.env.RPC_URL || "https://polygon-mainnet.chainstacklabs.com";
+
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const ARBITRAGE_CONTRACT_ADDRESS = process.env.ARBITRAGE_CONTRACT || "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 
