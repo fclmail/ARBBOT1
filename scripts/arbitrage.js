@@ -6,7 +6,7 @@ dotenv.config();
 /* ==========================================================================
    1. NETWORK, PROVIDER, AND CONFIGURATION KEYS
    ========================================================================== */
-const RPC_URL = process.env.RPC_URL || "https://polygon-mainnet.chainstacklabs.com";
+const RPC_URL = process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com";
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const ARBITRAGE_CONTRACT_ADDRESS = process.env.ARBITRAGE_CONTRACT || "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
@@ -43,6 +43,9 @@ const TOKENS = {
 // Target execution parameters matched down to JS1's Micro Specs
 const TRADE_AMOUNT_USDC = ethers.parseUnits("0.02", 6); // $0.02 Micro capital target
 const MIN_PROFIT_USDC = ethers.parseUnits("0.0002", 6); // $0.0002 Micro target filter
+
+// Adjustable target threshold for cumulative batch profit ($0.20 baseline)
+const BATCH_MIN_PROFIT_USDC = ethers.parseUnits("0.20", 6); 
 
 /* ==========================================================================
    2. MINIMAL ABIs REQUIRED FOR ROUTING & TELEMETRY
@@ -140,6 +143,14 @@ async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract,
 
     // Limit execution payload to a max chunk size per batch transaction
     const activeTrades = trades.slice(0, 4);
+
+    // Calculate total expected profit for this specific scanned batch
+    const totalBatchProfit = activeTrades.reduce((sum, t) => sum + (t.expectedOutput - t.amount), 0n);
+
+    if (totalBatchProfit < BATCH_MIN_PROFIT_USDC) {
+        console.log(`\n⏭️ Batch deferred: Total profit (${ethers.formatUnits(totalBatchProfit, 6)} USDC) below batch threshold (${ethers.formatUnits(BATCH_MIN_PROFIT_USDC, 6)} USDC).`);
+        return;
+    }
 
     const payload = {
         routers: activeTrades.map(t => t.router),
