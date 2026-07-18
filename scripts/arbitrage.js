@@ -52,7 +52,7 @@ async function queueArbitrageRoute(route, contractWithSigner) {
     const safeBuyRouter = ethers.getAddress(route.buyRouter);
     const safeSellRouter = ethers.getAddress(route.sellRouter);
     const safePathToToken = route.pathToToken.map(addr => ethers.getAddress(addr));
-    const safePathToUSDC = route.pathsToUSDC.map(addr => ethers.getAddress(addr));
+    const safePathToUSDC = route.pathToUSDC.map(addr => ethers.getAddress(addr)); // FIXED: Using correct singular property
 
     // Simulate the on-chain profit view for this specific route right now
     let estimatedProfitFormatted = "0.00";
@@ -82,7 +82,7 @@ async function queueArbitrageRoute(route, contractWithSigner) {
     currentBatch.sellRouters.push(safeSellRouter);
     currentBatch.amountsInUSDC.push(route.amountInUSDC);
     currentBatch.pathsToToken.push(safePathToToken);
-    currentBatch.pathsToUSDC.push(safePathToUSDC);
+    currentBatch.pathsToUSDC.push(safePathToUSDC); // FIXED: Linked cleanly to safe local collection variable
     
     if (currentBatch.buyRouters.length >= TARGET_BATCH_SIZE) {
         console.log(`\n🚀 [Batch Target Reached] Target size of ${TARGET_BATCH_SIZE} hit! Processing execution log summary...`);
@@ -174,6 +174,15 @@ async function main() {
     console.log(`Initializing Arbitrage Enforcer Client Engine...`);
     console.log(`Network Target:  Polygon Mainnet`);
     console.log(`Contract Target: ${ethers.getAddress(CONTRACT_ADDRESS)}`);
+    
+    // RESTORED: Query and log minimum profit target setting configured on-chain
+    try {
+        const minProfit = await contract.minimumProfitUSDC();
+        console.log(`Contract Filter: Minimum required profit per trade: ${ethers.formatUnits(minProfit, USDC_DECIMALS)} USDC`);
+    } catch (err) {
+        console.log(`Contract Filter: Could not fetch minimumProfitUSDC (Check contract deploy state)`);
+    }
+    
     console.log(`Batch Threshold: ${TARGET_BATCH_SIZE} collected items\n`);
 
     // --- MOCK REPLICATED DETECTED OPPORTUNITIES DATASET ---
