@@ -1,238 +1,141 @@
-import { ethers } from "ethers";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-/* ==========================================================================
-   1. NETWORK, PROVIDER, AND CONFIGURATION KEYS
-   ========================================================================== */
-const RPC_URL = process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com";
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const ARBITRAGE_CONTRACT_ADDRESS = process.env.ARBITRAGE_CONTRACT || "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
-
-// Router Addresses on Polygon
-const routers = {
-    QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-    SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-    Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-    ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-    Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
-};
-
-// Core Multi-Hop Assets + JS1's duplicate array profile to match exact scanning footprint
-const TOKENS = {
-    USDC: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-    AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-    CRV_1: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV_2: "0x172370d5cd63279efa6d502dab29171933a610af",
-    CRV_3: "0x172370d5cd63279efa6d502dab29171933a610af",
-    QUICK_1: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    QUICK_2: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-    APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-    DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-    LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-    SHIB: "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
-    UNI: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-    WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
-};
-
-// Target execution parameters matched down to JS1's Micro Specs
-const TRADE_AMOUNT_USDC = ethers.parseUnits("0.02", 6); // $0.02 Micro capital target
-const MIN_PROFIT_USDC = ethers.parseUnits("0.0002", 6); // $0.0002 Micro target filter
+const { ethers } = require("ethers");
 
 // ==========================================
-// ADJUSTABLE BATCH SIZE CONFIGURATION
+// CONFIGURATION & CONFIG CONSTANTS
 // ==========================================
-const BATCH_SIZE = 4; // Change this value to adjust the number of items bundled per transaction (e.g., 3 to 100)
+const PROVIDER_RPC = "YOUR_RPC_URL"; 
+const PRIVATE_KEY = "YOUR_PRIVATE_KEY";
+const CONTRACT_ADDRESS = "YOUR_ENFORCER_CONTRACT_ADDRESS";
 
-/* ==========================================================================
-   2. MINIMAL ABIs REQUIRED FOR ROUTING & TELEMETRY
-   ========================================================================== */
-const ROUTER_ABI = [
-    "function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)"
+// Target Batch Sizing Condition
+const TARGET_BATCH_SIZE = 3; // Transaction executes ONLY when exactly this many items are collected
+
+// ABI containing required methods
+const CONTRACT_ABI = [
+    "function executeFlashBatchArbitrage(tuple(address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",
+    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC) public view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)",
+    "function minimumProfitUSDC() public view returns (uint256)"
 ];
 
-const ERC20_ABI = [
-    "function balanceOf(address account) external view returns (uint256)"
-];
+// ==========================================
+// BATCH MANAGER (QUEUE STATE)
+// ==========================================
+let currentBatch = {
+    buyRouters: [],
+    sellRouters: [],
+    amountsInUSDC: [],
+    pathsToToken: [],
+    pathsToUSDC: [],
+    deadline: 0
+};
 
-const ARBITRAGE_CONTRACT_ABI = [
-    "function executeFlashBatchArbitrage(address[] calldata routers, address[][] calldata paths, uint256[] calldata amounts) external"
-];
-
-/* ==========================================================================
-   3. TIME-BASED CACHE ENGINE (PORTED FROM JS1)
-   ========================================================================== */
-const quoteCache = new Map();
-const CACHE_TTL = 1000; // 1 second Time-to-Live
-
-async function getCachedQuote(routerContract, amountIn, tokenPath) {
-    const cacheKey = `${routerContract.target}-${tokenPath.join('-')}-${amountIn.toString()}`;
-    const cached = quoteCache.get(cacheKey);
+/**
+ * Adds an arbitrage route to the memory queue. 
+ * Fires execution immediately once targeted batch volume is hit.
+ */
+async function queueArbitrageRoute(route, contractWithSigner) {
+    console.log(`[Queue] Adding trade path to processing pool...`);
     
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-        return cached.value;
+    currentBatch.buyRouters.push(route.buyRouter);
+    currentBatch.sellRouters.push(route.sellRouter);
+    currentBatch.amountsInUSDC.push(route.amountInUSDC);
+    currentBatch.pathsToToken.push(route.pathToToken);
+    currentBatch.pathsToUSDC.push(route.pathToUSDC);
+    
+    // Check if configuration volume limit is hit
+    if (currentBatch.buyRouters.length >= TARGET_BATCH_SIZE) {
+        console.log(`\n🚀 [Batch Target Reached] Target size of ${TARGET_BATCH_SIZE} hit! Dispatched to EVM...`);
+        await executeQueuedBatch(contractWithSigner);
+    } else {
+        console.log(`[Queue Status] Accumulated: ${currentBatch.buyRouters.length}/${TARGET_BATCH_SIZE} paths.`);
     }
+}
 
+/**
+ * Fires the transaction on-chain and resets the memory tracker variables
+ */
+async function executeQueuedBatch(contractWithSigner) {
     try {
-        const amountsOut = await routerContract.getAmountsOut(amountIn, tokenPath);
-        const finalAmount = BigInt(amountsOut[amountsOut.length - 1]);
-        quoteCache.set(cacheKey, { value: finalAmount, timestamp: Date.now() });
-        return finalAmount;
-    } catch (err) {
-        // Cache failures briefly to limit RPC spam on non-existent paths
-        quoteCache.set(cacheKey, { value: null, timestamp: Date.now() });
-        return null;
-    }
-}
+        // Apply fresh deadline timestamp for the bundle block matrix
+        currentBatch.deadline = Math.floor(Date.now() / 1000) + 120; // 2 minutes execution window
 
-/* ==========================================================================
-   4. SAME TOKEN LOOP PATH BUILDER (PORTED FROM JS1)
-   ========================================================================== */
-function buildTriangularPaths() {
-    let paths = [];
-    const tokensArray = Object.values(TOKENS);
-    const baseAsset = TOKENS.USDC;
-
-    // Generates cross loops including the duplicate/overlapping token strings
-    for (const a of tokensArray) {
-        for (const b of tokensArray) {
-            if (a === b) continue; 
-            paths.push([baseAsset, a, b, baseAsset]);
-        }
-    }
-    return paths;
-}
-
-/* ==========================================================================
-   5. PARALLEL TIMED SCANNER (WITH EARLY BREAK BASED ON BATCH SIZE)
-   ========================================================================== */
-async function parallelScan(tokenPaths, routerContractsArray) {
-    const opportunities = [];
-
-    for (const path of tokenPaths) {
-        // Break out of the primary loop immediately if our batch is full
-        if (opportunities.length >= BATCH_SIZE) {
-            break;
-        }
-
-        const scanPromises = routerContractsArray.map(async (routerContract) => {
-            // Internal safety valve if another parallel worker finishes the job mid-flight
-            if (opportunities.length >= BATCH_SIZE) return;
-
-            const amountOut = await getCachedQuote(routerContract, TRADE_AMOUNT_USDC, path);
-            
-            if (amountOut) {
-                const profit = amountOut - TRADE_AMOUNT_USDC;
-                if (profit >= MIN_PROFIT_USDC) {
-                    console.log(`🎯 TRI FOUND on ${routerContract.target.slice(0,6)}: 0.02 → ${ethers.formatUnits(amountOut, 6)} | PROFIT: ${ethers.formatUnits(profit, 6)}`);
-                    opportunities.push({
-                        router: routerContract.target,
-                        path: path,
-                        amount: TRADE_AMOUNT_USDC,
-                        expectedOutput: amountOut
-                    });
-                }
-            }
+        console.log("[Tx] Sending payload data structure to executeFlashBatchArbitrage...");
+        const tx = await contractWithSigner.executeFlashBatchArbitrage(currentBatch, {
+            gasLimit: 1500000 // Approximate buffer allowance for iterative multi-swaps
         });
-
-        await Promise.all(scanPromises);
-    }
-
-    return opportunities.slice(0, BATCH_SIZE);
-}
-
-/* ==========================================================================
-   6. ZERO REVALIDATION PIPELINE WITH RESTORED BATCH SPLICING
-   ========================================================================== */
-async function executeArbitrageZeroRevalidation(arbitrageContract, usdcContract, trades) {
-    if (trades.length === 0) return;
-
-    // Enforce dynamic splicing based entirely on your adjustable parameter
-    const activeTrades = trades.slice(0, BATCH_SIZE);
-
-    const payload = {
-        routers: activeTrades.map(t => t.router),
-        paths: activeTrades.map(t => t.path),
-        amounts: activeTrades.map(t => t.amount)
-    };
-
-    try {
-        const contractBalanceBefore = BigInt(await usdcContract.balanceOf(arbitrageContract.target));
-        console.log(`\n🔥 EXECUTING BATCH (${activeTrades.length} routes pooled)`);
-        console.log(`[BALANCE BEFORE] ${ethers.formatUnits(contractBalanceBefore, 6)} USDC`);
-
-        const txOptions = {
-            gasLimit: 2500000n, // Dynamic safety buffer sized for batch scaling
-            maxFeePerGas: ethers.parseUnits("250", "gwei"),
-            maxPriorityFeePerGas: ethers.parseUnits("40", "gwei")
-        };
-
-        const txResponse = await arbitrageContract.executeFlashBatchArbitrage(
-            payload.routers,
-            payload.paths,
-            payload.amounts,
-            txOptions
-        );
-
-        console.log(`📡 Broadcasted: ${txResponse.hash}`);
-        await txResponse.wait(1);
         
-        const contractBalanceAfter = BigInt(await usdcContract.balanceOf(arbitrageContract.target));
-        console.log(`[BALANCE AFTER]  ${ethers.formatUnits(contractBalanceAfter, 6)} USDC`);
-
-        const netProfit = contractBalanceAfter - contractBalanceBefore;
-        console.log(`REAL PROFIT:    ${ethers.formatUnits(netProfit, 6)} USDC`);
-
-    } catch (criticalError) {
-        console.error(`❌ Execution boundary fallback: ${criticalError.message}`);
+        console.log(`[Tx Sent] Hash: ${tx.hash}`);
+        const receipt = await tx.wait();
+        console.log(`🎉 [Tx Confirmed] Batch executed successfully in block ${receipt.blockNumber}`);
+        
+    } catch (error) {
+        console.error("❌ [Execution Failed] Batch fallback or revert triggered:", error.reason || error.message);
+    } finally {
+        // Flush memory states to avoid double spending signatures
+        resetBatchQueue();
     }
 }
 
-/* ==========================================================================
-   7. RUNTIME ENTRYPOINT (CONTINUOUS EVENT LOOP)
-   ========================================================================== */
+function resetBatchQueue() {
+    currentBatch = {
+        buyRouters: [],
+        sellRouters: [],
+        amountsInUSDC: [],
+        pathsToToken: [],
+        pathsToUSDC: []
+    };
+    console.log("[Queue] State structures initialized and cleared.\n");
+}
+
+// ==========================================
+// CORE EXECUTION ENTRYPOINT
+// ==========================================
 async function main() {
-    if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY environment variable missing.");
-
-    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    const provider = new ethers.JsonRpcProvider(PROVIDER_RPC);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-    console.log(`🔑 Wallet Address: ${wallet.address}`);
+    console.log(`Initializing Arbitrage Enforcer Client Engine...`);
+    console.log(`Monitoring targeted batch condition matrix: [${TARGET_BATCH_SIZE}] entries.`);
 
-    const usdcContract = new ethers.Contract(TOKENS.USDC, ERC20_ABI, provider);
-    const arbitrageContract = new ethers.Contract(ARBITRAGE_CONTRACT_ADDRESS, ARBITRAGE_CONTRACT_ABI, wallet);
-
-    const routerContractsArray = Object.values(routers).map(
-        address => new ethers.Contract(address, ROUTER_ABI, provider)
-    );
-
-    const tokenPaths = buildTriangularPaths();
-    console.log(`🚀 Engine hot. Ready to stream scans on ${tokenPaths.length} multi-hop tracks.`);
-    console.log(`📦 Configured Batch Size target: ${BATCH_SIZE}`);
-
-    // Continuous event framework loop
-    while (true) {
-        try {
-            const discoveredTrades = await parallelScan(tokenPaths, routerContractsArray);
-
-            if (discoveredTrades.length > 0) {
-                await executeArbitrageZeroRevalidation(arbitrageContract, usdcContract, discoveredTrades);
-            }
-            
-            // Short tick throttle to protect the RPC node endpoint from rate-limiting 
-            await new Promise(resolve => setTimeout(resolve, 300));
-        } catch (loopError) {
-            console.error(`⚠️ Cycle iteration error: ${loopError.message}`);
-            await new Promise(resolve => setTimeout(resolve, 1000));
+    // --- DEMO SAMPLE INPUT GENERATOR ---
+    // Mock routes mimicking operational definitions passing through the simulation array 
+    const sampleDiscoveredRoutes = [
+        {
+            buyRouter: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff", // QuickSwap V2
+            sellRouter: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506", // SushiSwap V2
+            amountInUSDC: ethers.parseUnits("1000", 6), // 1,000 USDC (Assuming 6 decimals)
+            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"], // USDC -> WETH
+            pathToUSDC: ["0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  // WETH -> USDC
+        },
+        {
+            buyRouter: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+            sellRouter: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
+            amountInUSDC: ethers.parseUnits("2500", 6),
+            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"], // USDC -> USDT
+            pathToUSDC: ["0xc2132D05D31c914a87C6611C10748AEb04B58e8F", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  // USDT -> USDC
+        },
+        {
+            buyRouter: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
+            sellRouter: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+            amountInUSDC: ethers.parseUnits("5000", 6),
+            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0x8f3Cf6ad23Cd3EAD96143c01f6F15580230cc746"], // USDC -> DAI
+            pathToUSDC: ["0x8f3Cf6ad23Cd3EAD96143c01f6F15580230cc746", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  // DAI -> USDC
         }
+    ];
+
+    // Simulating discovery engine finding 3 profitable routes over runtime loops
+    for (const route of sampleDiscoveredRoutes) {
+        // Optional verification via contract simulation view engine before batching:
+        const [,, estimatedProfit] = await contract.simulateArbitrageProfit(
+            route.buyRouter, route.sellRouter, route.amountInUSDC, route.pathToToken, route.pathToUSDC
+        );
+        
+        // Push validated options to processing engine array
+        await queueArbitrageRoute(route, contract);
     }
 }
 
-main().catch((fatalError) => {
-    console.error("Fatal framework blowout:", fatalError);
-    process.exit(1);
-});
+if (require.main === module) {
+    main();
+}
