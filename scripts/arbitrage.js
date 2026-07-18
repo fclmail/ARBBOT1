@@ -1,4 +1,4 @@
-const { ethers } = require("ethers");
+import { ethers } from "ethers";
 
 // ==========================================
 // CONFIGURATION & CONFIG CONSTANTS
@@ -99,43 +99,35 @@ async function main() {
     console.log(`Monitoring targeted batch condition matrix: [${TARGET_BATCH_SIZE}] entries.`);
 
     // --- DEMO SAMPLE INPUT GENERATOR ---
-    // Mock routes mimicking operational definitions passing through the simulation array 
     const sampleDiscoveredRoutes = [
         {
             buyRouter: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff", // QuickSwap V2
             sellRouter: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506", // SushiSwap V2
-            amountInUSDC: ethers.parseUnits("1000", 6), // 1,000 USDC (Assuming 6 decimals)
-            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"], // USDC -> WETH
-            pathToUSDC: ["0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  // WETH -> USDC
+            amountInUSDC: ethers.parseUnits("1000", 6), 
+            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"], 
+            pathToUSDC: ["0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  
         },
         {
             buyRouter: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
             sellRouter: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
             amountInUSDC: ethers.parseUnits("2500", 6),
-            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"], // USDC -> USDT
-            pathToUSDC: ["0xc2132D05D31c914a87C6611C10748AEb04B58e8F", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  // USDT -> USDC
+            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"], 
+            pathToUSDC: ["0xc2132D05D31c914a87C6611C10748AEb04B58e8F", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  
         },
         {
             buyRouter: "0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506",
             sellRouter: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
             amountInUSDC: ethers.parseUnits("5000", 6),
-            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0x8f3Cf6ad23Cd3EAD96143c01f6F15580230cc746"], // USDC -> DAI
-            pathToUSDC: ["0x8f3Cf6ad23Cd3EAD96143c01f6F15580230cc746", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  // DAI -> USDC
+            pathToToken: ["0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0x8f3Cf6ad23Cd3EAD96143c01f6F15580230cc746"], 
+            pathToUSDC: ["0x8f3Cf6ad23Cd3EAD96143c01f6F15580230cc746", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]  
         }
     ];
 
-    // Simulating discovery engine finding 3 profitable routes over runtime loops
+    // Simulating discovery engine execution loops
     for (const route of sampleDiscoveredRoutes) {
-        // Optional verification via contract simulation view engine before batching:
-        const [,, estimatedProfit] = await contract.simulateArbitrageProfit(
-            route.buyRouter, route.sellRouter, route.amountInUSDC, route.pathToToken, route.pathToUSDC
-        );
-        
-        // Push validated options to processing engine array
         await queueArbitrageRoute(route, contract);
     }
 }
 
-if (require.main === module) {
-    main();
-}
+// ESM Entry execution format
+main().catch(console.error);
