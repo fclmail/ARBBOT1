@@ -23,21 +23,25 @@ if (!RAW_PK) {
   process.exit(1);
 }
 
-// Convert inputs safely to EIP-55 Checksum Addresses
-const PAIR_ADDRESS = toSafeChecksumAddress(process.env.PAIR_ADDRESS, "0x6F4acF77f837463641fd732DC167c9A383CB0d88");
-const USDC_ADDRESS = toSafeChecksumAddress(process.env.USDC_ADDRESS, "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
-// Official Polygon Mainnet QuickSwap V2 Router: 0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff
-const ROUTER_ADDRESS = toSafeChecksumAddress(process.env.ROUTER_ADDRESS, "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff");
+// Convert core tokens & protocol infrastructure to EIP-55 Checksum Addresses
+const PZZC_TOKEN = toSafeChecksumAddress(process.env.TOKEN_ADDRESS || process.env.PAIR_ADDRESS, "0x6F4acF77f837463641fd732DC167c9A383CB0d88");
+const USDC_ADDRESS = toSafeChecksumAddress(process.env.USDC_ADDRESS, "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"); // USDC.e
+const FACTORY_ADDRESS = toSafeChecksumAddress(process.env.FACTORY_ADDRESS, "0x5757371414417b8C6CAad45bAeF915270E361571"); // QuickSwap V2 Factory
+const ROUTER_ADDRESS = toSafeChecksumAddress(process.env.ROUTER_ADDRESS, "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"); // QuickSwap V2 Router
 
 // ==========================================
 // 2. ABIs (HUMAN-READABLE)
 // ==========================================
+const FACTORY_ABI = [
+  "function getPair(address tokenA, address tokenB) external view returns (address pair)"
+];
+
 const PAIR_ABI = [
   "function token0() external view returns (address)",
   "function token1() external view returns (address)",
   "function balanceOf(address owner) external view returns (uint256)",
   "function approve(address spender, uint256 amount) external returns (bool)",
-  "event Swap(address indexed sender, uint amount0In, uint amount1In, uint amount0Out, uint amount1Out, address indexed to)"
+  "function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)"
 ];
 
 const ERC20_ABI = [
@@ -73,8 +77,23 @@ async function runEngine() {
   const wallet = new ethers.Wallet(RAW_PK, provider);
   console.log(`🔑 Monitoring Wallet Address: ${wallet.address}`);
 
+  // Fetch true LP Pair contract from QuickSwap Factory
+  const factoryContract = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
+  let pairAddress;
+
+  try {
+    pairAddress = await factoryContract.getPair(PZZC_TOKEN, USDC_ADDRESS);
+    if (pairAddress === ethers.ZeroAddress) {
+      throw new Error(`No active QuickSwap pool found for PZZC (${PZZC_TOKEN}) / USDC.e (${USDC_ADDRESS})`);
+    }
+    pairAddress = ethers.getAddress(pairAddress);
+  } catch (err) {
+    console.error(`❌ [FACTORY ERROR]: ${err.message}`);
+    process.exit(1);
+  }
+
   // Contract Instances
-  const pairContract = new ethers.Contract(PAIR_ADDRESS, PAIR_ABI, wallet);
+  const pairContract = new ethers.Contract(pairAddress, PAIR_ABI, wallet);
   const routerContract = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
   const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
@@ -83,21 +102,31 @@ async function runEngine() {
   const targetProfit = parseFloat(process.env.TARGET_NET_PROFIT_USDC || "10000.00");
   const targetThreshold = initialDeposit + targetProfit;
 
-  console.log(`📍 LP Pair Contract: ${PAIR_ADDRESS}`);
-  console.log(`📍 Router Contract:  ${ROUTER_ADDRESS}`);
-  console.log(`🎯 Target Pool Balance: $${targetThreshold.toFixed(2)} USDC.e`);
+  // Determine which token position in the pair is USDC.e
+  const token0 = await pairContract.token0();
+  const token1 = await pairContract.token1();
+  const isToken0Usdc = token0.toLowerCase() === USDC_ADDRESS.toLowerCase();
+
+  console.log(`📍 Token Contract (PZZC): ${PZZC_TOKEN}`);
+  console.log(`📍 LP Pair Contract:     ${pairAddress}`);
+  console.log(`📍 Router Contract:      ${ROUTER_ADDRESS}`);
+  console.log(`🎯 Target Pool Balance:  $${targetThreshold.toFixed(2)} USDC.e`);
   console.log(`================================================================================\n`);
   console.log(`🚀 CONTINUOUS SCANNING ENGINE ACTIVE (Polling every 3 seconds)\n`);
 
-  // Function to inspect pool balance
+  // Core monitoring check using direct on-chain reserves
   const checkBalance = async () => {
     if (isExecuting) return;
 
     try {
       pollCount++;
       const currentBlock = await provider.getBlockNumber();
-      const rawBalance = await usdcContract.balanceOf(PAIR_ADDRESS);
-      const formattedBalance = parseFloat(ethers.formatUnits(rawBalance, usdcDecimals));
+      
+      // Query raw reserves straight from pool storage
+      const [reserve0, reserve1] = await pairContract.getReserves();
+      const usdcReserve = isToken0Usdc ? reserve0 : reserve1;
+      
+      const formattedBalance = parseFloat(ethers.formatUnits(usdcReserve, usdcDecimals));
       const netProfit = formattedBalance - initialDeposit;
       const progressPercent = ((formattedBalance / targetThreshold) * 100).toFixed(4);
 
@@ -107,21 +136,18 @@ async function runEngine() {
         )} USDC.e | Net Profit: +$${netProfit.toFixed(2)} (${progressPercent}%)`
       );
 
-      // Check Execution Trigger
+      // Trigger Liquidity Removal when target is reached
       if (formattedBalance >= targetThreshold) {
         isExecuting = true;
         console.warn(`\n--------------------------------------------------------------------------------`);
-        console.warn(`🚨 TARGET REACHED! Current Balance: $${formattedBalance.toFixed(2)} >= Threshold: $${targetThreshold.toFixed(2)}`);
+        console.warn(`🚨 TARGET REACHED! Current Reserve: $${formattedBalance.toFixed(2)} >= Threshold: $${targetThreshold.toFixed(2)}`);
         console.warn(`🚨 Initiating Automatic Liquidity Withdrawal...`);
         console.warn(`--------------------------------------------------------------------------------\n`);
 
         const lpBalance = await pairContract.balanceOf(wallet.address);
         if (lpBalance === 0n) {
-          throw new Error("Wallet holds 0 LP tokens. Cannot execute removeLiquidity().");
+          throw new Error("Wallet holds 0 LP tokens in pair. Cannot execute removeLiquidity().");
         }
-
-        const token0 = await pairContract.token0();
-        const token1 = await pairContract.token1();
 
         console.log(`🔓 Approving Router (${ROUTER_ADDRESS}) to spend ${lpBalance.toString()} LP tokens...`);
         const approveTx = await pairContract.approve(ROUTER_ADDRESS, lpBalance);
@@ -160,7 +186,7 @@ async function runEngine() {
   // Polling Interval (Runs every 3 seconds)
   const pollInterval = setInterval(checkBalance, 3000);
 
-  // Keep process alive explicitly
+  // Keep event loop active continuously
   const keepAlive = setInterval(() => {}, 100000);
 
   // Graceful shutdown handlers
