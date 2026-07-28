@@ -22,11 +22,13 @@ if (!RAW_PK) {
   process.exit(1);
 }
 
-// Polygon Mainnet Known Contracts
+// Token & Uniswap V2 Polygon Addresses
 const PZZC_TOKEN = toSafeChecksumAddress(process.env.TOKEN_ADDRESS, "0x6F4acF77f837463641fd732DC167c9A383CB0d88");
 const USDC_ADDRESS = toSafeChecksumAddress(process.env.USDC_ADDRESS, "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"); // USDC.e
-const FACTORY_ADDRESS = toSafeChecksumAddress(process.env.FACTORY_ADDRESS, "0x5757371414417b8C6CAad45bAeF915270E361571"); // QuickSwap V2 Factory
-const ROUTER_ADDRESS = toSafeChecksumAddress(process.env.ROUTER_ADDRESS, "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"); // QuickSwap V2 Router
+
+// UNISWAP V2 POLYGON MAINNET DEPLOYMENTS
+const FACTORY_ADDRESS = toSafeChecksumAddress(process.env.FACTORY_ADDRESS, "0x9e5A52f57b3038F1B8EeE45F28b3C1967e22799C"); // Uniswap V2 Factory (Polygon)
+const ROUTER_ADDRESS = toSafeChecksumAddress(process.env.ROUTER_ADDRESS, "0xedf6066a2b290C185783862C7F4776A2C8077AD1");  // Uniswap V2 Router02 (Polygon)
 
 // ==========================================
 // 2. HUMAN-READABLE ABIs
@@ -74,26 +76,26 @@ async function runEngine() {
 
   const wallet = new ethers.Wallet(RAW_PK, provider);
   console.log(`🔑 Monitoring Wallet Address: ${wallet.address}`);
-  console.log(`🏭 Querying QuickSwap Factory: ${FACTORY_ADDRESS}`);
+  console.log(`🏭 Querying Uniswap V2 Factory: ${FACTORY_ADDRESS}`);
 
-  // Fetch true LP Pair contract from QuickSwap Factory
+  // Fetch true LP Pair contract from Uniswap V2 Factory
   const factoryContract = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
   let pairAddress;
 
   try {
-    console.log(`🔎 Looking up LP pair for PZZC (${PZZC_TOKEN}) and USDC.e (${USDC_ADDRESS})...`);
+    console.log(`🔎 Looking up Uniswap V2 LP pair for PZZC (${PZZC_TOKEN}) and USDC.e (${USDC_ADDRESS})...`);
     pairAddress = await factoryContract.getPair(PZZC_TOKEN, USDC_ADDRESS);
 
     if (!pairAddress || pairAddress === ethers.ZeroAddress) {
-      console.error(`❌ [FACTORY ERROR]: QuickSwap returned address(0). No LP pair exists for this token pair!`);
+      console.error(`❌ [FACTORY ERROR]: Uniswap V2 Factory returned address(0). No pool found for this token pair!`);
       process.exit(1);
     }
 
     pairAddress = ethers.getAddress(pairAddress);
-    console.log(`✅ Found LP Pair Address: ${pairAddress}`);
+    console.log(`✅ Found Uniswap V2 LP Pair Address: ${pairAddress}`);
   } catch (err) {
     console.error(`❌ [FACTORY ERROR]: ${err.message}`);
-    console.error(`💡 Verify that FACTORY_ADDRESS (${FACTORY_ADDRESS}) is correct and deployed on Chain ID 137.`);
+    console.error(`💡 Verify that FACTORY_ADDRESS (${FACTORY_ADDRESS}) matches your DEX deployment.`);
     process.exit(1);
   }
 
