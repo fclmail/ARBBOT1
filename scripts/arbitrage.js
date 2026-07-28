@@ -1,12 +1,20 @@
 import { ethers } from "ethers";
+import WebSocket from "ws";
 import dotenv from "dotenv";
 dotenv.config();
+
+// Default to Polygon Bor WSS Endpoint if RPC_WSS_URL is not explicitly set in secrets
+const POLYGON_BOR_WSS = process.env.RPC_WSS_URL || "wss://polygon-bor-wss.publicnode.com";
+
+// Smart Contract / Pair Addresses
+const PAIR_ADDRESS = "0x6F4acF77f837463641fd732DC167c9A383CB0d88";
+const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // USDC.e on Polygon PoS
+const ROUTER_ADDRESS = process.env.ROUTER_ADDRESS || "0x8954AfA98594b868B2566200270386cE5134d010"; // QuickSwap Router
 
 // Contract ABIs
 const PAIR_ABI = [
   "function token0() external view returns (address)",
   "function token1() external view returns (address)",
-  "function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)",
   "function balanceOf(address owner) external view returns (uint256)",
   "function approve(address spender, uint256 amount) external returns (bool)",
   "event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)"
@@ -21,106 +29,122 @@ const ROUTER_ABI = [
   "function removeLiquidity(address tokenA, address tokenB, uint liquidity, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB)"
 ];
 
-async function main() {
-  console.log("🚀 Starting Real-Time Liquidity & Profit Engine...");
+let provider;
+let pairContract;
+let isExecuting = false;
 
-  // Initialize WebSocket Provider for instant event streaming
-  const provider = new ethers.WebSocketProvider(process.env.RPC_WSS_URL);
-  const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+// Custom WebSocket connection wrapper to handle Polygon Bor disconnects & resets
+function createResilientWebSocketProvider(url) {
+  return new Promise((resolve) => {
+    let ws;
 
-  const pairContract = new ethers.Contract(process.env.PAIR_ADDRESS, PAIR_ABI, wallet);
-  const routerContract = new ethers.Contract(process.env.ROUTER_ADDRESS, ROUTER_ABI, wallet);
-  const usdcContract = new ethers.Contract(process.env.USDC_ADDRESS, ERC20_ABI, provider);
+    const connect = () => {
+      console.log(`🔌 Connecting to Polygon Bor WebSocket: ${url}`);
+      ws = new WebSocket(url);
 
-  // Determine token decimals and pair orientation
-  const usdcDecimals = await usdcContract.decimals(); // USDC.e uses 6 decimals
-  const token0 = await pairContract.token0();
-  const isUsdcToken0 = token0.toLowerCase() === process.env.USDC_ADDRESS.toLowerCase();
+      ws.on("open", () => {
+        console.log("✅ Polygon Bor WebSocket connected successfully.");
+        const wsProvider = new ethers.WebSocketProvider(url);
+        resolve(wsProvider);
+      });
 
-  const initialDeposit = parseFloat(process.env.INITIAL_DEPOSIT_USDC || "0.02");
-  const targetProfit = parseFloat(process.env.TARGET_NET_PROFIT_USDC || "10000.00");
-  const targetBalance = initialDeposit + targetProfit; // e.g., 10000.02 USDC.e
+      ws.on("close", (code) => {
+        console.warn(`⚠️ WebSocket connection closed (Code: ${code}). Reconnecting in 3 seconds...`);
+        setTimeout(startMonitoring, 3000);
+      });
 
-  console.log(`📍 Pool Address: ${process.env.PAIR_ADDRESS}`);
-  console.log(`🎯 Initial Seed: $${initialDeposit} USDC.e | Target Pool Balance: $${targetBalance.toFixed(2)} USDC.e`);
+      ws.on("error", (err) => {
+        console.error("❌ Polygon WebSocket Error:", err.message);
+        ws.close();
+      });
+    };
 
-  let isExecuting = false;
-
-  // Real-time Event Listener for Swap Activity
-  pairContract.on("Swap", async (sender, amount0In, amount1In, amount0Out, amount1Out, to, event) => {
-    if (isExecuting) return;
-
-    try {
-      // Query exact live USDC.e reserve in the pool contract
-      const poolUsdcBalance = await usdcContract.balanceOf(process.env.PAIR_ADDRESS);
-      const formattedBalance = parseFloat(ethers.formatUnits(poolUsdcBalance, usdcDecimals));
-      const netProfit = formattedBalance - initialDeposit;
-      const progressPercent = ((formattedBalance / targetBalance) * 100).toFixed(2);
-
-      console.log(
-        `⚡ [BLOCK ${event.log.blockNumber}] Swap Detected | Pool USDC.e Balance: $${formattedBalance.toFixed(
-          2
-        )} | Net Profit: +$${netProfit.toFixed(2)} (${progressPercent}%)`
-      );
-
-      // Check Target Milestone
-      if (formattedBalance >= targetBalance) {
-        isExecuting = true;
-        console.warn(`🚨 TARGET REACHED! Initiating Automated Profit Extraction...`);
-
-        await executeLiquidityWithdrawal(pairContract, routerContract, wallet, isUsdcToken0);
-        process.exit(0);
-      }
-    } catch (err) {
-      console.error("❌ Error checking pool metrics:", err);
-    }
+    connect();
   });
 }
 
-async function executeLiquidityWithdrawal(pairContract, routerContract, wallet, isUsdcToken0) {
-  try {
-    // 1. Get LP token balance owned by wallet
-    const lpBalance = await pairContract.balanceOf(wallet.address);
-    console.log(`📥 LP Balance Found: ${ethers.formatEther(lpBalance)} LP Tokens`);
+async function startMonitoring() {
+  if (isExecuting) return;
 
-    if (lpBalance === 0n) {
-      throw new Error("Zero LP balance detected in treasury wallet!");
+  try {
+    const pk = process.env.PRIVATE_KEY;
+    if (!pk) {
+      throw new Error("PRIVATE_KEY secret is missing! Ensure it is set in GitHub Repository Secrets.");
     }
 
-    // 2. Identify token pairs
-    const token0 = await pairContract.token0();
-    const token1 = await pairContract.token1();
+    provider = await createResilientWebSocketProvider(POLYGON_BOR_WSS);
+    const wallet = new ethers.Wallet(pk, provider);
 
-    // 3. Approve Router to spend LP tokens
-    console.log("🔓 Approving Router to transfer LP tokens...");
-    const approveTx = await pairContract.approve(process.env.ROUTER_ADDRESS, lpBalance);
-    await approveTx.wait();
-    console.log("✅ Approval confirmed.");
+    pairContract = new ethers.Contract(PAIR_ADDRESS, PAIR_ABI, wallet);
+    const routerContract = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
+    const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-    // 4. Submit removeLiquidity transaction
-    const deadline = Math.floor(Date.now() / 1000) + 60 * 5; // 5-minute block deadline
-    console.log("💸 Executing removeLiquidity()...");
+    const usdcDecimals = await usdcContract.decimals();
+    const initialDeposit = parseFloat(process.env.INITIAL_DEPOSIT_USDC || "0.02");
+    const targetProfit = parseFloat(process.env.TARGET_NET_PROFIT_USDC || "10000.00");
+    const targetBalance = initialDeposit + targetProfit;
 
-    const withdrawTx = await routerContract.removeLiquidity(
-      token0,
-      token1,
-      lpBalance,
-      0n, // Accept market slippage
-      0n,
-      wallet.address,
-      deadline
-    );
+    console.log(`🚀 REACTIVE EVENT-DRIVEN MULTI-HOP ENGINE ONLINE`);
+    console.log(`📍 Contract Address: ${PAIR_ADDRESS}`);
+    console.log(`🎯 Target Pool USDC.e Balance: $${targetBalance.toFixed(2)}`);
 
-    console.log(`⏳ Withdrawal Transaction Sent: ${withdrawTx.hash}`);
-    const receipt = await withdrawTx.wait();
+    // Stream real-time Swap events on Polygon Bor
+    pairContract.on("Swap", async (sender, amount0In, amount1In, amount0Out, amount1Out, to, event) => {
+      if (isExecuting) return;
 
-    console.log(`🎉 SUCCESS! Liquidity pulled in Block #${receipt.blockNumber}. Profit secured in treasury!`);
+      try {
+        const poolUsdcBalance = await usdcContract.balanceOf(PAIR_ADDRESS);
+        const formattedBalance = parseFloat(ethers.formatUnits(poolUsdcBalance, usdcDecimals));
+        const netProfit = formattedBalance - initialDeposit;
+        const progress = ((formattedBalance / targetBalance) * 100).toFixed(2);
+
+        console.log(
+          `⚡ [Polygon Block ${event.log.blockNumber}] Swap Event Detected | Pool Balance: $${formattedBalance.toFixed(
+            2
+          )} USDC.e | Net Profit: +$${netProfit.toFixed(2)} (${progress}%)`
+        );
+
+        if (formattedBalance >= targetBalance) {
+          isExecuting = true;
+          console.warn("🚨 TARGET $10,000.00 USDC.e REACHED! Pulling Liquidity...");
+
+          const lpBalance = await pairContract.balanceOf(wallet.address);
+          if (lpBalance === 0n) {
+            throw new Error("No LP tokens found in wallet address for withdrawal.");
+          }
+
+          const token0 = await pairContract.token0();
+          const token1 = await pairContract.token1();
+
+          console.log("🔓 Approving Router for LP Token spend...");
+          const approveTx = await pairContract.approve(ROUTER_ADDRESS, lpBalance);
+          await approveTx.wait();
+
+          console.log("💸 Executing removeLiquidity()...");
+          const deadline = Math.floor(Date.now() / 1000) + 300;
+          const withdrawTx = await routerContract.removeLiquidity(
+            token0,
+            token1,
+            lpBalance,
+            0n,
+            0n,
+            wallet.address,
+            deadline
+          );
+
+          console.log(`⏳ Tx Broadcasted: ${withdrawTx.hash}`);
+          const receipt = await withdrawTx.wait();
+          console.log(`🎉 SUCCESS! Liquidity removed in Polygon Block #${receipt.blockNumber}. Profit secured!`);
+          process.exit(0);
+        }
+      } catch (err) {
+        console.error("Error processing swap event:", err);
+      }
+    });
   } catch (error) {
-    console.error("❌ Liquidity Withdrawal Failed:", error);
+    console.error("Initialization error, retrying in 5s...", error.message);
+    setTimeout(startMonitoring, 5000);
   }
 }
 
-main().catch((err) => {
-  console.error("Fatal Error:", err);
-  process.exit(1);
-});
+startMonitoring();
