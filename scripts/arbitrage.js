@@ -5,7 +5,6 @@ dotenv.config();
 // ==========================================
 // 1. SANITIZE & NORMALIZE INPUTS
 // ==========================================
-// Strips non-printable characters, newlines (\n / {0A}), and converts to lowercase before checksumming
 const toSafeChecksumAddress = (rawAddress, fallbackAddress) => {
   const cleaned = rawAddress
     ? rawAddress.trim().replace(/[\r\n\t]/g, "").toLowerCase()
@@ -23,14 +22,14 @@ if (!RAW_PK) {
   process.exit(1);
 }
 
-// Convert core tokens & protocol infrastructure to EIP-55 Checksum Addresses
-const PZZC_TOKEN = toSafeChecksumAddress(process.env.TOKEN_ADDRESS || process.env.PAIR_ADDRESS, "0x6F4acF77f837463641fd732DC167c9A383CB0d88");
+// Polygon Mainnet Known Contracts
+const PZZC_TOKEN = toSafeChecksumAddress(process.env.TOKEN_ADDRESS, "0x6F4acF77f837463641fd732DC167c9A383CB0d88");
 const USDC_ADDRESS = toSafeChecksumAddress(process.env.USDC_ADDRESS, "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"); // USDC.e
 const FACTORY_ADDRESS = toSafeChecksumAddress(process.env.FACTORY_ADDRESS, "0x5757371414417b8C6CAad45bAeF915270E361571"); // QuickSwap V2 Factory
 const ROUTER_ADDRESS = toSafeChecksumAddress(process.env.ROUTER_ADDRESS, "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"); // QuickSwap V2 Router
 
 // ==========================================
-// 2. ABIs (HUMAN-READABLE)
+// 2. HUMAN-READABLE ABIs
 // ==========================================
 const FACTORY_ABI = [
   "function getPair(address tokenA, address tokenB) external view returns (address pair)"
@@ -54,7 +53,6 @@ const ROUTER_ABI = [
   "function removeLiquidity(address tokenA, address tokenB, uint liquidity, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB)"
 ];
 
-// Re-entrancy Lock & Counter
 let isExecuting = false;
 let pollCount = 0;
 
@@ -76,19 +74,26 @@ async function runEngine() {
 
   const wallet = new ethers.Wallet(RAW_PK, provider);
   console.log(`🔑 Monitoring Wallet Address: ${wallet.address}`);
+  console.log(`🏭 Querying QuickSwap Factory: ${FACTORY_ADDRESS}`);
 
   // Fetch true LP Pair contract from QuickSwap Factory
   const factoryContract = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
   let pairAddress;
 
   try {
+    console.log(`🔎 Looking up LP pair for PZZC (${PZZC_TOKEN}) and USDC.e (${USDC_ADDRESS})...`);
     pairAddress = await factoryContract.getPair(PZZC_TOKEN, USDC_ADDRESS);
-    if (pairAddress === ethers.ZeroAddress) {
-      throw new Error(`No active QuickSwap pool found for PZZC (${PZZC_TOKEN}) / USDC.e (${USDC_ADDRESS})`);
+
+    if (!pairAddress || pairAddress === ethers.ZeroAddress) {
+      console.error(`❌ [FACTORY ERROR]: QuickSwap returned address(0). No LP pair exists for this token pair!`);
+      process.exit(1);
     }
+
     pairAddress = ethers.getAddress(pairAddress);
+    console.log(`✅ Found LP Pair Address: ${pairAddress}`);
   } catch (err) {
     console.error(`❌ [FACTORY ERROR]: ${err.message}`);
+    console.error(`💡 Verify that FACTORY_ADDRESS (${FACTORY_ADDRESS}) is correct and deployed on Chain ID 137.`);
     process.exit(1);
   }
 
@@ -102,7 +107,7 @@ async function runEngine() {
   const targetProfit = parseFloat(process.env.TARGET_NET_PROFIT_USDC || "10000.00");
   const targetThreshold = initialDeposit + targetProfit;
 
-  // Determine which token position in the pair is USDC.e
+  // Determine token positions in the pool
   const token0 = await pairContract.token0();
   const token1 = await pairContract.token1();
   const isToken0Usdc = token0.toLowerCase() === USDC_ADDRESS.toLowerCase();
@@ -114,7 +119,6 @@ async function runEngine() {
   console.log(`================================================================================\n`);
   console.log(`🚀 CONTINUOUS SCANNING ENGINE ACTIVE (Polling every 3 seconds)\n`);
 
-  // Core monitoring check using direct on-chain reserves
   const checkBalance = async () => {
     if (isExecuting) return;
 
@@ -122,7 +126,6 @@ async function runEngine() {
       pollCount++;
       const currentBlock = await provider.getBlockNumber();
       
-      // Query raw reserves straight from pool storage
       const [reserve0, reserve1] = await pairContract.getReserves();
       const usdcReserve = isToken0Usdc ? reserve0 : reserve1;
       
@@ -136,7 +139,6 @@ async function runEngine() {
         )} USDC.e | Net Profit: +$${netProfit.toFixed(2)} (${progressPercent}%)`
       );
 
-      // Trigger Liquidity Removal when target is reached
       if (formattedBalance >= targetThreshold) {
         isExecuting = true;
         console.warn(`\n--------------------------------------------------------------------------------`);
@@ -156,14 +158,14 @@ async function runEngine() {
         console.log(`✅ Router Approved!`);
 
         console.log(`💸 Executing removeLiquidity()...`);
-        const deadline = Math.floor(Date.now() / 1000) + 300; // 5 minute deadline
+        const deadline = Math.floor(Date.now() / 1000) + 300;
         
         const removeTx = await routerContract.removeLiquidity(
           token0,
           token1,
           lpBalance,
-          0n, // Accept min amountA
-          0n, // Accept min amountB
+          0n,
+          0n,
           wallet.address,
           deadline
         );
@@ -180,16 +182,10 @@ async function runEngine() {
     }
   };
 
-  // Perform initial check immediately
   await checkBalance();
-
-  // Polling Interval (Runs every 3 seconds)
   const pollInterval = setInterval(checkBalance, 3000);
-
-  // Keep event loop active continuously
   const keepAlive = setInterval(() => {}, 100000);
 
-  // Graceful shutdown handlers
   process.on("SIGINT", () => {
     clearInterval(pollInterval);
     clearInterval(keepAlive);
