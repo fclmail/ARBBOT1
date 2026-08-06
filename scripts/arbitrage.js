@@ -41,7 +41,8 @@ const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 const erc20Abi = [  
     "function balanceOf(address) view returns(uint256)",  
-    "function approve(address,uint256)"  
+    "function approve(address,uint256)",
+    "function allowance(address owner, address spender) view returns (uint256)"
 ];  
 
 const contractAbi = [  
@@ -216,13 +217,13 @@ async function parallelScan(paths, routersList) {
 let pendingTxCount = 0;  
 const MAX_IN_FLIGHT = 1;  
 
-async function guardedSend(txPromise) {  
+async function guardedSend(txPromiseFn) {  
     while (pendingTxCount >= MAX_IN_FLIGHT) {  
         await sleep(750);  
     }  
     pendingTxCount++;  
     try {  
-        const tx = await txPromise;  
+        const tx = await txPromiseFn();  
         await provider.waitForTransaction(tx.hash);  
         return tx;  
     } finally {  
@@ -248,7 +249,7 @@ async function executeBatch(trades) {
             return;  
         }  
 
-        const tx = await guardedSend(vault.executeFlashBatchArbitrage({  
+        const tx = await guardedSend(() => vault.executeFlashBatchArbitrage({  
             buyRouters: trades.map(t => t.router),  
             sellRouters: trades.map(t => t.router),  
             amountsInUSDC: trades.map(t => t.amountIn),  
@@ -275,13 +276,13 @@ async function topUpGas() {
 
         const amount = (contractBal * WITHDRAW_PERCENT) / 100n;  
 
-        await guardedSend(vault.withdraw(amount));  
+        await guardedSend(() => vault.withdraw(amount));  
         await sleep(1000);  
-        await guardedSend(usdc.approve(routers.QuickSwap, amount));  
+        await guardedSend(() => usdc.approve(routers.QuickSwap, amount));  
         await sleep(1000);  
 
         const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);  
-        await guardedSend(router.swapExactTokensForTokens(  
+        await guardedSend(() => router.swapExactTokensForTokens(  
             amount,  
             0,  
             [USDC, TOKENS.WMATIC],  
@@ -296,9 +297,15 @@ async function topUpGas() {
 /* ================= APPROVE ONCE AT STARTUP ================= */  
 async function approveOnce() {  
     try {  
-        console.log("🔑 Pre-approving QuickSwap with MAX_UINT256...");  
-        await guardedSend(usdc.approve(routers.QuickSwap, ethers.MaxUint256));  
-        console.log("✅ QuickSwap approved");  
+        console.log("🔑 Checking QuickSwap allowance...");  
+        const allowance = await usdc.allowance(wallet.address, routers.QuickSwap);  
+        if (allowance < ethers.parseUnits("1000000", 6)) {  
+            console.log("🔑 Pre-approving QuickSwap with MAX_UINT256...");  
+            await guardedSend(() => usdc.approve(routers.QuickSwap, ethers.MaxUint256));  
+            console.log("✅ QuickSwap approved");  
+        } else {  
+            console.log("✅ QuickSwap already sufficiently approved");  
+        }  
     } catch (e) {  
         console.log(`⚠️ APPROVE FAILED (will re-try on next cycle): ${e.message}`);  
     }  
@@ -311,10 +318,15 @@ async function approveOnce() {
     rebuildContracts();  
 
     try {  
-        await guardedSend(usdc.approve(vault.target, ethers.MaxUint256));  
-        await sleep(1000);  
+        const vaultAllowance = await usdc.allowance(wallet.address, vault.target);  
+        if (vaultAllowance < ethers.parseUnits("1000000", 6)) {  
+            console.log("🔑 Pre-approving Vault with MAX_UINT256...");  
+            await guardedSend(() => usdc.approve(vault.target, ethers.MaxUint256));  
+            await sleep(1000);  
+        } else {  
+            console.log("✅ Vault already sufficiently approved");  
+        }  
     } catch (e) {  
-        console.log(`⚠️ VAULT USDC APPROVE FAILED: ${e.message}`);  
     }  
 
     await approveOnce();  
