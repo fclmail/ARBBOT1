@@ -213,19 +213,37 @@ async function parallelScan(paths, routersList) {
     return results.slice(0, BATCH_SIZE);  
 }  
 
-/* ================= TX SEND GUARD ================= */  
+/* ================= TX SEND GUARD (WITH MANUAL NONCE MANAGEMENT) ================= */  
 let pendingTxCount = 0;  
 const MAX_IN_FLIGHT = 1;  
+let knownNonce = null;  
 
-async function guardedSend(txPromiseFn) {  
+async function guardedSend(txFactory) {  
     while (pendingTxCount >= MAX_IN_FLIGHT) {  
         await sleep(750);  
     }  
+
     pendingTxCount++;  
     try {  
-        const tx = await txPromiseFn();  
+        // Always fetch the true confirmed network nonce if we don't have one or if it desynced
+        if (knownNonce === null) {  
+            knownNonce = await provider.getTransactionCount(wallet.address, "latest");  
+        }  
+
+        // Pass explicit nonce override to avoid gapped-nonce errors from pending states
+        const tx = await txFactory(knownNonce);  
         await provider.waitForTransaction(tx.hash);  
+
+        // Increment our known nonce safely upon confirmation
+        knownNonce++;  
         return tx;  
+    } catch (err) {  
+        console.error("⚠️ TX FAILED:", err.shortMessage || err.message);  
+        
+        // Reset nonce cache on error to force a fresh chain lookup next time
+        knownNonce = null;  
+        await sleep(3000);  
+        throw err;  
     } finally {  
         pendingTxCount--;  
     }  
@@ -249,14 +267,14 @@ async function executeBatch(trades) {
             return;  
         }  
 
-        const tx = await guardedSend(() => vault.executeFlashBatchArbitrage({  
+        const tx = await guardedSend((nonce) => vault.executeFlashBatchArbitrage({  
             buyRouters: trades.map(t => t.router),  
             sellRouters: trades.map(t => t.router),  
             amountsInUSDC: trades.map(t => t.amountIn),  
             pathsToToken: trades.map(t => t.pathToToken),  
             pathsToUSDC: trades.map(t => t.pathToUSDC),  
             deadline: Math.floor(Date.now() / 1000) + 30  
-        }));  
+        }, { nonce }));  
 
         const after = await usdc.balanceOf(CONTRACT_ADDRESS);  
         const real = after > before ? after - before : 0n;  
@@ -276,18 +294,19 @@ async function topUpGas() {
 
         const amount = (contractBal * WITHDRAW_PERCENT) / 100n;  
 
-        await guardedSend(() => vault.withdraw(amount));  
+        await guardedSend((nonce) => vault.withdraw(amount, { nonce }));  
         await sleep(1000);  
-        await guardedSend(() => usdc.approve(routers.QuickSwap, amount));  
+        await guardedSend((nonce) => usdc.approve(routers.QuickSwap, amount, { nonce }));  
         await sleep(1000);  
 
         const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);  
-        await guardedSend(() => router.swapExactTokensForTokens(  
+        await guardedSend((nonce) => router.swapExactTokensForTokens(  
             amount,  
             0,  
             [USDC, TOKENS.WMATIC],  
             wallet.address,  
-            Math.floor(Date.now() / 1000) + 120  
+            Math.floor(Date.now() / 1000) + 120,  
+            { nonce }  
         ));  
     } catch (e) {  
         console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);  
@@ -301,7 +320,7 @@ async function approveOnce() {
         const allowance = await usdc.allowance(wallet.address, routers.QuickSwap);  
         if (allowance < ethers.parseUnits("1000000", 6)) {  
             console.log("🔑 Pre-approving QuickSwap with MAX_UINT256...");  
-            await guardedSend(() => usdc.approve(routers.QuickSwap, ethers.MaxUint256));  
+            await guardedSend((nonce) => usdc.approve(routers.QuickSwap, ethers.MaxUint256, { nonce }));  
             console.log("✅ QuickSwap approved");  
         } else {  
             console.log("✅ QuickSwap already sufficiently approved");  
@@ -313,7 +332,7 @@ async function approveOnce() {
 
 /* ================= MAIN LOOP ================= */  
 (async function main() {  
-    console.log("🚀 BOT STARTED | CACHING + CONCURRENCY-LIMITED PROMISE.ALL + TX GUARD\n");  
+    console.log("🚀 BOT STARTED | MANUAL NONCE MANAGEMENT + TX GUARD\n");  
     provider = newProvider();  
     rebuildContracts();  
 
@@ -321,7 +340,7 @@ async function approveOnce() {
         const vaultAllowance = await usdc.allowance(wallet.address, vault.target);  
         if (vaultAllowance < ethers.parseUnits("1000000", 6)) {  
             console.log("🔑 Pre-approving Vault with MAX_UINT256...");  
-            await guardedSend(() => usdc.approve(vault.target, ethers.MaxUint256));  
+            await guardedSend((nonce) => usdc.approve(vault.target, ethers.MaxUint256, { nonce }));  
             console.log("✅ Vault approved");  
         } else {  
             console.log("✅ Vault already sufficiently approved");  
@@ -362,6 +381,7 @@ async function approveOnce() {
             console.error("❌ Error in main loop:", error.message);  
             consecutiveErrors++;  
             pendingTxCount = 0;    
+            knownNonce = null; // Force fresh lookup on next run
             provider = newProvider();  
             rebuildContracts();  
             
