@@ -263,7 +263,7 @@ async function executeBatch(trades) {
 
         console.log(`REAL PROFIT: ${fmt(real)} USDC\n`);  
         await topUpGas();  
-    }  catch (err) {  
+    } catch (err) {  
         console.error("⚠️ BATCH EXECUTION REVERTED:", err.message);  
     }  
 }  
@@ -307,7 +307,7 @@ async function approveOnce() {
             console.log("✅ QuickSwap already sufficiently approved");  
         }  
     } catch (e) {  
-        console.log(`⚠️ APPROVE FAILED (will re-try on next cycle): ${e.message}`);  
+        console.log(`⚠️ APPROVE FAILED: ${e.message}`);  
     }  
 }  
 
@@ -322,17 +322,17 @@ async function approveOnce() {
         if (vaultAllowance < ethers.parseUnits("1000000", 6)) {  
             console.log("🔑 Pre-approving Vault with MAX_UINT256...");  
             await guardedSend(() => usdc.approve(vault.target, ethers.MaxUint256));  
-            await sleep(2000); // 🕒 Increased spacing to let network index/settle the nonce
+            console.log("✅ Vault approved");  
         } else {  
             console.log("✅ Vault already sufficiently approved");  
         }  
     } catch (e) {  
-        console.log(`⚠️ VAULT APPROVE FAILED: ${e.message}`);  
+        console.log(`⚠️ VAULT APPROVE SKIPPED/FAILED: ${e.message}`);  
     }  
 
-    // 🕒 Added pacing buffer before next startup approval
-    await sleep(2000);
+    await sleep(2000);  
     await approveOnce();  
+    await sleep(2000);  
 
     const multiHopPaths = buildMultiHopPaths();  
     const routersList = Object.values(routers);  
