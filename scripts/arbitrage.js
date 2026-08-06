@@ -9,7 +9,7 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= RPC ================= */
 const RPCS = [
-"https://polygon-mainnet.chainstacklabs.com"];
+"https://polygon-mainnet.public.blastapi.io"];
 
 let rpcIndex = 0;
 let provider;
