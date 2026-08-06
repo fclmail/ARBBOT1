@@ -9,8 +9,7 @@ if (!PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= RPC ================= */
 const RPCS = [
-    "https://polygon.llamarpc.com"
-];
+"https://rpc.ankr.com/polygon"];
 
 let rpcIndex = 0;
 let provider;
