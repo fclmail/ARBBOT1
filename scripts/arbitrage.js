@@ -263,7 +263,7 @@ async function executeBatch(trades) {
 
         console.log(`REAL PROFIT: ${fmt(real)} USDC\n`);  
         await topUpGas();  
-    } catch (err) {  
+    }  catch (err) {  
         console.error("⚠️ BATCH EXECUTION REVERTED:", err.message);  
     }  
 }  
@@ -322,13 +322,16 @@ async function approveOnce() {
         if (vaultAllowance < ethers.parseUnits("1000000", 6)) {  
             console.log("🔑 Pre-approving Vault with MAX_UINT256...");  
             await guardedSend(() => usdc.approve(vault.target, ethers.MaxUint256));  
-            await sleep(1000);  
+            await sleep(2000); // 🕒 Increased spacing to let network index/settle the nonce
         } else {  
             console.log("✅ Vault already sufficiently approved");  
         }  
     } catch (e) {  
+        console.log(`⚠️ VAULT APPROVE FAILED: ${e.message}`);  
     }  
 
+    // 🕒 Added pacing buffer before next startup approval
+    await sleep(2000);
     await approveOnce();  
 
     const multiHopPaths = buildMultiHopPaths();  
@@ -337,6 +340,8 @@ async function approveOnce() {
 
     console.log(`📊 Paths to scan: ${multiHopPaths.length} | Routers: ${routersList.length}`);  
     console.log(`🛡️ Concurrency cap: ${CONCURRENCY_LIMIT} | Chunk delay: ${CHUNK_DELAY_MS}ms\n`);  
+
+    let consecutiveErrors = 0;
 
     while (true) {  
         try {  
@@ -352,12 +357,17 @@ async function approveOnce() {
             } else {  
                 await sleep(500);  
             }  
+            consecutiveErrors = 0;  
         } catch (error) {  
             console.error("❌ Error in main loop:", error.message);  
+            consecutiveErrors++;  
             pendingTxCount = 0;    
             provider = newProvider();  
             rebuildContracts();  
-            await sleep(1000);  
+            
+            const backoffTime = Math.min(1000 * Math.pow(2, consecutiveErrors), 30000);  
+            console.log(`⏳ Backing off for ${backoffTime}ms due to repeated errors...`);  
+            await sleep(backoffTime);  
         }  
     }  
 })();
