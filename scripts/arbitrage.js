@@ -49,7 +49,7 @@ const routers = {
 };
 
 const TOKENS = {
-    AAVE: ethers.getAddress("0xd6df932a45c0f255f85145f286ea0b292b21c90".toLowerCase()), // Safe checksum parsing
+    AAVE: ethers.getAddress("0xd6df932A45c0F255F85145f286EA0b292B21c90b"), // Fixed checksum
     WETH: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619")
 };
 
