@@ -24,7 +24,7 @@ let contract;
 const BASE_TRADE = ethers.parseUnits("5.0", 6); 
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 
-/* ================= CONTRACTS (Strictly formatted checksum addresses) ================= */
+/* ================= CONTRACTS & TOKENS (Valid Checksummed Addresses) ================= */
 const CONTRACT_ADDRESS = ethers.getAddress("0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958");
 const USDC = ethers.getAddress("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
 
@@ -49,7 +49,7 @@ const routers = {
 };
 
 const TOKENS = {
-    AAVE: ethers.getAddress("0xd6df932a45c0f255f85145f286ea0b292b21c90"),
+    AAVE: ethers.getAddress("0xd6df932a45c0f255f85145f286ea0b292b21c90".toLowerCase()), // Safe checksum parsing
     WETH: ethers.getAddress("0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619")
 };
 
@@ -63,7 +63,6 @@ async function initProvider() {
         usdc = new ethers.Contract(USDC, erc20Abi, wallet);
         contract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
         
-        // Test connection
         await provider.getBlockNumber();
         console.log(`🔗 Connected to RPC: ${RPCS[rpcIndex]} | Wallet: ${wallet.address}`);
     } catch (err) {
