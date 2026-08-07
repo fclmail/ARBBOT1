@@ -142,8 +142,7 @@ const getSymbol = (addr) => Object.keys(TOKENS).find(k => TOKENS[k] === addr) ||
 /* ================= SIMULATION & SCANNING ================= */
 async function findArbitrageOpportunity(router, path) {
     let currentAmount = BASE_TRADE;
-    
-    // Dynamically iterate through all intermediate hops
+
     for (let i = 0; i < path.length - 1; i++) {
         const hopPath = [path[i], path[i + 1]];
         const nextOut = await quote(router, currentAmount, hopPath);
@@ -157,47 +156,39 @@ async function findArbitrageOpportunity(router, path) {
     const routeDescription = path.map(addr => getSymbol(addr)).join("->");
     console.log(`🔔 OPPORTUNITY FOUND | Route: ${routeDescription} | Profit: ${fmt(profit)} USDC`);
 
+    const midIndex = Math.floor(path.length / 2);
+    const pathToToken = path.slice(0, midIndex + 1);
+    const pathToUSDC = path.slice(midIndex);
+
     return {
         router,
         amountIn: BASE_TRADE,
-        pathToToken: path.slice(0, path.length - 1),
-        pathToUSDC: [path[path.length - 2], USDC],
+        buyPath: pathToToken,
+        sellPath: pathToUSDC,
         expectedProfit: profit
     };
 }
 
-async function parallelScan(paths, routersList) {
-    const batchResults = [];
-    
-    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
-        const pathChunk = paths.slice(i, i + BATCH_SIZE);
-        const scanPromises = [];
-
-        for (const router of routersList) {
-            for (const path of pathChunk) {
-                scanPromises.push(findArbitrageOpportunity(router, path).catch(() => null));
-            }
-        }
-
-        const results = await Promise.all(scanPromises);
-        batchResults.push(...results.filter(r => r !== null));
-
-        if (batchResults.length >= BATCH_SIZE) break;
-    }
-    return batchResults.slice(0, BATCH_SIZE);
-}
-
-/* ================= EXECUTION CORES ================= */
 async function executeBatch(trades) {
     console.log("\n🔥 EXECUTING BATCH");
+
     try {
-        const before = await usdc.balanceOf(CONTRACT_ADDRESS);
-        let total = 0n;
+        const beforeBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+        let usedCapital = 0n;
         let expected = 0n;
+        let usable = [];
 
         for (const t of trades) {
-            total += t.amountIn;
+            if (usedCapital + t.amountIn > beforeBal) break;
+            usedCapital += t.amountIn;
             expected += t.expectedProfit;
+            usable.push(t);
+        }
+
+        if (usable.length === 0) {
+            console.log("❌ SKIPPED: INSUFFICIENT CONTRACT CAPITAL\n");
+            return;
         }
 
         if (expected < GAS_COST_USDC) {
@@ -206,20 +197,29 @@ async function executeBatch(trades) {
         }
 
         const tx = await vault.executeFlashBatchArbitrage({
-            buyRouters: trades.map(t => t.router),
-            sellRouters: trades.map(t => t.router),
-            amountsInUSDC: trades.map(t => t.amountIn),
-            pathsToToken: trades.map(t => t.pathToToken),
-            pathsToUSDC: trades.map(t => t.pathToUSDC),
+            buyRouters: usable.map(t => t.router),
+            sellRouters: usable.map(t => t.router),
+            amountsInUSDC: usable.map(t => t.amountIn),
+            pathsToToken: usable.map(t => t.buyPath),
+            pathsToUSDC: usable.map(t => t.sellPath),
             deadline: Math.floor(Date.now() / 1000) + 30
         });
 
-        await provider.waitForTransaction(tx.hash);
-        const after = await usdc.balanceOf(CONTRACT_ADDRESS);
-        const real = after > before ? after - before : 0n;
+        console.log(`TX SENT ${tx.hash}\n`);
 
-        console.log(`REAL PROFIT: ${fmt(real)} USDC\n`);
-        await topUpGas();
+        await provider.waitForTransaction(tx.hash);
+
+        const afterBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+        const delta =
+            afterBal > beforeBal
+                ? afterBal - beforeBal
+                : 0n;
+
+        console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
+        console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
+        console.log(`REAL PROFIT     ${fmt(delta)}\n`);
+
     } catch (err) {
         console.error("⚠️ BATCH EXECUTION REVERTED:", err.message);
     }
