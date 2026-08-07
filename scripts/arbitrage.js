@@ -38,9 +38,9 @@ const ROUTERS = {
     Sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
 };
 
-const BASE_TRADE = ethers.parseUnits("100", 6); // $100 USDC base size
-const MIN_PROFIT = ethers.parseUnits("0.5", 6); // $0.50 min profit threshold
-const GAS_COST_USDC = ethers.parseUnits("0.05", 6);
+const BASE_TRADE = ethers.parseUnits(".02", 6); // $100 USDC base size
+const MIN_PROFIT = ethers.parseUnits("0.00001", 6); // $0.50 min profit threshold
+const GAS_COST_USDC = ethers.parseUnits("0.00005", 6);
 
 // Minimal ABIs
 const ERC20_ABI = [
