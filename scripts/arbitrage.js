@@ -4,346 +4,203 @@ import { ethers } from "ethers";
 dotenv.config({ override: false });
 
 /* ================= ENV ================= */
-
-const PRIVATE_KEY =
-  process.env.WALLET_PRIVATE_KEY ||
-  process.env.PRIVATE_KEY;
-
+const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PK missing");
 
-/* ================= RPC ================= */
+// ===================== CONFIGURATION & CONSTANTS =====================
+const RPC_URL = process.env.RPC_URL || "YOUR_POLYGON_WSS_OR_HTTP_ENDPOINT";
+const CONTRACT_ADDRESS = "YOUR_DEPLOYED_VAULT_ARBITRAGE_ENFORCER_ADDRESS";
 
-const RPCS = [
-  "https://polygon-bor-rpc.publicnode.com",
-  "https://polygon.llamarpc.com",
-  "https://polygon.drpc.org",
-  "https://polygon-public.nodies.app"
-];
+const provider = new ethers.WebSocketProvider(RPC_URL);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-let rpcIndex = 0;
-let provider;
-let wallet;
-let usdc;
-let vault;
-let routerContracts;
-
-/* ================= CONFIG ================= */
-
-const TRADE_AMOUNT = ethers.parseUnits("0.03", 6);
-const MIN_PROFIT = ethers.parseUnits("0.00003", 6);
-const MIN_BATCH_PROFIT = ethers.parseUnits("0.004", 6);
-
-const WORKER_COUNT = 32;
-
-/* ================= GAS TOP-UP ================= */
-
-const WITHDRAW_THRESHOLD = ethers.parseUnits("5", 6);
-const WITHDRAW_PERCENT = 1n;
-
-/* ================= CONTRACT ================= */
-
-const CONTRACT_ADDRESS =
-  "0x1923E396811f0586440e5bD69fa3b4Bf9db2DE61";
-
-const USDC =
-  "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-
-/* ================= ABI ================= */
-
-const erc20Abi = [
-  "function balanceOf(address) view returns (uint256)",
-  "function approve(address,uint256)"
-];
-
-const contractAbi = [
-  "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
-  "function minimumProfitUSDC() view returns (uint256)",
-  "function withdrawERC20(address,uint256)"
-];
-
-const routerAbi = [
-  "function getAmountsOut(uint,address[]) view returns(uint[])",
-  "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
-];
-
-/* ================= ROUTERS ================= */
-
-const routers = {
-  QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
-  SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
-  Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
-  Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
-  ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
-  Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
-};
-
-/* ================= TOKENS ================= */
+// Token Addresses (Polygon)
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDCE = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Keeping explicit reference matching contract core tokens
+const WMATIC = "0x0d500B1d8e8eF31E21C99d1Db9A6444d3ADf1270";
+const WETH = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
+const USDT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
+const DAI = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063";
+const WBTC = "0x1BFD67037B42Cf73acF2047067bd4F2C47d9Bf6d";
 
 const TOKENS = {
-  AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
-  APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
-  CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
-  DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
-  LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
-  QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
-  SHIB: "0x6f8a06447ff6fcf75a5fcdb3f8c4bab2da4fc0d0",
-  UNI: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-  USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
-  WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
-  WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
-  WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
+    [USDC]: { symbol: "USDC", decimals: 6 },
+    [USDCE]: { symbol: "USDCE", decimals: 6 },
+    [WMATIC]: { symbol: "WMATIC", decimals: 18 },
+    [WETH]: { symbol: "WETH", decimals: 18 },
+    [USDT]: { symbol: "USDT", decimals: 6 },
+    [DAI]: { symbol: "DAI", decimals: 18 },
+    [WBTC]: { symbol: "WBTC", decimals: 8 }
 };
 
-/* ================= HELPERS ================= */
+const ROUTERS = {
+    QuickSwap: "0xa5e0829cacedd8ffffe2562575a0c8742e14d14e",
+    Sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
+};
 
-const fmt = x => ethers.formatUnits(x, 6);
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const BASE_TRADE = ethers.parseUnits("100", 6); // $100 USDC base size
+const MIN_PROFIT = ethers.parseUnits("0.5", 6); // $0.50 min profit threshold
+const GAS_COST_USDC = ethers.parseUnits("0.05", 6);
 
-/* ================= STATE ================= */
+// Minimal ABIs
+const ERC20_ABI = [
+    "function balanceOf(address account) external view returns (uint256)",
+    "function decimals() external view returns (uint8)"
+];
 
-let microTrades = [];
-let runningProfit = 0n;
-let isExecuting = false;
+const ROUTER_ABI = [
+    "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"
+];
 
-/* ================= INIT ================= */
+const VAULT_ABI = [
+    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",
+    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC) external view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)"
+];
 
-function rebuildContracts() {
-  wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-  usdc = new ethers.Contract(USDC, erc20Abi, wallet);
-  vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+const usdc = new ethers.Contract(USDC, ERC20_ABI, wallet);
+const vault = new ethers.Contract(CONTRACT_ADDRESS, VAULT_ABI, wallet);
 
-  routerContracts = Object.fromEntries(
-    Object.values(routers).map(a => [
-      a,
-      new ethers.Contract(a, routerAbi, provider)
-    ])
-  );
+// Helper for formatting
+function fmt(val, decimals = 6) {
+    return ethers.formatUnits(val, decimals);
 }
 
-function newProvider() {
-  const url = RPCS[rpcIndex];
-  rpcIndex = (rpcIndex + 1) % RPCS.length;
-  return new ethers.JsonRpcProvider(url);
+function getSymbol(addr) {
+    return TOKENS[addr] ? TOKENS[addr].symbol : addr.slice(0, 6);
 }
 
-async function initProvider() {
-  provider = newProvider();
-  await provider.getNetwork();
-  rebuildContracts();
-
-  const onchainMin = await vault.minimumProfitUSDC();
-  console.log(`ONCHAIN MIN PROFIT ${fmt(onchainMin)}\n`);
+// Quick quote helper
+async function quote(routerAddress, amountIn, path) {
+    try {
+        const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
+        const amounts = await router.getAmountsOut(amountIn, path);
+        return amounts[amounts.length - 1];
+    } catch (err) {
+        return null;
+    }
 }
 
-/* ================= GAS TOP-UP ================= */
+// ===================== ARBITRAGE SCANNER & EXECUTION =====================
 
-async function topUpGas() {
-  try {
-    const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
-    if (contractBal < WITHDRAW_THRESHOLD) return;
+async function findArbitrageOpportunity(router, path) {
+    let currentAmount = BASE_TRADE;
 
-    const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
-
-    console.log(`⚡ GAS TOP-UP ${fmt(amount)} USDC`);
-
-    await (await vault.withdrawERC20(USDC, amount)).wait();
-    await (await usdc.approve(routers.QuickSwap, amount)).wait();
-
-    const router = new ethers.Contract(
-      routers.QuickSwap,
-      routerAbi,
-      wallet
-    );
-
-    await (
-      await router.swapExactTokensForTokens(
-        amount,
-        0,
-        [USDC, TOKENS.WMATIC],
-        wallet.address,
-        Math.floor(Date.now() / 1000) + 120
-      )
-    ).wait();
-
-    console.log("✅ USDC → WMATIC");
-
-    const wmatic = new ethers.Contract(
-      TOKENS.WMATIC,
-      [
-        "function withdraw(uint256)",
-        "function balanceOf(address) view returns(uint256)"
-      ],
-      wallet
-    );
-
-    const bal = await wmatic.balanceOf(wallet.address);
-
-    if (bal > 0n) {
-      await (await wmatic.withdraw(bal)).wait();
-      console.log("🔥 WMATIC → POL");
+    for (let i = 0; i < path.length - 1; i++) {
+        const hopPath = [path[i], path[i + 1]];
+        const nextOut = await quote(router, currentAmount, hopPath);
+        if (!nextOut) return null;
+        currentAmount = nextOut;
     }
 
-  } catch (e) {
-    console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
-  }
-}
+    const profit = currentAmount - BASE_TRADE;
+    if (profit <= 0n || profit < MIN_PROFIT) return null;
 
-/* ================= QUOTE ================= */
+    const routeDescription = path.map(addr => getSymbol(addr)).join("->");
+    console.log(`🔔 OPPORTUNITY FOUND | Route: ${routeDescription} | Profit: ${fmt(profit)} USDC`);
 
-async function quote(router, amount, path) {
-  try {
-    const out =
-      await routerContracts[router].getAmountsOut(amount, path);
-    return out.at(-1);
-  } catch {
-    return null;
-  }
-}
+    // Split the multi-hop path cleanly into buy leg and sell leg matching the contract expectations
+    const midIndex = Math.floor(path.length / 2);
+    const pathToToken = path.slice(0, midIndex + 1);
+    const pathToUSDC = path.slice(midIndex);
 
-/* ================= PATHS ================= */
-
-function buildBuyPaths(token) {
-  return [
-    [USDC, token],
-    [USDC, TOKENS.WETH, token],
-    [USDC, TOKENS.WMATIC, token],
-    [USDC, TOKENS.DAI, token],
-    [USDC, TOKENS.USDT, token]
-  ];
-}
-
-function buildSellPaths(token) {
-  return [
-    [token, USDC],
-    [token, TOKENS.WETH, USDC],
-    [token, TOKENS.WMATIC, USDC],
-    [token, TOKENS.DAI, USDC],
-    [token, TOKENS.USDT, USDC]
-  ];
-}
-
-/* ================= FIND TRADE ================= */
-
-async function findTrade(buy, sell, token) {
-  for (const bp of buildBuyPaths(token)) {
-    const buyOut = await quote(buy, TRADE_AMOUNT, bp);
-    if (!buyOut) continue;
-
-    for (const sp of buildSellPaths(token)) {
-      const sellOut = await quote(sell, buyOut, sp);
-      if (!sellOut) continue;
-
-      const profit = sellOut - TRADE_AMOUNT;
-
-      if (profit < MIN_PROFIT) continue;
-
-      return {
-        buy,
-        sell,
-        token,
-        amountIn: TRADE_AMOUNT,
-        buyPath: bp,
-        sellPath: sp,
+    return {
+        router,
+        amountIn: BASE_TRADE,
+        buyPath: pathToToken,
+        sellPath: pathToUSDC,
         expectedProfit: profit
-      };
-    }
-  }
-  return null;
+    };
 }
-
-/* ================= EXECUTE ================= */
 
 async function executeBatch(trades) {
-  console.log("\nBATCH THRESHOLD REACHED");
+    console.log("\n🔥 EXECUTING BATCH");
 
-  const beforeBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+    try {
+        const beforeBal = await usdc.balanceOf(CONTRACT_ADDRESS);
 
-  const tx = await vault.executeFlashBatchArbitrage({
-    buyRouters: trades.map(t => t.buy),
-    sellRouters: trades.map(t => t.sell),
-    amountsInUSDC: trades.map(t => t.amountIn),
-    pathsToToken: trades.map(t => t.buyPath),
-    pathsToUSDC: trades.map(t => t.sellPath),
-    deadline: Math.floor(Date.now() / 1000) + 30
-  });
+        let usedCapital = 0n;
+        let expected = 0n;
+        let usable = [];
 
-  console.log(`TX SENT ${tx.hash}`);
+        for (const t of trades) {
+            if (usedCapital + t.amountIn > beforeBal) break;
+            usedCapital += t.amountIn;
+            expected += t.expectedProfit;
+            usable.push(t);
+        }
 
-  await provider.waitForTransaction(tx.hash);
+        if (usable.length === 0) {
+            console.log("❌ SKIPPED: INSUFFICIENT CONTRACT CAPITAL\n");
+            return;
+        }
 
-  const afterBal = await usdc.balanceOf(CONTRACT_ADDRESS);
-  const profit = afterBal - beforeBal;
+        if (expected < GAS_COST_USDC) {
+            console.log("❌ SKIPPED: BELOW GAS\n");
+            return;
+        }
 
-  console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
-  console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
-  console.log(`REAL PROFIT     ${fmt(profit)}\n`);
+        const tx = await vault.executeFlashBatchArbitrage({
+            buyRouters: usable.map(t => t.router),
+            sellRouters: usable.map(t => t.router),
+            amountsInUSDC: usable.map(t => t.amountIn),
+            pathsToToken: usable.map(t => t.buyPath),
+            pathsToUSDC: usable.map(t => t.sellPath),
+            deadline: Math.floor(Date.now() / 1000) + 30
+        });
 
-  await topUpGas();
+        console.log(`TX SENT ${tx.hash}\n`);
 
-  isExecuting = false;
+        await provider.waitForTransaction(tx.hash);
+
+        const afterBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+        const delta =
+            afterBal > beforeBal
+                ? afterBal - beforeBal
+                : 0n;
+
+        console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
+        console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
+        console.log(`REAL PROFIT     ${fmt(delta)}\n`);
+
+    } catch (err) {
+        console.error("⚠️ BATCH EXECUTION REVERTED:", err.message);
+    }
 }
 
-/* ================= SCAN LOOP (RESTORED) ================= */
+// Generate standard routing permutations
+const paths = [
+    [USDC, WMATIC, USDC],
+    [USDC, WETH, USDC],
+    [USDC, USDT, USDC],
+    [USDC, DAI, USDC],
+    [USDC, WBTC, USDC],
+    [USDC, WMATIC, WETH, USDC],
+    [USDC, WETH, WMATIC, USDC]
+];
 
 async function scanLoop() {
+    let batchTrades = [];
 
-  const tasks = [];
-
-  for (const b of Object.values(routers)) {
-    for (const s of Object.values(routers)) {
-      if (b === s) continue;
-
-      for (const t of Object.values(TOKENS)) {
-        tasks.push({ buy: b, sell: s, token: t });
-      }
+    for (const [routerName, routerAddress] of Object.entries(ROUTERS)) {
+        for (const path of paths) {
+            const opp = await findArbitrageOpportunity(routerAddress, path);
+            if (opp) {
+                batchTrades.push(opp);
+            }
+        }
     }
-  }
 
-  let i = 0;
-
-  async function worker() {
-    while (true) {
-
-      if (isExecuting) {
-        await sleep(5);
-        continue;
-      }
-
-      const task = tasks[i++ % tasks.length];
-
-      const trade =
-        await findTrade(task.buy, task.sell, task.token);
-
-      if (!trade) continue;
-
-      microTrades.push(trade);
-      runningProfit += trade.expectedProfit;
-
-      console.log(`RUNNING TOTAL ${fmt(runningProfit)}`);
-
-      if (!isExecuting && runningProfit >= MIN_BATCH_PROFIT) {
-
-        isExecuting = true;
-
-        const batch = [...microTrades];
-
-        microTrades = [];
-        runningProfit = 0n;
-
-        await executeBatch(batch);
-      }
+    if (batchTrades.length > 0) {
+        await executeBatch(batchTrades);
     }
-  }
 
-  await Promise.all(
-    Array.from({ length: WORKER_COUNT }, worker)
-  );
+    setTimeout(scanLoop, 1000);
 }
 
-/* ================= MAIN ================= */
+provider.on("block", async (blockNumber) => {
+    console.log(`📦 New Block: ${blockNumber}`);
+});
 
-(async function main() {
-  console.log("🚀 BOT STARTED\n");
-  await initProvider();
-  await scanLoop();
-})();
+console.log("🚀 Starting Optimized Arbitrage Bot Engine...");
+scanLoop();
