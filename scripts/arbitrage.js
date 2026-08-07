@@ -8,8 +8,8 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PK missing");
 
 // ===================== CONFIGURATION & CONSTANTS =====================
-const RPC_URL = process.env.RPC_URL || "YOUR_POLYGON_WSS_OR_HTTP_ENDPOINT";
-const CONTRACT_ADDRESS = "YOUR_DEPLOYED_VAULT_ARBITRAGE_ENFORCER_ADDRESS";
+const RPC_URL = process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com";
+const CONTRACT_ADDRESS = "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958";
 
 const provider = new ethers.WebSocketProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
