@@ -7,84 +7,143 @@ dotenv.config({ override: false });
 const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PK missing");
 
-// ===================== CONFIGURATION & CONSTANTS =====================
-const RPC_URL = process.env.RPC_URL || "https://polygon-bor-rpc.publicnode.com";
-const CONTRACT_ADDRESS = "0x7EAf60672B8c0A2399187bCa1BB916F14Ac7a958";
+/* ================= RPC ================= */
+const RPCS = ["https://polygon-bor-rpc.publicnode.com"
+];
 
-const provider = new ethers.WebSocketProvider(RPC_URL);
-const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+let rpcIndex = 0;
+let provider;
+let wallet;
+let usdc;
+let vault;
+let routerContracts;
 
-// Token Addresses (Polygon)
+/* ================= CONFIG ================= */
+const BATCH_SIZE = 3; 
+const BASE_TRADE = ethers.parseUnits(".05", 6);
+const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
+const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
+
+/* ================= GAS TOP-UP ================= */
+const WITHDRAW_THRESHOLD = ethers.parseUnits("997973", 6);
+const WITHDRAW_PERCENT = 1n;
+
+/* ================= CONTRACTS ================= */
+const CONTRACT_ADDRESS = "0xB1a557c33FF23F3C0Ffa2A9251630197b037F4cc";
 const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const USDCE = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Keeping explicit reference matching contract core tokens
-const WMATIC = "0x0d500B1d8e8eF31E21C99d1Db9A6444d3ADf1270";
-const WETH = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
-const USDT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
-const DAI = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063";
-const WBTC = "0x1BFD67037B42Cf73acF2047067bd4F2C47d9Bf6d";
+
+const erc20Abi = [
+    "function balanceOf(address) view returns(uint256)",
+    "function approve(address,uint256)"
+];
+
+const contractAbi = [
+    "function executeFlashBatchArbitrage((address[] buyRouters,address[] sellRouters,uint256[] amountsInUSDC,address[][] pathsToToken,address[][] pathsToUSDC,uint256 deadline) batch)",
+    "function withdraw(uint256)"
+];
+
+const routerAbi = [
+    "function getAmountsOut(uint,address[]) view returns(uint[])",
+    "function swapExactTokensForTokens(uint,uint,address[],address,uint)"
+];
+
+const routers = {
+    QuickSwap: "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff",
+    SushiSwap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506",
+    Dfyn: "0xA102072A4C07F06EC3B4900FDC4C7B80b6c57429",
+    Firebird: "0xe0C9D6E8c2C5d4B9A6F7D0A6C2e20e671e7E55cA",
+    ApeSwap: "0xC0788A3aD43d79aa53B09c2EaCc313A787d1d607",
+    Wault: "0xa98ea6356a316b44bf710d5f9b6b4ea0081409ef"
+};
 
 const TOKENS = {
-    [USDC]: { symbol: "USDC", decimals: 6 },
-    [USDCE]: { symbol: "USDCE", decimals: 6 },
-    [WMATIC]: { symbol: "WMATIC", decimals: 18 },
-    [WETH]: { symbol: "WETH", decimals: 18 },
-    [USDT]: { symbol: "USDT", decimals: 6 },
-    [DAI]: { symbol: "DAI", decimals: 18 },
-    [WBTC]: { symbol: "WBTC", decimals: 8 }
+    AAVE: "0xd6df932a45c0f255f85145f286ea0b292b21c90b",
+    CRV: "0x172370d5cd63279efa6d502dab29171933a610af",
+    QUICK: "0x831753dd7087cac61ab5644b308642cc1c33dc13",
+    APE: "0x4d224452801aced8b2f0aebe155379bb5d594381",
+    DAI: "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+    LINK: "0x53e0bca35ec356bd5dddfebbd1fc0fd03fabad39",
+    USDT: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+    WBTC: "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+    WMATIC: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+    WETH: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
 };
 
-const ROUTERS = {
-    QuickSwap: "0xa5e0829cacedd8ffffe2562575a0c8742e14d14e",
-    Sushiswap: "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506"
-};
+/* ================= HELPERS & CACHE ================= */
+const fmt = x => ethers.formatUnits(x, 6);
+const quoteCache = new Map();
+const CACHE_TTL = 1000;
 
-const BASE_TRADE = ethers.parseUnits(".02", 6); // $100 USDC base size
-const MIN_PROFIT = ethers.parseUnits("0.00001", 6); // $0.50 min profit threshold
-const GAS_COST_USDC = ethers.parseUnits("0.00005", 6);
-
-// Minimal ABIs
-const ERC20_ABI = [
-    "function balanceOf(address account) external view returns (uint256)",
-    "function decimals() external view returns (uint8)"
-];
-
-const ROUTER_ABI = [
-    "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"
-];
-
-const VAULT_ABI = [
-    "function executeFlashBatchArbitrage((address[] buyRouters, address[] sellRouters, uint256[] amountsInUSDC, address[][] pathsToToken, address[][] pathsToUSDC, uint256 deadline) batch) external",
-    "function simulateArbitrageProfit(address buyRouter, address sellRouter, uint256 amountInUSDC, address[] pathToToken, address[] pathToUSDC) external view returns (uint256 estimatedFinalUSDC, uint256 estimatedProfit)"
-];
-
-const usdc = new ethers.Contract(USDC, ERC20_ABI, wallet);
-const vault = new ethers.Contract(CONTRACT_ADDRESS, VAULT_ABI, wallet);
-
-// Helper for formatting
-function fmt(val, decimals = 6) {
-    return ethers.formatUnits(val, decimals);
+function getCachedQuote(router, path) {
+    const key = `${router}-${path.join('-')}`;
+    const cached = quoteCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.value;
+    return undefined;
 }
 
-function getSymbol(addr) {
-    return TOKENS[addr] ? TOKENS[addr].symbol : addr.slice(0, 6);
+function setCachedQuote(router, path, value) {
+    const key = `${router}-${path.join('-')}`;
+    quoteCache.set(key, { value, timestamp: Date.now() });
 }
 
-// Quick quote helper
-async function quote(routerAddress, amountIn, path) {
+function newProvider() {
+    const url = RPCS[rpcIndex];
+    rpcIndex = (rpcIndex + 1) % RPCS.length;
+    return new ethers.JsonRpcProvider(url);
+}
+
+function rebuildContracts() {
+    wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    usdc = new ethers.Contract(USDC, erc20Abi, wallet);
+    vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+    routerContracts = Object.fromEntries(
+        Object.values(routers).map(a => [a, new ethers.Contract(a, routerAbi, provider)])
+    );
+}
+
+async function quote(router, amount, path) {
+    const cached = getCachedQuote(router, path);
+    if (cached !== undefined) return cached;
     try {
-        const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider);
-        const amounts = await router.getAmountsOut(amountIn, path);
-        return amounts[amounts.length - 1];
-    } catch (err) {
+        const out = await routerContracts[router].getAmountsOut(amount, path);
+        const result = out.at(-1);
+        setCachedQuote(router, path, result);
+        return result;
+    } catch {
+        setCachedQuote(router, path, null);
         return null;
     }
 }
 
-// ===================== ARBITRAGE SCANNER & EXECUTION =====================
+/* ================= MULTI-HOP PATH BUILDER ================= */
+function buildMultiHopPaths() {
+    const tokens = Object.values(TOKENS);
+    let paths = [];
+    
+    // Triangular and Multi-Hop Combinations (Supports 2 to 3 intermediate token hops)
+    for (const a of tokens) {
+        for (const b of tokens) {
+            if (a === b) continue;
+            // 3-step hop (Standard Triangular)
+            paths.push([USDC, a, b, USDC]);
+            
+            for (const c of tokens) {
+                if (a === c || b === c) continue;
+                // 4-step hop (Advanced Multi-Hop Arbitrage)
+                paths.push([USDC, a, b, c, USDC]);
+            }
+        }
+    }
+    return paths;
+}
 
+const getSymbol = (addr) => Object.keys(TOKENS).find(k => TOKENS[k] === addr) || addr.slice(0, 6);
+
+/* ================= SIMULATION & SCANNING ================= */
 async function findArbitrageOpportunity(router, path) {
     let currentAmount = BASE_TRADE;
-
+    
+    // Dynamically iterate through all intermediate hops
     for (let i = 0; i < path.length - 1; i++) {
         const hopPath = [path[i], path[i + 1]];
         const nextOut = await quote(router, currentAmount, hopPath);
@@ -98,40 +157,47 @@ async function findArbitrageOpportunity(router, path) {
     const routeDescription = path.map(addr => getSymbol(addr)).join("->");
     console.log(`🔔 OPPORTUNITY FOUND | Route: ${routeDescription} | Profit: ${fmt(profit)} USDC`);
 
-    // Split the multi-hop path cleanly into buy leg and sell leg matching the contract expectations
-    const midIndex = Math.floor(path.length / 2);
-    const pathToToken = path.slice(0, midIndex + 1);
-    const pathToUSDC = path.slice(midIndex);
-
     return {
         router,
         amountIn: BASE_TRADE,
-        buyPath: pathToToken,
-        sellPath: pathToUSDC,
+        pathToToken: path.slice(0, path.length - 1),
+        pathToUSDC: [path[path.length - 2], USDC],
         expectedProfit: profit
     };
 }
 
-async function executeBatch(trades) {
-    console.log("\n🔥 EXECUTING BATCH");
+async function parallelScan(paths, routersList) {
+    const batchResults = [];
+    
+    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+        const pathChunk = paths.slice(i, i + BATCH_SIZE);
+        const scanPromises = [];
 
-    try {
-        const beforeBal = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-        let usedCapital = 0n;
-        let expected = 0n;
-        let usable = [];
-
-        for (const t of trades) {
-            if (usedCapital + t.amountIn > beforeBal) break;
-            usedCapital += t.amountIn;
-            expected += t.expectedProfit;
-            usable.push(t);
+        for (const router of routersList) {
+            for (const path of pathChunk) {
+                scanPromises.push(findArbitrageOpportunity(router, path).catch(() => null));
+            }
         }
 
-        if (usable.length === 0) {
-            console.log("❌ SKIPPED: INSUFFICIENT CONTRACT CAPITAL\n");
-            return;
+        const results = await Promise.all(scanPromises);
+        batchResults.push(...results.filter(r => r !== null));
+
+        if (batchResults.length >= BATCH_SIZE) break;
+    }
+    return batchResults.slice(0, BATCH_SIZE);
+}
+
+/* ================= EXECUTION CORES ================= */
+async function executeBatch(trades) {
+    console.log("\n🔥 EXECUTING BATCH");
+    try {
+        const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+        let total = 0n;
+        let expected = 0n;
+
+        for (const t of trades) {
+            total += t.amountIn;
+            expected += t.expectedProfit;
         }
 
         if (expected < GAS_COST_USDC) {
@@ -140,67 +206,77 @@ async function executeBatch(trades) {
         }
 
         const tx = await vault.executeFlashBatchArbitrage({
-            buyRouters: usable.map(t => t.router),
-            sellRouters: usable.map(t => t.router),
-            amountsInUSDC: usable.map(t => t.amountIn),
-            pathsToToken: usable.map(t => t.buyPath),
-            pathsToUSDC: usable.map(t => t.sellPath),
+            buyRouters: trades.map(t => t.router),
+            sellRouters: trades.map(t => t.router),
+            amountsInUSDC: trades.map(t => t.amountIn),
+            pathsToToken: trades.map(t => t.pathToToken),
+            pathsToUSDC: trades.map(t => t.pathToUSDC),
             deadline: Math.floor(Date.now() / 1000) + 30
         });
 
-        console.log(`TX SENT ${tx.hash}\n`);
-
         await provider.waitForTransaction(tx.hash);
+        const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+        const real = after > before ? after - before : 0n;
 
-        const afterBal = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-        const delta =
-            afterBal > beforeBal
-                ? afterBal - beforeBal
-                : 0n;
-
-        console.log(`CONTRACT BEFORE ${fmt(beforeBal)}`);
-        console.log(`CONTRACT AFTER  ${fmt(afterBal)}`);
-        console.log(`REAL PROFIT     ${fmt(delta)}\n`);
-
+        console.log(`REAL PROFIT: ${fmt(real)} USDC\n`);
+        await topUpGas();
     } catch (err) {
         console.error("⚠️ BATCH EXECUTION REVERTED:", err.message);
     }
 }
 
-// Generate standard routing permutations
-const paths = [
-    [USDC, WMATIC, USDC],
-    [USDC, WETH, USDC],
-    [USDC, USDT, USDC],
-    [USDC, DAI, USDC],
-    [USDC, WBTC, USDC],
-    [USDC, WMATIC, WETH, USDC],
-    [USDC, WETH, WMATIC, USDC]
-];
+async function topUpGas() {
+    try {
+        const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+        if (contractBal < WITHDRAW_THRESHOLD) return;
 
-async function scanLoop() {
-    let batchTrades = [];
+        const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
+        await (await vault.withdraw(amount)).wait();
+        await (await usdc.approve(routers.QuickSwap, amount)).wait();
 
-    for (const [routerName, routerAddress] of Object.entries(ROUTERS)) {
-        for (const path of paths) {
-            const opp = await findArbitrageOpportunity(routerAddress, path);
-            if (opp) {
-                batchTrades.push(opp);
-            }
-        }
+        const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
+        await (await router.swapExactTokensForTokens(
+            amount,
+            0,
+            [USDC, TOKENS.WMATIC],
+            wallet.address,
+            Math.floor(Date.now() / 1000) + 120
+        )).wait();
+    } catch (e) {
+        console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
     }
-
-    if (batchTrades.length > 0) {
-        await executeBatch(batchTrades);
-    }
-
-    setTimeout(scanLoop, 1000);
 }
 
-provider.on("block", async (blockNumber) => {
-    console.log(`📦 New Block: ${blockNumber}`);
-});
+/* ================= MAIN LOOP ================= */
+(async function main() {
+    console.log("🚀 BOT STARTED WITH CACHING & MULTI-HOP PROMISE.ALL\n");
+    provider = newProvider();
+    rebuildContracts();
 
-console.log("🚀 Starting Optimized Arbitrage Bot Engine...");
-scanLoop();
+    const multiHopPaths = buildMultiHopPaths();
+    const routersList = Object.values(routers);
+    let lastBlock = 0;
+
+    while (true) {
+        try {
+            const currentBlock = await provider.getBlockNumber();
+            if (currentBlock > lastBlock) {
+                lastBlock = currentBlock;
+                // Clear cache on new block to ensure freshness
+                quoteCache.clear(); 
+            }
+
+            const trades = await parallelScan(multiHopPaths, routersList);
+            if (trades.length > 0) {
+                await executeBatch(trades);
+            } else {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        } catch (error) {
+            console.error("❌ Error in main loop:", error.message);
+            provider = newProvider();
+            rebuildContracts();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+})();
