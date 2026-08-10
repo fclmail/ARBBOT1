@@ -20,7 +20,7 @@ const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // Adjustable Controls
 const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 3;
-const TRADE_AMOUNT_USDC = process.env.TRADE_AMOUNT_USDC || "0.05";
+const TRADE_AMOUNT_USDC = process.env.TRADE_AMOUNT_USDC || "0.02";
 const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC || "0.0002";
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS) || 500;
 
