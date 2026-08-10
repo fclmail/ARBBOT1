@@ -15,9 +15,9 @@ const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 
 // Adjustable Bot Controls
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS) || 3000;
-const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 4;                   // Max trades per batch
-const TRADE_AMOUNT_USDC = process.env.TRADE_AMOUNT_USDC || "0.02";       // Base USDC per trade route
-const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC || "0.00001";            // Minimum required net profit
+const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 6;                   // Max trades per batch
+const TRADE_AMOUNT_USDC = process.env.TRADE_AMOUNT_USDC || "10.0";       // Base USDC per trade route
+const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC || "0.01";            // Minimum required net profit
 
 /* ==========================================================================
    RESTORED TOKEN & ROUTER REGISTRY
@@ -43,6 +43,55 @@ const TOKENS = {
 };
 
 /* ==========================================================================
+   PREDEFINED MULTI-HOP PATH PRESETS
+   ========================================================================== */
+
+const HOP_PATH_PRESETS = [
+  // 2-Hop Direct Paths (USDC -> Target -> USDC)
+  {
+    toToken: [USDC_ADDRESS, TOKENS.WETH],
+    toUSDC: [TOKENS.WETH, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.WBTC],
+    toUSDC: [TOKENS.WBTC, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.WMATIC],
+    toUSDC: [TOKENS.WMATIC, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.LINK],
+    toUSDC: [TOKENS.LINK, USDC_ADDRESS]
+  },
+  // 3-Hop Triangular Paths (USDC -> Intermediary -> Target -> USDC)
+  {
+    toToken: [USDC_ADDRESS, TOKENS.WMATIC, TOKENS.WETH],
+    toUSDC: [TOKENS.WETH, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.WETH],
+    toUSDC: [TOKENS.WETH, TOKENS.WBTC, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.USDT, TOKENS.WMATIC],
+    toUSDC: [TOKENS.WMATIC, TOKENS.DAI, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.QUICK],
+    toUSDC: [TOKENS.QUICK, TOKENS.WETH, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.WMATIC, TOKENS.AAVE],
+    toUSDC: [TOKENS.AAVE, USDC_ADDRESS]
+  },
+  {
+    toToken: [USDC_ADDRESS, TOKENS.GHST],
+    toUSDC: [TOKENS.GHST, TOKENS.WMATIC, USDC_ADDRESS]
+  }
+];
+
+/* ==========================================================================
    ABIs
    ========================================================================== */
 
@@ -57,11 +106,10 @@ const ARBITRAGE_CONTRACT_ABI = [
 ];
 
 /* ==========================================================================
-   BATCH BUILDER
+   BATCH BUILDER WITH MULTI-HOP PATHS
    ========================================================================== */
 
 function generateBatchParameters(deadline) {
-  const targetTokens = Object.values(TOKENS);
   const buyRoutersList = [ROUTERS.QUICKSWAP, ROUTERS.SUSHISWAP, ROUTERS.APESWAP];
   const sellRoutersList = [ROUTERS.SUSHISWAP, ROUTERS.QUICKSWAP, ROUTERS.WAULTSWAP];
 
@@ -73,16 +121,16 @@ function generateBatchParameters(deadline) {
 
   const tradeAmountUnits = ethers.parseUnits(TRADE_AMOUNT_USDC, 6);
 
-  for (let i = 0; i < Math.min(BATCH_SIZE, targetTokens.length); i++) {
-    const token = targetTokens[i % targetTokens.length];
+  for (let i = 0; i < Math.min(BATCH_SIZE, HOP_PATH_PRESETS.length); i++) {
+    const preset = HOP_PATH_PRESETS[i % HOP_PATH_PRESETS.length];
     const buyRouter = buyRoutersList[i % buyRoutersList.length];
     const sellRouter = sellRoutersList[i % sellRoutersList.length];
 
     buyRouters.push(buyRouter);
     sellRouters.push(sellRouter);
     amountsInUSDC.push(tradeAmountUnits);
-    pathsToToken.push([USDC_ADDRESS, token]);
-    pathsToUSDC.push([token, USDC_ADDRESS]);
+    pathsToToken.push(preset.toToken);
+    pathsToUSDC.push(preset.toUSDC);
   }
 
   return {
@@ -127,7 +175,7 @@ export async function executeSafeBatchArbitrage(provider, signer, batchParams) {
     console.log(`📍 Contract Address : ${contractAddress}`);
     console.log(`💰 Starting Balance : 💵 ${formattedStartingBal} USDC`);
     console.log(`🎯 Min Required Profit: 💵 ${formattedMinProfit} USDC`);
-    console.log(`📦 Batch Size Target: ${batchParams.buyRouters.length} routes`);
+    console.log(`📦 Batch Size Target: ${batchParams.buyRouters.length} routes (Multi-Hop active)`);
     console.log("✅ Simulation Passed! Route is executable.");
 
     const estimatedGas = await arbitrageContract.executeFlashBatchArbitrage.estimateGas(batchParams);
@@ -191,7 +239,7 @@ async function startContinuousScanner() {
       const currentBlock = await provider.getBlock("latest");
       const deadline = BigInt(currentBlock.timestamp + 300);
 
-      console.log(`🔍 [Scan #${scanCount}] Checking opportunities on Block #${currentBlock.number}...`);
+      console.log(`🔍 [Scan #${scanCount}] Checking multi-hop opportunities on Block #${currentBlock.number}...`);
 
       const batchParams = generateBatchParameters(deadline);
       await executeSafeBatchArbitrage(provider, signer, batchParams);
