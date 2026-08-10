@@ -21,9 +21,9 @@ let routerContracts;
 
 /* ================= CONFIG ================= */
 const BATCH_SIZE = 3;
-const BASE_TRADE = ethers.parseUnits("0.05", 6);
-const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
-const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
+const BASE_TRADE = ethers.parseUnits("0.001", 6);
+const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
+const GAS_COST_USDC = ethers.parseUnits("0.00001", 6);
 
 /* ================= TX LOCK ================= */
 let txInFlight = false;
