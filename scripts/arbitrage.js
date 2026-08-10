@@ -8,7 +8,9 @@ const PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("PK missing");
 
 /* ================= RPC ================= */
-const RPCS = ["https://polygon-bor-rpc.publicnode.com"];
+const RPCS = [
+    "https://polygon-bor-rpc.publicnode.com"
+];
 
 let rpcIndex = 0;
 let provider;
@@ -18,10 +20,14 @@ let vault;
 let routerContracts;
 
 /* ================= CONFIG ================= */
-const BATCH_SIZE = 3; 
-const BASE_TRADE = ethers.parseUnits(".05", 6);
+const BATCH_SIZE = 3;
+const BASE_TRADE = ethers.parseUnits("0.05", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0002", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00003", 6);
+
+/* ================= TX LOCK ================= */
+let txInFlight = false;
+let lastTxHash = null;
 
 /* ================= GAS TOP-UP ================= */
 const WITHDRAW_THRESHOLD = ethers.parseUnits("997973", 6);
@@ -74,14 +80,14 @@ const quoteCache = new Map();
 const CACHE_TTL = 1000;
 
 function getCachedQuote(router, path) {
-    const key = `${router}-${path.join('-')}`;
+    const key = `${router}-${path.join("-")}`;
     const cached = quoteCache.get(key);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.value;
     return undefined;
 }
 
 function setCachedQuote(router, path, value) {
-    const key = `${router}-${path.join('-')}`;
+    const key = `${router}-${path.join("-")}`;
     quoteCache.set(key, { value, timestamp: Date.now() });
 }
 
@@ -95,14 +101,19 @@ function rebuildContracts() {
     wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     usdc = new ethers.Contract(USDC, erc20Abi, wallet);
     vault = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, wallet);
+
     routerContracts = Object.fromEntries(
-        Object.values(routers).map(a => [a, new ethers.Contract(a, routerAbi, provider)])
+        Object.values(routers).map(a => [
+            a,
+            new ethers.Contract(a, routerAbi, provider)
+        ])
     );
 }
 
 async function quote(router, amount, path) {
     const cached = getCachedQuote(router, path);
     if (cached !== undefined) return cached;
+
     try {
         const out = await routerContracts[router].getAmountsOut(amount, path);
         const result = out.at(-1);
@@ -114,101 +125,161 @@ async function quote(router, amount, path) {
     }
 }
 
-/* ================= CROSS-DEX SCANNER ================= */
-async function evaluateCrossDexOpportunity(buyRouter, sellRouter, tokenAddress) {
-    if (buyRouter === sellRouter) return null;
+/* ================= MULTI-HOP PATH BUILDER ================= */
+function buildMultiHopPaths() {
+    const tokens = Object.values(TOKENS);
+    const paths = [];
 
-    // Strict 2-hop route required by your smart contract: Leg1 buys token, Leg2 sells token
-    const pathToToken = [USDC, tokenAddress];
-    const pathToUSDC = [tokenAddress, USDC];
+    for (const a of tokens) {
+        for (const b of tokens) {
+            if (a === b) continue;
 
-    // Leg 1: Quote buying intermediate token
-    const expectedTokenOut = await quote(buyRouter, BASE_TRADE, pathToToken);
-    if (!expectedTokenOut || expectedTokenOut === 0n) return null;
+            // 3-step triangular
+            paths.push([USDC, a, b, USDC]);
 
-    // Leg 2: Quote selling intermediate token back to USDC on secondary router
-    const expectedUsdcBack = await quote(sellRouter, expectedTokenOut, pathToUSDC);
-    if (!expectedUsdcBack || expectedUsdcBack === 0n) return null;
+            for (const c of tokens) {
+                if (a === c || b === c) continue;
 
-    const profit = expectedUsdcBack > BASE_TRADE ? expectedUsdcBack - BASE_TRADE : 0n;
-    if (profit < MIN_PROFIT) return null;
-
-    console.log(`🔔 OPPORTUNITY FOUND | Token: ${tokenAddress.slice(0, 6)} | Profit: ${fmt(profit)} USDC`);
-
-    return {
-        buyRouter,
-        sellRouter,
-        amountIn: BASE_TRADE,
-        pathToToken,
-        pathToUSDC,
-        expectedProfit: profit
-    };
-}
-
-async function parallelScan() {
-    const routerAddresses = Object.values(routers);
-    const tokenAddresses = Object.values(TOKENS);
-    const scanPromises = [];
-
-    for (const buyRouter of routerAddresses) {
-        for (const sellRouter of routerAddresses) {
-            if (buyRouter === sellRouter) continue;
-            for (const token of tokenAddresses) {
-                scanPromises.push(evaluateCrossDexOpportunity(buyRouter, sellRouter, token));
+                // 4-step multi-hop
+                paths.push([USDC, a, b, c, USDC]);
             }
         }
     }
 
-    const results = await Promise.all(scanPromises);
-    const validTrades = results.filter(r => r !== null);
-    validTrades.sort((a, b) => (b.expectedProfit > a.expectedProfit ? 1 : -1));
-    return validTrades.slice(0, BATCH_SIZE);
+    return paths;
 }
 
-/* ================= EXECUTION CORES ================= */
+const getSymbol = addr =>
+    Object.keys(TOKENS).find(k => TOKENS[k] === addr) || addr.slice(0, 6);
+
+/* ================= SIMULATION ================= */
+async function findArbitrageOpportunity(router, path) {
+    let currentAmount = BASE_TRADE;
+
+    for (let i = 0; i < path.length - 1; i++) {
+        const hopPath = [path[i], path[i + 1]];
+        const nextOut = await quote(router, currentAmount, hopPath);
+        if (!nextOut) return null;
+        currentAmount = nextOut;
+    }
+
+    const profit = currentAmount - BASE_TRADE;
+
+    if (profit <= 0n || profit < MIN_PROFIT) return null;
+
+    const routeDescription = path.map(addr => getSymbol(addr)).join("->");
+
+    console.log(
+        `🧪 SIMULATED OPPORTUNITY | Route: ${routeDescription} | Est Profit: ${fmt(profit)} USDC`
+    );
+
+    return {
+        router,
+        amountIn: BASE_TRADE,
+        pathToToken: path.slice(0, path.length - 1),
+        pathToUSDC: [path[path.length - 2], USDC],
+        expectedProfit: profit
+    };
+}
+
+async function parallelScan(paths, routersList) {
+    const batchResults = [];
+
+    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+        const chunk = paths.slice(i, i + BATCH_SIZE);
+        const promises = [];
+
+        for (const router of routersList) {
+            for (const path of chunk) {
+                promises.push(
+                    findArbitrageOpportunity(router, path).catch(() => null)
+                );
+            }
+        }
+
+        const results = await Promise.all(promises);
+        batchResults.push(...results.filter(Boolean));
+
+        if (batchResults.length >= BATCH_SIZE) break;
+    }
+
+    return batchResults.slice(0, BATCH_SIZE);
+}
+
+/* ================= EXECUTION ================= */
 async function executeBatch(trades) {
-    console.log(`\n🔥 EXECUTING BATCH OF ${trades.length} TRADES`);
+    if (txInFlight) {
+        console.log("⏳ TX STILL PENDING - SKIP NEW BATCH");
+        return;
+    }
+
+    txInFlight = true;
+
     try {
-        const totalExpected = trades.reduce((acc, t) => acc + t.expectedProfit, 0n);
-        if (totalExpected < GAS_COST_USDC) {
-            console.log("❌ SKIPPED: EXPECTED PROFIT BELOW ESTIMATED GAS\n");
+        console.log("\\n🔥 EXECUTING BATCH");
+
+        const before = await usdc.balanceOf(CONTRACT_ADDRESS);
+
+        let expected = 0n;
+        for (const t of trades) expected += t.expectedProfit;
+
+        console.log(`📦 CONTRACT BEFORE: ${fmt(before)} USDC`);
+        console.log(`📈 EXPECTED PROFIT: ${fmt(expected)} USDC`);
+
+        if (expected < GAS_COST_USDC) {
+            console.log("❌ SKIPPED: BELOW GAS\\n");
             return;
         }
 
-        const balanceBefore = await usdc.balanceOf(CONTRACT_ADDRESS);
-
-        const batchParam = {
-            buyRouters: trades.map(t => t.buyRouter),
-            sellRouters: trades.map(t => t.sellRouter),
+        const tx = await vault.executeFlashBatchArbitrage({
+            buyRouters: trades.map(t => t.router),
+            sellRouters: trades.map(t => t.router),
             amountsInUSDC: trades.map(t => t.amountIn),
             pathsToToken: trades.map(t => t.pathToToken),
             pathsToUSDC: trades.map(t => t.pathToUSDC),
             deadline: Math.floor(Date.now() / 1000) + 60
-        };
+        });
 
-        const tx = await vault.executeFlashBatchArbitrage(batchParam, { gasLimit: 1200000 });
-        console.log(`Tx submitted: ${tx.hash}`);
-        await tx.wait(1);
+        lastTxHash = tx.hash;
 
-        const balanceAfter = await usdc.balanceOf(CONTRACT_ADDRESS);
-        const realProfit = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
-        console.log(`✅ REAL PROFIT DEPOSITED TO CONTRACT: ${fmt(realProfit)} USDC\n`);
+        console.log(`📨 TX SENT: ${tx.hash}`);
+
+        const receipt = await tx.wait();
+
+        console.log(`⛓️ CONFIRMED IN BLOCK ${receipt.blockNumber}`);
+
+        const after = await usdc.balanceOf(CONTRACT_ADDRESS);
+        const deposited = after > before ? after - before : 0n;
+
+        console.log(`🏦 CONTRACT AFTER : ${fmt(after)} USDC`);
+        console.log(`💰 PROFIT DEPOSITED TO CONTRACT: ${fmt(deposited)} USDC\\n`);
+
         await topUpGas();
+
     } catch (err) {
-        console.error("⚠️ BATCH EXECUTION REVERTED:", err.reason || err.message);
+        console.error(
+            "⚠️ BATCH EXECUTION FAILED:",
+            err.shortMessage || err.message
+        );
+    } finally {
+        txInFlight = false;
     }
 }
 
+/* ================= GAS TOP-UP ================= */
 async function topUpGas() {
     try {
         const contractBal = await usdc.balanceOf(CONTRACT_ADDRESS);
+
         if (contractBal < WITHDRAW_THRESHOLD) return;
 
         const amount = (contractBal * WITHDRAW_PERCENT) / 100n;
+
         await (await vault.withdraw(amount)).wait();
         await (await usdc.approve(routers.QuickSwap, amount)).wait();
 
         const router = new ethers.Contract(routers.QuickSwap, routerAbi, wallet);
+
         await (await router.swapExactTokensForTokens(
             amount,
             0,
@@ -216,6 +287,8 @@ async function topUpGas() {
             wallet.address,
             Math.floor(Date.now() / 1000) + 120
         )).wait();
+
+        console.log(`⛽ GAS TOP-UP COMPLETED | Swapped ${fmt(amount)} USDC to WMATIC`);
     } catch (e) {
         console.log(`⚠️ GAS TOP-UP FAILED: ${e.message}`);
     }
@@ -223,31 +296,45 @@ async function topUpGas() {
 
 /* ================= MAIN LOOP ================= */
 (async function main() {
-    console.log("🚀 BOT STARTED WITH CONTRACT-ONLY VAULT BALANCE");
+    console.log("🚀 BOT STARTED WITH CACHING & MULTI-HOP PROMISE.ALL\\n");
+
     provider = newProvider();
     rebuildContracts();
+
+    const multiHopPaths = buildMultiHopPaths();
+    const routersList = Object.values(routers);
 
     let lastBlock = 0;
 
     while (true) {
         try {
             const currentBlock = await provider.getBlockNumber();
+
             if (currentBlock > lastBlock) {
                 lastBlock = currentBlock;
                 quoteCache.clear();
             }
 
-            const trades = await parallelScan();
-            if (trades.length > 0) {
-                await executeBatch(trades);
+            if (!txInFlight) {
+                const trades = await parallelScan(multiHopPaths, routersList);
+
+                if (trades.length > 0) {
+                    await executeBatch(trades);
+                } else {
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                }
             } else {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                console.log("⏳ WAITING FOR PREVIOUS TX CONFIRMATION...");
+                await new Promise(resolve => setTimeout(resolve, 3000));
             }
+
         } catch (error) {
-            console.error("❌ Error in main loop:", error.message);
+            console.error("❌ ERROR IN MAIN LOOP:", error.message);
+
             provider = newProvider();
             rebuildContracts();
-            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            await new Promise(resolve => setTimeout(resolve, 5000));
         }
     }
 })();
