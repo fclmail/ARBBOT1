@@ -16,8 +16,8 @@ const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
 // Adjustable Bot Controls
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS) || 3000;
 const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 4;                   // Max trades per batch
-const TRADE_AMOUNT_USDC = process.env.TRADE_AMOUNT_USDC || "10.0";       // Base USDC per trade route
-const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC || "0.01";            // Minimum required net profit
+const TRADE_AMOUNT_USDC = process.env.TRADE_AMOUNT_USDC || "0.02";       // Base USDC per trade route
+const MIN_PROFIT_USDC = process.env.MIN_PROFIT_USDC || "0.00001";            // Minimum required net profit
 
 /* ==========================================================================
    RESTORED TOKEN & ROUTER REGISTRY
