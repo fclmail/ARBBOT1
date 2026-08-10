@@ -20,8 +20,8 @@ let vault;
 let routerContracts;
 
 /* ================= CONFIG ================= */
-const BATCH_SIZE = 3;
-const BASE_TRADE = ethers.parseUnits("0.001", 6);
+const BATCH_SIZE = 7;
+const BASE_TRADE = ethers.parseUnits("0.01", 6);
 const MIN_PROFIT = ethers.parseUnits("0.00001", 6);
 const GAS_COST_USDC = ethers.parseUnits("0.00001", 6);
 
