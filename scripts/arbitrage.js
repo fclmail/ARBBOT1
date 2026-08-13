@@ -17,7 +17,7 @@ let vault;
 let routerContracts;
 
 /* ================= CONFIG ================= */
-const BASE_TRADE = ethers.parseUnits("0.41", 6);
+const BASE_TRADE = ethers.parseUnits("0.21", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0001", 6); // High-impact profit floor filter
 const GAS_COST_USDC = ethers.parseUnits("0.00001", 6);
 const BATCH_SIZE = 9;
