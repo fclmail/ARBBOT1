@@ -17,14 +17,15 @@ let vault;
 let routerContracts;
 
 /* ================= CONFIG ================= */
-const BASE_TRADE = ethers.parseUnits("0.05", 6);
+const BASE_TRADE = ethers.parseUnits("0.01
+                                     ", 6);
 const MIN_PROFIT = ethers.parseUnits("0.0001", 6); // High-impact profit floor filter
 const GAS_COST_USDC = ethers.parseUnits("0.00001", 6);
 const BATCH_SIZE = 9;
 
 // Scaling test tiers to scale winning trades
 const SCALING_TESTS = [
-  ethers.parseUnits("0.10", 6),
+  ethers.parseUnits("0.02", 6),
   ethers.parseUnits("1.05", 6),
   ethers.parseUnits("2.10", 6)
 ];
