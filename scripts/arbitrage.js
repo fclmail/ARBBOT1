@@ -25,8 +25,8 @@ const BATCH_SIZE = 3;
 // Scaling test tiers to scale winning trades
 const SCALING_TESTS = [
   ethers.parseUnits("0.01", 6),
-  ethers.parseUnits("0.05", 6),
-  ethers.parseUnits("0.10", 6)
+  ethers.parseUnits("1.05", 6),
+  ethers.parseUnits("2.10", 6)
 ];
 
 /* ================= CONTRACT ================= */
