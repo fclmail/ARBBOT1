@@ -30,7 +30,7 @@ const SCALING_TESTS = [
 ];
 
 /* ================= THROTTLING & CACHE CONFIG ================= */
-const CHUNK_SIZE = 35;      // Concurrent paths checked per Promise.all block
+const CHUNK_SIZE = 200;      // Concurrent paths checked per Promise.all block
 const CHUNK_DELAY_MS = 100; // Delay between chunks to respect RPC rate limits
 const CACHE_TTL_MS = 3000;   // Cache lifetime in ms (~1-2 Polygon blocks)
 
